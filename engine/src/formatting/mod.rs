@@ -49,7 +49,7 @@ pub fn format_source(source: &str, attribute: &str) -> Result<String, Error> {
 // Spec
 // =============================================================================
 
-fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
+pub(crate) fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
     let mut out = String::new();
     out.push_str("spec ");
     out.push_str(&spec.name);

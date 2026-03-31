@@ -22,7 +22,7 @@ pub(crate) fn parse_cli_v_version(tag: &str) -> Option<Version> {
 
 fn git_fetch_tags(root: &Path) -> Result<(), String> {
     let o = Command::new("git")
-        .args(["fetch", "--tags", "--quiet"])
+        .args(["fetch", "--tags", "--quiet", "-f"])
         .current_dir(root)
         .output()
         .map_err(|e| format!("failed to run git fetch --tags: {e}"))?;

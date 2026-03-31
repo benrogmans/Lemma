@@ -167,17 +167,23 @@ impl<'a> PerSliceTypeResolver<'a> {
         Ok(())
     }
 
-    /// Register types from all specs transitively reachable from `spec` via type imports,
-    /// fact spec references, and fact type declarations with `from`.
-    pub fn register_dependency_types(&mut self, spec: &Arc<LemmaSpec>) -> Vec<Error> {
+    /// Register ALL specs transitively reachable from `spec`: type imports,
+    /// spec ref facts, and type declarations with `from`.
+    ///
+    /// Walks spec refs (not just type deps) because type resolution is batch:
+    /// every dependency spec must be pre-registered before `resolve_all_registered_specs`.
+    /// A spec ref dep may define types used by its own facts/rules, which the
+    /// graph validator type-checks. After resolution, `resolved_types.keys()` is
+    /// the canonical set of all dependency specs for a plan.
+    pub fn register_dependency_specs(&mut self, spec: &Arc<LemmaSpec>) -> Vec<Error> {
         let mut errors = Vec::new();
         let mut visited_spec_names: HashSet<String> = HashSet::new();
         visited_spec_names.insert(spec.name.clone());
-        self.register_dependency_types_recursive(spec, &mut visited_spec_names, &mut errors);
+        self.register_dependency_specs_recursive(spec, &mut visited_spec_names, &mut errors);
         errors
     }
 
-    fn register_dependency_types_recursive(
+    fn register_dependency_specs_recursive(
         &mut self,
         spec: &Arc<LemmaSpec>,
         visited: &mut HashSet<String>,
@@ -185,14 +191,14 @@ impl<'a> PerSliceTypeResolver<'a> {
     ) {
         for type_def in &spec.types {
             if let TypeDef::Import { from, .. } = type_def {
-                self.try_register_dep_spec(&from.name, from.effective.as_ref(), visited, errors);
+                self.try_register_spec(&from.name, from.effective.as_ref(), visited, errors);
             }
         }
 
         for fact in &spec.facts {
             match &fact.value {
                 ParsedFactValue::SpecReference(spec_ref) => {
-                    self.try_register_dep_spec(
+                    self.try_register_spec(
                         &spec_ref.name,
                         spec_ref.effective.as_ref(),
                         visited,
@@ -203,7 +209,7 @@ impl<'a> PerSliceTypeResolver<'a> {
                     from: Some(from_ref),
                     ..
                 } => {
-                    self.try_register_dep_spec(
+                    self.try_register_spec(
                         &from_ref.name,
                         from_ref.effective.as_ref(),
                         visited,
@@ -215,7 +221,7 @@ impl<'a> PerSliceTypeResolver<'a> {
         }
     }
 
-    fn try_register_dep_spec(
+    fn try_register_spec(
         &mut self,
         name: &str,
         explicit_effective: Option<&DateTimeValue>,
@@ -235,7 +241,7 @@ impl<'a> PerSliceTypeResolver<'a> {
 
         if let Some(dep_spec) = dep_spec {
             errors.extend(self.register_all(&dep_spec));
-            self.register_dependency_types_recursive(&dep_spec, visited, errors);
+            self.register_dependency_specs_recursive(&dep_spec, visited, errors);
         }
     }
 

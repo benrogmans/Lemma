@@ -2,7 +2,7 @@
 //!
 //! Projects ExecutionPlan onto a representation that contains only what the plan actually does.
 //! Uses dedicated fingerprint types (no LemmaType, LiteralValue, Arc<LemmaSpec>) so the hash
-//! does not depend on external types or other specs. Excludes sources, meta, source locations.
+//! does not depend on external types or other specs. Excludes meta and source locations.
 //! Schema is explicit and stable: adding Rust fields does not change hashes for unused content.
 //!
 //! **Format versioning:** `fingerprint_hash` hashes `LMFP` + big-endian `FINGERPRINT_FORMAT_VERSION`
@@ -360,7 +360,7 @@ fn literal_value_fingerprint(lv: &LiteralValue) -> LiteralValueFingerprint {
     }
 }
 
-/// Project ExecutionPlan to semantic fingerprint, excluding sources and meta.
+/// Project ExecutionPlan to semantic fingerprint, excluding meta and sources.
 pub fn from_plan(plan: &ExecutionPlan) -> PlanFingerprint {
     let facts: BTreeMap<FactPath, FactFingerprint> = plan
         .facts
@@ -508,7 +508,7 @@ mod tests {
     use crate::parsing::ast::Span;
     use crate::parsing::source::Source;
     use crate::planning::semantics::primitive_number;
-    use indexmap::{IndexMap, IndexSet};
+    use indexmap::IndexMap;
     use std::collections::{BTreeSet, HashMap};
 
     fn empty_plan(spec_name: &str) -> ExecutionPlan {
@@ -516,12 +516,11 @@ mod tests {
             spec_name: spec_name.to_string(),
             facts: IndexMap::new(),
             rules: vec![],
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         }
     }
 

@@ -63,17 +63,11 @@ pub enum OperationKind {
         kind: ComputationKind,
         inputs: Vec<LiteralValue>,
         result: LiteralValue,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        expr: Option<String>,
     },
     RuleBranchEvaluated {
         #[serde(skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
         matched: bool,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        condition_expr: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        result_expr: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         result_value: Option<OperationResult>,
     },

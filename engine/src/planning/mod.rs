@@ -1056,11 +1056,15 @@ fact imported_value: [amount from a]
     }
 
     // ========================================================================
-    // Dependency tracking
+    // Source transparency
     // ========================================================================
 
+    fn has_source_for(plan: &super::execution_plan::ExecutionPlan, name: &str) -> bool {
+        plan.sources.keys().any(|(n, _)| n == name)
+    }
+
     #[test]
-    fn dependencies_populated_for_cross_spec_rule_reference() {
+    fn sources_contain_main_and_dep_for_cross_spec_rule_reference() {
         let code = r#"
 spec dep
 fact x: 10
@@ -1081,22 +1085,19 @@ rule result: d.val
 
         let plan = plan_single(consumer, &specs, sources).expect("planning should succeed");
 
-        assert_eq!(
-            plan.dependencies.len(),
-            1,
-            "consumer should depend on exactly one spec, got: {:?}",
-            plan.dependencies
-        );
-        let dep_id = plan.dependencies.iter().next().unwrap();
-        assert_eq!(dep_id.name, "dep");
+        assert_eq!(plan.sources.len(), 2, "main + dep, got: {:?}", plan.sources);
         assert!(
-            !dep_id.plan_hash.is_empty(),
-            "dependency plan hash must be non-empty"
+            has_source_for(&plan, "consumer"),
+            "sources must include main spec"
+        );
+        assert!(
+            has_source_for(&plan, "dep"),
+            "sources must include dep spec"
         );
     }
 
     #[test]
-    fn dependencies_empty_for_standalone_spec() {
+    fn sources_contain_only_main_for_standalone_spec() {
         let code = r#"
 spec standalone
 fact age: 25
@@ -1111,15 +1112,16 @@ rule is_adult: age >= 18
 
         let plan = plan_single(&specs[0], &specs, sources).expect("planning should succeed");
 
-        assert!(
-            plan.dependencies.is_empty(),
-            "standalone spec should have no dependencies, got: {:?}",
-            plan.dependencies
+        assert_eq!(
+            plan.sources.len(),
+            1,
+            "standalone should have only main spec"
         );
+        assert!(has_source_for(&plan, "standalone"));
     }
 
     #[test]
-    fn dependencies_contain_multiple_cross_spec_refs() {
+    fn sources_contain_all_cross_spec_refs() {
         let code = r#"
 spec rates
 fact base_rate: 0.05
@@ -1147,18 +1149,51 @@ rule combined: r.rate + c.limit
         let plan = plan_single(calc, &specs, sources).expect("planning should succeed");
 
         assert_eq!(
-            plan.dependencies.len(),
-            2,
-            "calculator should depend on two specs, got: {:?}",
-            plan.dependencies
+            plan.sources.len(),
+            3,
+            "calculator + rates + config, got: {:?}",
+            plan.sources
         );
-        let dep_names: Vec<&str> = plan.dependencies.iter().map(|d| d.name.as_str()).collect();
-        assert!(dep_names.contains(&"rates"), "should depend on rates");
-        assert!(dep_names.contains(&"config"), "should depend on config");
+        assert!(has_source_for(&plan, "calculator"));
+        assert!(has_source_for(&plan, "rates"));
+        assert!(has_source_for(&plan, "config"));
     }
 
     #[test]
-    fn dependency_plan_hash_matches_dep_spec_plan_hash() {
+    fn sources_include_spec_ref_even_without_rules() {
+        let code = r#"
+spec dep
+fact x: 10
+
+spec consumer
+fact d: spec dep
+fact local: 99
+rule result: local
+"#;
+        let specs = parse(code, "test.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
+
+        let mut sources = HashMap::new();
+        sources.insert("test.lemma".to_string(), code.to_string());
+
+        let plan = plan_single(consumer, &specs, sources).expect("planning should succeed");
+
+        assert_eq!(
+            plan.sources.len(),
+            2,
+            "consumer + dep, got: {:?}",
+            plan.sources
+        );
+        assert!(
+            has_source_for(&plan, "dep"),
+            "spec ref dep must be in sources even without rules"
+        );
+    }
+
+    #[test]
+    fn sources_round_trip_to_valid_specs() {
         let code = r#"
 spec dep
 fact x: 42
@@ -1171,108 +1206,22 @@ rule result: d.val
         let specs = parse(code, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
+        let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
 
         let mut sources = HashMap::new();
         sources.insert("test.lemma".to_string(), code.to_string());
 
-        let mut ctx = Context::new();
-        for spec in &specs {
-            ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry)
-                .expect("insert spec");
+        let plan = plan_single(consumer, &specs, sources).expect("planning should succeed");
+
+        for ((name, _), source_text) in &plan.sources {
+            let parsed = parse(source_text, "roundtrip.lemma", &ResourceLimits::default());
+            assert!(
+                parsed.is_ok(),
+                "source for '{}' must re-parse: {:?}\nsource:\n{}",
+                name,
+                parsed.err(),
+                source_text
+            );
         }
-        let result = plan(&ctx, sources);
-        assert!(result.global_errors.is_empty());
-
-        let dep_plan = result
-            .per_spec
-            .iter()
-            .find(|r| r.spec.name == "dep")
-            .expect("dep result")
-            .plans
-            .first()
-            .expect("dep must have a plan");
-
-        let consumer_plan = result
-            .per_spec
-            .iter()
-            .find(|r| r.spec.name == "consumer")
-            .expect("consumer result")
-            .plans
-            .first()
-            .expect("consumer must have a plan");
-
-        let recorded_hash = &consumer_plan
-            .dependencies
-            .iter()
-            .find(|d| d.name == "dep")
-            .expect("consumer should depend on dep")
-            .plan_hash;
-
-        assert_eq!(
-            recorded_hash,
-            &dep_plan.plan_hash(),
-            "dependency hash must match the dep's actual computed plan hash"
-        );
-    }
-
-    #[test]
-    fn spec_ref_without_rules_excluded_from_dependencies() {
-        let code = r#"
-spec dep
-fact x: 10
-
-spec consumer
-fact d: spec dep
-fact local: 99
-rule result: local
-"#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
-
-        let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
-
-        let plan = plan_single(consumer, &specs, sources).expect("planning should succeed");
-
-        assert!(
-            plan.dependencies.is_empty(),
-            "spec ref whose facts are not used by any rule should not appear in dependencies, got: {:?}",
-            plan.dependencies
-        );
-    }
-
-    #[test]
-    fn spec_ref_with_rules_always_creates_dependency() {
-        // Even if the consumer's own rules don't reference dep rules,
-        // the dep's rules are part of the execution plan and need dep's facts.
-        let code = r#"
-spec dep
-fact x: 10
-rule val: x
-
-spec consumer
-fact d: spec dep
-fact local: 99
-rule result: local
-"#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
-
-        let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
-
-        let plan = plan_single(consumer, &specs, sources).expect("planning should succeed");
-
-        assert_eq!(
-            plan.dependencies.len(),
-            1,
-            "dep's rules are in the plan, so dep must be a dependency, got: {:?}",
-            plan.dependencies
-        );
-        assert_eq!(plan.dependencies.iter().next().unwrap().name, "dep");
     }
 }

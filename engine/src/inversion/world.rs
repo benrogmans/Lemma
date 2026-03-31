@@ -1068,12 +1068,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts: indexmap::IndexMap::new(),
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: indexmap::IndexSet::new(),
+            sources: indexmap::IndexMap::new(),
         }
     }
 

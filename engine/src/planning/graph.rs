@@ -37,7 +37,6 @@ pub(crate) struct Graph {
     main_spec: Arc<LemmaSpec>,
     facts: IndexMap<FactPath, FactData>,
     rules: BTreeMap<RulePath, RuleNode>,
-    sources: HashMap<String, String>,
     execution_order: Vec<RulePath>,
 }
 
@@ -52,10 +51,6 @@ impl Graph {
 
     pub(crate) fn rules_mut(&mut self) -> &mut BTreeMap<RulePath, RuleNode> {
         &mut self.rules
-    }
-
-    pub(crate) fn sources(&self) -> &HashMap<String, String> {
-        &self.sources
     }
 
     pub(crate) fn execution_order(&self) -> &[RulePath] {
@@ -326,12 +321,12 @@ impl Graph {
 
         let mut type_errors: Vec<Error> = Vec::new();
         type_errors.extend(type_resolver.register_all(main_spec));
-        type_errors.extend(type_resolver.register_dependency_types(main_spec));
+        type_errors.extend(type_resolver.register_dependency_specs(main_spec));
 
         let (resolved_types, resolve_errors) = type_resolver.resolve_all_registered_specs();
         type_errors.extend(resolve_errors);
 
-        let (facts, rules, builder_sources, graph_errors, local_types) = {
+        let (facts, rules, graph_errors, local_types) = {
             let mut builder = GraphBuilder {
                 facts: IndexMap::new(),
                 rules: BTreeMap::new(),
@@ -349,7 +344,6 @@ impl Graph {
             (
                 builder.facts,
                 builder.rules,
-                builder.sources,
                 builder.errors,
                 builder.local_types,
             )
@@ -358,7 +352,6 @@ impl Graph {
         let mut graph = Graph {
             facts,
             rules,
-            sources: builder_sources,
             execution_order: Vec::new(),
             main_spec: Arc::clone(main_spec),
         };

@@ -112,9 +112,6 @@ pub(crate) fn evaluate_rule(
     for branch_index in (1..exec_rule.branches.len()).rev() {
         let branch = &exec_rule.branches[branch_index];
         if let Some(ref condition) = branch.condition {
-            let condition_expr = condition.get_source_text(&context.sources);
-            let result_expr = branch.result.get_source_text(&context.sources);
-
             let condition_result = evaluate_expression(condition, context);
             let condition_explanation =
                 get_explanation_node_required(context, condition, "condition");
@@ -126,8 +123,6 @@ pub(crate) fn evaluate_rule(
                     context.push_operation(OperationKind::RuleBranchEvaluated {
                         index: Some(unless_clause_index),
                         matched: true,
-                        condition_expr,
-                        result_expr,
                         result_value: Some(OperationResult::Veto(msg.clone())),
                     });
 
@@ -187,8 +182,6 @@ pub(crate) fn evaluate_rule(
                 context.push_operation(OperationKind::RuleBranchEvaluated {
                     index: Some(unless_clause_index),
                     matched: true,
-                    condition_expr,
-                    result_expr,
                     result_value: Some(result.clone()),
                 });
 
@@ -221,8 +214,6 @@ pub(crate) fn evaluate_rule(
             context.push_operation(OperationKind::RuleBranchEvaluated {
                 index: Some(unless_clause_index),
                 matched: false,
-                condition_expr,
-                result_expr,
                 result_value: None,
             });
 
@@ -237,14 +228,11 @@ pub(crate) fn evaluate_rule(
 
     // No unless clause matched - evaluate default expression (first branch)
     let default_branch = &exec_rule.branches[0];
-    let default_expr = default_branch.result.get_source_text(&context.sources);
     let default_result = evaluate_expression(&default_branch.result, context);
 
     context.push_operation(OperationKind::RuleBranchEvaluated {
         index: None,
         matched: true,
-        condition_expr: None,
-        result_expr: default_expr,
         result_value: Some(default_result.clone()),
     });
 
@@ -281,14 +269,11 @@ fn evaluate_rule_without_unless(
     context: &mut crate::evaluation::EvaluationContext,
 ) -> (OperationResult, crate::evaluation::explanation::Explanation) {
     let default_branch = &exec_rule.branches[0];
-    let default_expr = default_branch.result.get_source_text(&context.sources);
     let default_result = evaluate_expression(&default_branch.result, context);
 
     context.push_operation(OperationKind::RuleBranchEvaluated {
         index: None,
         matched: true,
-        condition_expr: None,
-        result_expr: default_expr,
         result_value: Some(default_result.clone()),
     });
 
@@ -520,17 +505,12 @@ fn evaluate_single_expression(
             let right_explanation = get_explanation_node_required(context, right, "right operand");
 
             if let OperationResult::Value(ref val) = result {
-                let expr_text = current.get_source_text(&context.sources);
-                // Use source text if available, otherwise construct from values for explanation display
-                let original_expr = expr_text
-                    .clone()
-                    .unwrap_or_else(|| format!("{} {} {}", left_val, op, right_val));
+                let original_expr = format!("{} {} {}", left_val, op, right_val);
                 let substituted_expr = format!("{} {} {}", left_val, op, right_val);
                 context.push_operation(OperationKind::Computation {
                     kind: ComputationKind::Arithmetic(op.clone()),
                     inputs: vec![left_val.clone(), right_val.clone()],
                     result: val.as_ref().clone(),
-                    expr: expr_text,
                 });
                 let explanation_node = ExplanationNode::Computation {
                     kind: ComputationKind::Arithmetic(op.clone()),
@@ -590,22 +570,11 @@ fn evaluate_single_expression(
                 let is_false = matches!(val.as_ref().value, ValueKind::Boolean(false));
                 let (display_op, original_expr, substituted_expr, display_result) = if is_false {
                     let negated_op = negated_comparison(op.clone());
-                    let orig = match (
-                        left.get_source_text(&context.sources),
-                        right.get_source_text(&context.sources),
-                    ) {
-                        (Some(l), Some(r)) => {
-                            format!("{} {} {}", l, negated_op, r)
-                        }
-                        _ => format!("{} {} {}", left_val, negated_op, right_val),
-                    };
+                    let orig = format!("{} {} {}", left_val, negated_op, right_val);
                     let sub = format!("{} {} {}", left_val, negated_op, right_val);
                     (negated_op, orig, sub, LiteralValue::from_bool(true))
                 } else {
-                    let expr_text = current.get_source_text(&context.sources);
-                    let original_expr = expr_text
-                        .clone()
-                        .unwrap_or_else(|| format!("{} {} {}", left_val, op, right_val));
+                    let original_expr = format!("{} {} {}", left_val, op, right_val);
                     let substituted_expr = format!("{} {} {}", left_val, op, right_val);
                     (
                         op.clone(),
@@ -614,12 +583,10 @@ fn evaluate_single_expression(
                         val.as_ref().clone(),
                     )
                 };
-                let expr_text = current.get_source_text(&context.sources);
                 context.push_operation(OperationKind::Computation {
                     kind: ComputationKind::Comparison(op.clone()),
                     inputs: vec![left_val.clone(), right_val.clone()],
                     result: val.as_ref().clone(),
-                    expr: expr_text,
                 });
                 let explanation_node = ExplanationNode::Computation {
                     kind: ComputationKind::Comparison(display_op),
@@ -926,7 +893,6 @@ fn evaluate_mathematical_operator(
                 kind: ComputationKind::Mathematical(op.clone()),
                 inputs: vec![value.clone()],
                 result: result_value.clone(),
-                expr: None,
             });
             OperationResult::Value(Box::new(result_value))
         }

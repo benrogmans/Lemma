@@ -173,19 +173,6 @@ impl Expression {
             source_location: Some(source_location),
         }
     }
-
-    /// Get the source text for this expression from the given sources map
-    ///
-    /// Returns `None` if the source is not found.
-    pub fn get_source_text(
-        &self,
-        sources: &std::collections::HashMap<String, String>,
-    ) -> Option<String> {
-        let loc = self.source_location.as_ref()?;
-        sources
-            .get(&loc.attribute)
-            .and_then(|source| loc.extract_text(source))
-    }
 }
 
 /// Semantic equality - compares expressions by structure only, ignoring source location
@@ -1553,10 +1540,6 @@ mod tests {
         let veto_without_message = VetoExpression { message: None };
         assert!(veto_without_message.message.is_none());
     }
-
-    // test_expression_get_source_text_with_location (uses Value instead of LiteralValue now)
-    // test_expression_get_source_text_no_location (uses Value instead of LiteralValue now)
-    // test_expression_get_source_text_source_not_found (uses Value instead of LiteralValue now)
 
     // =====================================================================
     // FactValue / TypeDef Display — constraint formatting

@@ -24,7 +24,6 @@ pub(crate) struct EvaluationContext {
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
     rule_explanations: HashMap<RulePath, crate::evaluation::explanation::Explanation>,
     operations: Option<Vec<crate::OperationRecord>>,
-    pub(crate) sources: HashMap<String, String>,
     explanation_nodes: HashMap<usize, crate::evaluation::explanation::ExplanationNode>,
     now: LiteralValue,
 }
@@ -45,7 +44,6 @@ impl EvaluationContext {
             } else {
                 None
             },
-            sources: plan.sources.clone(),
             explanation_nodes: HashMap::new(),
             now,
         }

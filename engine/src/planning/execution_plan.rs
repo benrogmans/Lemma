@@ -19,7 +19,7 @@ use crate::planning::types::ResolvedSpecTypes;
 use crate::Error;
 use crate::ResourceLimits;
 use crate::Source;
-use indexmap::{IndexMap, IndexSet};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -44,6 +44,9 @@ impl std::fmt::Display for SpecId {
     }
 }
 
+/// Spec sources keyed by (name, effective_from).
+pub type SpecSources = IndexMap<(String, Option<DateTimeValue>), String>;
+
 /// A complete execution plan ready for the evaluator
 ///
 /// Contains the topologically sorted list of rules to execute, along with all facts.
@@ -61,9 +64,6 @@ pub struct ExecutionPlan {
     /// Rules to execute in topological order (sorted by dependencies)
     pub rules: Vec<ExecutableRule>,
 
-    /// Source code for error messages
-    pub sources: HashMap<String, String>,
-
     /// Spec metadata
     pub meta: HashMap<String, MetaValue>,
 
@@ -77,19 +77,67 @@ pub struct ExecutionPlan {
     /// Temporal slice end (exclusive). None = +∞.
     pub valid_to: Option<DateTimeValue>,
 
-    /// Spec dependencies actually used by rules, identified by name + computed plan hash.
-    pub dependencies: IndexSet<SpecId>,
+    /// Canonical source for all specs in this plan, keyed by (name, effective_from).
+    /// Reconstructed from AST — not raw file content.
+    #[serde(default)]
+    #[serde(
+        serialize_with = "serialize_sources",
+        deserialize_with = "deserialize_sources"
+    )]
+    pub sources: SpecSources,
 }
 
 impl ExecutionPlan {
     /// Deterministic 8-char hex plan hash: SHA-256 of `LMFP` + format version + postcard(semantic fingerprint)
-    /// (excluding sources and meta). See [`crate::planning::fingerprint::FINGERPRINT_FORMAT_VERSION`].
+    /// (excluding meta). See [`crate::planning::fingerprint::FINGERPRINT_FORMAT_VERSION`].
     #[must_use]
     pub fn plan_hash(&self) -> String {
         crate::planning::fingerprint::fingerprint_hash(&crate::planning::fingerprint::from_plan(
             self,
         ))
     }
+}
+
+fn serialize_sources<S>(sources: &SpecSources, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let mut seq = serializer.serialize_seq(Some(sources.len()))?;
+    for ((name, effective_from), source) in sources {
+        seq.serialize_element(&SpecSourceEntry {
+            name,
+            effective_from,
+            source,
+        })?;
+    }
+    seq.end()
+}
+
+fn deserialize_sources<'de, D>(deserializer: D) -> Result<SpecSources, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries: Vec<SpecSourceEntryOwned> = Vec::deserialize(deserializer)?;
+    let mut map = IndexMap::with_capacity(entries.len());
+    for e in entries {
+        map.insert((e.name, e.effective_from), e.source);
+    }
+    Ok(map)
+}
+
+#[derive(Serialize)]
+struct SpecSourceEntry<'a> {
+    name: &'a str,
+    effective_from: &'a Option<DateTimeValue>,
+    source: &'a str,
+}
+
+#[derive(Deserialize)]
+struct SpecSourceEntryOwned {
+    name: String,
+    effective_from: Option<DateTimeValue>,
+    source: String,
 }
 
 /// An executable rule with flattened branches
@@ -146,7 +194,6 @@ pub(crate) fn build_execution_plan(
 
     let mut executable_rules: Vec<ExecutableRule> = Vec::new();
     let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
-    let mut dependencies: IndexSet<SpecId> = IndexSet::new();
 
     for rule_path in execution_order {
         let rule_node = graph.rules().get(rule_path).expect(
@@ -177,21 +224,6 @@ pub(crate) fn build_execution_plan(
             });
         }
 
-        let is_dependency_rule = !rule_path.segments.is_empty();
-        if is_dependency_rule {
-            let spec_ref_path = FactPath {
-                segments: vec![],
-                fact: rule_path.segments[0].fact.clone(),
-            };
-            if let Some(fact_data) = facts.get(&spec_ref_path) {
-                if let (Some(name), Some(hash)) =
-                    (fact_data.spec_ref(), fact_data.resolved_plan_hash())
-                {
-                    dependencies.insert(SpecId::new(name.to_string(), hash.to_string()));
-                }
-            }
-        }
-
         path_to_index.insert(rule_path.clone(), executable_rules.len());
         executable_rules.push(ExecutableRule {
             path: rule_path.clone(),
@@ -206,11 +238,18 @@ pub(crate) fn build_execution_plan(
     let main_spec = graph.main_spec();
     let named_types = build_type_tables(main_spec, resolved_types);
 
+    let mut sources: SpecSources = IndexMap::new();
+    for spec in resolved_types.keys() {
+        let key = (spec.name.clone(), spec.effective_from.clone());
+        sources
+            .entry(key)
+            .or_insert_with(|| crate::formatting::format_spec(spec, crate::formatting::MAX_COLS));
+    }
+
     ExecutionPlan {
         spec_name: main_spec.name.clone(),
         facts,
         rules: executable_rules,
-        sources: graph.sources().clone(),
         meta: main_spec
             .meta_fields
             .iter()
@@ -219,7 +258,7 @@ pub(crate) fn build_execution_plan(
         named_types,
         valid_from,
         valid_to,
-        dependencies,
+        sources,
     }
 }
 
@@ -950,12 +989,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let mut values = HashMap::new();
@@ -1008,12 +1046,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let mut values = HashMap::new();
@@ -1074,12 +1111,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::from([("<test>".to_string(), "".to_string())]),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let mut values = HashMap::new();
@@ -1110,16 +1146,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: {
-                let mut s = HashMap::new();
-                s.insert("test.lemma".to_string(), "fact age: number".to_string());
-                s
-            },
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1128,7 +1159,6 @@ mod tests {
         assert_eq!(deserialized.spec_name, plan.spec_name);
         assert_eq!(deserialized.facts.len(), plan.facts.len());
         assert_eq!(deserialized.rules.len(), plan.rules.len());
-        assert_eq!(deserialized.sources.len(), plan.sources.len());
     }
 
     #[test]
@@ -1154,12 +1184,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts: IndexMap::new(),
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types,
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1206,12 +1235,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1271,12 +1299,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1325,12 +1352,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1370,12 +1396,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1435,12 +1460,11 @@ mod tests {
             spec_name: "empty".to_string(),
             facts: IndexMap::new(),
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1449,7 +1473,6 @@ mod tests {
         assert_eq!(deserialized.spec_name, "empty");
         assert_eq!(deserialized.facts.len(), 0);
         assert_eq!(deserialized.rules.len(), 0);
-        assert_eq!(deserialized.sources.len(), 0);
     }
 
     #[test]
@@ -1470,12 +1493,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: HashMap::new(),
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1538,16 +1560,11 @@ mod tests {
             spec_name: "test".to_string(),
             facts,
             rules: Vec::new(),
-            sources: {
-                let mut s = HashMap::new();
-                s.insert("test.lemma".to_string(), "fact age: number".to_string());
-                s
-            },
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             valid_from: None,
             valid_to: None,
-            dependencies: IndexSet::new(),
+            sources: IndexMap::new(),
         };
 
         let rule = ExecutableRule {
@@ -1582,7 +1599,6 @@ mod tests {
         assert_eq!(deserialized2.spec_name, plan.spec_name);
         assert_eq!(deserialized2.facts.len(), plan.facts.len());
         assert_eq!(deserialized2.rules.len(), plan.rules.len());
-        assert_eq!(deserialized2.sources.len(), plan.sources.len());
         assert_eq!(deserialized2.rules[0].name, plan.rules[0].name);
         assert_eq!(
             deserialized2.rules[0].branches.len(),

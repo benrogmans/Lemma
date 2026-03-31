@@ -323,66 +323,6 @@ fn test_veto_expression() {
 }
 
 #[test]
-fn test_expression_get_source_text_with_location() {
-    use crate::parsing::source::Source;
-    use std::collections::HashMap;
-
-    let source = "fact value: 42";
-    let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), source.to_string());
-
-    let span = Span {
-        start: 12,
-        end: 14,
-        line: 1,
-        col: 12,
-    };
-    let source_location = Source::new("test.lemma", span);
-    let expr = Expression::new(
-        ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
-        source_location,
-    );
-
-    assert_eq!(expr.get_source_text(&sources), Some("42".to_string()));
-}
-
-#[test]
-fn test_expression_get_source_text_no_location() {
-    use std::collections::HashMap;
-
-    let mut sources = HashMap::new();
-    sources.insert("test.lemma".to_string(), "fact value: 42".to_string());
-
-    let expr = Expression {
-        kind: ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
-        source_location: None,
-    };
-
-    assert_eq!(expr.get_source_text(&sources), None);
-}
-
-#[test]
-fn test_expression_get_source_text_source_not_found() {
-    use crate::parsing::source::Source;
-    use std::collections::HashMap;
-
-    let sources = HashMap::new();
-    let span = Span {
-        start: 0,
-        end: 5,
-        line: 1,
-        col: 0,
-    };
-    let source_location = Source::new("missing.lemma", span);
-    let expr = Expression::new(
-        ExpressionKind::Literal(Value::Number(Decimal::new(42, 0))),
-        source_location,
-    );
-
-    assert_eq!(expr.get_source_text(&sources), None);
-}
-
-#[test]
 fn test_datetime_value_parse_year_and_year_month_equal() {
     let from_year: DateTimeValue = "2026".parse().expect("2026 should parse");
     let from_year_month: DateTimeValue = "2026-01".parse().expect("2026-01 should parse");

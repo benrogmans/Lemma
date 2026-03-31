@@ -1267,14 +1267,6 @@ impl Expression {
         }
     }
 
-    /// Get source text for this expression if available
-    pub fn get_source_text(&self, sources: &HashMap<String, String>) -> Option<String> {
-        let source = self.source_location.as_ref()?;
-        let file_source = sources.get(&source.attribute)?;
-        let span = &source.span;
-        Some(file_source.get(span.start..span.end)?.to_string())
-    }
-
     /// Collect all FactPath references from this resolved expression tree
     pub fn collect_fact_paths(&self, facts: &mut std::collections::HashSet<FactPath>) {
         self.kind.collect_fact_paths(facts);
