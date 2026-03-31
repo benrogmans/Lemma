@@ -2,13 +2,14 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
-## [0.8.10] - 2026-03-30
+## [0.8.10] - 2026-03-31
 
 ### Added
 
 - Nix flake dev shell (Rust from `rust-toolchain.toml`, cargo-nextest, cargo-deny, wasm-pack, Node 24, Elixir, nixpkgs-fmt formatter) plus `flake.lock`.
 - `rust-toolchain.toml`: `wasm32-unknown-unknown` target.
-- Test cases for temporal type imports
+- Test cases for temporal type imports.
+- `ExecutionPlan.sources`: keyed `SpecSources` map (`IndexMap<(name, effective_from), source>`) with AST-reconstructed canonical source for every spec in the plan. Custom serde serializes as `[{name, effective_from, source}]` for downstream consumers.
 
 ### Changed
 
@@ -16,8 +17,16 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - Graph / types: missing plan hash on type-import or spec-reference binding yields validation errors instead of `unreachable!` when a dependency spec failed validation or is absent from the hash registry.
 - `build_graph` test helper pre-plans dependency specs so `PlanHashRegistry` matches topological `plan()` behavior.
 - `.gitignore`: `result` / `result-*` (Nix build outputs).
-- Fixes for temporal type imports, to properly pin and resolve them
-- Fix for docker image building in CI
+- Fixes for temporal type imports, to properly pin and resolve them.
+- Fix for docker image building in CI.
+- Formatter cleanup: deterministic output improvements.
+- Deterministic fingerprinting on semantics.
+- Type resolver: rename `register_dependency_types` to `register_dependency_specs` to clarify scope.
+
+### Removed
+
+- `==` / `!=` syntax (use `=` and `!=` was already removed).
+- Raw source text from operation records and expression evaluation (replaced by plan-level `sources`).
 
 ## [0.8.9] - 2026-03-30
 
