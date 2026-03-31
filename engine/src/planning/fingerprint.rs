@@ -9,14 +9,17 @@
 //! (u32) + postcard(`PlanFingerprint`). Bump the version when the encoded semantics change in a
 //! way that must not share hashes with prior formats.
 
-use crate::parsing::ast::{CalendarUnit, DateCalendarKind, DateRelativeKind, DateTimeValue};
+use crate::parsing::ast::{
+    CalendarUnit, DateCalendarKind, DateRelativeKind, DateTimeValue, DurationUnit, TimeValue,
+};
 use crate::planning::execution_plan::{Branch, ExecutableRule, ExecutionPlan, SpecId};
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactData, FactPath,
-    LemmaType, LiteralValue, MathematicalComputation, NegationType, RulePath,
-    SemanticConversionTarget, TypeDefiningSpec, TypeExtends, TypeSpecification, ValueKind,
-    VetoExpression,
+    LemmaType, LiteralValue, MathematicalComputation, NegationType, RatioUnit, RatioUnits,
+    RulePath, ScaleUnit, ScaleUnits, SemanticConversionTarget, TypeDefiningSpec, TypeExtends,
+    TypeSpecification, ValueKind, VetoExpression,
 };
+use rust_decimal::Decimal;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -48,10 +51,72 @@ pub enum TypeExtendsFingerprint {
     },
 }
 
+/// Mirrors [`TypeSpecification`] with order-independent vecs (sorted) for fingerprinting.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TypeSpecificationFingerprint {
+    Boolean {
+        help: String,
+        default: Option<bool>,
+    },
+    Scale {
+        minimum: Option<Decimal>,
+        maximum: Option<Decimal>,
+        decimals: Option<u8>,
+        precision: Option<Decimal>,
+        units: ScaleUnits,
+        help: String,
+        default: Option<(Decimal, String)>,
+    },
+    Number {
+        minimum: Option<Decimal>,
+        maximum: Option<Decimal>,
+        decimals: Option<u8>,
+        precision: Option<Decimal>,
+        help: String,
+        default: Option<Decimal>,
+    },
+    Ratio {
+        minimum: Option<Decimal>,
+        maximum: Option<Decimal>,
+        decimals: Option<u8>,
+        units: RatioUnits,
+        help: String,
+        default: Option<Decimal>,
+    },
+    Text {
+        minimum: Option<usize>,
+        maximum: Option<usize>,
+        length: Option<usize>,
+        options: Vec<String>,
+        help: String,
+        default: Option<String>,
+    },
+    Date {
+        minimum: Option<DateTimeValue>,
+        maximum: Option<DateTimeValue>,
+        help: String,
+        default: Option<DateTimeValue>,
+    },
+    Time {
+        minimum: Option<TimeValue>,
+        maximum: Option<TimeValue>,
+        help: String,
+        default: Option<TimeValue>,
+    },
+    Duration {
+        help: String,
+        default: Option<(Decimal, DurationUnit)>,
+    },
+    Veto {
+        message: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LemmaTypeFingerprint {
     pub name: Option<String>,
-    pub specifications: TypeSpecification,
+    pub specifications: TypeSpecificationFingerprint,
     pub extends: TypeExtendsFingerprint,
 }
 
@@ -66,8 +131,8 @@ pub struct LiteralValueFingerprint {
 pub struct PlanFingerprint {
     pub spec_name: String,
     pub valid_from: Option<DateTimeValue>,
-    pub facts: Vec<(FactPath, FactFingerprint)>,
-    pub rules: Vec<RuleFingerprint>,
+    pub facts: BTreeMap<FactPath, FactFingerprint>,
+    pub rules: BTreeMap<RulePath, RuleFingerprint>,
     pub named_types: BTreeMap<String, LemmaTypeFingerprint>,
 }
 
@@ -91,7 +156,6 @@ pub enum FactFingerprint {
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleFingerprint {
     pub path: RulePath,
-    pub name: String,
     pub branches: Vec<BranchFingerprint>,
     pub needs_facts: Vec<FactPath>,
     pub rule_type: LemmaTypeFingerprint,
@@ -138,6 +202,121 @@ pub enum ExpressionKindFingerprint {
     DateCalendar(DateCalendarKind, CalendarUnit, Box<ExpressionFingerprint>),
 }
 
+fn type_spec_fingerprint(ts: &TypeSpecification) -> TypeSpecificationFingerprint {
+    match ts {
+        TypeSpecification::Boolean { help, default } => TypeSpecificationFingerprint::Boolean {
+            help: help.clone(),
+            default: *default,
+        },
+        TypeSpecification::Scale {
+            minimum,
+            maximum,
+            decimals,
+            precision,
+            units,
+            help,
+            default,
+        } => {
+            let mut sorted: Vec<ScaleUnit> = units.iter().cloned().collect();
+            sorted.sort_by(|a, b| a.name.cmp(&b.name));
+            TypeSpecificationFingerprint::Scale {
+                minimum: *minimum,
+                maximum: *maximum,
+                decimals: *decimals,
+                precision: *precision,
+                units: ScaleUnits::from(sorted),
+                help: help.clone(),
+                default: default.clone(),
+            }
+        }
+        TypeSpecification::Number {
+            minimum,
+            maximum,
+            decimals,
+            precision,
+            help,
+            default,
+        } => TypeSpecificationFingerprint::Number {
+            minimum: *minimum,
+            maximum: *maximum,
+            decimals: *decimals,
+            precision: *precision,
+            help: help.clone(),
+            default: *default,
+        },
+        TypeSpecification::Ratio {
+            minimum,
+            maximum,
+            decimals,
+            units,
+            help,
+            default,
+        } => {
+            let mut sorted: Vec<RatioUnit> = units.iter().cloned().collect();
+            sorted.sort_by(|a, b| a.name.cmp(&b.name));
+            TypeSpecificationFingerprint::Ratio {
+                minimum: *minimum,
+                maximum: *maximum,
+                decimals: *decimals,
+                units: RatioUnits::from(sorted),
+                help: help.clone(),
+                default: *default,
+            }
+        }
+        TypeSpecification::Text {
+            minimum,
+            maximum,
+            length,
+            options,
+            help,
+            default,
+        } => {
+            let mut sorted_opts = options.clone();
+            sorted_opts.sort();
+            TypeSpecificationFingerprint::Text {
+                minimum: *minimum,
+                maximum: *maximum,
+                length: *length,
+                options: sorted_opts,
+                help: help.clone(),
+                default: default.clone(),
+            }
+        }
+        TypeSpecification::Date {
+            minimum,
+            maximum,
+            help,
+            default,
+        } => TypeSpecificationFingerprint::Date {
+            minimum: minimum.clone(),
+            maximum: maximum.clone(),
+            help: help.clone(),
+            default: default.clone(),
+        },
+        TypeSpecification::Time {
+            minimum,
+            maximum,
+            help,
+            default,
+        } => TypeSpecificationFingerprint::Time {
+            minimum: minimum.clone(),
+            maximum: maximum.clone(),
+            help: help.clone(),
+            default: default.clone(),
+        },
+        TypeSpecification::Duration { help, default } => TypeSpecificationFingerprint::Duration {
+            help: help.clone(),
+            default: default.clone(),
+        },
+        TypeSpecification::Veto { message } => TypeSpecificationFingerprint::Veto {
+            message: message.clone(),
+        },
+        TypeSpecification::Undetermined => {
+            unreachable!("fingerprint: Undetermined must not appear in a validated execution plan")
+        }
+    }
+}
+
 fn type_defining_spec_fingerprint(ds: &TypeDefiningSpec) -> TypeDefiningSpecFingerprint {
     match ds {
         TypeDefiningSpec::Local => TypeDefiningSpecFingerprint::Local,
@@ -169,7 +348,7 @@ fn type_extends_fingerprint(e: &TypeExtends) -> TypeExtendsFingerprint {
 fn lemma_type_fingerprint(lt: &LemmaType) -> LemmaTypeFingerprint {
     LemmaTypeFingerprint {
         name: lt.name.clone(),
-        specifications: lt.specifications.clone(),
+        specifications: type_spec_fingerprint(&lt.specifications),
         extends: type_extends_fingerprint(&lt.extends),
     }
 }
@@ -183,13 +362,17 @@ fn literal_value_fingerprint(lv: &LiteralValue) -> LiteralValueFingerprint {
 
 /// Project ExecutionPlan to semantic fingerprint, excluding sources and meta.
 pub fn from_plan(plan: &ExecutionPlan) -> PlanFingerprint {
-    let facts: Vec<(FactPath, FactFingerprint)> = plan
+    let facts: BTreeMap<FactPath, FactFingerprint> = plan
         .facts
         .iter()
         .map(|(path, data)| (path.clone(), fact_fingerprint(data)))
         .collect();
 
-    let rules: Vec<RuleFingerprint> = plan.rules.iter().map(rule_fingerprint).collect();
+    let rules: BTreeMap<RulePath, RuleFingerprint> = plan
+        .rules
+        .iter()
+        .map(|rule| (rule.path.clone(), rule_fingerprint(rule)))
+        .collect();
 
     let named_types: BTreeMap<String, LemmaTypeFingerprint> = plan
         .named_types
@@ -231,7 +414,6 @@ fn fact_fingerprint(data: &FactData) -> FactFingerprint {
 fn rule_fingerprint(rule: &ExecutableRule) -> RuleFingerprint {
     RuleFingerprint {
         path: rule.path.clone(),
-        name: rule.name.clone(),
         branches: rule.branches.iter().map(branch_fingerprint).collect(),
         needs_facts: rule.needs_facts.iter().cloned().collect(),
         rule_type: lemma_type_fingerprint(&rule.rule_type),
@@ -323,8 +505,11 @@ pub fn fingerprint_hash(fp: &PlanFingerprint) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::ast::Span;
+    use crate::parsing::source::Source;
+    use crate::planning::semantics::primitive_number;
     use indexmap::{IndexMap, IndexSet};
-    use std::collections::HashMap;
+    use std::collections::{BTreeSet, HashMap};
 
     fn empty_plan(spec_name: &str) -> ExecutionPlan {
         ExecutionPlan {
@@ -337,6 +522,40 @@ mod tests {
             valid_from: None,
             valid_to: None,
             dependencies: IndexSet::new(),
+        }
+    }
+
+    fn dummy_source() -> Source {
+        Source::new(
+            "test.lemma",
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+        )
+    }
+
+    fn literal_expr_one() -> Expression {
+        Expression::with_source(
+            ExpressionKind::Literal(Box::new(LiteralValue::number(Decimal::ONE))),
+            None,
+        )
+    }
+
+    fn simple_rule(path: RulePath, name: &str) -> ExecutableRule {
+        ExecutableRule {
+            path,
+            name: name.to_string(),
+            branches: vec![Branch {
+                condition: None,
+                result: literal_expr_one(),
+                source: dummy_source(),
+            }],
+            needs_facts: BTreeSet::new(),
+            source: dummy_source(),
+            rule_type: primitive_number().clone(),
         }
     }
 
@@ -383,5 +602,56 @@ mod tests {
             timezone: None,
         });
         assert_eq!(fingerprint_hash(&from_plan(&p)), "b301d0c3");
+    }
+
+    #[test]
+    fn fingerprint_independent_of_fact_rule_and_type_order() {
+        let fa = FactPath::local("a".to_string());
+        let fb = FactPath::local("b".to_string());
+        let fact_a = FactData::Value {
+            value: LiteralValue::number(Decimal::ONE),
+            source: dummy_source(),
+            is_default: false,
+        };
+        let fact_b = FactData::Value {
+            value: LiteralValue::number(Decimal::from(2)),
+            source: dummy_source(),
+            is_default: false,
+        };
+
+        let type_x = LemmaType::new(
+            "age".to_string(),
+            TypeSpecification::number(),
+            TypeExtends::Primitive,
+        );
+        let type_y = LemmaType::new(
+            "weight".to_string(),
+            TypeSpecification::number(),
+            TypeExtends::Primitive,
+        );
+
+        let mut plan1 = empty_plan("order_test");
+        plan1.facts.insert(fa.clone(), fact_a.clone());
+        plan1.facts.insert(fb.clone(), fact_b.clone());
+        plan1.named_types.insert("age".to_string(), type_x.clone());
+        plan1
+            .named_types
+            .insert("weight".to_string(), type_y.clone());
+
+        let mut plan2 = empty_plan("order_test");
+        plan2.facts.insert(fb, fact_b);
+        plan2.facts.insert(fa, fact_a);
+        plan2.named_types.insert("weight".to_string(), type_y);
+        plan2.named_types.insert("age".to_string(), type_x);
+
+        let r1 = RulePath::new(vec![], "r1".to_string());
+        let r2 = RulePath::new(vec![], "r2".to_string());
+        plan1.rules = vec![simple_rule(r1.clone(), "r1"), simple_rule(r2.clone(), "r2")];
+        plan2.rules = vec![simple_rule(r2, "r2"), simple_rule(r1, "r1")];
+
+        assert_eq!(
+            fingerprint_hash(&from_plan(&plan1)),
+            fingerprint_hash(&from_plan(&plan2))
+        );
     }
 }

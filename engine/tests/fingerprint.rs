@@ -51,7 +51,7 @@ fn golden_loaded_minimal_fact_and_rule() {
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_loaded_minimal", &eff),
-        "56c29a91"
+        "9d4491bb"
     );
 }
 
@@ -67,7 +67,7 @@ fn golden_loaded_unless_rule() {
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_loaded_unless", &eff),
-        "6a33b890"
+        "d7101147"
     );
 }
 
@@ -102,7 +102,7 @@ rule r: x"#,
     let eff = date(2025, 7, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_temporal_adv", &eff),
-        "6d8cc867"
+        "1c22b3a1"
     );
 }
 
@@ -130,7 +130,7 @@ rule total: balance"#,
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_rich_adv", &eff),
-        "d5f0b7ae"
+        "e84294c5"
     );
 }
 
@@ -160,7 +160,7 @@ rule out: link.computed"#,
     let eff = date(2025, 1, 1);
     assert_eq!(
         plan_hash_from_loaded_plan(&engine, "golden_consumer_ref", &eff),
-        "c161b54e"
+        "7463e060"
     );
 }
 
