@@ -31,8 +31,6 @@ fact x: 1
         .get_plan("meta_test", Some(&effective))
         .expect("Plan not found");
 
-    // Check meta fields
-    // Note: Display for Text literal is unquoted in Value::Display
     assert_eq!(
         plan.meta.get("title").map(|v| v.to_string()),
         Some("Test Spec".to_string())

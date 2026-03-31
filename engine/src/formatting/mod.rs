@@ -1,10 +1,7 @@
 //! Lemma source code formatting.
 //!
-//! Formats parsed specs into canonical Lemma source text.
-//! Value and constraint formatting is delegated to [`AsLemmaSource`] (in `parsing::ast`),
-//! which emits valid, round-trippable Lemma syntax. The regular `Display` impls on AST
-//! types are for human-readable output (error messages, evaluation); they are **not** used
-//! here. This module handles layout: alignment, line wrapping, and section ordering.
+//! Formats parsed specs into canonical Lemma source text. Uses `AsLemmaSource`
+//! and `Expression::Display` for syntax; this module handles layout only.
 
 use crate::parsing::ast::{
     expression_precedence, AsLemmaSource, Expression, ExpressionKind, FactValue, LemmaFact,
@@ -108,10 +105,6 @@ fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
 
     out
 }
-
-// =============================================================================
-// Type definitions — delegated to AsLemmaSource<TypeDef>
-// =============================================================================
 
 // =============================================================================
 // Facts
@@ -255,79 +248,6 @@ fn format_rule(rule: &LemmaRule, max_cols: usize) -> String {
 }
 
 // =============================================================================
-// Expressions — produce valid Lemma source with precedence-based parens
-// =============================================================================
-
-/// Format an expression as valid Lemma source (flat, no wrapping).
-///
-/// Uses `AsLemmaSource<Value>` for literals and the AST types' `Display` impls
-/// for operators, rule references, etc. (those `Display` impls already emit
-/// valid Lemma syntax for these simple tokens).
-fn format_expr(expr: &Expression, parent_prec: u8) -> String {
-    let my_prec = expression_precedence(&expr.kind);
-
-    let needs_parens = parent_prec < 10 && my_prec < parent_prec;
-
-    let inner = match &expr.kind {
-        ExpressionKind::Literal(lit) => format!("{}", AsLemmaSource(lit)),
-        ExpressionKind::Reference(r) => format!("{}", r),
-        ExpressionKind::UnresolvedUnitLiteral(..) => {
-            // Expression::Display already normalizes the decimal.
-            format!("{}", expr)
-        }
-        ExpressionKind::Arithmetic(left, op, right) => {
-            let left_str = format_expr(left, my_prec);
-            let right_str = format_expr(right, my_prec);
-            format!("{} {} {}", left_str, op.symbol(), right_str)
-        }
-        ExpressionKind::Comparison(left, op, right) => {
-            let left_str = format_expr(left, my_prec);
-            let right_str = format_expr(right, my_prec);
-            format!("{} {} {}", left_str, op.symbol(), right_str)
-        }
-        ExpressionKind::UnitConversion(value, target) => {
-            let value_str = format_expr(value, my_prec);
-            format!("{} in {}", value_str, target)
-        }
-        ExpressionKind::LogicalNegation(inner_expr, _) => {
-            let inner_str = format_expr(inner_expr, my_prec);
-            format!("not {}", inner_str)
-        }
-        ExpressionKind::LogicalAnd(left, right) => {
-            let left_str = format_expr(left, my_prec);
-            let right_str = format_expr(right, my_prec);
-            format!("{} and {}", left_str, right_str)
-        }
-        ExpressionKind::MathematicalComputation(op, operand) => {
-            let operand_str = format_expr(operand, my_prec);
-            format!("{} {}", op, operand_str)
-        }
-        ExpressionKind::Veto(veto) => match &veto.message {
-            Some(msg) => format!("veto {}", crate::parsing::ast::quote_lemma_text(msg)),
-            None => "veto".to_string(),
-        },
-        ExpressionKind::Now => "now".to_string(),
-        ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
-            let date_str = format_expr(date_expr, my_prec);
-            match tolerance {
-                Some(tol) => format!("{} {} {}", date_str, kind, format_expr(tol, my_prec)),
-                None => format!("{} {}", date_str, kind),
-            }
-        }
-        ExpressionKind::DateCalendar(kind, unit, date_expr) => {
-            let date_str = format_expr(date_expr, my_prec);
-            format!("{} {} {}", date_str, kind, unit)
-        }
-    };
-
-    if needs_parens {
-        format!("({})", inner)
-    } else {
-        inner
-    }
-}
-
-// =============================================================================
 // Expression wrapping (soft line breaking at max_cols)
 // =============================================================================
 
@@ -373,18 +293,17 @@ fn format_expr_wrapped(
         ExpressionKind::Arithmetic(left, op, right) => {
             let left_str = format_expr_wrapped(left.as_ref(), max_cols, indent, my_prec);
             let right_str = format_expr_wrapped(right.as_ref(), max_cols, indent, my_prec);
-            let op_symbol = op.symbol();
-            let single_line = format!("{} {} {}", left_str, op_symbol, right_str);
+            let single_line = format!("{} {} {}", left_str, op, right_str);
             if single_line.len() <= max_cols && !single_line.contains('\n') {
                 return wrap_in_parens(single_line);
             }
             let continued_right = indent_after_first_line(&right_str, indent);
-            let continuation = format!("{}{} {}", indent, op_symbol, continued_right);
+            let continuation = format!("{}{} {}", indent, op, continued_right);
             let multi_line = format!("{}\n{}", left_str, continuation);
             wrap_in_parens(multi_line)
         }
         _ => {
-            let s = format_expr(expr, parent_prec);
+            let s = expr.to_string();
             wrap_in_parens(s)
         }
     }
@@ -716,6 +635,20 @@ rule total: price
             reparsed.is_ok(),
             "formatted output should re-parse, got: {:?}",
             reparsed
+        );
+    }
+
+    #[test]
+    fn test_format_expression_display_stable_round_trip() {
+        let source = r#"spec test
+fact a: 1.00
+rule r: a + 2.00 * 3
+"#;
+        let formatted = format_source(source, "test.lemma").unwrap();
+        let again = format_source(&formatted, "test.lemma").unwrap();
+        assert_eq!(
+            formatted, again,
+            "AST Display-based format must be idempotent under parse/format"
         );
     }
 }

@@ -524,8 +524,8 @@ fn evaluate_single_expression(
                 // Use source text if available, otherwise construct from values for explanation display
                 let original_expr = expr_text
                     .clone()
-                    .unwrap_or_else(|| format!("{} {} {}", left_val, op.symbol(), right_val));
-                let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
+                    .unwrap_or_else(|| format!("{} {} {}", left_val, op, right_val));
+                let substituted_expr = format!("{} {} {}", left_val, op, right_val);
                 context.push_operation(OperationKind::Computation {
                     kind: ComputationKind::Arithmetic(op.clone()),
                     inputs: vec![left_val.clone(), right_val.clone()],
@@ -595,18 +595,18 @@ fn evaluate_single_expression(
                         right.get_source_text(&context.sources),
                     ) {
                         (Some(l), Some(r)) => {
-                            format!("{} {} {}", l, negated_op.symbol(), r)
+                            format!("{} {} {}", l, negated_op, r)
                         }
-                        _ => format!("{} {} {}", left_val, negated_op.symbol(), right_val),
+                        _ => format!("{} {} {}", left_val, negated_op, right_val),
                     };
-                    let sub = format!("{} {} {}", left_val, negated_op.symbol(), right_val);
+                    let sub = format!("{} {} {}", left_val, negated_op, right_val);
                     (negated_op, orig, sub, LiteralValue::from_bool(true))
                 } else {
                     let expr_text = current.get_source_text(&context.sources);
                     let original_expr = expr_text
                         .clone()
-                        .unwrap_or_else(|| format!("{} {} {}", left_val, op.symbol(), right_val));
-                    let substituted_expr = format!("{} {} {}", left_val, op.symbol(), right_val);
+                        .unwrap_or_else(|| format!("{} {} {}", left_val, op, right_val));
+                    let substituted_expr = format!("{} {} {}", left_val, op, right_val);
                     (
                         op.clone(),
                         original_expr,

@@ -2,17 +2,13 @@
 //!
 //! Infrastructure (Span, DepthTracker) and spec/fact/rule/expression/value types from parsing.
 //!
-//! # `AsLemmaSource<T>` wrapper
+//! # Human `Display` vs canonical `AsLemmaSource`
 //!
-//! For types that need to emit valid, round-trippable Lemma source (e.g. constraint
-//! args like `help`, `default`, `option`), wrap a reference in [`AsLemmaSource`] and
-//! use its `Display` implementation. The regular `Display` impls on AST types are for
-//! human-readable output (error messages, debug); `AsLemmaSource` emits **valid Lemma syntax**.
-//!
-//! ```ignore
-//! use lemma::parsing::ast::{AsLemmaSource, FactValue};
-//! let s = format!("{}", AsLemmaSource(&fact_value));
-//! ```
+//! [`MetaValue`], [`FactValue`], [`TypeDef`], and [`CommandArg`] use human-oriented
+//! `Display` (stable for `to_string()`, logs, APIs). [`Expression`] and
+//! [`LemmaRule`]/[`LemmaSpec`] use canonical Lemma source for literals via
+//! [`AsLemmaSource`] around [`Value`]. Wrap [`MetaValue`]/[`FactValue`]/[`TypeDef`]
+//! in [`AsLemmaSource`] when emitting round-trippable source (e.g. the formatter).
 
 /// Span representing a location in source code
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -359,21 +355,6 @@ pub enum ArithmeticComputation {
     Power,
 }
 
-impl ArithmeticComputation {
-    /// Returns the operator symbol
-    #[must_use]
-    pub fn symbol(&self) -> &'static str {
-        match self {
-            ArithmeticComputation::Add => "+",
-            ArithmeticComputation::Subtract => "-",
-            ArithmeticComputation::Multiply => "*",
-            ArithmeticComputation::Divide => "/",
-            ArithmeticComputation::Modulo => "%",
-            ArithmeticComputation::Power => "^",
-        }
-    }
-}
-
 /// Comparison computations
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -387,19 +368,6 @@ pub enum ComparisonComputation {
 }
 
 impl ComparisonComputation {
-    /// Returns the operator symbol
-    #[must_use]
-    pub fn symbol(&self) -> &'static str {
-        match self {
-            ComparisonComputation::GreaterThan => ">",
-            ComparisonComputation::LessThan => "<",
-            ComparisonComputation::GreaterThanOrEqual => ">=",
-            ComparisonComputation::LessThanOrEqual => "<=",
-            ComparisonComputation::Is => "is",
-            ComparisonComputation::IsNot => "is not",
-        }
-    }
-
     /// Check if this is an equality comparison (`is`)
     #[must_use]
     pub fn is_equal(&self) -> bool {
@@ -899,7 +867,7 @@ fn write_expression_child(
 impl fmt::Display for Expression {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
-            ExpressionKind::Literal(lit) => write!(f, "{}", lit),
+            ExpressionKind::Literal(lit) => write!(f, "{}", AsLemmaSource(lit)),
             ExpressionKind::Reference(r) => write!(f, "{}", r),
             ExpressionKind::Arithmetic(left, op, right) => {
                 let my_prec = expression_precedence(&self.kind);
@@ -1163,19 +1131,10 @@ impl fmt::Display for TypeDef {
 }
 
 // =============================================================================
-// AsLemmaSource — wrapper for valid, round-trippable Lemma source output
+// AsLemmaSource<Value> — canonical literal formatting
 // =============================================================================
 
-/// Wrapper that selects the "emit valid Lemma source" `Display` implementation.
-///
-/// The regular `Display` on AST types is for human-readable output. Wrap a
-/// reference in `AsLemmaSource` when you need syntactically valid Lemma that
-/// can be parsed back (round-trip).
-///
-/// # Example
-/// ```ignore
-/// let s = format!("{}", AsLemmaSource(&fact_value));
-/// ```
+/// Wrap a value to emit canonical Lemma source (round-trippable). See module docs.
 pub struct AsLemmaSource<'a, T: ?Sized>(pub &'a T);
 
 /// Escape a string and wrap it in double quotes for Lemma source output.
@@ -1229,8 +1188,6 @@ fn group_digits(s: &str) -> String {
     format!("{}{}{}", sign, grouped, frac_part)
 }
 
-// -- Display for AsLemmaSource<CommandArg> ------------------------------------
-
 impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
@@ -1246,9 +1203,6 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
 }
 
 /// Format a single constraint command and its args as valid Lemma source.
-///
-/// Each `CommandArg` already knows its literal kind (from parsing), so formatting
-/// is simply delegated to `AsLemmaSource<CommandArg>` — no lookup table needed.
 fn format_constraint_as_source(cmd: &TypeConstraintCommand, args: &[CommandArg]) -> String {
     if args.is_empty() {
         cmd.to_string()
@@ -1269,36 +1223,6 @@ fn format_constraints_as_source(constraints: &[Constraint], separator: &str) -> 
         .map(|(cmd, args)| format_constraint_as_source(cmd, args))
         .collect::<Vec<_>>()
         .join(separator)
-}
-
-// -- Display for AsLemmaSource<FactValue> ------------------------------------
-
-impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            FactValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-            FactValue::SpecReference(spec_ref) => {
-                write!(f, "spec {}", spec_ref)
-            }
-            FactValue::TypeDeclaration {
-                base,
-                constraints,
-                from,
-            } => {
-                let base_str = if let Some(from_spec) = from {
-                    format!("{} from {}", base, from_spec)
-                } else {
-                    format!("{}", base)
-                };
-                if let Some(ref constraints_vec) = constraints {
-                    let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
-                    write!(f, "[{} -> {}]", base_str, constraint_str)
-                } else {
-                    write!(f, "[{}]", base_str)
-                }
-            }
-        }
-    }
 }
 
 // -- Display for AsLemmaSource<Value> ----------------------------------------
@@ -1351,7 +1275,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
     }
 }
 
-// -- Display for AsLemmaSource<MetaValue> ------------------------------------
+// -- AsLemmaSource: MetaValue, FactValue, TypeDef (formatter / round-trip) ---
 
 impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1362,7 +1286,33 @@ impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
     }
 }
 
-// -- Display for AsLemmaSource<TypeDef> --------------------------------------
+impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            FactValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
+            FactValue::SpecReference(spec_ref) => {
+                write!(f, "spec {}", spec_ref)
+            }
+            FactValue::TypeDeclaration {
+                base,
+                constraints,
+                from,
+            } => {
+                let base_str = if let Some(from_spec) = from {
+                    format!("{} from {}", base, from_spec)
+                } else {
+                    format!("{}", base)
+                };
+                if let Some(ref constraints_vec) = constraints {
+                    let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
+                    write!(f, "[{} -> {}]", base_str, constraint_str)
+                } else {
+                    write!(f, "[{}]", base_str)
+                }
+            }
+        }
+    }
+}
 
 impl<'a> fmt::Display for AsLemmaSource<'a, TypeDef> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1609,7 +1559,7 @@ mod tests {
     // test_expression_get_source_text_source_not_found (uses Value instead of LiteralValue now)
 
     // =====================================================================
-    // AsLemmaSource — constraint formatting tests
+    // FactValue / TypeDef Display — constraint formatting
     // =====================================================================
 
     #[test]
