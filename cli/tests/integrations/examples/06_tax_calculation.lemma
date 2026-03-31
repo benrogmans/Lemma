@@ -67,7 +67,7 @@ rule total_income_tax:
 
 rule country_tax_rate:
   21%
-  unless country != "NL" then 0%
+  unless country is not "NL" then 0%
 
 rule vat_tax:
   taxable_income * country_tax_rate
@@ -77,7 +77,7 @@ rule total_tax:
 
 rule effective_tax_rate:
   total_tax / income in percent
-  unless income == 0 then 0%
+  unless income is 0 then 0%
 
 rule after_tax_income:
   income - total_tax

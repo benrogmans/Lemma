@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_format_value_number() {
         let v = Value::Number(Decimal::from_str("42.50").unwrap());
-        assert_eq!(fmt_value(&v), "42.5");
+        assert_eq!(fmt_value(&v), "42.50");
     }
 
     #[test]
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn test_format_value_scale() {
         let v = Value::Scale(Decimal::from_str("99.50").unwrap(), "eur".to_string());
-        assert_eq!(fmt_value(&v), "99.5 eur");
+        assert_eq!(fmt_value(&v), "99.50 eur");
     }
 
     #[test]

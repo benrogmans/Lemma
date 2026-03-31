@@ -78,8 +78,8 @@ fn test_modulo_in_expression() {
             r#"
 spec test
 fact value: 17
-rule is_even: (value % 2) == 0
-rule is_odd: (value % 2) == 1
+rule is_even: (value % 2) is 0
+rule is_odd: (value % 2) is 1
 "#,
             lemma::SourceType::Labeled("test"),
         )

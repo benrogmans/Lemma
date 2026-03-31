@@ -51,7 +51,7 @@ fn test_text_number_comparison_allowed() {
 spec test
 fact name: "Alice"
 fact age: 30
-rule check: name == "Bob" and age > 25
+rule check: name is "Bob" and age > 25
 "#;
 
     let mut engine = Engine::new();
@@ -198,7 +198,7 @@ spec test
 fact x: 5
 fact y: 10
 rule check: x < y
-  unless x == 0 then y > 0
+  unless x is 0 then y > 0
 "#;
 
     let mut engine = Engine::new();
@@ -217,7 +217,7 @@ spec test
 fact a: 10
 fact b: 20
 rule sum: a + b
-  unless a == 0 then 0
+  unless a is 0 then 0
 "#;
 
     let mut engine = Engine::new();
@@ -237,7 +237,7 @@ fact x: 5
 rule value: 10
   unless x < 0 then 0
   unless x > 100 then 100
-  unless x == 5 then 5
+  unless x is 5 then 5
 "#;
 
     let mut engine = Engine::new();

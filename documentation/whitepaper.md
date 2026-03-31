@@ -99,7 +99,7 @@ Lemma encodes this exactly as stated:
 
 ```lemma
 rule shipping: 12.99
-  unless destination == "CA" then 25.00
+  unless destination is "CA" then 25.00
   unless order_total >= 100 then 0
 ```
 
@@ -195,7 +195,7 @@ Rules can reference other rules by name (the engine resolves whether a name is a
 
 ```lemma
 rule is_adult: age >= 18
-rule has_license: license_status == "valid"
+rule has_license: license_status is "valid"
 rule can_drive: is_adult and has_license
 ```
 
@@ -234,7 +234,7 @@ Lemma provides comprehensive operators for arithmetic, comparison, logical opera
 rule compound: principal * (1 + rate) ^ years
 ```
 
-**Comparison**: `>`, `<`, `>=`, `<=`, `==`, `!=`, `is`, `is not`
+**Comparison**: `>`, `<`, `>=`, `<=`, `is`, `is not`
 
 ```lemma
 rule is_eligible: age >= 18 and income > 30000
@@ -588,7 +588,7 @@ fact filing_status: "single"
 rule taxable_income: income - standard_deduction
 
 rule standard_deduction: 13850
-  unless filing_status == "married" then 27700
+  unless filing_status is "married" then 27700
 
 rule tax_owed: 0
   unless taxable_income > 11000
@@ -616,9 +616,9 @@ rule volume_discount: 0%
   unless quantity >= 100 then 15%
 
 rule tier_discount: 0%
-  unless customer_tier == "silver" then 5%
-  unless customer_tier == "gold" then 10%
-  unless customer_tier == "platinum" then 15%
+  unless customer_tier is "silver" then 5%
+  unless customer_tier is "gold" then 10%
+  unless customer_tier is "platinum" then 15%
 
 rule best_discount: volume_discount
   unless tier_discount > volume_discount then tier_discount
@@ -643,13 +643,13 @@ rule eligible_age: age >= 18 and age <= 65
 rule eligible_health: not pre_existing_conditions
 
 rule eligible_employment: false
-  unless employment_status == "full_time" then true
-  unless employment_status == "part_time" then true
+  unless employment_status is "full_time" then true
+  unless employment_status is "part_time" then true
 
 rule is_eligible: eligible_age and eligible_health and eligible_employment
-  unless eligible_age == false then veto "Age not within eligible range"
-  unless eligible_health == false then veto "Pre-existing conditions"
-  unless eligible_employment == false then veto "Employment status ineligible"
+  unless eligible_age is false then veto "Age not within eligible range"
+  unless eligible_health is false then veto "Pre-existing conditions"
+  unless eligible_employment is false then veto "Employment status ineligible"
 ```
 
 ### 7.4 Shipping policy
@@ -667,8 +667,8 @@ fact destination: [text]
 fact is_expedited: false
 
 rule base_rate: 12.99
-  unless destination == "CA" then 25.00
-  unless destination == "MX" then 22.00
+  unless destination is "CA" then 25.00
+  unless destination is "MX" then 22.00
 
 rule weight_surcharge: 0
   unless weight > 5 kilograms then 7.50
@@ -677,7 +677,7 @@ rule weight_surcharge: 0
 rule expedited_fee: 0
   unless is_expedited then 25.00
 
-rule free_shipping: order_total >= 100 and destination == "US"
+rule free_shipping: order_total >= 100 and destination is "US"
 
 rule final_shipping: base_rate + weight_surcharge + expedited_fee
   unless free_shipping then 0
@@ -706,8 +706,8 @@ rule performance_bonus: base_salary * 0%
   unless performance_rating >= 4.5 then base_salary * 15%
 
 rule department_bonus: 0
-  unless department == "sales" then base_salary * 10%
-  unless department == "engineering" then base_salary * 5%
+  unless department is "sales" then base_salary * 10%
+  unless department is "engineering" then base_salary * 5%
 
 rule total_compensation: base_salary + tenure_bonus
                           + performance_bonus + department_bonus
@@ -991,9 +991,9 @@ fact location: [text]
 fact is_manager: false
 
 rule cost_of_living_adjustment: 0%
-  unless location == "San Francisco" then 25%
-  unless location == "New York" then 20%
-  unless location == "Seattle" then 15%
+  unless location is "San Francisco" then 25%
+  unless location is "New York" then 20%
+  unless location is "Seattle" then 15%
 
 rule adjusted_salary: base_salary * (1 + cost_of_living_adjustment)
 
@@ -1011,7 +1011,7 @@ rule performance_multiplier: 1.0
 
 rule target_bonus_rate: 10%
   unless is_manager then 20%
-  unless department == "sales" then 30%
+  unless department is "sales" then 30%
 
 rule performance_bonus: adjusted_salary * target_bonus_rate * performance_multiplier
 
@@ -1066,7 +1066,7 @@ Rule Definition:
 
 Expressions:
   <arithmetic>        // +, -, *, /, %, ^
-  <comparison>        // >, <, >=, <=, ==, !=, is, is not
+  <comparison>        // >, <, >=, <=, is, is not
   <logical>          // and, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
   <unit-conversion>  // <value> in <unit>

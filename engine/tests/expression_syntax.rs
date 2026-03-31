@@ -16,7 +16,7 @@ rule not_x: not(x)
 rule sqrt_num: sqrt(num)
 rule sin_zero: sin(0)
 rule log_ten: log(10)
-rule combined: not(x) and sqrt(16) == 4
+rule combined: not(x) and sqrt(16) is 4
 rule with_spaces: not  (  x  )
 "#;
 
@@ -60,13 +60,13 @@ rule with_spaces: not  (  x  )
         v => panic!("Expected number 0, got {:?}", v),
     }
 
-    // combined expression: not(true) and (sqrt(16) == 4) => false and true => false
+    // combined expression: not(true) and (sqrt(16) is 4) => false and true => false
     let combined_rule = response.results.get("combined").unwrap();
     match combined_rule.result.value().unwrap() {
         LiteralValue {
             value: ValueKind::Boolean(b),
             ..
-        } => assert!(!*b, "not(x) and sqrt(16) == 4 with x=true should be false"),
+        } => assert!(!*b, "not(x) and sqrt(16) is 4 with x=true should be false"),
         v => panic!("Expected boolean false, got {:?}", v),
     }
 }

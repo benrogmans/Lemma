@@ -161,7 +161,7 @@ Reference other rules by name (the engine resolves whether a name is a fact or a
 ```lemma
 rule is_adult: age >= 18
 
-rule has_license: license_status == "valid"
+rule has_license: license_status is "valid"
 
 rule can_drive: is_adult and has_license
   unless license_suspended then veto "License suspended"
@@ -207,7 +207,7 @@ rule not_cancelled: status is not "cancelled"
 rule is_eligible: age >= 18 and income > 30000
 ```
 
-Operators: `>`, `<`, `>=`, `<=`, `==`, `!=`, `is`, `is not`
+Operators: `>`, `<`, `>=`, `<=`, `is`, `is not`
 
 ### Logical
 

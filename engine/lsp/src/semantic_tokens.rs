@@ -104,8 +104,6 @@ fn token_type_index(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Lt
         | TokenKind::Gte
         | TokenKind::Lte
-        | TokenKind::EqEq
-        | TokenKind::BangEq
         | TokenKind::Arrow
         | TokenKind::Is => Some(7),
 

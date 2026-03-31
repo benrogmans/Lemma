@@ -2253,20 +2253,14 @@ fn check_comparison_types(
     if left_type.vetoed() || right_type.vetoed() {
         return Ok(());
     }
-    let is_equality_only = matches!(
-        op,
-        ComparisonComputation::Equal
-            | ComparisonComputation::NotEqual
-            | ComparisonComputation::Is
-            | ComparisonComputation::IsNot
-    );
+    let is_equality_only = matches!(op, ComparisonComputation::Is | ComparisonComputation::IsNot);
 
     if left_type.is_boolean() && right_type.is_boolean() {
         if !is_equality_only {
             return Err(vec![engine_error_at_graph(
                 graph,
                 source,
-                format!("Can only use == and != with booleans (got {})", op),
+                format!("Can only use 'is' and 'is not' with booleans (got {})", op),
             )]);
         }
         return Ok(());
@@ -2277,7 +2271,7 @@ fn check_comparison_types(
             return Err(vec![engine_error_at_graph(
                 graph,
                 source,
-                format!("Can only use == and != with text (got {})", op),
+                format!("Can only use 'is' and 'is not' with text (got {})", op),
             )]);
         }
         return Ok(());

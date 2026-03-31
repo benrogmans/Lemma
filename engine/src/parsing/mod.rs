@@ -62,7 +62,7 @@ rule is_adult: age >= 18
 fact age: 25
 rule can_drink: age >= 21
 fact status: "active"
-rule is_eligible: is_adult and status == "active""#;
+rule is_eligible: is_adult and status is "active""#;
 
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
@@ -282,7 +282,7 @@ rule is_adult: age >= 21"#;
                 "duration conversion with lt",
             ),
             (
-                "(delay in seconds) == 60",
+                "(delay in seconds) is 60",
                 "duration conversion with equality",
             ),
             (

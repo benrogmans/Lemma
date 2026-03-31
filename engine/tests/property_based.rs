@@ -101,7 +101,7 @@ rule result: x + 0
         let code = format!(r#"
 spec test
 fact x: {}
-rule eq_self: x == x
+rule eq_self: x is x
 rule lte_self: x <= x
 "#, n);
         engine.load(&code, lemma::SourceType::Labeled("test")).unwrap();
@@ -548,7 +548,7 @@ fact c: 30
 rule a_lt_b: a < b
 rule b_lt_c: b < c
 rule a_lt_c: a < c
-rule a_eq_a: a == a
+rule a_eq_a: a is a
 rule a_lte_a: a <= a
 rule a_gte_a: a >= a
 "#;

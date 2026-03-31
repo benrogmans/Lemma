@@ -18,9 +18,9 @@ pub struct Target {
 /// Comparison operators for targets
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum TargetOp {
-    /// Equal to (=)
+    /// Equal to (`is`)
     Eq,
-    /// Not equal to (!=)
+    /// Not equal to (`is not`)
     Neq,
     /// Less than (<)
     Lt,
@@ -74,7 +74,7 @@ impl Target {
     pub fn format(&self) -> String {
         let op_str = match self.op {
             TargetOp::Eq => "=",
-            TargetOp::Neq => "!=",
+            TargetOp::Neq => "is not",
             TargetOp::Lt => "<",
             TargetOp::Lte => "<=",
             TargetOp::Gt => ">",

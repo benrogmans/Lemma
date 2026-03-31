@@ -26,7 +26,7 @@ fn test_timezone_comparison_same_instant() {
 spec test
 fact time_nyc: 2024-03-15T10:00:00-05:00
 fact time_london: 2024-03-15T15:00:00+00:00
-rule are_equal: time_nyc == time_london
+rule are_equal: time_nyc is time_london
     "#;
 
     engine
@@ -257,9 +257,6 @@ rule preserved: nepal_time
 // Note: Time literals with timezones are not supported by chrono parser
 // (time-only strings can't be parsed with timezone offsets)
 // Use full datetime if timezone is needed
-
-// Note: Datetime equality comparison requires using comparison operators like < or >
-// == operator on datetime values has parser limitations
 
 #[test]
 fn test_extreme_western_timezone() {

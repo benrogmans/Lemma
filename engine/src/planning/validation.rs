@@ -869,8 +869,6 @@ fn normalize_literal_constraint(rule: NumericLiteralConstraint) -> NumericLitera
         ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
         ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
         ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
-        ComparisonComputation::Equal => ComparisonComputation::Equal,
-        ComparisonComputation::NotEqual => ComparisonComputation::NotEqual,
         ComparisonComputation::Is => ComparisonComputation::Is,
         ComparisonComputation::IsNot => ComparisonComputation::IsNot,
     };
@@ -898,11 +896,11 @@ fn numeric_literal_constraint_satisfied(
         ComparisonComputation::LessThanOrEqual => {
             minimum.is_none_or(|min| min <= normalized.literal)
         }
-        ComparisonComputation::Equal | ComparisonComputation::Is => {
+        ComparisonComputation::Is => {
             minimum.is_none_or(|min| min <= normalized.literal)
                 && maximum.is_none_or(|max| max >= normalized.literal)
         }
-        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => {
+        ComparisonComputation::IsNot => {
             !(minimum == Some(normalized.literal) && maximum == Some(normalized.literal))
         }
     }

@@ -6,7 +6,7 @@
 //! - Makes invalid states unrepresentable
 //!
 //! Includes BDD-based simplification for contradiction detection.
-//! For semantic analysis (e.g., `x == A and x != B`), use domain extraction.
+//! For semantic analysis (e.g., `x is A and x is not B`), use domain extraction.
 
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
@@ -34,7 +34,7 @@ pub enum Constraint {
         op: ComparisonComputation,
         value: Arc<LiteralValue>,
     },
-    /// Boolean fact reference (e.g., `is_employee` meaning `is_employee == true`)
+    /// Boolean fact reference (e.g., `is_employee` meaning `is_employee is true`)
     Fact(FactPath),
     /// Logical AND of two constraints
     And(Box<Constraint>, Box<Constraint>),
@@ -270,7 +270,7 @@ impl Constraint {
             }
         }
 
-        // Case 3: literal op literal (e.g., "bronze" == "silver") - evaluate directly
+        // Case 3: literal op literal (e.g., "bronze" is "silver") - evaluate directly
         if let ExpressionKind::Literal(left_val) = &left.kind {
             if let ExpressionKind::Literal(right_val) = &right.kind {
                 if let Some(result) = evaluate_literal_comparison(left_val, op, right_val) {
@@ -283,19 +283,19 @@ impl Constraint {
             }
         }
 
-        // Case 4: comparison == boolean or comparison != boolean
-        // (age > 18) == true  -> age > 18
-        // (age > 18) == false -> not (age > 18)
-        // (age > 18) != true  -> not (age > 18)
-        // (age > 18) != false -> age > 18
+        // Case 4: comparison is boolean or comparison is not boolean
+        // (age > 18) is true  -> age > 18
+        // (age > 18) is false -> not (age > 18)
+        // (age > 18) is not true  -> not (age > 18)
+        // (age > 18) is not false -> age > 18
         if op.is_equal() || op.is_not_equal() {
             if let ExpressionKind::Comparison(inner_left, inner_op, inner_right) = &left.kind {
                 if let ExpressionKind::Literal(lit) = &right.kind {
                     if let ValueKind::Boolean(bool_val) = &lit.value {
                         let inner_constraint =
                             Self::from_comparison(inner_left, inner_op, inner_right)?;
-                        // For ==: true means keep, false means negate
-                        // For !=: true means negate, false means keep
+                        // For is: true means keep, false means negate
+                        // For is not: true means negate, false means keep
                         let should_negate = if op.is_equal() { !*bool_val } else { *bool_val };
                         if should_negate {
                             return Ok(inner_constraint.not());
@@ -555,8 +555,8 @@ fn flip_inequality(op: &ComparisonComputation) -> ComparisonComputation {
         ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
         ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
         ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
-        ComparisonComputation::Equal | ComparisonComputation::Is => op.clone(),
-        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => op.clone(),
+        ComparisonComputation::Is => op.clone(),
+        ComparisonComputation::IsNot => op.clone(),
     }
 }
 
@@ -909,8 +909,8 @@ fn evaluate_literal_comparison(
         }
         // Number comparisons
         (ValueKind::Number(l), ValueKind::Number(r)) => match op {
-            ComparisonComputation::Equal | ComparisonComputation::Is => Some(l == r),
-            ComparisonComputation::NotEqual | ComparisonComputation::IsNot => Some(l != r),
+            ComparisonComputation::Is => Some(l == r),
+            ComparisonComputation::IsNot => Some(l != r),
             ComparisonComputation::LessThan => Some(l < r),
             ComparisonComputation::LessThanOrEqual => Some(l <= r),
             ComparisonComputation::GreaterThan => Some(l > r),
@@ -918,8 +918,8 @@ fn evaluate_literal_comparison(
         },
         // Ratio comparisons
         (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => match op {
-            ComparisonComputation::Equal | ComparisonComputation::Is => Some(l == r),
-            ComparisonComputation::NotEqual | ComparisonComputation::IsNot => Some(l != r),
+            ComparisonComputation::Is => Some(l == r),
+            ComparisonComputation::IsNot => Some(l != r),
             ComparisonComputation::LessThan => Some(l < r),
             ComparisonComputation::LessThanOrEqual => Some(l <= r),
             ComparisonComputation::GreaterThan => Some(l > r),
@@ -932,8 +932,6 @@ fn evaluate_literal_comparison(
 /// Flip a comparison operator (for converting `literal op fact` to `fact flipped_op literal`)
 fn flip_comparison_operator(op: &ComparisonComputation) -> ComparisonComputation {
     match op {
-        ComparisonComputation::Equal => ComparisonComputation::Equal,
-        ComparisonComputation::NotEqual => ComparisonComputation::NotEqual,
         ComparisonComputation::Is => ComparisonComputation::Is,
         ComparisonComputation::IsNot => ComparisonComputation::IsNot,
         ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
@@ -1325,9 +1323,9 @@ mod tests {
 
     #[test]
     fn test_simplify_contradiction() {
-        // x == 1 and x == 2 cannot both be true.
-        let c1 = comparison("x", ComparisonComputation::Equal, 1);
-        let c2 = comparison("x", ComparisonComputation::Equal, 2);
+        // x is 1 and x is 2 cannot both be true.
+        let c1 = comparison("x", ComparisonComputation::Is, 1);
+        let c2 = comparison("x", ComparisonComputation::Is, 2);
 
         let expr = c1.and(c2);
         let simplified = expr.simplify().unwrap();
@@ -1355,9 +1353,9 @@ mod tests {
 
     #[test]
     fn test_simplify_detects_neq_contradiction() {
-        // x == 5 and x != 5 cannot both be true.
-        let eq = comparison("x", ComparisonComputation::Equal, 5);
-        let neq = comparison("x", ComparisonComputation::NotEqual, 5);
+        // x is 5 and x is not 5 cannot both be true.
+        let eq = comparison("x", ComparisonComputation::Is, 5);
+        let neq = comparison("x", ComparisonComputation::IsNot, 5);
         let simplified = eq.and(neq).simplify().unwrap();
         assert!(
             simplified.is_false(),

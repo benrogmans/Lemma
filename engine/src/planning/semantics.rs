@@ -28,8 +28,8 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
         ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThan,
         ComparisonComputation::GreaterThan => ComparisonComputation::LessThanOrEqual,
         ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThan,
-        ComparisonComputation::Equal | ComparisonComputation::Is => ComparisonComputation::IsNot,
-        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => ComparisonComputation::Is,
+        ComparisonComputation::Is => ComparisonComputation::IsNot,
+        ComparisonComputation::IsNot => ComparisonComputation::Is,
     }
 }
 
@@ -2251,16 +2251,6 @@ mod tests {
         assert_eq!(
             negated_comparison(ComparisonComputation::GreaterThanOrEqual),
             ComparisonComputation::LessThan
-        );
-        assert_eq!(
-            negated_comparison(ComparisonComputation::Equal),
-            ComparisonComputation::IsNot,
-            "== negates to 'is not'"
-        );
-        assert_eq!(
-            negated_comparison(ComparisonComputation::NotEqual),
-            ComparisonComputation::Is,
-            "!= negates to 'is'"
         );
         assert_eq!(
             negated_comparison(ComparisonComputation::Is),

@@ -26,10 +26,8 @@ Quick reference for all operators and types in Lemma.
 | `<` | Less than | `price < 100` |
 | `>=` | Greater or equal | `score >= 70` |
 | `<=` | Less or equal | `weight <= 50` |
-| `==` | Equal | `status == "active"` |
-| `!=` | Not equal | `type != "admin"` |
-| `is` | Equal (text-friendly) | `status is "approved"` |
-| `is not` | Not equal (text-friendly) | `status is not "cancelled"` |
+| `is` | Equal | `status is "approved"` |
+| `is not` | Not equal | `status is not "cancelled"` |
 
 ### Logical
 | Operator | Description | Example |

@@ -15,7 +15,7 @@ fact discount_rate: 25%
 rule price_after_discount: base_price - discount_rate
 rule expected: 150
 
-rule test_passes: price_after_discount == expected
+rule test_passes: price_after_discount is expected
 "#;
 
     engine
@@ -54,7 +54,7 @@ fact markup: 10%
 rule price_with_markup: base + markup
 rule expected: 110
 
-rule test_passes: price_with_markup == expected
+rule test_passes: price_with_markup is expected
 "#;
 
     engine
@@ -90,7 +90,7 @@ fact rate: 15%
 rule result: amount * rate
 rule expected: 150
 
-rule test_passes: result == expected
+rule test_passes: result is expected
 "#;
 
     engine
@@ -127,7 +127,7 @@ rule discount_amount: base_price * discount_rate
 rule final_price: base_price - discount_amount
 rule expected: 150
 
-rule test_passes: final_price == expected
+rule test_passes: final_price is expected
 "#;
 
     engine
@@ -166,7 +166,7 @@ rule after_second: after_first - second_discount
 
 rule expected: 72
 
-rule test_passes: after_second == expected
+rule test_passes: after_second is expected
 "#;
 
     engine

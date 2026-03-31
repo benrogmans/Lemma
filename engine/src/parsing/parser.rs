@@ -1397,7 +1397,7 @@ impl Parser {
         // Check for suffixes
         let peeked = self.peek()?;
 
-        // Comparison suffix: >, <, >=, <=, ==, !=, is, is not
+        // Comparison suffix: >, <, >=, <=, is, is not
         if is_comparison_operator(&peeked.kind) {
             return self.parse_comparison_suffix(base, start_span);
         }
@@ -1457,8 +1457,6 @@ impl Parser {
             TokenKind::Lt => Ok(ComparisonComputation::LessThan),
             TokenKind::Gte => Ok(ComparisonComputation::GreaterThanOrEqual),
             TokenKind::Lte => Ok(ComparisonComputation::LessThanOrEqual),
-            TokenKind::EqEq => Ok(ComparisonComputation::Equal),
-            TokenKind::BangEq => Ok(ComparisonComputation::NotEqual),
             TokenKind::Is => {
                 // Check for "is not"
                 if self.at(&TokenKind::Not)? {
@@ -2013,13 +2011,7 @@ fn parse_decimal_string(text: &str, span: &Span, parser: &Parser) -> Result<Deci
 fn is_comparison_operator(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Gt
-            | TokenKind::Lt
-            | TokenKind::Gte
-            | TokenKind::Lte
-            | TokenKind::EqEq
-            | TokenKind::BangEq
-            | TokenKind::Is
+        TokenKind::Gt | TokenKind::Lt | TokenKind::Gte | TokenKind::Lte | TokenKind::Is
     )
 }
 

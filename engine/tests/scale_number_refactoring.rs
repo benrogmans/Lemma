@@ -369,7 +369,7 @@ fact price1: [money]
 fact price2: [money]
 
 rule is_greater: price1 > price2
-rule is_equal: price1 == price2"#;
+rule is_equal: price1 is price2"#;
 
     let mut engine = Engine::new();
     engine

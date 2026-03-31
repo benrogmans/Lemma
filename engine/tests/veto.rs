@@ -203,7 +203,7 @@ fact country: "US"
 fact has_license: false
 rule can_drive: age >= 16
     unless age < 16 then veto "Too young to drive"
-    unless country != "US" then false
+    unless country is not "US" then false
     unless not has_license then false
 "#;
 
@@ -417,8 +417,8 @@ fn test_veto_with_string_equality() {
     let code = r#"
 spec status_check
 fact status: "cancelled"
-rule is_active: status == "active"
-    unless status == "cancelled" then veto "Cannot process cancelled items"
+rule is_active: status is "active"
+    unless status is "cancelled" then veto "Cannot process cancelled items"
 "#;
 
     let mut engine = Engine::new();
@@ -502,7 +502,7 @@ fn test_veto_with_empty_string_message() {
 spec edge_case
 fact value: 0
 rule is_valid: value > 0
-    unless value == 0 then veto ""
+    unless value is 0 then veto ""
 "#;
 
     let mut engine = Engine::new();
@@ -564,7 +564,7 @@ fn test_veto_with_very_long_message() {
 spec long_message
 fact value: 0
 rule valid: value > 0
-    unless value == 0 then veto "{}"
+    unless value is 0 then veto "{}"
 "#,
         message
     );
@@ -597,7 +597,7 @@ spec priority_test
 fact value: 5
 rule check: value > 10
     unless value < 10 then veto "Value too small"
-    unless value != 5 then false
+    unless value is not 5 then false
 "#;
 
     let mut engine = Engine::new();

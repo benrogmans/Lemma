@@ -365,8 +365,8 @@ pub fn datetime_comparison(
                 ComparisonComputation::LessThan => l_utc < r_utc,
                 ComparisonComputation::GreaterThanOrEqual => l_utc >= r_utc,
                 ComparisonComputation::LessThanOrEqual => l_utc <= r_utc,
-                ComparisonComputation::Equal | ComparisonComputation::Is => l_utc == r_utc,
-                ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
+                ComparisonComputation::Is => l_utc == r_utc,
+                ComparisonComputation::IsNot => l_utc != r_utc,
             };
 
             OperationResult::Value(Box::new(LiteralValue::from_bool(result)))
@@ -403,8 +403,8 @@ pub fn time_comparison(
                 ComparisonComputation::LessThan => l_utc < r_utc,
                 ComparisonComputation::GreaterThanOrEqual => l_utc >= r_utc,
                 ComparisonComputation::LessThanOrEqual => l_utc <= r_utc,
-                ComparisonComputation::Equal | ComparisonComputation::Is => l_utc == r_utc,
-                ComparisonComputation::NotEqual | ComparisonComputation::IsNot => l_utc != r_utc,
+                ComparisonComputation::Is => l_utc == r_utc,
+                ComparisonComputation::IsNot => l_utc != r_utc,
             };
 
             OperationResult::Value(Box::new(LiteralValue::from_bool(result)))

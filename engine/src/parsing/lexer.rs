@@ -96,8 +96,6 @@ pub enum TokenKind {
     Lt,
     Gte,
     Lte,
-    EqEq,
-    BangEq,
 
     // Punctuation
     Colon,
@@ -203,8 +201,6 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Lt => write!(f, "'<'"),
             TokenKind::Gte => write!(f, "'>='"),
             TokenKind::Lte => write!(f, "'<='"),
-            TokenKind::EqEq => write!(f, "'=='"),
-            TokenKind::BangEq => write!(f, "'!='"),
             TokenKind::Colon => write!(f, "':'"),
             TokenKind::Arrow => write!(f, "'->'"),
             TokenKind::Tilde => write!(f, "'~'"),
@@ -626,8 +622,6 @@ impl Lexer {
             ('-', Some('>')) => TokenKind::Arrow,
             ('>', Some('=')) => TokenKind::Gte,
             ('<', Some('=')) => TokenKind::Lte,
-            ('=', Some('=')) => TokenKind::EqEq,
-            ('!', Some('=')) => TokenKind::BangEq,
             ('%', Some('%')) => {
                 // Check that it's not followed by a digit (invalid permille like 10%%5)
                 TokenKind::PercentPercent
@@ -1107,9 +1101,9 @@ mod tests {
 
     #[test]
     fn lex_all_operators() {
-        let kinds = lex_kinds("+ - * / % ^ > < >= <= == != -> %%").unwrap();
+        let kinds = lex_kinds("+ - * / % ^ > < >= <= -> %%").unwrap();
         assert_eq!(
-            &kinds[..14],
+            &kinds[..12],
             &[
                 TokenKind::Plus,
                 TokenKind::Minus,
@@ -1121,8 +1115,6 @@ mod tests {
                 TokenKind::Lt,
                 TokenKind::Gte,
                 TokenKind::Lte,
-                TokenKind::EqEq,
-                TokenKind::BangEq,
                 TokenKind::Arrow,
                 TokenKind::PercentPercent,
             ]

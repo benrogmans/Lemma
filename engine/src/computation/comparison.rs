@@ -18,10 +18,10 @@ pub fn comparison_operation(
         }
 
         (ValueKind::Boolean(l), ValueKind::Boolean(r)) => match op {
-            ComparisonComputation::Equal | ComparisonComputation::Is => {
+            ComparisonComputation::Is => {
                 OperationResult::Value(Box::new(LiteralValue::from_bool(l == r)))
             }
-            ComparisonComputation::NotEqual | ComparisonComputation::IsNot => {
+            ComparisonComputation::IsNot => {
                 OperationResult::Value(Box::new(LiteralValue {
                     value: ValueKind::Boolean(l != r),
                     lemma_type: primitive_boolean().clone(),
@@ -34,10 +34,10 @@ pub fn comparison_operation(
         },
 
         (ValueKind::Text(l), ValueKind::Text(r)) => match op {
-            ComparisonComputation::Equal | ComparisonComputation::Is => {
+            ComparisonComputation::Is => {
                 OperationResult::Value(Box::new(LiteralValue::from_bool(l == r)))
             }
-            ComparisonComputation::NotEqual | ComparisonComputation::IsNot => {
+            ComparisonComputation::IsNot => {
                 OperationResult::Value(Box::new(LiteralValue {
                     value: ValueKind::Boolean(l != r),
                     lemma_type: primitive_boolean().clone(),
@@ -117,8 +117,8 @@ fn compare_decimals(left: Decimal, op: &ComparisonComputation, right: &Decimal) 
         ComparisonComputation::LessThan => left < *right,
         ComparisonComputation::GreaterThanOrEqual => left >= *right,
         ComparisonComputation::LessThanOrEqual => left <= *right,
-        ComparisonComputation::Equal | ComparisonComputation::Is => left == *right,
-        ComparisonComputation::NotEqual | ComparisonComputation::IsNot => left != *right,
+        ComparisonComputation::Is => left == *right,
+        ComparisonComputation::IsNot => left != *right,
     }
 }
 

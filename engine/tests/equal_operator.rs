@@ -14,8 +14,8 @@ fact a: 42
 fact b: 42
 fact c: 100
 
-rule equal_true: a == b
-rule equal_false: a == c
+rule equal_true: a is b
+rule equal_false: a is c
 "#,
             lemma::SourceType::Labeled("test.lemma"),
         )
@@ -44,8 +44,8 @@ spec test_equal_text
 fact greeting: "hello"
 fact other: "world"
 
-rule same_greeting: greeting == "hello"
-rule different_greeting: greeting == other
+rule same_greeting: greeting is "hello"
+rule different_greeting: greeting is other
 "#,
             lemma::SourceType::Labeled("test.lemma"),
         )
@@ -75,8 +75,8 @@ fact price_a: 100
 fact price_b: 100
 fact price_c: 50
 
-rule same_price: price_a == price_b
-rule different_price: price_a == price_c
+rule same_price: price_a is price_b
+rule different_price: price_a is price_c
 "#,
             lemma::SourceType::Labeled("test.lemma"),
         )
@@ -106,8 +106,8 @@ fact flag_a: true
 fact flag_b: true
 fact flag_c: false
 
-rule both_true: flag_a == flag_b
-rule mixed: flag_a == flag_c
+rule both_true: flag_a is flag_b
+rule mixed: flag_a is flag_c
 "#,
             lemma::SourceType::Labeled("test.lemma"),
         )
@@ -137,8 +137,8 @@ fact status: "active"
 fact count: 10
 
 rule message: "inactive"
-  unless status == "active" then "active"
-  unless count == 10 then "count is 10"
+  unless status is "active" then "active"
+  unless count is 10 then "count is 10"
 "#,
             lemma::SourceType::Labeled("test.lemma"),
         )

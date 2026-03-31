@@ -57,9 +57,9 @@ rule comfort_level:
 
 rule recommendation:
   "Enjoy your day!"
-  unless comfort_level == "cold"
+  unless comfort_level is "cold"
     then "Dress warmly and stay indoors if possible"
-  unless comfort_level == "hot"
+  unless comfort_level is "hot"
     then "Stay hydrated and seek shade"
-  unless comfort_level == "uncomfortable"
+  unless comfort_level is "uncomfortable"
     then "Consider postponing outdoor activities"

@@ -382,8 +382,6 @@ pub enum ComparisonComputation {
     LessThan,
     GreaterThanOrEqual,
     LessThanOrEqual,
-    Equal,
-    NotEqual,
     Is,
     IsNot,
 }
@@ -397,29 +395,21 @@ impl ComparisonComputation {
             ComparisonComputation::LessThan => "<",
             ComparisonComputation::GreaterThanOrEqual => ">=",
             ComparisonComputation::LessThanOrEqual => "<=",
-            ComparisonComputation::Equal => "==",
-            ComparisonComputation::NotEqual => "!=",
             ComparisonComputation::Is => "is",
             ComparisonComputation::IsNot => "is not",
         }
     }
 
-    /// Check if this is an equality comparison (== or is)
+    /// Check if this is an equality comparison (`is`)
     #[must_use]
     pub fn is_equal(&self) -> bool {
-        matches!(
-            self,
-            ComparisonComputation::Equal | ComparisonComputation::Is
-        )
+        matches!(self, ComparisonComputation::Is)
     }
 
-    /// Check if this is an inequality comparison (!= or is not)
+    /// Check if this is an inequality comparison (`is not`)
     #[must_use]
     pub fn is_not_equal(&self) -> bool {
-        matches!(
-            self,
-            ComparisonComputation::NotEqual | ComparisonComputation::IsNot
-        )
+        matches!(self, ComparisonComputation::IsNot)
     }
 }
 
@@ -995,8 +985,6 @@ impl fmt::Display for ComparisonComputation {
             ComparisonComputation::LessThan => write!(f, "<"),
             ComparisonComputation::GreaterThanOrEqual => write!(f, ">="),
             ComparisonComputation::LessThanOrEqual => write!(f, "<="),
-            ComparisonComputation::Equal => write!(f, "=="),
-            ComparisonComputation::NotEqual => write!(f, "!="),
             ComparisonComputation::Is => write!(f, "is"),
             ComparisonComputation::IsNot => write!(f, "is not"),
         }
@@ -1197,16 +1185,15 @@ pub fn quote_lemma_text(s: &str) -> String {
     format!("\"{}\"", escaped)
 }
 
-/// Format a Decimal for Lemma source: normalize, remove trailing zeros,
-/// strip the fractional part when it is zero (e.g. `100.00` → `"100"`),
-/// and insert underscore separators in the integer part when it has 4+
-/// digits (e.g. `30000000.50` → `"30_000_000.50"`).
+/// Format a Decimal for Lemma source, preserving precision (trailing zeros).
+/// Strips the fractional part only when it is zero (e.g. `100` stays `"100"`,
+/// `1.00` stays `"1.00"`). Inserts underscore separators in the integer part
+/// when it has 4+ digits (e.g. `30000000.50` → `"30_000_000.50"`).
 fn format_decimal_source(n: &Decimal) -> String {
-    let norm = n.normalize();
-    let raw = if norm.fract().is_zero() {
-        norm.trunc().to_string()
+    let raw = if n.fract().is_zero() {
+        n.trunc().to_string()
     } else {
-        norm.to_string()
+        n.to_string()
     };
     group_digits(&raw)
 }

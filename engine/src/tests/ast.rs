@@ -68,8 +68,6 @@ fn test_comparison_operator_display() {
         ">="
     );
     assert_eq!(format!("{}", ComparisonComputation::LessThanOrEqual), "<=");
-    assert_eq!(format!("{}", ComparisonComputation::Equal), "==");
-    assert_eq!(format!("{}", ComparisonComputation::NotEqual), "!=");
     assert_eq!(format!("{}", ComparisonComputation::Is), "is");
     assert_eq!(format!("{}", ComparisonComputation::IsNot), "is not");
 }

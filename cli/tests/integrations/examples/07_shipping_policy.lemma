@@ -55,7 +55,7 @@ rule expedited_fee:
 rule hazardous_fee:
   0
   unless is_hazardous then 50
-  unless is_hazardous and destination_country != "NL"
+  unless is_hazardous and destination_country is not "NL"
     then veto "Cannot ship hazardous materials internationally"
 
 rule customer_discount:
@@ -91,7 +91,7 @@ rule ships_to_location:
   true
   unless is_po_box and is_hazardous
     then veto "Cannot ship hazardous materials to PO boxes"
-  unless destination_region == "Svalbard"
+  unless destination_region is "Svalbard"
     then veto "Shipping not available to Svalbard"
 
 rule total_with_shipping:

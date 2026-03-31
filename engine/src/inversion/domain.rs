@@ -293,7 +293,7 @@ fn extract_domain_for_fact(
         }
 
         Constraint::Not(inner) => {
-            // Handle not (fact == value)
+            // Handle not (fact is value)
             if let Constraint::Comparison { fact, op, value } = inner.as_ref() {
                 if fact == fact_path && op.is_equal() {
                     return Ok(Some(normalize_domain(Domain::Complement(Box::new(
@@ -370,7 +370,7 @@ impl Domain {
     /// Proven subset check for the atom-domain forms we generate from comparisons:
     /// - Range
     /// - Enumeration
-    /// - Complement(Enumeration) (used for != / is not)
+    /// - Complement(Enumeration) (used for `is not`)
     ///
     /// Returns false when the relationship cannot be proven with these forms.
     pub(crate) fn is_subset_of(&self, other: &Domain) -> bool {
@@ -1199,7 +1199,7 @@ mod tests {
     fn test_extract_domain_from_equality() {
         let constraint = Constraint::Comparison {
             fact: fact("status"),
-            op: ComparisonComputation::Equal,
+            op: ComparisonComputation::Is,
             value: Arc::new(LiteralValue::text("active".to_string())),
         };
 
