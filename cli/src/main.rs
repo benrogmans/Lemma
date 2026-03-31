@@ -39,38 +39,22 @@ enum OutputFormat {
 enum Commands {
     /// Evaluate rules and display results
     ///
-    /// Loads all .lemma files from the workspace, evaluates the specified spec with optional fact values,
-    /// and displays the computed results. Use this for command-line evaluation and testing.
+    /// Load a .lemma file or workspace, evaluate the specified spec, and display results.
     ///
-    /// Syntax: spec [--rules=rule1,rule2] [spec~hash for hash pin]
+    /// Examples:
+    ///   lemma run tax.lemma income=85000
+    ///   lemma run tax.lemma calculator income=85000
+    ///   lemma run calculator income=85000
+    ///   lemma run ./project calculator income=85000
     Run {
-        /// Spec to evaluate (optionally suffixed with ~hash to pin to a plan hash)
-        ///
-        /// Examples:
-        ///   pricing                    - evaluate all rules in pricing spec
-        ///   nl/tax/net_salary~a1b2c3d4 - pin to specific plan hash
-        #[arg(value_name = "SPEC")]
-        spec_id: Option<String>,
+        /// [source] [spec] [name=value ...] — source is a .lemma file or directory
+        args: Vec<String>,
         /// Rules to evaluate (comma-separated); omit to evaluate all rules
         #[arg(long, value_name = "RULES")]
         rules: Option<String>,
-        /// Fact values to provide (format: name=value or ref_spec.fact=value)
-        ///
-        /// Examples: price=100, quantity=5, config.tax_rate=0.21
-        facts: Vec<String>,
         /// Invert a rule to find inputs that produce desired output
-        ///
-        /// Format: rule[=target] where target can be =value, >value, <value, >=value, <=value, or =veto
-        ///
-        /// Examples:
-        ///   --target total=100
-        ///   --target total>50
-        ///   --target can_drive=veto
         #[arg(short = 't', long)]
         target: Option<String>,
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
         /// Output format: table (human-readable) or json (machine-readable)
         #[arg(
             short = 'o',
@@ -91,36 +75,30 @@ enum Commands {
     },
     /// Spec schema (facts and rules)
     ///
-    /// Displays spec structure and dependencies.
+    /// Examples:
+    ///   lemma schema tax.lemma
+    ///   lemma schema calculator
+    ///   lemma schema calculator --hash
     Schema {
-        /// Name of the spec
-        spec_name: String,
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
+        /// [source] [spec] — source is a .lemma file or directory
+        args: Vec<String>,
         /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
-        /// Output only the plan hash (for piping, e.g. lemma run spec~$(lemma schema spec --hash))
+        /// Output only the plan hash
         #[arg(long)]
         hash: bool,
     },
     /// List all specs with facts and rules counts
-    ///
-    /// Scans the workspace for .lemma files and displays all available specs
-    /// with their facts and rules counts. Use this to explore a Lemma project.
     List {
-        /// Workspace root directory containing .lemma files
+        /// Workspace directory or .lemma file
         #[arg(default_value = ".")]
-        root: PathBuf,
-        /// List at effective datetime (e.g. 2026, 2026-03-04)
+        source: PathBuf,
+        /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
     },
     /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
-    ///
-    /// Loads all .lemma files from the workspace and generates typed REST API endpoints
-    /// for each spec. Interactive OpenAPI documentation is available at /docs.
     ///
     /// Routes:
     ///   GET  /{spec}              — evaluate all rules (facts as query params)
@@ -132,9 +110,9 @@ enum Commands {
     ///   GET  /openapi.json       — OpenAPI 3.1 specification
     ///   GET  /health             — health check
     Server {
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
+        /// Workspace directory or .lemma file
+        #[arg(default_value = ".")]
+        source: PathBuf,
         /// Host address to bind to
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -144,48 +122,31 @@ enum Commands {
         /// Watch workspace for .lemma file changes and reload automatically
         #[arg(short, long)]
         watch: bool,
-        /// Enable explanation generation; clients send header x-explanations to receive explanation objects in responses
+        /// Enable explanation generation
         #[arg(long)]
         explanations: bool,
     },
     /// Start MCP server for AI assistant integration (stdio)
-    ///
-    /// Runs an MCP server over stdio for AI assistant integration.
-    /// The server provides tools for adding specs, evaluating rules, and inspecting specs.
-    /// Designed for use with AI coding assistants and agents.
     Mcp {
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
+        /// Workspace directory or .lemma file
+        #[arg(default_value = ".")]
+        source: PathBuf,
         /// Enable admin tools: add_spec, get_spec_source (read-only by default)
         #[arg(long)]
         admin: bool,
     },
     /// Get dependencies from the registry
     ///
-    /// Without arguments: parses all local .lemma files, collects @... references,
-    /// and downloads dependencies from the registry into the global deps cache.
-    ///
-    /// With a spec argument (e.g. `lemma get @user/repo/spec`): fetches all
-    /// temporal versions of that specific spec from the registry.
-    ///
-    /// Old dependency versions are kept (not pruned) so that spec~hash pinning
-    /// continues to work.
+    /// Without arguments: resolves all @... references in the workspace.
+    /// With a spec: fetches that specific spec from the registry.
     Get {
-        /// Specific spec to fetch (e.g. @user/repo/spec). If omitted, resolves all @... references.
-        #[arg(value_name = "SPEC")]
-        spec_id: Option<String>,
-        /// Workspace root directory containing .lemma files
-        #[arg(short = 'd', long = "dir", default_value = ".")]
-        workdir: PathBuf,
+        /// [source] [spec] — spec to fetch (e.g. @user/repo/spec)
+        args: Vec<String>,
         /// Overwrite existing registry specs when content has changed
         #[arg(short = 'f', long)]
         force: bool,
     },
     /// Format .lemma files to canonical style
-    ///
-    /// Parses and re-emits .lemma files with consistent formatting.
-    /// Without flags, formats files in place. Use --check for CI.
     Format {
         /// Files or directories to format (default: current directory)
         #[arg(default_value = ".")]
@@ -197,6 +158,76 @@ enum Commands {
         #[arg(long)]
         stdout: bool,
     },
+}
+
+struct ParsedTarget {
+    source: PathBuf,
+    spec: Option<String>,
+    facts: Vec<String>,
+}
+
+fn parse_target(args: &[String]) -> Result<ParsedTarget> {
+    let mut facts = Vec::new();
+    let mut positionals = Vec::new();
+    for arg in args {
+        if arg.contains('=') {
+            facts.push(arg.clone());
+        } else {
+            if arg == "-" {
+                anyhow::bail!(
+                    "`-` is not a valid source path (stdin is not supported); pass a .lemma file or directory"
+                );
+            }
+            positionals.push(arg.as_str());
+        }
+    }
+    let (source, spec) = match positionals.as_slice() {
+        [] => (PathBuf::from("."), None),
+        [first] => {
+            if Path::new(first).exists() {
+                (PathBuf::from(first), None)
+            } else {
+                (PathBuf::from("."), Some(first.to_string()))
+            }
+        }
+        [first, second, ..] => {
+            if Path::new(first).exists() {
+                (PathBuf::from(first), Some(second.to_string()))
+            } else {
+                (PathBuf::from("."), Some(first.to_string()))
+            }
+        }
+    };
+    Ok(ParsedTarget {
+        source,
+        spec,
+        facts,
+    })
+}
+
+/// Resolve spec name: use explicit name, auto-select for single-spec sources,
+/// or error/interactive for multi-spec sources.
+fn resolve_spec(engine: &Engine, spec: Option<&String>, interactive: bool) -> Result<String> {
+    resolve_spec_str(engine, spec.map(|s| s.as_str()), interactive)
+}
+
+fn resolve_spec_str(engine: &Engine, spec: Option<&str>, interactive: bool) -> Result<String> {
+    if let Some(name) = spec {
+        return Ok(name.to_string());
+    }
+    let specs = engine.list_specs();
+    match specs.len() {
+        0 => anyhow::bail!("No specs found in source"),
+        1 => Ok(specs[0].name.clone()),
+        _ if interactive => Ok(String::new()),
+        _ => {
+            let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+            anyhow::bail!(
+                "Source contains multiple specs: {}\n\nUsage: lemma run <source> <spec> [facts...]",
+                names.join(", ")
+            );
+        }
+    }
 }
 
 fn resolve_effective(raw: Option<&String>) -> Result<DateTimeValue> {
@@ -212,54 +243,61 @@ fn resolve_effective(raw: Option<&String>) -> Result<DateTimeValue> {
 fn main() {
     let cli = Cli::parse();
 
-    let result = match &cli.command {
+    let result: Result<()> = (|| match &cli.command {
         Commands::Run {
-            workdir,
-            spec_id,
+            args,
             rules,
-            facts,
             target,
             output,
             explain,
             interactive,
             effective,
-        } => run_command(RunOptions {
-            workdir,
-            spec_id: spec_id.as_ref(),
-            rules: rules.as_ref(),
-            facts,
-            target: target.as_ref(),
-            output: *output,
-            explain: *explain,
-            interactive: *interactive,
-            effective_raw: effective.as_ref(),
-        }),
+        } => {
+            let parsed = parse_target(args)?;
+            run_command(RunOptions {
+                source: &parsed.source,
+                spec_id: parsed.spec.as_ref(),
+                rules: rules.as_ref(),
+                facts: &parsed.facts,
+                target: target.as_ref(),
+                output: *output,
+                explain: *explain,
+                interactive: *interactive,
+                effective_raw: effective.as_ref(),
+            })
+        }
         Commands::Schema {
-            workdir,
-            spec_name,
+            args,
             effective,
             hash,
-        } => schema_command(workdir, spec_name, effective.as_ref(), *hash),
-        Commands::List { root, effective } => list_command(root, effective.as_ref()),
+        } => {
+            let parsed = parse_target(args)?;
+            schema_command(
+                &parsed.source,
+                parsed.spec.as_deref(),
+                effective.as_ref(),
+                *hash,
+            )
+        }
+        Commands::List { source, effective } => list_command(source, effective.as_ref()),
         Commands::Server {
-            workdir,
+            source,
             host,
             port,
             watch,
             explanations,
-        } => server_command(workdir, host, *port, *watch, *explanations),
-        Commands::Mcp { workdir, admin } => mcp_command(workdir, *admin),
-        Commands::Get {
-            spec_id,
-            workdir,
-            force,
-        } => get_command(workdir, spec_id.as_ref(), *force),
+        } => server_command(source, host, *port, *watch, *explanations),
+        Commands::Mcp { source, admin } => mcp_command(source, *admin),
+        Commands::Get { args, force } => {
+            let parsed = parse_target(args)?;
+            get_command(&parsed.source, parsed.spec.as_deref(), *force)
+        }
         Commands::Format {
             paths,
             check,
             stdout,
         } => format_command(paths, *check, *stdout),
-    };
+    })();
 
     if let Err(e) = result {
         eprintln!("{}", e);
@@ -268,7 +306,7 @@ fn main() {
 }
 
 struct RunOptions<'a> {
-    workdir: &'a Path,
+    source: &'a Path,
     spec_id: Option<&'a String>,
     rules: Option<&'a String>,
     facts: &'a [String],
@@ -282,39 +320,17 @@ struct RunOptions<'a> {
 fn run_command(opts: RunOptions<'_>) -> Result<()> {
     let now = resolve_effective(opts.effective_raw)?;
     let mut engine = Engine::new();
-    load_workspace(&mut engine, opts.workdir)?;
+    load_workspace(&mut engine, opts.source)?;
 
-    let (spec_id, rules, final_facts, target) = if opts.interactive || opts.spec_id.is_none() {
-        if opts.spec_id.is_none() && !opts.interactive {
-            eprintln!("Error: No spec specified\n");
-            eprintln!("Usage: lemma run [SPEC] [--rules=rule1,rule2] [FACTS...] [OPTIONS]\n");
-            eprintln!("Examples:");
-            eprintln!(
-                "  lemma run pricing                    - Evaluate all rules in 'pricing' spec"
-            );
-            eprintln!("  lemma run pricing --rules=total        - Evaluate only 'total' rule");
-            eprintln!(
-                "  lemma run pricing --rules=total,tax     - Evaluate 'total' and 'tax' rules"
-            );
-            eprintln!("  lemma run pricing price=100 qty=5      - Evaluate with fact values");
-            eprintln!("  lemma run spec~a1b2c3d4                - Pin to plan hash (use lemma schema for hash)");
-            eprintln!(
-                "  lemma run --interactive                - Interactive mode for selection\n"
-            );
-            eprintln!("To see available specs:");
-            eprintln!("  lemma list\n");
-            eprintln!("For more information:");
-            eprintln!("  lemma run --help");
-            std::process::exit(1);
-        }
+    let resolved_spec = resolve_spec(&engine, opts.spec_id, opts.interactive)?;
 
-        let (parsed_spec, parsed_rules) = match opts.spec_id {
-            Some(spec_id) => {
-                let (name, _) =
-                    lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
-                (Some(name), opts.rules.map(|r| parse_rule_names(r.as_str())))
-            }
-            None => (None, None),
+    let (spec_id, rules, final_facts, target) = if opts.interactive {
+        let (parsed_spec, parsed_rules) = if resolved_spec.is_empty() {
+            (None, None)
+        } else {
+            let (name, _) =
+                lemma::parse_spec_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
+            (Some(name), opts.rules.map(|r| parse_rule_names(r.as_str())))
         };
 
         let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(opts.facts);
@@ -328,24 +344,19 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
             &now,
         )?;
 
-        // Add a blank line after the final interactive prompt so the
-        // formatted output sections ("Facts", "Rules", etc.) don't run
-        // directly against the last user-entered line.
         println!();
 
         let mut all_facts = cli_facts;
         all_facts.extend(interactive_facts);
         (s, r.unwrap_or_default(), all_facts, interactive_target)
-    } else if let Some(spec_id) = opts.spec_id {
-        lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
+    } else {
+        lemma::parse_spec_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
         let rules = opts
             .rules
             .map(|r| parse_rule_names(r.as_str()))
             .unwrap_or_default();
         let fact_values = parse_fact_strings(opts.facts);
-        (spec_id.to_owned(), rules, fact_values, None)
-    } else {
-        unreachable!()
+        (resolved_spec, rules, fact_values, None)
     };
 
     if target.is_some() {
@@ -421,17 +432,18 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
 }
 
 fn schema_command(
-    workdir: &Path,
-    spec_id: &str,
+    source: &Path,
+    spec: Option<&str>,
     effective_raw: Option<&String>,
     hash_only: bool,
 ) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
+    load_workspace(&mut engine, source)?;
 
+    let spec_id = resolve_spec_str(&engine, spec, false)?;
     let plan = engine
-        .get_plan(spec_id, Some(&now))
+        .get_plan(&spec_id, Some(&now))
         .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
     let hash = plan.plan_hash();
     if hash_only {
@@ -443,17 +455,21 @@ fn schema_command(
     Ok(())
 }
 
-fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
+fn list_command(source: &Path, effective_raw: Option<&String>) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
 
-    let file_count = WalkDir::new(root)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("lemma"))
-        .count();
+    let file_count = if source.is_file() {
+        1
+    } else {
+        WalkDir::new(source)
+            .into_iter()
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("lemma"))
+            .count()
+    };
 
-    load_workspace(&mut engine, root)?;
+    load_workspace(&mut engine, source)?;
 
     let specs = engine.list_specs();
     let schemas: Vec<lemma::SpecSchema> = specs
@@ -477,7 +493,7 @@ fn list_command(root: &PathBuf, effective_raw: Option<&String>) -> Result<()> {
 }
 
 fn server_command(
-    workdir: &Path,
+    source: &Path,
     host: &str,
     port: u16,
     watch: bool,
@@ -487,7 +503,7 @@ fn server_command(
     let rt = Runtime::new()?;
     rt.block_on(async {
         let mut engine = Engine::new();
-        load_workspace(&mut engine, workdir)?;
+        load_workspace(&mut engine, source)?;
 
         let spec_names = engine.list_specs();
         let spec_count = spec_names.len();
@@ -498,16 +514,16 @@ fn server_command(
             port,
             watch,
             explanations,
-            workdir.to_path_buf(),
+            source.to_path_buf(),
         )
         .await
     })?;
     Ok(())
 }
 
-fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
+fn mcp_command(source: &Path, admin: bool) -> Result<()> {
     let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
+    load_workspace(&mut engine, source)?;
 
     let config = mcp::McpConfig { admin };
 
@@ -519,17 +535,17 @@ fn mcp_command(workdir: &Path, admin: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_command(workdir: &Path, spec_id: Option<&String>, force: bool) -> Result<()> {
+fn get_command(source: &Path, spec_id: Option<&str>, force: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(get_command_async(workdir, spec_id, force))
+    rt.block_on(get_command_async(source, spec_id, force))
 }
 
-async fn get_command_async(workdir: &Path, spec_id: Option<&String>, force: bool) -> Result<()> {
+async fn get_command_async(source: &Path, spec_id: Option<&str>, force: bool) -> Result<()> {
     let registry = make_fetch_registry();
 
     match spec_id {
-        Some(spec_id) => get_single_spec(workdir, spec_id, &*registry, force).await,
-        None => get_all_workspace_deps(workdir, &*registry, force).await,
+        Some(spec_id) => get_single_spec(source, spec_id, &*registry, force).await,
+        None => get_all_workspace_deps(source, &*registry, force).await,
     }
 }
 
@@ -866,16 +882,18 @@ fn make_fetch_registry() -> Box<dyn lemma::Registry> {
     std::process::exit(1);
 }
 
-/// Load all .lemma files from the workspace directory.
-///
-/// Walks the workspace recursively for user-authored specs and cached registry
-/// dependencies (stored in `.deps/` inside the workspace by `lemma get`).
+/// Load specs from a workspace directory (recursive walk) or a single .lemma file.
+/// When given a directory, also picks up cached registry deps in `.deps/`.
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
     let mut paths: Vec<std::path::PathBuf> = Vec::new();
-    for entry in WalkDir::new(workdir) {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-            paths.push(entry.path().to_path_buf());
+    if workdir.is_file() {
+        paths.push(workdir.to_path_buf());
+    } else {
+        for entry in WalkDir::new(workdir) {
+            let entry = entry?;
+            if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
+                paths.push(entry.path().to_path_buf());
+            }
         }
     }
     if let Err(load_err) = engine.load_from_paths(&paths, false) {

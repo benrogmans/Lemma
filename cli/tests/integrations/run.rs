@@ -7,10 +7,8 @@ use tempfile::TempDir;
 #[test]
 fn test_cli_run_simple_spec() {
     let temp_dir = TempDir::new().unwrap();
-    let lemma_file = temp_dir.path().join("test.lemma");
-
     fs::write(
-        &lemma_file,
+        temp_dir.path().join("test.lemma"),
         r#"
 spec simple_test
 fact x: 10
@@ -22,10 +20,7 @@ rule product: x * y
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("simple_test")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("simple_test");
 
     cmd.assert()
         .success()
@@ -38,10 +33,8 @@ rule product: x * y
 #[test]
 fn test_cli_run_with_fact_values() {
     let temp_dir = TempDir::new().unwrap();
-    let lemma_file = temp_dir.path().join("test.lemma");
-
     fs::write(
-        &lemma_file,
+        temp_dir.path().join("test.lemma"),
         r#"
 spec override_test
 fact base: [number]
@@ -52,10 +45,9 @@ rule doubled: base * 2
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("override_test")
-        .arg("base=7")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("base=7");
 
     cmd.assert()
         .success()
@@ -67,10 +59,7 @@ fn test_cli_run_nonexistent_spec() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("nonexistent")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("nonexistent");
 
     cmd.assert()
         .failure()
@@ -78,12 +67,20 @@ fn test_cli_run_nonexistent_spec() {
 }
 
 #[test]
+fn test_cli_run_rejects_dash_source() {
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run").arg("-").arg("any_spec");
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("stdin is not supported"));
+}
+
+#[test]
 fn test_cli_run_with_unless_clause() {
     let temp_dir = TempDir::new().unwrap();
-    let lemma_file = temp_dir.path().join("test.lemma");
-
     fs::write(
-        &lemma_file,
+        temp_dir.path().join("test.lemma"),
         r#"
 spec discount_test
 fact quantity: 15
@@ -95,10 +92,7 @@ rule discount: 0
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("discount_test")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("discount_test");
 
     cmd.assert()
         .success()
@@ -108,10 +102,8 @@ rule discount: 0
 #[test]
 fn test_cli_schema_spec() {
     let temp_dir = TempDir::new().unwrap();
-    let lemma_file = temp_dir.path().join("test.lemma");
-
     fs::write(
-        &lemma_file,
+        temp_dir.path().join("test.lemma"),
         r#"
 spec inspect_test
 fact name: "Test"
@@ -122,10 +114,7 @@ rule doubled: value * 2
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("schema")
-        .arg("inspect_test")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("schema").arg(temp_dir.path()).arg("inspect_test");
 
     cmd.assert()
         .success()
@@ -168,10 +157,8 @@ fact y: 2
 #[test]
 fn test_cli_run_with_arithmetic() {
     let temp_dir = TempDir::new().unwrap();
-    let lemma_file = temp_dir.path().join("test.lemma");
-
     fs::write(
-        &lemma_file,
+        temp_dir.path().join("test.lemma"),
         r#"
 spec arithmetic_test
 fact price: 100
@@ -181,10 +168,7 @@ rule with_tax: price * 1.21
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("arithmetic_test")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("arithmetic_test");
 
     cmd.assert()
         .success()
@@ -194,10 +178,8 @@ rule with_tax: price * 1.21
 #[test]
 fn test_cli_parse_error_handling() {
     let temp_dir = TempDir::new().unwrap();
-    let lemma_file = temp_dir.path().join("test.lemma");
-
     fs::write(
-        &lemma_file,
+        temp_dir.path().join("test.lemma"),
         r#"
 spec invalid
 this is not valid lemma syntax
@@ -206,10 +188,7 @@ this is not valid lemma syntax
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("invalid")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("invalid");
 
     cmd.assert()
         .failure()
@@ -220,7 +199,6 @@ this is not valid lemma syntax
 fn test_cli_reports_errors_from_all_files() {
     let temp_dir = TempDir::new().unwrap();
 
-    // File 1: valid
     fs::write(
         temp_dir.path().join("valid.lemma"),
         r#"
@@ -231,7 +209,6 @@ rule doubled: price * 2
     )
     .unwrap();
 
-    // File 2: broken (parse error)
     fs::write(
         temp_dir.path().join("broken_a.lemma"),
         r#"
@@ -241,7 +218,6 @@ this is not valid lemma
     )
     .unwrap();
 
-    // File 3: broken (different parse error)
     fs::write(
         temp_dir.path().join("broken_b.lemma"),
         r#"
@@ -252,12 +228,8 @@ also invalid lemma syntax
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("valid_spec")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("valid_spec");
 
-    // Should fail, and the error output should mention BOTH broken files
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -292,11 +264,10 @@ rule total: a + b + c
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("nested_explanation")
         .arg("--rules=total")
-        .arg("--explain")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("--explain");
 
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -346,10 +317,9 @@ rule out: true
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("explain_test")
-        .arg("--explain")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("--explain");
 
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);

@@ -1,7 +1,7 @@
 //! Tests for all CLI integration example files
 //!
 //! Ensures all example files in cli/tests/integrations/examples/ are valid and can be evaluated
-//! This validates that the examples work correctly through the CLI command interface.
+//! through the CLI command interface.
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
@@ -24,10 +24,7 @@ fn test_example_01_simple_facts() {
     fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("simple_facts")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("simple_facts");
 
     cmd.assert().success();
 }
@@ -39,10 +36,7 @@ fn test_schema_includes_hash() {
     fs::copy(&example_file, temp_dir.path().join("01_simple_facts.lemma")).unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("schema")
-        .arg("simple_facts")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("schema").arg(temp_dir.path()).arg("simple_facts");
 
     cmd.assert()
         .success()
@@ -58,10 +52,9 @@ fn test_schema_hash_only_outputs_hash() {
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("schema")
+        .arg(temp_dir.path())
         .arg("simple_facts")
-        .arg("--hash")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("--hash");
 
     let output = cmd.output().unwrap();
     assert!(output.status.success());
@@ -88,10 +81,9 @@ fn test_example_02_rules_and_unless() {
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("rules_and_unless")
-        .arg("base_price=100.00")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("base_price=100.00");
 
     cmd.assert()
         .success()
@@ -109,32 +101,20 @@ fn test_example_03_spec_references() {
     )
     .unwrap();
 
-    // Test base_employee spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("base_employee")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("base_employee");
 
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("annual_salary").or(predicate::str::is_empty()));
 
-    // Test specific_employee spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("specific_employee")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("specific_employee");
 
     cmd.assert().success();
 
-    // Test contractor spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("contractor")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("contractor");
 
     cmd.assert().success();
 }
@@ -151,10 +131,7 @@ fn test_example_04_unit_conversions() {
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("unit_conversions")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("unit_conversions");
 
     cmd.assert()
         .success()
@@ -174,10 +151,9 @@ fn test_example_05_date_handling() {
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("date_handling")
-        .arg("current_date=2024-06-15")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("current_date=2024-06-15");
 
     cmd.assert()
         .success()
@@ -196,10 +172,7 @@ fn test_example_06_tax_calculation() {
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("tax_calculation")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("tax_calculation");
 
     cmd.assert()
         .success()
@@ -219,6 +192,7 @@ fn test_example_07_shipping_policy() {
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("shipping_policy")
         .arg("order_total=75.00")
         .arg("item_weight=8")
@@ -226,9 +200,7 @@ fn test_example_07_shipping_policy() {
         .arg("destination_region=North Holland")
         .arg("is_po_box=false")
         .arg("is_expedited=false")
-        .arg("is_hazardous=false")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("is_hazardous=false");
 
     cmd.assert()
         .success()
@@ -249,23 +221,15 @@ fn test_example_08_rule_references() {
     )
     .unwrap();
 
-    // Test rule_references spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("rule_references")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("rule_references");
 
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("can_drive_legally").or(predicate::str::is_empty()));
 
-    // Test eligibility_check spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("eligibility_check")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("eligibility_check");
 
     cmd.assert().success().stdout(
         predicate::str::contains("can_travel_internationally").or(predicate::str::is_empty()),
@@ -281,6 +245,7 @@ fn test_example_09_stress_test() {
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("stress_test")
         .arg("base_price=100.00")
         .arg("quantity=50")
@@ -290,24 +255,20 @@ fn test_example_09_stress_test() {
         .arg("delivery_distance=300")
         .arg("is_express=false")
         .arg("is_fragile=false")
-        .arg("payment_method=credit")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("payment_method=credit");
 
     cmd.assert().success();
 
-    // Test stress_test_config spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("stress_test_config")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("stress_test_config");
 
     cmd.assert().success();
 
-    // Test stress_test_extended spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg(temp_dir.path())
         .arg("stress_test_extended")
         .arg("order.base_price=100.00")
         .arg("order.quantity=100")
@@ -317,9 +278,7 @@ fn test_example_09_stress_test() {
         .arg("order.delivery_distance=250")
         .arg("order.is_express=true")
         .arg("order.is_fragile=true")
-        .arg("order.payment_method=debit")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg("order.payment_method=debit");
 
     cmd.assert().success();
 }
@@ -338,9 +297,8 @@ fn test_example_10_compensation_policy() {
     // Test base_policy spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("compensation/base_policy")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("compensation/base_policy");
 
     cmd.assert()
         .success()
@@ -349,9 +307,8 @@ fn test_example_10_compensation_policy() {
     // Test engineering_dept spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("compensation/engineering_dept")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("compensation/engineering_dept");
 
     cmd.assert()
         .success()
@@ -360,18 +317,16 @@ fn test_example_10_compensation_policy() {
     // Test senior_engineer spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("compensation/senior_engineer")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("compensation/senior_engineer");
 
     cmd.assert().success();
 
     // Test principal_engineer spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("compensation/principal_engineer")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("compensation/principal_engineer");
 
     cmd.assert().success();
 }
@@ -390,9 +345,8 @@ fn test_example_11_spec_composition() {
     // Test base_config spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("pricing/base_config")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("pricing/base_config");
 
     cmd.assert()
         .success()
@@ -400,10 +354,7 @@ fn test_example_11_spec_composition() {
 
     // Test wholesale spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("pricing/wholesale")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("pricing/wholesale");
 
     cmd.assert()
         .success()
@@ -412,27 +363,22 @@ fn test_example_11_spec_composition() {
     // Test wholesale_order spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("order/wholesale_order")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("order/wholesale_order");
 
     cmd.assert().success();
 
     // Test comparison spec
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run")
-        .arg("order/comparison")
-        .arg("--dir")
-        .arg(temp_dir.path());
+    cmd.arg("run").arg(temp_dir.path()).arg("order/comparison");
 
     cmd.assert().success();
 
     // Test custom_wholesale spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("order/custom_wholesale")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("order/custom_wholesale");
 
     cmd.assert()
         .success()
@@ -441,9 +387,8 @@ fn test_example_11_spec_composition() {
     // Test multi_reference spec
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
-        .arg("complex/multi_reference")
-        .arg("--dir")
-        .arg(temp_dir.path());
+        .arg(temp_dir.path())
+        .arg("complex/multi_reference");
 
     cmd.assert().success();
 }
@@ -466,9 +411,8 @@ fn test_example_13_temporal_versioning() {
     let output_2024 = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
         .args([
             "run",
-            "ind/kennismigrant/aanvraag",
-            "--dir",
             dir,
+            "ind/kennismigrant/aanvraag",
             "--effective",
             "2024-06",
             "applicant_age=28",
@@ -494,9 +438,8 @@ fn test_example_13_temporal_versioning() {
     let output_2025 = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
         .args([
             "run",
-            "ind/kennismigrant/aanvraag",
-            "--dir",
             dir,
+            "ind/kennismigrant/aanvraag",
             "--effective",
             "2025-06",
             "applicant_age=31",

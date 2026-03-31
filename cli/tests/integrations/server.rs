@@ -31,7 +31,6 @@ rule result: x
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut child = std::process::Command::new(bin)
         .arg("server")
-        .arg("--dir")
         .arg(temp_dir.path())
         .arg("--port")
         .arg(SERVER_TEST_PORT.to_string())
@@ -75,7 +74,9 @@ fn test_server_help_shows_new_routes() {
 
     cmd.assert()
         .success()
-        .stdout(predicates::str::contains("Workspace root directory"))
+        .stdout(predicates::str::contains(
+            "Workspace directory or .lemma file",
+        ))
         .stdout(predicates::str::contains("--watch"))
         .stdout(predicates::str::contains("/docs"))
         .stdout(predicates::str::contains("/openapi.json"));
@@ -100,7 +101,7 @@ fn test_server_help_shows_explanations_flag() {
     cmd.assert()
         .success()
         .stdout(predicates::str::contains("--explanations"))
-        .stdout(predicates::str::contains("x-explanations"));
+        .stdout(predicates::str::contains("Enable explanation generation"));
 }
 
 #[test]
@@ -120,7 +121,6 @@ rule result: x
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut child = std::process::Command::new(bin)
         .arg("server")
-        .arg("--dir")
         .arg(temp_dir.path())
         .arg("--port")
         .arg(port.to_string())

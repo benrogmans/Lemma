@@ -30,7 +30,7 @@ fn mcp_session(
 ) -> Vec<serde_json::Value> {
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
-    cmd.arg("mcp").arg("--dir").arg(workdir);
+    cmd.arg("mcp").arg(workdir);
     if admin {
         cmd.arg("--admin");
     }
@@ -853,7 +853,7 @@ fn test_mcp_malformed_json() {
 
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
-    cmd.arg("mcp").arg("--dir").arg(temp_dir.path());
+    cmd.arg("mcp").arg(temp_dir.path());
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

@@ -13,6 +13,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ### Changed
 
+- CLI: workspace or `.lemma` file is a positional argument (`run`/`schema`/`get [source] [spec]…`, `list`/`server`/`mcp [source]`); `-d`/`--dir` removed. Spec auto-selected when the source defines exactly one spec; multiple specs without a name yield an error listing names (or use `-i`). Lemma source from filesystem only; positional `-` is rejected (not a valid path).
 - Planning: `FactData::SpecRef.resolved_plan_hash` is a required `String`; fingerprints always build `SpecId` from it (no optional fallback to bare spec name).
 - Graph / types: missing plan hash on type-import or spec-reference binding yields validation errors instead of `unreachable!` when a dependency spec failed validation or is absent from the hash registry.
 - `build_graph` test helper pre-plans dependency specs so `PlanHashRegistry` matches topological `plan()` behavior.
@@ -21,7 +22,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - Fix for docker image building in CI.
 - Formatter cleanup: deterministic output improvements.
 - Deterministic fingerprinting on semantics.
-- Type resolver: rename `register_dependency_types` to `register_dependency_specs` to clarify scope.
+- Type resolver: rename contributing-spec registration to `register_dependency_specs` to clarify scope.
 
 ### Removed
 
