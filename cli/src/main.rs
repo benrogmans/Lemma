@@ -527,7 +527,7 @@ fn mcp_command(source: &Path, admin: bool) -> Result<()> {
 
     let config = mcp::McpConfig { admin };
 
-    println!(
+    eprintln!(
         "Starting MCP server with {} spec(s) loaded",
         engine.list_specs().len()
     );

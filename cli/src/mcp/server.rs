@@ -110,18 +110,39 @@ mod imp {
             Self { engine, config }
         }
 
-        fn handle_request(&mut self, request: McpRequest) -> McpResponse {
+        /// JSON-RPC 2.0: requests with no `id` are notifications and MUST NOT
+        /// receive a response (§4.1). Returns `None` for notifications, even
+        /// on error, so the transport layer skips the write entirely.
+        fn handle_request(&mut self, request: McpRequest) -> Option<McpResponse> {
             debug!("Handling request: method={}", request.method);
 
+            let is_notification = request.id.is_none();
+
             if request.jsonrpc != "2.0" {
-                return McpResponse {
+                if is_notification {
+                    debug!("Dropping notification with bad jsonrpc version");
+                    return None;
+                }
+                return Some(McpResponse {
                     jsonrpc: "2.0".to_string(),
                     id: request.id,
                     result: None,
                     error: Some(McpError::invalid_request(
                         "Invalid JSON-RPC version, expected '2.0'".to_string(),
                     )),
-                };
+                });
+            }
+
+            if is_notification {
+                match request.method.as_str() {
+                    "notifications/initialized" => {
+                        debug!("Client signalled notifications/initialized");
+                    }
+                    other => {
+                        debug!("Ignoring notification: {}", other);
+                    }
+                }
+                return None;
             }
 
             let result = match request.method.as_str() {
@@ -131,7 +152,7 @@ mod imp {
                 _ => Err(McpError::method_not_found(request.method)),
             };
 
-            match result {
+            Some(match result {
                 Ok(result) => McpResponse {
                     jsonrpc: "2.0".to_string(),
                     id: request.id,
@@ -144,7 +165,7 @@ mod imp {
                     result: None,
                     error: Some(error),
                 },
-            }
+            })
         }
 
         fn initialize(&self) -> Result<serde_json::Value, McpError> {
@@ -156,7 +177,9 @@ mod imp {
                     "version": SERVER_VERSION
                 },
                 "capabilities": {
-                    "tools": {}
+                    "tools": {
+                        "listChanged": false
+                    }
                 }
             }))
         }
@@ -862,28 +885,104 @@ mod imp {
 
             debug!("Received: {}", line);
 
+            // Parse error responds with id: null (JSON-RPC 2.0 §4.2). For
+            // any successfully-parsed notification, handle_request returns
+            // None and we MUST NOT write anything back.
             let response = match serde_json::from_str::<McpRequest>(&line) {
                 Ok(request) => server.handle_request(request),
                 Err(e) => {
                     error!("Parse error: {}", e);
-                    McpResponse {
+                    Some(McpResponse {
                         jsonrpc: "2.0".to_string(),
                         id: None,
                         result: None,
                         error: Some(McpError::parse_error(format!("Parse error: {e}"))),
-                    }
+                    })
                 }
             };
 
-            let response_json = serde_json::to_string(&response)?;
-            writeln!(stdout, "{}", response_json)?;
-            stdout.flush()?;
-
-            debug!("Sent response");
+            if let Some(response) = response {
+                let response_json = serde_json::to_string(&response)?;
+                writeln!(stdout, "{}", response_json)?;
+                stdout.flush()?;
+                debug!("Sent response");
+            } else {
+                debug!("No response (notification)");
+            }
         }
 
         info!("MCP server shutting down");
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn server() -> McpServer {
+            McpServer::new(Engine::new(), McpConfig::default())
+        }
+
+        fn parse(line: &str) -> McpRequest {
+            serde_json::from_str(line).expect("test fixture must be valid JSON-RPC")
+        }
+
+        #[test]
+        fn notification_returns_no_response() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+            assert!(s.handle_request(req).is_none());
+        }
+
+        #[test]
+        fn notification_with_unknown_method_still_silent() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"2.0","method":"some/random/notification"}"#);
+            assert!(s.handle_request(req).is_none());
+        }
+
+        #[test]
+        fn notification_with_bad_jsonrpc_version_silent() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"1.0","method":"notifications/initialized"}"#);
+            assert!(s.handle_request(req).is_none());
+        }
+
+        #[test]
+        fn request_with_id_gets_response() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+            let resp = s.handle_request(req).expect("request must yield response");
+            assert_eq!(resp.id, Some(serde_json::json!(1)));
+            assert!(resp.result.is_some());
+            assert!(resp.error.is_none());
+        }
+
+        #[test]
+        fn request_with_unknown_method_returns_method_not_found() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"2.0","id":7,"method":"does/not/exist"}"#);
+            let resp = s.handle_request(req).expect("request must yield response");
+            assert_eq!(resp.id, Some(serde_json::json!(7)));
+            assert_eq!(resp.error.as_ref().expect("error expected").code, -32601);
+        }
+
+        #[test]
+        fn request_with_bad_jsonrpc_version_returns_invalid_request() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"1.0","id":2,"method":"initialize"}"#);
+            let resp = s.handle_request(req).expect("request must yield response");
+            assert_eq!(resp.error.as_ref().expect("error expected").code, -32600);
+        }
+
+        #[test]
+        fn initialize_advertises_tools_list_changed_false() {
+            let mut s = server();
+            let req = parse(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+            let resp = s.handle_request(req).expect("request must yield response");
+            let result = resp.result.expect("result expected");
+            assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+        }
     }
 }
 
