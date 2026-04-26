@@ -137,11 +137,11 @@ curl -X POST http://localhost:8012/pricing \
 AI assistant integration via [Model Context Protocol](https://modelcontextprotocol.io) over stdio.
 
 ```bash
-lemma mcp [-d <path>] [--admin]
+lemma mcp [path] [--admin]
 ```
 
 **Options:**
-- `-d, --dir <path>` -- workspace root (default: `.`)
+- optional `path` — workspace directory or `.lemma` file; omit to start without loading from disk
 - `--admin` -- enable write tools (`add_spec`, `get_spec_source`)
 
 ## Workspace

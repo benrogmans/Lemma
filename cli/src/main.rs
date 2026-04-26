@@ -129,8 +129,7 @@ enum Commands {
     /// Start MCP server for AI assistant integration (stdio)
     Mcp {
         /// Workspace directory or .lemma file
-        #[arg(default_value = ".")]
-        source: PathBuf,
+        source: Option<PathBuf>,
         /// Enable admin tools: add_spec, get_spec_source (read-only by default)
         #[arg(long)]
         admin: bool,
@@ -287,7 +286,10 @@ fn main() {
             watch,
             explanations,
         } => server_command(source, host, *port, *watch, *explanations),
-        Commands::Mcp { source, admin } => mcp_command(source, *admin),
+        Commands::Mcp {
+            source: workdir,
+            admin,
+        } => mcp_command(workdir.as_deref(), *admin),
         Commands::Get { args, force } => {
             let parsed = parse_target(args)?;
             get_command(&parsed.source, parsed.spec.as_deref(), *force)
@@ -521,9 +523,11 @@ fn server_command(
     Ok(())
 }
 
-fn mcp_command(source: &Path, admin: bool) -> Result<()> {
+fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {
     let mut engine = Engine::new();
-    load_workspace(&mut engine, source)?;
+    if let Some(path) = workdir {
+        load_workspace(&mut engine, path)?;
+    }
 
     let config = mcp::McpConfig { admin };
 

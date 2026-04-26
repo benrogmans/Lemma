@@ -23,14 +23,18 @@ fn test_mcp_help_shows_admin_flag() {
 }
 
 /// Send JSON-RPC messages to the MCP server and collect responses.
+/// `workdir: None` runs `lemma mcp` with no path (no disk read at startup).
 fn mcp_session(
-    workdir: &std::path::Path,
+    workdir: Option<&std::path::Path>,
     admin: bool,
     messages: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
-    cmd.arg("mcp").arg(workdir);
+    cmd.arg("mcp");
+    if let Some(p) = workdir {
+        cmd.arg(p);
+    }
     if admin {
         cmd.arg("--admin");
     }
@@ -89,7 +93,7 @@ fn test_mcp_list_specs_includes_schema() {
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -138,7 +142,7 @@ fn test_mcp_evaluate_includes_reasoning() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -181,7 +185,7 @@ fn test_mcp_read_only_by_default() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -241,7 +245,7 @@ fn test_mcp_admin_enables_add_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -303,7 +307,7 @@ fn test_mcp_get_spec_source() {
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -351,7 +355,7 @@ fn test_mcp_get_spec_source_blocked_without_admin() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -392,7 +396,7 @@ fn test_mcp_initialize_response() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[make_request(1, "initialize", json!({}))],
     );
@@ -419,7 +423,7 @@ fn test_mcp_get_schema_full_spec() {
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -461,7 +465,7 @@ fn test_mcp_get_schema_for_specific_rule() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -492,7 +496,7 @@ fn test_mcp_get_schema_missing_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -522,7 +526,7 @@ fn test_mcp_get_schema_empty_spec_name() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -557,7 +561,7 @@ fn test_mcp_evaluate_all_rules() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -594,7 +598,7 @@ fn test_mcp_evaluate_missing_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -619,7 +623,7 @@ fn test_mcp_evaluate_empty_spec_name() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -657,7 +661,7 @@ fn test_mcp_evaluate_veto_result() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -697,7 +701,7 @@ fn test_mcp_evaluate_with_effective_datetime() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -737,7 +741,7 @@ fn test_mcp_list_specs_empty_workspace() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -768,7 +772,7 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -794,6 +798,35 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
     );
 }
 
+#[test]
+fn test_mcp_omit_path_no_disk_at_startup() {
+    let responses = mcp_session(
+        None,
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "list_specs",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list_specs should return text");
+    assert!(
+        text.contains("No specs loaded"),
+        "Omitting path should start with empty engine, got: {text}"
+    );
+    assert!(text.contains("add_spec"));
+}
+
 // ── error handling ──────────────────────────────────────────────────────
 
 #[test]
@@ -801,7 +834,7 @@ fn test_mcp_invalid_jsonrpc_version() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[json!({
             "jsonrpc": "1.0",
@@ -825,7 +858,7 @@ fn test_mcp_unknown_method() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[make_request(1, "nonexistent/method", json!({}))],
     );
@@ -849,11 +882,9 @@ fn test_mcp_unknown_method() {
 
 #[test]
 fn test_mcp_malformed_json() {
-    let temp_dir = tempfile::tempdir().unwrap();
-
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
-    cmd.arg("mcp").arg(temp_dir.path());
+    cmd.arg("mcp");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -889,7 +920,7 @@ fn test_mcp_tools_call_missing_params() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -915,7 +946,7 @@ fn test_mcp_tools_call_missing_tool_name() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -937,7 +968,7 @@ fn test_mcp_tools_call_unknown_tool() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -972,7 +1003,7 @@ fn test_mcp_add_spec_empty_code() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -1002,7 +1033,7 @@ fn test_mcp_add_spec_invalid_code() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -1032,7 +1063,7 @@ fn test_mcp_tools_list_read_only_tools() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -1071,7 +1102,7 @@ fn test_mcp_tools_list_admin_tools() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -1118,7 +1149,7 @@ fn test_mcp_tools_have_input_schemas() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -1159,7 +1190,7 @@ fn test_mcp_evaluate_with_fact_overrides() {
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -1199,7 +1230,7 @@ fn test_mcp_add_spec_then_evaluate() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -1254,7 +1285,7 @@ fn test_mcp_get_spec_source_missing_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         true,
         &[
             make_request(1, "initialize", json!({})),
@@ -1291,7 +1322,7 @@ fn test_mcp_evaluate_invalid_effective() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(1, "initialize", json!({})),
@@ -1337,7 +1368,7 @@ fn test_mcp_response_ids_match_request_ids() {
     );
 
     let responses = mcp_session(
-        temp_dir.path(),
+        Some(temp_dir.path()),
         false,
         &[
             make_request(10, "initialize", json!({})),
