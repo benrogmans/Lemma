@@ -230,7 +230,7 @@ export function build() {
     keywords: [...NPM_BRANDING.keywords],
     author: meta.author,
     license: meta.license,
-    repository: { type: 'git', url: meta.repository },
+    repository: { type: 'git', url: `git+${meta.repository}.git` },
     homepage: NPM_BRANDING.homepage,
     bugs: { url: `${meta.repository}/issues` },
   };

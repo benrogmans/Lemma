@@ -284,6 +284,9 @@ jobs:
       needs.create-release.result == 'success' &&
       needs.detect-version-changes.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     env:
       WASM_PACK_VERSION: 0.14.0
     steps:
@@ -324,14 +327,13 @@ jobs:
 
       - name: Build WASM
         working-directory: engine/packages/npm
-        run: |
-          node build.js
+        run: node build.js
 
       - name: Publish to npm
-        working-directory: engine/packages/npm/dist
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        uses: npm/publish@v1.0.1
+        with:
+          package: engine/packages/npm/dist
+          provenance: true
 
   publish-vscode:
     name: Publish VS Code Extension
