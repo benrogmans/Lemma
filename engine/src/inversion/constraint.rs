@@ -1,6 +1,6 @@
 //! Constraint type for inversion
 //!
-//! Represents boolean constraints over facts. Unlike `Expression`, this type:
+//! Represents boolean constraints over data. Unlike `Expression`, this type:
 //! - Does not require source location information
 //! - Only represents the subset of expressions valid in constraints
 //! - Makes invalid states unrepresentable
@@ -9,7 +9,7 @@
 //! For semantic analysis (e.g., `x is A and x is not B`), use domain extraction.
 
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
+    ArithmeticComputation, ComparisonComputation, DataPath, Expression, ExpressionKind,
     LiteralValue, SemanticConversionTarget, ValueKind,
 };
 use crate::{Error, OperationResult};
@@ -17,7 +17,7 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::fmt;
 use std::sync::Arc;
 
-/// A boolean constraint over facts
+/// A boolean constraint over data
 ///
 /// Used internally by inversion to represent conditions under which
 /// a solution applies. Converted from `Expression` at the boundary
@@ -28,14 +28,14 @@ pub enum Constraint {
     True,
     /// Always false (unsatisfiable)
     False,
-    /// Comparison: fact op value (e.g., `age > 18`)
+    /// Comparison: data op value (e.g., `age > 18`)
     Comparison {
-        fact: FactPath,
+        data: DataPath,
         op: ComparisonComputation,
         value: Arc<LiteralValue>,
     },
-    /// Boolean fact reference (e.g., `is_employee` meaning `is_employee is true`)
-    Fact(FactPath),
+    /// Boolean data reference (e.g., `is_employee` meaning `is_employee is true`)
+    Data(DataPath),
     /// Logical AND of two constraints
     And(Box<Constraint>, Box<Constraint>),
     /// Logical OR of two constraints
@@ -106,7 +106,7 @@ impl Constraint {
         if let Some(bexpr) = to_bool_expr(&self, &mut atoms) {
             const MAX_ATOMS: usize = 64;
             if atoms.len() <= MAX_ATOMS {
-                // Inject numeric theory between comparison atoms on the same fact.
+                // Inject numeric theory between comparison atoms on the same data.
                 // Without this, BDD simplification is boolean-only and can keep worlds like:
                 //   (x > 5) AND NOT(x > 3)
                 // which are propositionally satisfiable but numerically impossible.
@@ -123,8 +123,8 @@ impl Constraint {
     /// Convert from an Expression to a Constraint
     ///
     /// The expression must be a boolean expression containing only:
-    /// - Comparisons between facts and literals
-    /// - Boolean fact references
+    /// - Comparisons between data and literals
+    /// - Boolean data references
     /// - Logical operators (and, or, not)
     /// - Boolean literals
     pub fn from_expression(expr: &Expression) -> Result<Constraint, Error> {
@@ -168,8 +168,8 @@ impl Constraint {
                                 ));
                             }
                         },
-                        ExpressionKind::FactPath(fact_path) => {
-                            constraint_stack.push(Constraint::Fact(fact_path.clone()));
+                        ExpressionKind::DataPath(data_path) => {
+                            constraint_stack.push(Constraint::Data(data_path.clone()));
                         }
                         ExpressionKind::Comparison(left, op, right) => {
                             match Self::from_comparison(&left, &op, &right) {
@@ -247,23 +247,23 @@ impl Constraint {
             Error::inversion(message, left.source_location.clone(), suggestion)
         }
 
-        // Case 1: fact op literal (e.g., age > 18)
-        if let ExpressionKind::FactPath(fact_path) = &left.kind {
+        // Case 1: data op literal (e.g., age > 18)
+        if let ExpressionKind::DataPath(data_path) = &left.kind {
             if let ExpressionKind::Literal(value) = &right.kind {
                 return Ok(Constraint::Comparison {
-                    fact: fact_path.clone(),
+                    data: data_path.clone(),
                     op: op.clone(),
                     value: Arc::new(value.as_ref().clone()),
                 });
             }
         }
 
-        // Case 2: literal op fact (e.g., 18 < age) - flip the comparison
+        // Case 2: literal op data (e.g., 18 < age) - flip the comparison
         if let ExpressionKind::Literal(value) = &left.kind {
-            if let ExpressionKind::FactPath(fact_path) = &right.kind {
+            if let ExpressionKind::DataPath(data_path) = &right.kind {
                 let flipped_op = flip_comparison_operator(op);
                 return Ok(Constraint::Comparison {
-                    fact: fact_path.clone(),
+                    data: data_path.clone(),
                     op: flipped_op,
                     value: Arc::new(value.as_ref().clone()),
                 });
@@ -334,7 +334,7 @@ impl Constraint {
         }
 
         // Extended: try to rewrite richer comparison shapes into an atomic
-        // `fact op literal` constraint by isolating a single unknown fact.
+        // `data op literal` constraint by isolating a single unknown data.
         if let Some(rewritten) = try_rewrite_comparison_to_atomic(left, op, right) {
             return Ok(rewritten);
         }
@@ -346,25 +346,25 @@ impl Constraint {
                 left, op, right
             ),
             Some(
-                "Try rewriting the unless condition into a simple comparison between a single fact and a literal (e.g. x > 10)."
+                "Try rewriting the unless condition into a simple comparison between a single data and a literal (e.g. x > 10)."
                     .to_string(),
             ),
         ))
     }
 
-    /// Collect all fact paths referenced in this constraint
-    pub fn collect_facts(&self) -> Vec<FactPath> {
-        let mut facts = Vec::new();
+    /// Collect all data paths referenced in this constraint
+    pub fn collect_data(&self) -> Vec<DataPath> {
+        let mut paths = Vec::new();
         let mut stack = vec![self];
 
         while let Some(constraint) = stack.pop() {
             match constraint {
                 Constraint::True | Constraint::False => {}
-                Constraint::Comparison { fact, .. } => {
-                    facts.push(fact.clone());
+                Constraint::Comparison { data, .. } => {
+                    paths.push(data.clone());
                 }
-                Constraint::Fact(fact_path) => {
-                    facts.push(fact_path.clone());
+                Constraint::Data(data_path) => {
+                    paths.push(data_path.clone());
                 }
                 Constraint::And(left, right) | Constraint::Or(left, right) => {
                     stack.push(left.as_ref());
@@ -376,9 +376,9 @@ impl Constraint {
             }
         }
 
-        facts.sort_by_key(|a| a.to_string());
-        facts.dedup();
-        facts
+        paths.sort_by_key(|a| a.to_string());
+        paths.dedup();
+        paths
     }
 }
 
@@ -417,7 +417,7 @@ fn try_rewrite_comparison_to_atomic(
         _ => (left.clone(), right.clone()),
     };
 
-    // We can only rewrite comparisons where one side is a literal and the other side contains facts.
+    // We can only rewrite comparisons where one side is a literal and the other side contains data.
     let (expr, mut op_norm, lit) = match (&left.kind, &right.kind) {
         (ExpressionKind::Literal(l), _) => {
             // literal op expr  =>  expr flip(op) literal
@@ -428,22 +428,22 @@ fn try_rewrite_comparison_to_atomic(
         _ => return None,
     };
 
-    // Identify the single unknown fact.
-    let mut facts = Vec::new();
-    collect_fact_paths(&expr, &mut facts);
-    facts.sort_by_key(|fp| fp.to_string());
-    facts.dedup();
-    if facts.len() != 1 {
+    // Identify the single unknown data.
+    let mut data = Vec::new();
+    collect_data_paths(&expr, &mut data);
+    data.sort_by_key(|fp| fp.to_string());
+    data.dedup();
+    if data.len() != 1 {
         return None;
     }
-    let fact = facts[0].clone();
+    let data = data[0].clone();
 
-    // Try to isolate the fact for this comparison.
-    let (new_op, new_value) = isolate_linear_comparison(&expr, &fact, &op_norm, &lit)?;
+    // Try to isolate the data for this comparison.
+    let (new_op, new_value) = isolate_linear_comparison(&expr, &data, &op_norm, &lit)?;
     op_norm = new_op;
 
     Some(Constraint::Comparison {
-        fact,
+        data,
         op: op_norm,
         value: Arc::new(new_value),
     })
@@ -458,12 +458,12 @@ fn is_monotone_unit_conversion_target(target: &SemanticConversionTarget) -> bool
     )
 }
 
-fn collect_fact_paths(expr: &Expression, out: &mut Vec<FactPath>) {
+fn collect_data_paths(expr: &Expression, out: &mut Vec<DataPath>) {
     use ExpressionKind;
     let mut stack: Vec<&Expression> = vec![expr];
     while let Some(e) = stack.pop() {
         match &e.kind {
-            ExpressionKind::FactPath(fp) => out.push(fp.clone()),
+            ExpressionKind::DataPath(fp) => out.push(fp.clone()),
             ExpressionKind::Arithmetic(l, _, r)
             | ExpressionKind::Comparison(l, _, r)
             | ExpressionKind::LogicalAnd(l, r) => {
@@ -492,17 +492,10 @@ fn collect_fact_paths(expr: &Expression, out: &mut Vec<FactPath>) {
     }
 }
 
-fn contains_fact(expr: &Expression, fact: &FactPath) -> bool {
-    let mut found = false;
-    let mut facts = Vec::new();
-    collect_fact_paths(expr, &mut facts);
-    for fp in facts {
-        if &fp == fact {
-            found = true;
-            break;
-        }
-    }
-    found
+fn contains_data(expr: &Expression, target: &DataPath) -> bool {
+    let mut paths = Vec::new();
+    collect_data_paths(expr, &mut paths);
+    paths.iter().any(|fp| fp == target)
 }
 
 fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
@@ -510,7 +503,7 @@ fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
 
     match &expr.kind {
         ExpressionKind::Literal(_) => Some(expr.clone()),
-        ExpressionKind::FactPath(_) => None,
+        ExpressionKind::DataPath(_) => None,
 
         ExpressionKind::UnitConversion(inner, target) => {
             let folded_inner = constant_fold_expression(inner)?;
@@ -562,14 +555,14 @@ fn flip_inequality(op: &ComparisonComputation) -> ComparisonComputation {
 
 fn isolate_linear_comparison(
     expr: &Expression,
-    unknown: &FactPath,
+    unknown: &DataPath,
     op: &ComparisonComputation,
     bound: &LiteralValue,
 ) -> Option<(ComparisonComputation, LiteralValue)> {
     use ExpressionKind;
 
     match &expr.kind {
-        ExpressionKind::FactPath(fp) if fp == unknown => Some((op.clone(), bound.clone())),
+        ExpressionKind::DataPath(fp) if fp == unknown => Some((op.clone(), bound.clone())),
 
         // Strip top-level monotone unit conversion wrappers.
         ExpressionKind::UnitConversion(inner, target)
@@ -579,8 +572,8 @@ fn isolate_linear_comparison(
         }
 
         ExpressionKind::Arithmetic(left, arithmetic_op, right) => {
-            let left_contains = contains_fact(left, unknown);
-            let right_contains = contains_fact(right, unknown);
+            let left_contains = contains_data(left, unknown);
+            let right_contains = contains_data(right, unknown);
             if left_contains && right_contains {
                 return None;
             }
@@ -620,7 +613,7 @@ fn isolate_through_arithmetic_left(
     constant: &LiteralValue,
     op: &ComparisonComputation,
     bound: &LiteralValue,
-    unknown: &FactPath,
+    unknown: &DataPath,
 ) -> Option<(ComparisonComputation, LiteralValue)> {
     match operation {
         ArithmeticComputation::Add => {
@@ -669,7 +662,7 @@ fn isolate_through_arithmetic_right(
     constant: &LiteralValue,
     op: &ComparisonComputation,
     bound: &LiteralValue,
-    unknown: &FactPath,
+    unknown: &DataPath,
 ) -> Option<(ComparisonComputation, LiteralValue)> {
     match operation {
         ArithmeticComputation::Add => {
@@ -811,18 +804,18 @@ fn build_numeric_theory_closure(
 ) -> Result<boolean_expression::Expr<usize>, Error> {
     use boolean_expression::Expr;
 
-    // Group indices of comparison atoms by fact path.
-    let mut by_fact: std::collections::HashMap<FactPath, Vec<usize>> =
+    // Group indices of comparison atoms by data path.
+    let mut by_data: std::collections::HashMap<DataPath, Vec<usize>> =
         std::collections::HashMap::new();
     for (idx, atom) in atoms.iter().enumerate() {
-        if let Constraint::Comparison { fact, .. } = atom {
-            by_fact.entry(fact.clone()).or_default().push(idx);
+        if let Constraint::Comparison { data, .. } = atom {
+            by_data.entry(data.clone()).or_default().push(idx);
         }
     }
 
     let mut theory = Expr::Const(true);
 
-    for idxs in by_fact.values() {
+    for idxs in by_data.values() {
         for i in 0..idxs.len() {
             for j in (i + 1)..idxs.len() {
                 let a_idx = idxs[i];
@@ -929,7 +922,7 @@ fn evaluate_literal_comparison(
     }
 }
 
-/// Flip a comparison operator (for converting `literal op fact` to `fact flipped_op literal`)
+/// Flip a comparison operator (for converting `literal op data` to `data flipped_op literal`)
 fn flip_comparison_operator(op: &ComparisonComputation) -> ComparisonComputation {
     match op {
         ComparisonComputation::Is => ComparisonComputation::Is,
@@ -993,7 +986,7 @@ fn to_bool_expr(
                     stack.push(WorkItem::BuildNot);
                     stack.push(WorkItem::Visit(inner.clone()));
                 }
-                Constraint::Comparison { .. } | Constraint::Fact(_) => {
+                Constraint::Comparison { .. } | Constraint::Data(_) => {
                     let idx = find_or_add_atom(c.as_ref(), atoms);
                     expr_stack.push(Expr::Terminal(idx));
                 }
@@ -1025,17 +1018,17 @@ fn constraints_structurally_equal(a: &Constraint, b: &Constraint) -> bool {
         (Constraint::False, Constraint::False) => true,
         (
             Constraint::Comparison {
-                fact: f1,
+                data: f1,
                 op: o1,
                 value: v1,
             },
             Constraint::Comparison {
-                fact: f2,
+                data: f2,
                 op: o2,
                 value: v2,
             },
         ) => f1 == f2 && o1 == o2 && v1 == v2,
-        (Constraint::Fact(f1), Constraint::Fact(f2)) => f1 == f2,
+        (Constraint::Data(f1), Constraint::Data(f2)) => f1 == f2,
         _ => false,
     }
 }
@@ -1124,10 +1117,10 @@ impl fmt::Display for Constraint {
         match self {
             Constraint::True => write!(f, "true"),
             Constraint::False => write!(f, "false"),
-            Constraint::Comparison { fact, op, value } => {
-                write!(f, "{} {} {}", fact, op, value)
+            Constraint::Comparison { data, op, value } => {
+                write!(f, "{} {} {}", data, op, value)
             }
-            Constraint::Fact(fact_path) => write!(f, "{}", fact_path),
+            Constraint::Data(data_path) => write!(f, "{}", data_path),
             Constraint::And(left, right) => {
                 let left_str = format_with_parens(left, self);
                 let right_str = format_with_parens(right, self);
@@ -1178,18 +1171,18 @@ impl Serialize for Constraint {
                 state.serialize_field("type", "false")?;
                 state.end()
             }
-            Constraint::Comparison { fact, op, value } => {
+            Constraint::Comparison { data, op, value } => {
                 let mut state = serializer.serialize_struct("Constraint", 4)?;
                 state.serialize_field("type", "comparison")?;
-                state.serialize_field("fact", &fact.to_string())?;
+                state.serialize_field("data", &data.to_string())?;
                 state.serialize_field("op", &op.to_string())?;
                 state.serialize_field("value", value)?;
                 state.end()
             }
-            Constraint::Fact(fact_path) => {
+            Constraint::Data(data_path) => {
                 let mut state = serializer.serialize_struct("Constraint", 2)?;
-                state.serialize_field("type", "fact")?;
-                state.serialize_field("fact", &fact_path.to_string())?;
+                state.serialize_field("type", "data")?;
+                state.serialize_field("data", &data_path.to_string())?;
                 state.end()
             }
             Constraint::And(left, right) => {
@@ -1229,13 +1222,13 @@ mod tests {
         LiteralValue::number(Decimal::from(n))
     }
 
-    fn fact(name: &str) -> FactPath {
-        FactPath::new(vec![], name.to_string())
+    fn data(name: &str) -> DataPath {
+        DataPath::new(vec![], name.to_string())
     }
 
-    fn comparison(fact_name: &str, op: ComparisonComputation, val: i64) -> Constraint {
+    fn comparison(data_name: &str, op: ComparisonComputation, val: i64) -> Constraint {
         Constraint::Comparison {
-            fact: fact(fact_name),
+            data: data(data_name),
             op,
             value: Arc::new(num(val)),
         }
@@ -1246,8 +1239,8 @@ mod tests {
     #[test]
     fn test_constraint_and_short_circuit() {
         let c1 = Constraint::True;
-        let c2 = Constraint::Fact(fact("x"));
-        assert!(matches!(c1.and(c2.clone()), Constraint::Fact(_)));
+        let c2 = Constraint::Data(data("x"));
+        assert!(matches!(c1.and(c2.clone()), Constraint::Data(_)));
 
         let c3 = Constraint::False;
         assert!(matches!(c3.and(c2), Constraint::False));
@@ -1256,8 +1249,8 @@ mod tests {
     #[test]
     fn test_constraint_or_short_circuit() {
         let c1 = Constraint::False;
-        let c2 = Constraint::Fact(fact("x"));
-        assert!(matches!(c1.or(c2.clone()), Constraint::Fact(_)));
+        let c2 = Constraint::Data(data("x"));
+        assert!(matches!(c1.or(c2.clone()), Constraint::Data(_)));
 
         let c3 = Constraint::True;
         assert!(matches!(c3.or(c2), Constraint::True));
@@ -1265,7 +1258,7 @@ mod tests {
 
     #[test]
     fn test_constraint_not_double_negation() {
-        let c = Constraint::Fact(fact("x"));
+        let c = Constraint::Data(data("x"));
         let not_c = c.clone().not();
         let not_not_c = not_c.not();
         assert_eq!(c, not_not_c);
@@ -1274,7 +1267,7 @@ mod tests {
     #[test]
     fn test_constraint_display_simple() {
         let c = Constraint::Comparison {
-            fact: fact("age"),
+            data: data("age"),
             op: ComparisonComputation::GreaterThan,
             value: Arc::new(num(18)),
         };
@@ -1284,27 +1277,27 @@ mod tests {
     #[test]
     fn test_constraint_display_and() {
         let c1 = Constraint::Comparison {
-            fact: fact("age"),
+            data: data("age"),
             op: ComparisonComputation::GreaterThan,
             value: Arc::new(num(18)),
         };
-        let c2 = Constraint::Fact(fact("is_employee"));
+        let c2 = Constraint::Data(data("is_employee"));
         let combined = Constraint::And(Box::new(c1), Box::new(c2.not()));
         assert_eq!(combined.to_string(), "age > 18 and not is_employee");
     }
 
     #[test]
-    fn test_collect_facts() {
+    fn test_collect_data() {
         let c = Constraint::And(
             Box::new(Constraint::Comparison {
-                fact: fact("age"),
+                data: data("age"),
                 op: ComparisonComputation::GreaterThan,
                 value: Arc::new(num(18)),
             }),
-            Box::new(Constraint::Fact(fact("is_employee"))),
+            Box::new(Constraint::Data(data("is_employee"))),
         );
-        let facts = c.collect_facts();
-        assert_eq!(facts.len(), 2);
+        let data = c.collect_data();
+        assert_eq!(data.len(), 2);
     }
 
     // Simplification tests
@@ -1313,7 +1306,7 @@ mod tests {
     fn test_simplify_tautology() {
         // (A and B) or (A and not B) = A
         let a = comparison("x", ComparisonComputation::GreaterThan, 10);
-        let b = Constraint::Fact(fact("flag"));
+        let b = Constraint::Data(data("flag"));
 
         let expr = a.clone().and(b.clone()).or(a.clone().and(b.not()));
         let simplified = expr.simplify().unwrap();

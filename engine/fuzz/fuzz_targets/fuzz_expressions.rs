@@ -8,8 +8,8 @@ fuzz_target!(|data: &[u8]| {
         let mut engine = Engine::new();
         let code = format!(r#"
 spec fuzz_test
-fact x: 100
-fact y: 50
+data x: 100
+data y: 50
 rule test_expr: {}
 "#, s);
         let _ = engine.load(&code, lemma::SourceType::Labeled("fuzz_expr"));

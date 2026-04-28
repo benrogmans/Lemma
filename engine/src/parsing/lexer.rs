@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub enum TokenKind {
     // Keywords
     Spec,
-    Fact,
+    Data,
     Rule,
     Unless,
     Then,
@@ -89,6 +89,7 @@ pub enum TokenKind {
     Minus,
     Star,
     Slash,
+    Comma,
     Percent,
     PercentPercent,
     Caret,
@@ -100,13 +101,10 @@ pub enum TokenKind {
     // Punctuation
     Colon,
     Arrow,
-    Tilde,
     Dot,
     At,
     LParen,
     RParen,
-    LBracket,
-    RBracket,
 
     // Literals
     NumberLit,
@@ -126,7 +124,7 @@ impl std::fmt::Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenKind::Spec => write!(f, "'spec'"),
-            TokenKind::Fact => write!(f, "'fact'"),
+            TokenKind::Data => write!(f, "'data'"),
             TokenKind::Rule => write!(f, "'rule'"),
             TokenKind::Unless => write!(f, "'unless'"),
             TokenKind::Then => write!(f, "'then'"),
@@ -194,6 +192,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Minus => write!(f, "'-'"),
             TokenKind::Star => write!(f, "'*'"),
             TokenKind::Slash => write!(f, "'/'"),
+            TokenKind::Comma => write!(f, "','"),
             TokenKind::Percent => write!(f, "'%'"),
             TokenKind::PercentPercent => write!(f, "'%%'"),
             TokenKind::Caret => write!(f, "'^'"),
@@ -203,13 +202,10 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Lte => write!(f, "'<='"),
             TokenKind::Colon => write!(f, "':'"),
             TokenKind::Arrow => write!(f, "'->'"),
-            TokenKind::Tilde => write!(f, "'~'"),
             TokenKind::Dot => write!(f, "'.'"),
             TokenKind::At => write!(f, "'@'"),
             TokenKind::LParen => write!(f, "'('"),
             TokenKind::RParen => write!(f, "')'"),
-            TokenKind::LBracket => write!(f, "'['"),
-            TokenKind::RBracket => write!(f, "']'"),
             TokenKind::NumberLit => write!(f, "a number"),
             TokenKind::StringLit => write!(f, "a string"),
             TokenKind::Commentary => write!(f, "commentary block"),
@@ -302,26 +298,6 @@ impl Lexer {
             line: self.line,
             col: self.col,
         }
-    }
-
-    /// Scan a contiguous run of alphanumeric characters as a raw string,
-    /// bypassing normal tokenization. Used for plan hashes after `~`
-    /// where sequences like `7e20848b` must not be split by scientific
-    /// notation scanning.
-    pub fn scan_raw_alphanumeric(&mut self) -> Result<String, Error> {
-        self.peeked = None;
-        self.peeked2 = None;
-        self.skip_whitespace();
-        let mut result = String::new();
-        while let Some(ch) = self.current_char() {
-            if ch.is_ascii_alphanumeric() {
-                result.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        Ok(result)
     }
 
     pub fn next_token(&mut self) -> Result<Token, Error> {
@@ -641,14 +617,12 @@ impl Lexer {
             '+' => Some(TokenKind::Plus),
             '*' => Some(TokenKind::Star),
             '/' => Some(TokenKind::Slash),
+            ',' => Some(TokenKind::Comma),
             '^' => Some(TokenKind::Caret),
             ':' => Some(TokenKind::Colon),
-            '~' => Some(TokenKind::Tilde),
             '.' => Some(TokenKind::Dot),
             '(' => Some(TokenKind::LParen),
             ')' => Some(TokenKind::RParen),
-            '[' => Some(TokenKind::LBracket),
-            ']' => Some(TokenKind::RBracket),
             '>' => Some(TokenKind::Gt),
             '<' => Some(TokenKind::Lt),
             '%' => Some(TokenKind::Percent),
@@ -677,7 +651,7 @@ impl Lexer {
 fn keyword_from_identifier(text: &str) -> TokenKind {
     match text.to_lowercase().as_str() {
         "spec" => TokenKind::Spec,
-        "fact" => TokenKind::Fact,
+        "data" => TokenKind::Data,
         "rule" => TokenKind::Rule,
         "unless" => TokenKind::Unless,
         "then" => TokenKind::Then,
@@ -745,7 +719,7 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
     }
 }
 
-/// Structural keywords can never be used as identifiers (fact/rule names).
+/// Structural keywords can never be used as identifiers (data/rule names).
 /// Type keywords (scale, number, text, date, time, duration, boolean, percent, ratio)
 /// CAN be used as names because `reference_segment` accepts them
 /// via the `type_standard` alternative.
@@ -753,7 +727,7 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Spec
-            | TokenKind::Fact
+            | TokenKind::Data
             | TokenKind::Rule
             | TokenKind::Unless
             | TokenKind::Then
@@ -947,11 +921,11 @@ pub fn is_math_function(kind: &TokenKind) -> bool {
 }
 
 /// Returns true if the token kind can start the body of a spec
-/// (fact, rule, type, or meta definition).
+/// (data, rule, type, or meta definition).
 pub fn is_spec_body_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Fact | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
+        TokenKind::Data | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
     )
 }
 
@@ -1034,12 +1008,12 @@ mod tests {
     }
 
     #[test]
-    fn lex_fact_definition() {
-        let kinds = lex_kinds("fact age: 25").unwrap();
+    fn lex_data_definition() {
+        let kinds = lex_kinds("data age: 25").unwrap();
         assert_eq!(
             kinds,
             vec![
-                TokenKind::Fact,
+                TokenKind::Data,
                 TokenKind::Identifier,
                 TokenKind::Colon,
                 TokenKind::NumberLit,
@@ -1123,13 +1097,13 @@ mod tests {
 
     #[test]
     fn lex_keywords() {
-        let kinds = lex_kinds("spec fact rule unless then not and in type from with meta veto now")
+        let kinds = lex_kinds("spec data rule unless then not and in type from with meta veto now")
             .unwrap();
         assert_eq!(
             &kinds[..14],
             &[
                 TokenKind::Spec,
-                TokenKind::Fact,
+                TokenKind::Data,
                 TokenKind::Rule,
                 TokenKind::Unless,
                 TokenKind::Then,
@@ -1191,25 +1165,6 @@ mod tests {
         let kinds = lex_kinds("@user").unwrap();
         assert_eq!(kinds[0], TokenKind::At);
         assert_eq!(kinds[1], TokenKind::Identifier);
-    }
-
-    #[test]
-    fn lex_tilde() {
-        let kinds = lex_kinds("~").unwrap();
-        assert_eq!(kinds[0], TokenKind::Tilde);
-    }
-
-    #[test]
-    fn lex_brackets() {
-        let kinds = lex_kinds("[number]").unwrap();
-        assert_eq!(
-            &kinds[..3],
-            &[
-                TokenKind::LBracket,
-                TokenKind::NumberKw,
-                TokenKind::RBracket
-            ]
-        );
     }
 
     #[test]
@@ -1286,20 +1241,20 @@ mod tests {
 
     #[test]
     fn lex_multiline_span_tracking() {
-        let tokens = lex_all("spec test\nfact x: 1").unwrap();
-        // "fact" should be on line 2
-        let fact_token = &tokens[2]; // spec, test, fact
-        assert_eq!(fact_token.kind, TokenKind::Fact);
-        assert_eq!(fact_token.span.line, 2);
-        assert_eq!(fact_token.span.col, 1);
+        let tokens = lex_all("spec test\ndata x: 1").unwrap();
+        // "data" should be on line 2
+        let data_token = &tokens[2]; // spec, test, data
+        assert_eq!(data_token.kind, TokenKind::Data);
+        assert_eq!(data_token.span.line, 2);
+        assert_eq!(data_token.span.col, 1);
     }
 
     #[test]
     fn lex_case_insensitive_keywords() {
         // Lemma keywords are case-insensitive
-        let kinds = lex_kinds("SPEC Fact RULE").unwrap();
+        let kinds = lex_kinds("SPEC Data RULE").unwrap();
         assert_eq!(kinds[0], TokenKind::Spec);
-        assert_eq!(kinds[1], TokenKind::Fact);
+        assert_eq!(kinds[1], TokenKind::Data);
         assert_eq!(kinds[2], TokenKind::Rule);
     }
 

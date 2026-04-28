@@ -1,6 +1,6 @@
 //! Regression test: type-only dependencies must respect temporal versioning.
 //!
-//! When spec B depends on spec A *only* via `type money from A` (no fact-level
+//! When spec B depends on spec A *only* via `data money from A` (no data-level
 //! spec ref), and A has multiple temporal versions with different type
 //! definitions, B must produce separate temporal slices — one per version of A
 //! that falls within B's effective range.
@@ -25,9 +25,9 @@ fn eval_with(
     engine: &Engine,
     spec_name: &str,
     effective: &DateTimeValue,
-    facts: Vec<(&str, &str)>,
+    data: Vec<(&str, &str)>,
 ) -> lemma::Response {
-    let map: HashMap<String, String> = facts
+    let map: HashMap<String, String> = data
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
@@ -53,36 +53,27 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
     );
 }
 
-/// Type-only dependency where the source spec's type definition changes between
-/// temporal versions. The consumer has NO fact-level spec ref — only
-/// `type money from finance`.
-///
-/// finance v1 (before 2025-07-01): money has only `eur`
-/// finance v2 (from 2025-07-01):  money has `eur` + `usd`
-///
-/// consumer is active from 2025-01-01 and uses `eur` literals.
-/// Both slices should plan successfully with the correct version of the type.
-/// Crucially, evaluating *after* the boundary must see finance v2's type (which
-/// includes `usd`), not finance v1's.
+/// Qualified type import: `from finance 2025-02-01` pins to finance v1 (eur only)
+/// regardless of evaluation datetime. The pin freezes the type at that instant.
 #[test]
-fn type_only_dep_must_produce_temporal_slices() {
+fn qualified_type_import_pins_to_referenced_version() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
 spec finance
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> decimals 2
-fact base_price: 50.00 eur
+data base_price: 50.00 eur
 
 spec finance 2025-07-01
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2
-fact base_price: 75.00 eur
+data base_price: 75.00 eur
 "#,
             lemma::SourceType::Labeled("finance.lemma"),
         )
@@ -92,15 +83,15 @@ fact base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-type money from finance
-fact price: [money]
+data money from finance 2025-02-01
+data price: money
 rule doubled: price * 2
 "#,
             lemma::SourceType::Labeled("shop.lemma"),
         )
         .unwrap();
 
-    // Before boundary: finance v1 type (eur only). 10 eur * 2 = 20.00 eur.
+    // Pin resolves finance v1 (eur only), works at any eval datetime.
     assert_rule_value(
         &eval_with(
             &engine,
@@ -112,9 +103,7 @@ rule doubled: price * 2
         "20.00 eur",
     );
 
-    // After boundary: finance v2 type (eur + usd). 10 eur * 2 = 20.00 eur.
-    // This must use v2's type — if temporal slicing worked, this slice would
-    // resolve finance at 2025-07-01 and get the eur+usd version.
+    // Even after the boundary, the pin keeps us on v1 — still eur only.
     assert_rule_value(
         &eval_with(
             &engine,
@@ -125,40 +114,90 @@ rule doubled: price * 2
         "doubled",
         "20.00 eur",
     );
+}
 
-    // The definitive check: after the boundary, `usd` must be a valid unit
-    // because finance v2 defines it. If temporal slicing is broken, this will
-    // fail with "unknown unit 'usd'" because the single slice resolved
-    // finance v1 (which only has eur).
+/// Qualified type import `from finance 2025-02-01` pins to finance v1 (eur only).
+/// Using a unit from v2 (usd) must produce a validation error even after the
+/// v2 boundary, because the pin freezes the type at the qualified instant.
+#[test]
+fn qualified_type_import_rejects_unit_from_later_version() {
+    let mut engine = Engine::new();
+
+    engine
+        .load(
+            r#"
+spec finance
+data money: scale
+ -> unit eur 1.00
+ -> decimals 2
+
+spec finance 2025-07-01
+data money: scale
+ -> unit eur 1.00
+ -> unit usd 1.10
+ -> decimals 2
+"#,
+            lemma::SourceType::Labeled("finance.lemma"),
+        )
+        .unwrap();
+
+    engine
+        .load(
+            r#"
+spec shop 2025-01-01
+data money from finance 2025-02-01
+data price: money
+rule doubled: price * 2
+"#,
+            lemma::SourceType::Labeled("shop.lemma"),
+        )
+        .unwrap();
+
+    // eur works: finance v1 has eur
     assert_rule_value(
         &eval_with(
             &engine,
             "shop",
-            &date(2025, 9, 1),
-            vec![("price", "10.00 usd")],
+            &date(2025, 3, 1),
+            vec![("price", "10.00 eur")],
         ),
         "doubled",
-        "20.00 usd",
+        "20.00 eur",
+    );
+
+    // usd must fail: pin locks to finance v1 which only has eur
+    let result = engine.run(
+        "shop",
+        Some(&date(2025, 9, 1)),
+        vec![("price".to_string(), "10.00 usd".to_string())]
+            .into_iter()
+            .collect(),
+        false,
+    );
+    assert!(result.is_err(), "usd should be rejected by pinned v1 type");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Unknown unit") && err.contains("usd"),
+        "error should mention unknown unit 'usd', got: {err}"
     );
 }
 
-/// Same scenario but the consumer spec is unranged (no effective_from).
-/// The type-only dependency should still produce slices based on finance's
-/// version boundary.
+/// Unranged consumer with a type-only dep whose interface changes between
+/// temporal slices must be rejected when the reference is not pinned.
 #[test]
-fn unranged_spec_with_type_only_dep_must_slice() {
+fn unranged_spec_with_type_only_dep_rejects_incompatible_interface() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
 spec units
-type weight: scale
+data weight: scale
  -> unit kg 1.00
  -> decimals 1
 
 spec units 2025-06-01
-type weight: scale
+data weight: scale
  -> unit kg 1.00
  -> unit lb 2.205
  -> decimals 1
@@ -167,155 +206,33 @@ type weight: scale
         )
         .unwrap();
 
-    engine
-        .load(
-            r#"
+    let result = engine.load(
+        r#"
 spec warehouse
-type weight from units
-fact item_weight: [weight]
+data weight from units
+data item_weight: weight
 rule heavy: item_weight > 100.0 kg
 "#,
-            lemma::SourceType::Labeled("warehouse.lemma"),
-        )
-        .unwrap();
-
-    // Before boundary: only kg is available
-    assert_rule_value(
-        &eval_with(
-            &engine,
-            "warehouse",
-            &date(2025, 3, 1),
-            vec![("item_weight", "150.0 kg")],
-        ),
-        "heavy",
-        "true",
+        lemma::SourceType::Labeled("warehouse.lemma"),
     );
 
-    // After boundary: lb must also be available (units v2 adds it).
-    // If slicing is broken, this fails with "unknown unit 'lb'".
-    assert_rule_value(
-        &eval_with(
-            &engine,
-            "warehouse",
-            &date(2025, 9, 1),
-            vec![("item_weight", "250.0 lb")],
-        ),
-        "heavy",
-        "true",
+    assert!(
+        result.is_err(),
+        "Unpinned type-only dep with incompatible interfaces must be rejected"
+    );
+    let errs = result.unwrap_err();
+    let combined: String = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.contains("changed its interface"),
+        "Error should mention interface change, got: {combined}"
     );
 }
 
-/// The plan hashes for the consumer spec must differ across slices when the
-/// type-only dependency changes, proving that separate plans were built.
-#[test]
-fn type_only_dep_produces_distinct_plan_hashes_per_slice() {
-    let mut engine = Engine::new();
-
-    engine
-        .load(
-            r#"
-spec types_lib
-type score: number -> minimum 0 -> maximum 100
-
-spec types_lib 2025-06-01
-type score: number -> minimum 0 -> maximum 1000
-"#,
-            lemma::SourceType::Labeled("types_lib.lemma"),
-        )
-        .unwrap();
-
-    engine
-        .load(
-            r#"
-spec grader 2025-01-01
-type score from types_lib
-fact student_score: [score]
-rule passed: student_score >= 50
-"#,
-            lemma::SourceType::Labeled("grader.lemma"),
-        )
-        .unwrap();
-
-    let hash_before = engine
-        .get_plan_hash("grader", &date(2025, 3, 1))
-        .ok()
-        .flatten()
-        .expect("grader should have a plan hash before boundary");
-
-    let hash_after = engine
-        .get_plan_hash("grader", &date(2025, 9, 1))
-        .ok()
-        .flatten()
-        .expect("grader should have a plan hash after boundary");
-
-    assert_ne!(
-        hash_before, hash_after,
-        "plan hashes must differ across slices when the type-only dependency changes \
-         (maximum changed from 100 to 1000). Got same hash: {}",
-        hash_before
-    );
-}
-
-/// Hash-pinned type import must NOT create slice boundaries.
-/// The consumer should get exactly one plan hash regardless of dep versions.
-#[test]
-fn hash_pinned_type_import_does_not_create_slices() {
-    let mut engine = Engine::new();
-
-    engine
-        .load(
-            r#"
-spec finance
-type money: scale
- -> unit eur 1.00
- -> decimals 2
-fact base_price: 50.00 eur
-
-spec finance 2025-07-01
-type money: scale
- -> unit eur 1.00
- -> unit usd 1.10
- -> decimals 2
-fact base_price: 75.00 eur
-"#,
-            lemma::SourceType::Labeled("finance.lemma"),
-        )
-        .unwrap();
-
-    let finance_hash = engine
-        .get_plan_hash("finance", &date(2025, 3, 1))
-        .ok()
-        .flatten()
-        .expect("finance should have a plan hash")
-        .to_string();
-
-    let consumer_src = format!(
-        "spec shop 2025-01-01\ntype money from finance~{}\nfact price: [money]\nrule doubled: price * 2",
-        finance_hash
-    );
-    engine
-        .load(&consumer_src, lemma::SourceType::Labeled("shop.lemma"))
-        .unwrap();
-
-    let hash_before = engine
-        .get_plan_hash("shop", &date(2025, 3, 1))
-        .ok()
-        .flatten()
-        .expect("shop should have a plan hash before boundary");
-
-    let hash_after = engine
-        .get_plan_hash("shop", &date(2025, 9, 1))
-        .ok()
-        .flatten()
-        .expect("shop should have a plan hash after boundary");
-
-    assert_eq!(
-        hash_before, hash_after,
-        "hash-pinned type import must NOT create slice boundaries; hashes should be identical"
-    );
-}
-
-/// Mixed scenario: consumer has both a fact-level spec ref and a type import
+/// Mixed scenario: consumer has both a data-level spec ref and a type import
 /// to the same dependency. Consumer needs separate temporal versions to satisfy
 /// the cross-spec interface contract (dep's interface changes between slices).
 #[test]
@@ -326,17 +243,17 @@ fn mixed_spec_ref_and_type_import_to_same_dep() {
         .load(
             r#"
 spec finance
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> decimals 2
-fact base_price: 50.00 eur
+data base_price: 50.00 eur
 
 spec finance 2025-07-01
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2
-fact base_price: 75.00 eur
+data base_price: 75.00 eur
 "#,
             lemma::SourceType::Labeled("finance.lemma"),
         )
@@ -346,15 +263,15 @@ fact base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-type money from finance
-fact ref: spec finance
-fact price: [money]
+data money from finance
+with ref: finance
+data price: money
 rule total: ref.base_price + price
 
 spec shop 2025-07-01
-type money from finance
-fact ref: spec finance
-fact price: [money]
+data money from finance
+with ref: finance
+data price: money
 rule total: ref.base_price + price
 "#,
             lemma::SourceType::Labeled("shop.lemma"),
@@ -398,65 +315,54 @@ rule total: ref.base_price + price
     );
 }
 
-/// Inline type import (`fact price: [money from finance]`) must also produce
-/// temporal slices when the source spec has multiple versions.
+/// Inline type import (`data price: money from finance`) without pinning
+/// must be rejected when the source spec's interface changes across versions.
 #[test]
-fn inline_type_import_creates_temporal_slices() {
+fn inline_type_import_rejects_incompatible_unpinned_dep() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
 spec finance
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> decimals 2
-fact base_price: 50.00 eur
+data base_price: 50.00 eur
 
 spec finance 2025-07-01
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2
-fact base_price: 75.00 eur
+data base_price: 75.00 eur
 "#,
             lemma::SourceType::Labeled("finance.lemma"),
         )
         .unwrap();
 
-    engine
-        .load(
-            r#"
+    let result = engine.load(
+        r#"
 spec shop 2025-01-01
-fact price: [money from finance]
+data price: money from finance
 rule doubled: price * 2
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
-        )
-        .unwrap();
-
-    // Before boundary: finance v1 (eur only)
-    assert_rule_value(
-        &eval_with(
-            &engine,
-            "shop",
-            &date(2025, 3, 1),
-            vec![("price", "10.00 eur")],
-        ),
-        "doubled",
-        "20.00 eur",
+        lemma::SourceType::Labeled("shop.lemma"),
     );
 
-    // After boundary: finance v2, usd must be available
-    assert_rule_value(
-        &eval_with(
-            &engine,
-            "shop",
-            &date(2025, 9, 1),
-            vec![("price", "10.00 usd")],
-        ),
-        "doubled",
-        "20.00 usd",
+    assert!(
+        result.is_err(),
+        "Unpinned inline type import with incompatible dep interfaces must be rejected"
+    );
+    let errs = result.unwrap_err();
+    let combined: String = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.contains("changed its interface"),
+        "Error should mention interface change, got: {combined}"
     );
 }
 
@@ -469,17 +375,17 @@ fn type_import_with_effective_datetime_pins_version() {
         .load(
             r#"
 spec finance
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> decimals 2
-fact base_price: 50.00 eur
+data base_price: 50.00 eur
 
 spec finance 2025-07-01
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2
-fact base_price: 75.00 eur
+data base_price: 75.00 eur
 "#,
             lemma::SourceType::Labeled("finance.lemma"),
         )
@@ -491,8 +397,8 @@ fact base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-type money from finance 2025-03-01
-fact price: [money]
+data money from finance 2025-03-01
+data price: money
 rule doubled: price * 2
 "#,
             lemma::SourceType::Labeled("shop.lemma"),
@@ -513,122 +419,73 @@ rule doubled: price * 2
     );
 }
 
-// ============================================================================
-// Hash pin + effective datetime validation
-// ============================================================================
+/// Regression: qualified pin to early dep version must NOT silently bind to a
+/// later body. Two finance versions with incompatible types (v1=eur only,
+/// v2=eur+usd). Consumer pins to v1 via `from finance 2025-02-01`.
+/// Evaluating with `usd` in a later slice must fail (v1 has no usd).
+#[test]
+fn qualified_pin_must_not_leak_later_version_types() {
+    let mut engine = Engine::new();
 
-fn load_finance(engine: &mut Engine) -> String {
     engine
         .load(
             r#"
 spec finance
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> decimals 2
-fact base_price: 50.00 eur
 
 spec finance 2025-07-01
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2
-fact base_price: 75.00 eur
 "#,
             lemma::SourceType::Labeled("finance.lemma"),
         )
         .unwrap();
 
     engine
-        .get_plan_hash("finance", &date(2025, 3, 1))
-        .ok()
-        .flatten()
-        .expect("finance v1 should have a plan hash")
-        .to_string()
-}
-
-/// Hash-pinned type import with effective IN the pinned version's range succeeds.
-#[test]
-fn type_import_hash_pin_with_effective_in_range_succeeds() {
-    let mut engine = Engine::new();
-    let hash = load_finance(&mut engine);
-
-    let consumer_src = format!(
-        "spec shop 2025-01-01\ntype money from finance~{} 2025-03-01\nfact price: [money]\nrule doubled: price * 2",
-        hash
-    );
-    engine
-        .load(&consumer_src, lemma::SourceType::Labeled("shop.lemma"))
+        .load(
+            r#"
+spec shop 2025-01-01
+data money from finance 2025-02-01
+data price: money
+rule doubled: price * 2
+"#,
+            lemma::SourceType::Labeled("shop.lemma"),
+        )
         .unwrap();
 
-    assert_rule_value(
-        &eval_with(
-            &engine,
-            "shop",
-            &date(2025, 3, 1),
-            vec![("price", "10.00 eur")],
-        ),
-        "doubled",
-        "20.00 eur",
+    // Evaluate after boundary with usd — must error because pin locks to v1 (no usd).
+    let result = engine.run(
+        "shop",
+        Some(&date(2025, 9, 1)),
+        [("price".to_string(), "10.00 usd".to_string())]
+            .into_iter()
+            .collect(),
+        false,
     );
-}
-
-fn assert_load_fails_with(engine: &mut Engine, src: &str, expected_substr: &str) {
-    let result = engine.load(src, lemma::SourceType::Labeled("shop.lemma"));
-    assert!(
-        result.is_err(),
-        "should fail with error containing '{}'",
-        expected_substr
-    );
-    let msgs: Vec<String> = result
-        .unwrap_err()
-        .errors
-        .iter()
-        .map(|e| format!("{:?}", e))
-        .collect();
-    let combined = msgs.join(" ");
-    assert!(
-        combined.contains(expected_substr),
-        "expected error containing '{}', got: {}",
-        expected_substr,
-        combined
-    );
-}
-
-/// Hash-pinned type import with effective OUTSIDE the pinned version's range is a hard error.
-#[test]
-fn type_import_hash_pin_with_effective_out_of_range_fails() {
-    let mut engine = Engine::new();
-    let hash = load_finance(&mut engine);
-
-    let consumer_src = format!(
-        "spec shop 2025-01-01\ntype money from finance~{} 2099-01-01\nfact price: [money]\nrule doubled: price * 2",
-        hash
-    );
-    assert_load_fails_with(&mut engine, &consumer_src, "outside the temporal range");
-}
-
-/// Fact-level spec ref with hash pin + out-of-range effective is a hard error.
-#[test]
-fn fact_spec_ref_hash_pin_with_effective_out_of_range_fails() {
-    let mut engine = Engine::new();
-    let hash = load_finance(&mut engine);
-
-    let consumer_src = format!(
-        "spec shop 2025-01-01\nfact ref: spec finance~{} 2099-01-01\nrule x: ref.base_price",
-        hash
-    );
-    assert_load_fails_with(&mut engine, &consumer_src, "outside the temporal range");
-}
-
-/// Inline type import with hash pin + out-of-range effective is a hard error.
-#[test]
-fn inline_type_import_hash_pin_with_effective_out_of_range_fails() {
-    let mut engine = Engine::new();
-    let hash = load_finance(&mut engine);
-
-    let consumer_src = format!(
-        "spec shop 2025-01-01\nfact price: [money from finance~{} 2099-01-01]\nrule doubled: price * 2",
-        hash
-    );
-    assert_load_fails_with(&mut engine, &consumer_src, "outside the temporal range");
+    match &result {
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("usd") || msg.contains("unit") || msg.contains("unknown"),
+                "error should mention the rejected unit, got: {msg}"
+            );
+        }
+        Ok(resp) => {
+            // If the engine returns Ok, every rule result must NOT have a successful
+            // value using usd — that would mean the pin leaked v2's types.
+            for (rule, r) in &resp.results {
+                if let Some(val) = r.result.value() {
+                    let s = val.to_string();
+                    assert!(
+                        !s.contains("usd"),
+                        "rule '{rule}' produced {s} — usd must not be accepted when pinned to finance v1"
+                    );
+                }
+            }
+        }
+    }
 }

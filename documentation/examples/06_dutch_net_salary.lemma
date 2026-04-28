@@ -23,12 +23,12 @@ Outputs:
   gross_annual_salary     Gross annual salary.
 """
 
-type money: scale
+data money: scale
   -> decimals 2
   -> unit eur 1.00
   -> minimum 0 eur
 
-type pay_period: text
+data pay_period: text
   -> option "month"
   -> option "4 weeks"
   -> option "week"
@@ -36,15 +36,15 @@ type pay_period: text
   -> option "year"
   -> help "Pay period: how often you are paid. Default is monthly."
 
-type income_source_type: text
+data income_source_type: text
   -> option "employment"
   -> option "benefit"
 
-fact pay_period           : [pay_period]
-fact gross_salary         : [money -> help "Gross salary per chosen period. Found on your payslip or in your employment contract."]
-fact income_source        : [income_source_type -> default "employment" -> help "Source of income: employment for employees, benefit for unemployment/disability/welfare. Employees receive the employment tax credit, benefit recipients do not."]
-fact pension_contribution : [money -> default 0 eur -> help "Employee share of the pension premium per period. Found on your payslip under pension deduction. Reduces taxable salary."]
-fact payroll_tax_credit   : [boolean -> default true -> help "Apply payroll tax credit? Choose yes if this is your only or main income. May only be applied at one employer or benefits agency."]
+data pay_period           : pay_period
+data gross_salary         : money -> help "Gross salary per chosen period. Found on your payslip or in your employment contract."
+data income_source        : income_source_type -> default "employment" -> help "Source of income: employment for employees, benefit for unemployment/disability/welfare. Employees receive the employment tax credit, benefit recipients do not."
+data pension_contribution : money -> default 0 eur -> help "Employee share of the pension premium per period. Found on your payslip under pension deduction. Reduces taxable salary."
+data payroll_tax_credit   : boolean -> default true -> help "Apply payroll tax credit? Choose yes if this is your only or main income. May only be applied at one employer or benefits agency."
 
 rule periods_per_year:
   12

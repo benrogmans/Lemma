@@ -34,6 +34,7 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
 }
 
 // Internal-only parsing imports (used only within this module for value/type resolution).
+use crate::parsing::ast::Constraint;
 use crate::parsing::ast::{
     BooleanValue, CalendarUnit, CommandArg, ConversionTarget, DateCalendarKind, DateRelativeKind,
     DateTimeValue, DurationUnit, LemmaSpec, PrimitiveKind, TimeValue, TypeConstraintCommand,
@@ -50,128 +51,15 @@ use std::sync::{Arc, OnceLock};
 // Type specification and units (resolved type shape; apply constraints is planning)
 // -----------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ScaleUnit {
-    pub name: String,
-    pub value: Decimal,
-}
+// Unit tables live in `crate::literals` (no dependency on parsing/ast). Re-exported
+// here so downstream modules importing from `planning::semantics` keep working.
+pub use crate::literals::{RatioUnit, RatioUnits, ScaleUnit, ScaleUnits};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ScaleUnits(pub Vec<ScaleUnit>);
-
-impl ScaleUnits {
-    pub fn new() -> Self {
-        ScaleUnits(Vec::new())
-    }
-    pub fn get(&self, name: &str) -> Result<&ScaleUnit, String> {
-        self.0.iter().find(|u| u.name == name).ok_or_else(|| {
-            let valid: Vec<&str> = self.0.iter().map(|u| u.name.as_str()).collect();
-            format!(
-                "Unknown unit '{}' for this scale type. Valid units: {}",
-                name,
-                valid.join(", ")
-            )
-        })
-    }
-    pub fn iter(&self) -> std::slice::Iter<'_, ScaleUnit> {
-        self.0.iter()
-    }
-    pub fn push(&mut self, u: ScaleUnit) {
-        self.0.push(u);
-    }
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl Default for ScaleUnits {
-    fn default() -> Self {
-        ScaleUnits::new()
-    }
-}
-
-impl From<Vec<ScaleUnit>> for ScaleUnits {
-    fn from(v: Vec<ScaleUnit>) -> Self {
-        ScaleUnits(v)
-    }
-}
-
-impl<'a> IntoIterator for &'a ScaleUnits {
-    type Item = &'a ScaleUnit;
-    type IntoIter = std::slice::Iter<'a, ScaleUnit>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RatioUnit {
-    pub name: String,
-    pub value: Decimal,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct RatioUnits(pub Vec<RatioUnit>);
-
-impl RatioUnits {
-    pub fn new() -> Self {
-        RatioUnits(Vec::new())
-    }
-    pub fn get(&self, name: &str) -> Result<&RatioUnit, String> {
-        self.0.iter().find(|u| u.name == name).ok_or_else(|| {
-            let valid: Vec<&str> = self.0.iter().map(|u| u.name.as_str()).collect();
-            format!(
-                "Unknown unit '{}' for this ratio type. Valid units: {}",
-                name,
-                valid.join(", ")
-            )
-        })
-    }
-    pub fn iter(&self) -> std::slice::Iter<'_, RatioUnit> {
-        self.0.iter()
-    }
-    pub fn push(&mut self, u: RatioUnit) {
-        self.0.push(u);
-    }
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-}
-
-impl Default for RatioUnits {
-    fn default() -> Self {
-        RatioUnits::new()
-    }
-}
-
-impl From<Vec<RatioUnit>> for RatioUnits {
-    fn from(v: Vec<RatioUnit>) -> Self {
-        RatioUnits(v)
-    }
-}
-
-impl<'a> IntoIterator for &'a RatioUnits {
-    type Item = &'a RatioUnit;
-    type IntoIter = std::slice::Iter<'a, RatioUnit>;
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TypeSpecification {
     Boolean {
         help: String,
-        default: Option<bool>,
     },
     Scale {
         minimum: Option<Decimal>,
@@ -180,7 +68,6 @@ pub enum TypeSpecification {
         precision: Option<Decimal>,
         units: ScaleUnits,
         help: String,
-        default: Option<(Decimal, String)>,
     },
     Number {
         minimum: Option<Decimal>,
@@ -188,7 +75,6 @@ pub enum TypeSpecification {
         decimals: Option<u8>,
         precision: Option<Decimal>,
         help: String,
-        default: Option<Decimal>,
     },
     Ratio {
         minimum: Option<Decimal>,
@@ -196,31 +82,26 @@ pub enum TypeSpecification {
         decimals: Option<u8>,
         units: RatioUnits,
         help: String,
-        default: Option<Decimal>,
     },
     Text {
-        minimum: Option<usize>,
-        maximum: Option<usize>,
         length: Option<usize>,
         options: Vec<String>,
         help: String,
-        default: Option<String>,
     },
     Date {
         minimum: Option<DateTimeValue>,
         maximum: Option<DateTimeValue>,
         help: String,
-        default: Option<DateTimeValue>,
     },
     Time {
         minimum: Option<TimeValue>,
         maximum: Option<TimeValue>,
         help: String,
-        default: Option<TimeValue>,
     },
     Duration {
+        minimum: Option<(Decimal, SemanticDurationUnit)>,
+        maximum: Option<(Decimal, SemanticDurationUnit)>,
         help: String,
-        default: Option<(Decimal, DurationUnit)>,
     },
     Veto {
         message: Option<String>,
@@ -231,19 +112,207 @@ pub enum TypeSpecification {
     Undetermined,
 }
 
-fn apply_type_help_command(help: &mut String, args: &[CommandArg]) -> Result<(), String> {
+/// Extract a typed [`Value`] from the first `CommandArg`, requiring `Literal` shape.
+///
+/// `Label` args carry identifiers (unit names, option keywords) and never satisfy a
+/// command position that wants a literal value. Returning a typed `Value` keeps the
+/// caller's match exhaustive over [`Value`] variants — no string coercion path.
+fn require_literal<'a>(
+    args: &'a [CommandArg],
+    cmd: &str,
+) -> Result<&'a crate::literals::Value, String> {
     let arg = args
         .first()
-        .ok_or_else(|| "help requires a text argument".to_string())?;
-    *help = arg.value().to_string();
-    Ok(())
+        .ok_or_else(|| format!("{} requires an argument", cmd))?;
+    match arg {
+        CommandArg::Literal(v) => Ok(v),
+        CommandArg::Label(name) => Err(format!(
+            "{} requires a literal value, got identifier '{}'",
+            cmd, name
+        )),
+    }
+}
+
+fn apply_type_help_command(help: &mut String, args: &[CommandArg]) -> Result<(), String> {
+    match require_literal(args, "help")? {
+        crate::literals::Value::Text(s) => {
+            *help = s.clone();
+            Ok(())
+        }
+        other => Err(format!(
+            "help requires a text literal (quoted string), got {}",
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Human-readable name for a [`Value`] variant — used in mismatch error messages.
+fn value_kind_name(v: &crate::literals::Value) -> &'static str {
+    use crate::literals::Value;
+    match v {
+        Value::Number(_) => "number",
+        Value::Scale(_, _) => "scale",
+        Value::Text(_) => "text",
+        Value::Date(_) => "date",
+        Value::Time(_) => "time",
+        Value::Boolean(_) => "boolean",
+        Value::Duration(_, _) => "duration",
+        Value::Ratio(_, _) => "ratio",
+    }
+}
+
+/// Cast a [`Decimal`] to `u8`, requiring it to be a non-negative whole number that fits.
+fn decimal_to_u8(d: Decimal, ctx: &str) -> Result<u8, String> {
+    use rust_decimal::prelude::ToPrimitive;
+    if !d.fract().is_zero() {
+        return Err(format!(
+            "{} requires a whole number, got fractional value {}",
+            ctx, d
+        ));
+    }
+    d.to_u8()
+        .ok_or_else(|| format!("{} value out of range for u8: {}", ctx, d))
+}
+
+/// Cast a [`Decimal`] to `usize`, requiring it to be a non-negative whole number that fits.
+fn decimal_to_usize(d: Decimal, ctx: &str) -> Result<usize, String> {
+    use rust_decimal::prelude::ToPrimitive;
+    if !d.fract().is_zero() {
+        return Err(format!(
+            "{} requires a whole number, got fractional value {}",
+            ctx, d
+        ));
+    }
+    d.to_usize()
+        .ok_or_else(|| format!("{} value out of range for usize: {}", ctx, d))
+}
+
+/// Extract a bare [`Decimal`] from a [`Value::Number`] literal arg.
+///
+/// Numeric meta-constraints (`decimals`, `precision`, `length`, `minimum`/`maximum`
+/// on `Number` and `Scale`) take a bare decimal — not a ratio, not a scale. Reject
+/// any other variant to honour the no-coercion contract.
+fn require_decimal_literal(args: &[CommandArg], cmd: &str) -> Result<Decimal, String> {
+    match require_literal(args, cmd)? {
+        crate::literals::Value::Number(d) => Ok(*d),
+        other => Err(format!(
+            "{} requires a number literal, got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Resolve a scale constraint arg to a canonical decimal in the scale's base unit.
+///
+/// Accepts:
+/// - `Value::Scale(d, unit)` — looks `unit` up in the scale's `units` table and
+///   multiplies by the unit's conversion factor (`5 eur` with `unit eur 1.00`
+///   becomes `5`). The unit must be defined before the bound is applied;
+///   otherwise the lookup fails.
+/// - `Value::Number(d)` — treated as already in base units.
+fn require_scale_literal(
+    args: &[CommandArg],
+    units: &ScaleUnits,
+    cmd: &str,
+) -> Result<Decimal, String> {
+    use crate::literals::Value;
+    match require_literal(args, cmd)? {
+        Value::Scale(d, unit_name) => {
+            let unit = units.get(unit_name)?;
+            Ok(*d * unit.value)
+        }
+        Value::Number(d) => Ok(*d),
+        other => Err(format!(
+            "{} requires a scale or number literal, got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Resolve a ratio constraint arg to a canonical 0..1 decimal.
+///
+/// Accepts:
+/// - `Value::Ratio(d, _)` — already canonicalised by the parser (`5%` → `0.05`).
+/// - `Value::Number(d)` — bare decimal interpreted as a unit-less ratio (`0.5`).
+///
+/// All other [`Value`] variants are rejected. Unit-named ratios with non-canonical
+/// units (e.g. user-defined `unit basis_point 0.0001`) are not yet representable
+/// at the literal layer and route through the same path once added.
+fn require_ratio_literal(args: &[CommandArg], cmd: &str) -> Result<Decimal, String> {
+    use crate::literals::Value;
+    match require_literal(args, cmd)? {
+        Value::Ratio(d, _) => Ok(*d),
+        Value::Number(d) => Ok(*d),
+        other => Err(format!(
+            "{} requires a ratio or number literal, got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Extract an option name from a single arg.
+///
+/// Both `option red` (bare identifier, parsed as `Label`) and `option "red"`
+/// (quoted text literal) are valid lemma syntax for option enumeration; the
+/// grammar accepts either form. All other variants are rejected.
+fn option_name(arg: &CommandArg, cmd: &str) -> Result<String, String> {
+    match arg {
+        CommandArg::Literal(crate::literals::Value::Text(s)) => Ok(s.clone()),
+        CommandArg::Label(name) => Ok(name.clone()),
+        CommandArg::Literal(other) => Err(format!(
+            "{} requires a text literal or identifier, got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Extract a [`DateTimeValue`] from a [`Value::Date`] literal arg.
+fn require_date_literal(args: &[CommandArg], cmd: &str) -> Result<DateTimeValue, String> {
+    match require_literal(args, cmd)? {
+        crate::literals::Value::Date(dt) => Ok(dt.clone()),
+        other => Err(format!(
+            "{} requires a date literal (e.g. 2024-01-01), got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Extract a [`TimeValue`] from a [`Value::Time`] literal arg.
+fn require_time_literal(args: &[CommandArg], cmd: &str) -> Result<TimeValue, String> {
+    match require_literal(args, cmd)? {
+        crate::literals::Value::Time(t) => Ok(t.clone()),
+        other => Err(format!(
+            "{} requires a time literal (e.g. 12:30:00), got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
+}
+
+/// Extract a `(value, unit)` pair from a [`Value::Duration`] literal arg.
+fn require_duration_literal(
+    args: &[CommandArg],
+    cmd: &str,
+) -> Result<(Decimal, DurationUnit), String> {
+    match require_literal(args, cmd)? {
+        crate::literals::Value::Duration(d, unit) => Ok((*d, unit.clone())),
+        other => Err(format!(
+            "{} requires a duration literal (e.g. 1 day), got {}",
+            cmd,
+            value_kind_name(other)
+        )),
+    }
 }
 
 impl TypeSpecification {
     pub fn boolean() -> Self {
         TypeSpecification::Boolean {
             help: "Values: true, false".to_string(),
-            default: None,
         }
     }
     pub fn scale() -> Self {
@@ -254,7 +323,6 @@ impl TypeSpecification {
             precision: None,
             units: ScaleUnits::new(),
             help: "Format: {value} {unit} (e.g. 100 kilograms)".to_string(),
-            default: None,
         }
     }
     pub fn number() -> Self {
@@ -264,7 +332,6 @@ impl TypeSpecification {
             decimals: None,
             precision: None,
             help: "Numeric value".to_string(),
-            default: None,
         }
     }
     pub fn ratio() -> Self {
@@ -283,17 +350,13 @@ impl TypeSpecification {
                 },
             ]),
             help: "Format: {value} {unit} (e.g. 21 percent)".to_string(),
-            default: None,
         }
     }
     pub fn text() -> Self {
         TypeSpecification::Text {
-            minimum: None,
-            maximum: None,
             length: None,
             options: vec![],
             help: "Text value".to_string(),
-            default: None,
         }
     }
     pub fn date() -> Self {
@@ -301,7 +364,6 @@ impl TypeSpecification {
             minimum: None,
             maximum: None,
             help: "Format: YYYY-MM-DD (e.g. 2024-01-15)".to_string(),
-            default: None,
         }
     }
     pub fn time() -> Self {
@@ -309,45 +371,48 @@ impl TypeSpecification {
             minimum: None,
             maximum: None,
             help: "Format: HH:MM:SS (e.g. 14:30:00)".to_string(),
-            default: None,
         }
     }
     pub fn duration() -> Self {
         TypeSpecification::Duration {
+            minimum: None,
+            maximum: None,
             help: "Format: {value} {unit} (e.g. 40 hours). Units: years, months, weeks, days, hours, minutes, seconds".to_string(),
-            default: None,
         }
     }
     pub fn veto() -> Self {
         TypeSpecification::Veto { message: None }
     }
 
+    /// Apply a single constraint command to this spec.
+    ///
+    /// The `declared_default` out-parameter receives the default value (if the command
+    /// is `Default`), encoded as [`ValueKind`]. Defaults are owned by the data binding
+    /// or typedef entry, not by the type specification itself; callers thread a single
+    /// `&mut Option<ValueKind>` across all constraint applications for one type so the
+    /// latest `-> default` command wins.
     pub fn apply_constraint(
         mut self,
         command: TypeConstraintCommand,
         args: &[CommandArg],
+        declared_default: &mut Option<ValueKind>,
     ) -> Result<Self, String> {
         match &mut self {
-            TypeSpecification::Boolean { help, default } => match command {
+            TypeSpecification::Boolean { help } => match command {
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
-                TypeConstraintCommand::Default => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?;
-                    match arg {
-                        CommandArg::Boolean(bv) => {
-                            *default = Some((*bv).into());
-                        }
-                        other => {
-                            return Err(format!(
-                                "default for boolean type requires a boolean literal (true/false/yes/no/accept/reject), got {:?}",
-                                other.value()
-                            ));
-                        }
+                TypeConstraintCommand::Default => match require_literal(args, "default")? {
+                    crate::literals::Value::Boolean(bv) => {
+                        *declared_default = Some(ValueKind::Boolean(bool::from(*bv)));
                     }
-                }
+                    other => {
+                        return Err(format!(
+                            "default for boolean type requires a boolean literal (true/false/yes/no/accept/reject), got {}",
+                            value_kind_name(other)
+                        ));
+                    }
+                },
                 other => {
                     return Err(format!(
                         "Invalid command '{}' for boolean type. Valid commands: help, default",
@@ -362,107 +427,57 @@ impl TypeSpecification {
                 precision,
                 units,
                 help,
-                default,
             } => match command {
                 TypeConstraintCommand::Decimals => {
-                    let d = args
-                        .first()
-                        .ok_or_else(|| "decimals requires an argument".to_string())?
-                        .value()
-                        .parse::<u8>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid decimals value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *decimals = Some(d);
+                    let d = require_decimal_literal(args, "decimals")?;
+                    *decimals = Some(decimal_to_u8(d, "decimals")?);
                 }
-                TypeConstraintCommand::Unit if args.len() >= 2 => {
-                    let unit_name = args[0].value().to_string();
+                TypeConstraintCommand::Unit => {
+                    let (unit_name, value) = match args {
+                        [CommandArg::Label(name), CommandArg::Literal(crate::literals::Value::Number(v))] => {
+                            (name.clone(), *v)
+                        }
+                        _ => {
+                            return Err(
+                                "unit requires a unit name followed by a numeric conversion factor (e.g., 'unit eur 1.00')"
+                                    .to_string(),
+                            );
+                        }
+                    };
                     if units.iter().any(|u| u.name == unit_name) {
                         return Err(format!(
                             "Unit '{}' is already defined in this scale type.",
                             unit_name
                         ));
                     }
-                    let value = args[1]
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| format!("invalid unit value: {}", args[1].value()))?;
                     units.0.push(ScaleUnit {
                         name: unit_name,
                         value,
                     });
                 }
                 TypeConstraintCommand::Minimum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "minimum requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid minimum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *minimum = Some(m);
+                    *minimum = Some(require_scale_literal(args, units, "minimum")?);
                 }
                 TypeConstraintCommand::Maximum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "maximum requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid maximum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *maximum = Some(m);
+                    *maximum = Some(require_scale_literal(args, units, "maximum")?);
                 }
                 TypeConstraintCommand::Precision => {
-                    let p = args
-                        .first()
-                        .ok_or_else(|| "precision requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid precision value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *precision = Some(p);
+                    *precision = Some(require_scale_literal(args, units, "precision")?);
                 }
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
-                TypeConstraintCommand::Default => {
-                    if args.len() < 2 {
-                        return Err(
-                            "default requires a value and unit (e.g., 'default 1 kilogram')"
-                                .to_string(),
-                        );
+                TypeConstraintCommand::Default => match require_literal(args, "default")? {
+                    crate::literals::Value::Scale(value, unit_name) => {
+                        *declared_default = Some(ValueKind::Scale(*value, unit_name.clone()));
                     }
-                    match &args[0] {
-                        CommandArg::Number(s) => {
-                            let value = s
-                                .parse::<Decimal>()
-                                .map_err(|_| format!("invalid default value: {:?}", s))?;
-                            let unit_name = args[1].value().to_string();
-                            *default = Some((value, unit_name));
-                        }
-                        other => {
-                            return Err(format!(
-                                "default for scale type requires a number literal as value, got {:?}",
-                                other.value()
-                            ));
-                        }
+                    other => {
+                        return Err(format!(
+                            "default for scale type requires a scale literal '{{value}} {{unit}}' (e.g. '1 kilogram'), got {}",
+                            value_kind_name(other)
+                        ));
                     }
-                }
+                },
                 _ => {
                     return Err(format!(
                         "Invalid command '{}' for scale type. Valid commands: unit, minimum, maximum, decimals, precision, help, default",
@@ -476,21 +491,10 @@ impl TypeSpecification {
                 maximum,
                 precision,
                 help,
-                default,
             } => match command {
                 TypeConstraintCommand::Decimals => {
-                    let d = args
-                        .first()
-                        .ok_or_else(|| "decimals requires an argument".to_string())?
-                        .value()
-                        .parse::<u8>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid decimals value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *decimals = Some(d);
+                    let d = require_decimal_literal(args, "decimals")?;
+                    *decimals = Some(decimal_to_u8(d, "decimals")?);
                 }
                 TypeConstraintCommand::Unit => {
                     return Err(
@@ -498,69 +502,28 @@ impl TypeSpecification {
                     );
                 }
                 TypeConstraintCommand::Minimum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "minimum requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid minimum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *minimum = Some(m);
+                    *minimum = Some(require_decimal_literal(args, "minimum")?);
                 }
                 TypeConstraintCommand::Maximum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "maximum requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid maximum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *maximum = Some(m);
+                    *maximum = Some(require_decimal_literal(args, "maximum")?);
                 }
                 TypeConstraintCommand::Precision => {
-                    let p = args
-                        .first()
-                        .ok_or_else(|| "precision requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid precision value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *precision = Some(p);
+                    *precision = Some(require_decimal_literal(args, "precision")?);
                 }
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
-                TypeConstraintCommand::Default => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?;
-                    match arg {
-                        CommandArg::Number(s) => {
-                            let d = s
-                                .parse::<Decimal>()
-                                .map_err(|_| format!("invalid default value: {:?}", s))?;
-                            *default = Some(d);
-                        }
-                        other => {
-                            return Err(format!(
-                                "default for number type requires a number literal, got {:?}",
-                                other.value()
-                            ));
-                        }
+                TypeConstraintCommand::Default => match require_literal(args, "default")? {
+                    crate::literals::Value::Number(d) => {
+                        *declared_default = Some(ValueKind::Number(*d));
                     }
-                }
+                    other => {
+                        return Err(format!(
+                            "default for number type requires a number literal, got {}",
+                            value_kind_name(other)
+                        ));
+                    }
+                },
                 _ => {
                     return Err(format!(
                         "Invalid command '{}' for number type. Valid commands: minimum, maximum, decimals, precision, help, default",
@@ -574,88 +537,46 @@ impl TypeSpecification {
                 maximum,
                 units,
                 help,
-                default,
             } => match command {
                 TypeConstraintCommand::Decimals => {
-                    let d = args
-                        .first()
-                        .ok_or_else(|| "decimals requires an argument".to_string())?
-                        .value()
-                        .parse::<u8>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid decimals value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *decimals = Some(d);
+                    let d = require_decimal_literal(args, "decimals")?;
+                    *decimals = Some(decimal_to_u8(d, "decimals")?);
                 }
-                TypeConstraintCommand::Unit if args.len() >= 2 => {
-                    let unit_name = args[0].value().to_string();
+                TypeConstraintCommand::Unit => {
+                    let (unit_name, value) = match args {
+                        [CommandArg::Label(name), CommandArg::Literal(crate::literals::Value::Number(v))] => {
+                            (name.clone(), *v)
+                        }
+                        _ => {
+                            return Err(
+                                "unit requires a unit name followed by a numeric conversion factor (e.g., 'unit percent 100')"
+                                    .to_string(),
+                            );
+                        }
+                    };
                     if units.iter().any(|u| u.name == unit_name) {
                         return Err(format!(
                             "Unit '{}' is already defined in this ratio type.",
                             unit_name
                         ));
                     }
-                    let value = args[1]
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| format!("invalid unit value: {}", args[1].value()))?;
                     units.0.push(RatioUnit {
                         name: unit_name,
                         value,
                     });
                 }
                 TypeConstraintCommand::Minimum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "minimum requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid minimum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *minimum = Some(m);
+                    *minimum = Some(require_ratio_literal(args, "minimum")?);
                 }
                 TypeConstraintCommand::Maximum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "maximum requires an argument".to_string())?
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid maximum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *maximum = Some(m);
+                    *maximum = Some(require_ratio_literal(args, "maximum")?);
                 }
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
                 TypeConstraintCommand::Default => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?;
-                    match arg {
-                        CommandArg::Number(s) => {
-                            let d = s
-                                .parse::<Decimal>()
-                                .map_err(|_| format!("invalid default value: {:?}", s))?;
-                            *default = Some(d);
-                        }
-                        other => {
-                            return Err(format!(
-                                "default for ratio type requires a number literal, got {:?}",
-                                other.value()
-                            ));
-                        }
-                    }
+                    let d = require_ratio_literal(args, "default")?;
+                    *declared_default = Some(ValueKind::Ratio(d, None));
                 }
                 _ => {
                     return Err(format!(
@@ -665,83 +586,44 @@ impl TypeSpecification {
                 }
             },
             TypeSpecification::Text {
-                minimum,
-                maximum,
                 length,
                 options,
                 help,
-                default,
             } => match command {
-                TypeConstraintCommand::Option if args.len() == 1 => {
-                    options.push(args[0].value().to_string());
+                TypeConstraintCommand::Option => {
+                    if args.len() != 1 {
+                        return Err("option takes exactly one argument".to_string());
+                    }
+                    options.push(option_name(&args[0], "option")?);
                 }
                 TypeConstraintCommand::Options => {
-                    *options = args.iter().map(|a| a.value().to_string()).collect();
-                }
-                TypeConstraintCommand::Minimum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "minimum requires an argument".to_string())?
-                        .value()
-                        .parse::<usize>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid minimum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *minimum = Some(m);
-                }
-                TypeConstraintCommand::Maximum => {
-                    let m = args
-                        .first()
-                        .ok_or_else(|| "maximum requires an argument".to_string())?
-                        .value()
-                        .parse::<usize>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid maximum value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *maximum = Some(m);
+                    let mut collected = Vec::with_capacity(args.len());
+                    for arg in args {
+                        collected.push(option_name(arg, "options")?);
+                    }
+                    *options = collected;
                 }
                 TypeConstraintCommand::Length => {
-                    let l = args
-                        .first()
-                        .ok_or_else(|| "length requires an argument".to_string())?
-                        .value()
-                        .parse::<usize>()
-                        .map_err(|_| {
-                            format!(
-                                "invalid length value: {:?}",
-                                args.first().map(|a| a.value())
-                            )
-                        })?;
-                    *length = Some(l);
+                    let d = require_decimal_literal(args, "length")?;
+                    *length = Some(decimal_to_usize(d, "length")?);
                 }
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
-                TypeConstraintCommand::Default => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?;
-                    match arg {
-                        CommandArg::Text(s) => {
-                            *default = Some(s.clone());
-                        }
-                        other => {
-                            return Err(format!(
-                                "default for text type requires a text literal (quoted string), got {:?}",
-                                other.value()
-                            ));
-                        }
+                TypeConstraintCommand::Default => match require_literal(args, "default")? {
+                    crate::literals::Value::Text(s) => {
+                        *declared_default = Some(ValueKind::Text(s.clone()));
                     }
-                }
+                    other => {
+                        return Err(format!(
+                            "default for text type requires a text literal (quoted string), got {}",
+                            value_kind_name(other)
+                        ));
+                    }
+                },
                 _ => {
                     return Err(format!(
-                        "Invalid command '{}' for text type. Valid commands: options, minimum, maximum, length, help, default",
+                        "Invalid command '{}' for text type. Valid commands: options, length, help, default",
                         command
                     ));
                 }
@@ -750,28 +632,21 @@ impl TypeSpecification {
                 minimum,
                 maximum,
                 help,
-                default,
             } => match command {
                 TypeConstraintCommand::Minimum => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "minimum requires an argument".to_string())?;
-                    *minimum = Some(arg.value().parse::<DateTimeValue>()?);
+                    let dt = require_date_literal(args, "minimum")?;
+                    *minimum = Some(dt);
                 }
                 TypeConstraintCommand::Maximum => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "maximum requires an argument".to_string())?;
-                    *maximum = Some(arg.value().parse::<DateTimeValue>()?);
+                    let dt = require_date_literal(args, "maximum")?;
+                    *maximum = Some(dt);
                 }
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
                 TypeConstraintCommand::Default => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(arg.value().parse::<DateTimeValue>()?);
+                    let dt = require_date_literal(args, "default")?;
+                    *declared_default = Some(ValueKind::Date(date_time_to_semantic(&dt)));
                 }
                 _ => {
                     return Err(format!(
@@ -784,28 +659,21 @@ impl TypeSpecification {
                 minimum,
                 maximum,
                 help,
-                default,
             } => match command {
                 TypeConstraintCommand::Minimum => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "minimum requires an argument".to_string())?;
-                    *minimum = Some(arg.value().parse::<TimeValue>()?);
+                    let t = require_time_literal(args, "minimum")?;
+                    *minimum = Some(t);
                 }
                 TypeConstraintCommand::Maximum => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "maximum requires an argument".to_string())?;
-                    *maximum = Some(arg.value().parse::<TimeValue>()?);
+                    let t = require_time_literal(args, "maximum")?;
+                    *maximum = Some(t);
                 }
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
                 TypeConstraintCommand::Default => {
-                    let arg = args
-                        .first()
-                        .ok_or_else(|| "default requires an argument".to_string())?;
-                    *default = Some(arg.value().parse::<TimeValue>()?);
+                    let t = require_time_literal(args, "default")?;
+                    *declared_default = Some(ValueKind::Time(time_to_semantic(&t)));
                 }
                 _ => {
                     return Err(format!(
@@ -814,24 +682,30 @@ impl TypeSpecification {
                     ));
                 }
             },
-            TypeSpecification::Duration { help, default } => match command {
+            TypeSpecification::Duration {
+                minimum,
+                maximum,
+                help,
+            } => match command {
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
-                TypeConstraintCommand::Default if args.len() >= 2 => {
-                    let value = args[0]
-                        .value()
-                        .parse::<Decimal>()
-                        .map_err(|_| format!("invalid duration value: {}", args[0].value()))?;
-                    let unit = args[1]
-                        .value()
-                        .parse::<DurationUnit>()
-                        .map_err(|_| format!("invalid duration unit: {}", args[1].value()))?;
-                    *default = Some((value, unit));
+                TypeConstraintCommand::Minimum => {
+                    let (value, unit) = require_duration_literal(args, "minimum")?;
+                    *minimum = Some((value, duration_unit_to_semantic(&unit)));
+                }
+                TypeConstraintCommand::Maximum => {
+                    let (value, unit) = require_duration_literal(args, "maximum")?;
+                    *maximum = Some((value, duration_unit_to_semantic(&unit)));
+                }
+                TypeConstraintCommand::Default => {
+                    let (value, unit) = require_duration_literal(args, "default")?;
+                    *declared_default =
+                        Some(ValueKind::Duration(value, duration_unit_to_semantic(&unit)));
                 }
                 _ => {
                     return Err(format!(
-                        "Invalid command '{}' for duration type. Valid commands: help, default",
+                        "Invalid command '{}' for duration type. Valid commands: minimum, maximum, help, default",
                         command
                     ));
                 }
@@ -859,7 +733,7 @@ pub fn parse_number_unit(
     value_str: &str,
     type_spec: &TypeSpecification,
 ) -> Result<crate::parsing::ast::Value, String> {
-    use crate::literals::{NumberLiteral, NumberWithUnit};
+    use crate::literals::{NumberWithUnit, RatioLiteral};
     use crate::parsing::ast::Value;
 
     let trimmed = value_str.trim();
@@ -902,22 +776,26 @@ pub fn parse_number_unit(
                     "BUG: Ratio type has no units; should have been validated during planning"
                 );
             }
-            match trimmed.parse::<NumberWithUnit>() {
-                Ok(n) => {
-                    let unit = units.get(&n.1).map_err(|e| e.to_string())?;
-                    Ok(Value::Ratio(n.0 / unit.value, Some(unit.name.clone())))
+            match trimmed.parse::<RatioLiteral>()? {
+                RatioLiteral::Bare(n) => Ok(Value::Ratio(n, None)),
+                // Sigils are language-level constants. Built-in `ratio()` constructor
+                // seeds `percent`=100 and `permille`=1000, and the duplicate-name guard
+                // in `apply_constraint` (TypeConstraintCommand::Unit) rejects user redefinition,
+                // so these unit names are guaranteed present in every Ratio type.
+                RatioLiteral::Percent(n) => {
+                    let unit = units.get("percent").map_err(|e| e.to_string())?;
+                    Ok(Value::Ratio(n, Some(unit.name.clone())))
                 }
-                Err(_) => {
-                    if trimmed.split_whitespace().count() == 1 && !trimmed.is_empty() {
-                        trimmed
-                            .parse::<NumberLiteral>()
-                            .map(|n| Value::Ratio(n.0, None))
-                            .map_err(|_| {
-                                "Ratio value must be a number, optionally followed by a unit (e.g. '0.5' or '50 percent').".to_string()
-                            })
-                    } else {
-                        Err("Ratio value must be a number, optionally followed by a unit (e.g. '0.5' or '50 percent').".to_string())
-                    }
+                RatioLiteral::Permille(n) => {
+                    let unit = units.get("permille").map_err(|e| e.to_string())?;
+                    Ok(Value::Ratio(n, Some(unit.name.clone())))
+                }
+                RatioLiteral::Named { value, unit } => {
+                    let resolved = units.get(&unit).map_err(|e| e.to_string())?;
+                    Ok(Value::Ratio(
+                        value / resolved.value,
+                        Some(resolved.name.clone()),
+                    ))
                 }
             }
         }
@@ -1170,51 +1048,51 @@ impl fmt::Display for ValueKind {
 
 /// A single segment in a resolved path traversal
 ///
-/// Used in both FactPath and RulePath to represent spec traversal.
-/// Each segment contains a fact name that points to a spec.
+/// Used in both DataPath and RulePath to represent spec traversal.
+/// Each segment contains a data name that points to a spec.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PathSegment {
-    /// The fact name in this segment
-    pub fact: String,
-    /// The spec this fact references (resolved during planning)
+    /// The data name in this segment
+    pub data: String,
+    /// The spec this data references (resolved during planning)
     pub spec: String,
 }
 
-/// Resolved path to a fact (created during planning from AST FactReference)
+/// Resolved path to a data (created during planning from AST DataReference)
 ///
-/// Represents a fully resolved path through specs to reach a fact.
+/// Represents a fully resolved path through specs to reach a data.
 /// All spec references are resolved during planning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct FactPath {
+pub struct DataPath {
     /// Path segments (each is a spec traversal)
     pub segments: Vec<PathSegment>,
-    /// Final fact name
-    pub fact: String,
+    /// Final data name
+    pub data: String,
 }
 
-impl FactPath {
-    /// Create a fact path from segments and fact name (matches AST FactReference shape)
-    pub fn new(segments: Vec<PathSegment>, fact: String) -> Self {
-        Self { segments, fact }
+impl DataPath {
+    /// Create a data path from segments and data name (matches AST DataReference shape)
+    pub fn new(segments: Vec<PathSegment>, data: String) -> Self {
+        Self { segments, data }
     }
 
-    /// Create a local fact path (no spec traversal)
-    pub fn local(fact: String) -> Self {
+    /// Create a local data path (no spec traversal)
+    pub fn local(data: String) -> Self {
         Self {
             segments: vec![],
-            fact,
+            data,
         }
     }
 
-    /// Dot-separated key used for matching user-provided fact values (e.g. `"order.payment_method"`).
+    /// Dot-separated key used for matching user-provided data values (e.g. `"order.payment_method"`).
     /// Unlike `Display`, this omits the resolved spec name.
     pub fn input_key(&self) -> String {
         let mut s = String::new();
         for segment in &self.segments {
-            s.push_str(&segment.fact);
+            s.push_str(&segment.data);
             s.push('.');
         }
-        s.push_str(&self.fact);
+        s.push_str(&self.data);
         s
     }
 }
@@ -1244,7 +1122,7 @@ impl RulePath {
 /// Resolved expression (all references resolved to paths, all literals typed)
 ///
 /// Created during planning from AST Expression. All unresolved references
-/// are converted to FactPath/RulePath, and all literals are typed.
+/// are converted to DataPath/RulePath, and all literals are typed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expression {
     pub kind: ExpressionKind,
@@ -1267,9 +1145,9 @@ impl Expression {
         }
     }
 
-    /// Collect all FactPath references from this resolved expression tree
-    pub fn collect_fact_paths(&self, facts: &mut std::collections::HashSet<FactPath>) {
-        self.kind.collect_fact_paths(facts);
+    /// Collect all DataPath references from this resolved expression tree
+    pub fn collect_data_paths(&self, data: &mut std::collections::HashSet<DataPath>) {
+        self.kind.collect_data_paths(data);
     }
 }
 
@@ -1279,8 +1157,8 @@ impl Expression {
 pub enum ExpressionKind {
     /// Resolved literal with type (boxed to keep enum small)
     Literal(Box<LiteralValue>),
-    /// Resolved fact path
-    FactPath(FactPath),
+    /// Resolved data path
+    DataPath(DataPath),
     /// Resolved rule path
     RulePath(RulePath),
     LogicalAnd(Arc<Expression>, Arc<Expression>),
@@ -1299,31 +1177,31 @@ pub enum ExpressionKind {
 }
 
 impl ExpressionKind {
-    /// Collect all FactPath references from this expression kind
-    fn collect_fact_paths(&self, facts: &mut std::collections::HashSet<FactPath>) {
+    /// Collect all DataPath references from this expression kind
+    pub(crate) fn collect_data_paths(&self, data: &mut std::collections::HashSet<DataPath>) {
         match self {
-            ExpressionKind::FactPath(fp) => {
-                facts.insert(fp.clone());
+            ExpressionKind::DataPath(fp) => {
+                data.insert(fp.clone());
             }
             ExpressionKind::LogicalAnd(left, right)
             | ExpressionKind::Arithmetic(left, _, right)
             | ExpressionKind::Comparison(left, _, right) => {
-                left.collect_fact_paths(facts);
-                right.collect_fact_paths(facts);
+                left.collect_data_paths(data);
+                right.collect_data_paths(data);
             }
             ExpressionKind::UnitConversion(inner, _)
             | ExpressionKind::LogicalNegation(inner, _)
             | ExpressionKind::MathematicalComputation(_, inner) => {
-                inner.collect_fact_paths(facts);
+                inner.collect_data_paths(data);
             }
             ExpressionKind::DateRelative(_, date_expr, tolerance) => {
-                date_expr.collect_fact_paths(facts);
+                date_expr.collect_data_paths(data);
                 if let Some(tol) = tolerance {
-                    tol.collect_fact_paths(facts);
+                    tol.collect_data_paths(data);
                 }
             }
             ExpressionKind::DateCalendar(_, _, date_expr) => {
-                date_expr.collect_fact_paths(facts);
+                date_expr.collect_data_paths(data);
             }
             ExpressionKind::Literal(_)
             | ExpressionKind::RulePath(_)
@@ -1351,11 +1229,8 @@ pub fn is_same_spec(left: &LemmaSpec, right: &LemmaSpec) -> bool {
 pub enum TypeDefiningSpec {
     /// Parent type is defined in the same spec as this type.
     Local,
-    /// Parent type was resolved from types loaded from this dependency (same concrete version as spec-reference facts).
-    Import {
-        spec: Arc<LemmaSpec>,
-        resolved_plan_hash: String,
-    },
+    /// Parent type was resolved from types loaded from this dependency.
+    Import { spec: Arc<LemmaSpec> },
 }
 
 /// What this type extends (primitive built-in or custom type by name).
@@ -1394,15 +1269,9 @@ impl PartialEq for TypeExtends {
                     && match (ld, rd) {
                         (TypeDefiningSpec::Local, TypeDefiningSpec::Local) => true,
                         (
-                            TypeDefiningSpec::Import {
-                                spec: left,
-                                resolved_plan_hash: lh,
-                            },
-                            TypeDefiningSpec::Import {
-                                spec: right,
-                                resolved_plan_hash: rh,
-                            },
-                        ) => is_same_spec(left, right) && lh == rh,
+                            TypeDefiningSpec::Import { spec: left },
+                            TypeDefiningSpec::Import { spec: right },
+                        ) => is_same_spec(left, right),
                         _ => false,
                     }
             }
@@ -1437,12 +1306,16 @@ impl TypeExtends {
 /// Resolved type after planning
 ///
 /// Contains a type specification and optional name. Created during planning
-/// from TypeSpecification and TypeDef in the AST.
+/// from TypeSpecification in the AST.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LemmaType {
     /// Optional type name (e.g., "age", "temperature")
     pub name: Option<String>,
-    /// The type specification (Boolean, Number, Scale, etc.)
+    /// The type specification (Boolean, Number, Scale, etc.).
+    /// Serialized as a discriminated union: the variant tag appears as
+    /// `"kind"` alongside `name` and `extends`, and the variant's fields
+    /// are flattened to the top level.
+    #[serde(flatten)]
     pub specifications: TypeSpecification,
     /// What this type extends (primitive or custom from a spec)
     pub extends: TypeExtends,
@@ -1598,35 +1471,6 @@ impl LemmaType {
         }
     }
 
-    /// Create a default value from this type's default constraint (if any)
-    pub fn create_default_value(&self) -> Option<LiteralValue> {
-        let value = match &self.specifications {
-            TypeSpecification::Text { default, .. } => default.clone().map(ValueKind::Text),
-            TypeSpecification::Number { default, .. } => (*default).map(ValueKind::Number),
-            TypeSpecification::Scale { default, .. } => {
-                default.clone().map(|(d, u)| ValueKind::Scale(d, u))
-            }
-            TypeSpecification::Boolean { default, .. } => (*default).map(ValueKind::Boolean),
-            TypeSpecification::Date { default, .. } => default
-                .clone()
-                .map(|dt| ValueKind::Date(date_time_to_semantic(&dt))),
-            TypeSpecification::Time { default, .. } => default
-                .clone()
-                .map(|t| ValueKind::Time(time_to_semantic(&t))),
-            TypeSpecification::Duration { default, .. } => default
-                .clone()
-                .map(|(v, u)| ValueKind::Duration(v, duration_unit_to_semantic(&u))),
-            TypeSpecification::Ratio { .. } => None, // Ratio default requires (value, unit); type spec has only Decimal
-            TypeSpecification::Veto { .. } => None,
-            TypeSpecification::Undetermined => None,
-        };
-
-        value.map(|v| LiteralValue {
-            value: v,
-            lemma_type: self.clone(),
-        })
-    }
-
     /// Create a Veto LemmaType
     pub fn veto_type() -> Self {
         Self::primitive(TypeSpecification::veto())
@@ -1769,7 +1613,6 @@ impl LiteralValue {
                     value: Decimal::from(1),
                 }]),
                 help: "Format: {value} {unit} (e.g. 100 kilograms)".to_string(),
-                default: None,
             },
             extends: TypeExtends::Primitive,
         };
@@ -1862,116 +1705,180 @@ impl LiteralValue {
     }
 }
 
-/// Fact value: literal, type declaration (resolved type only), or spec reference.
+/// Data value: literal, type declaration (resolved type only), or spec reference.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FactValue {
+pub enum DataValue {
     Literal(LiteralValue),
     TypeDeclaration { resolved_type: LemmaType },
     SpecReference(String),
 }
 
-/// Fact: path, value, and source location.
+/// Data: path, value, and source location.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Fact {
-    pub path: FactPath,
-    pub value: FactValue,
+pub struct Data {
+    pub path: DataPath,
+    pub value: DataValue,
     pub source: Option<Source>,
 }
 
-/// Resolved fact value for the execution plan: aligned with [`FactValue`] but with source per variant.
+/// What a [`DataDefinition::Reference`] copies its value from: either another data path
+/// or a rule whose result becomes this data's value.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum ReferenceTarget {
+    Data(DataPath),
+    Rule(RulePath),
+}
+
+/// Resolved data value for the execution plan: aligned with [`DataValue`] but with source per variant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FactData {
-    /// Value-holding fact: current value (literal or default); type is on the value.
-    /// When `is_default` is true, the value came from a type `-> default` constraint
-    /// rather than an explicit literal in the spec.
-    Value {
-        value: LiteralValue,
-        source: Source,
-        is_default: bool,
-    },
-    /// Type-only fact: schema known, value to be supplied (e.g. via with_values).
+pub enum DataDefinition {
+    /// Value-holding data: current value (literal or default); type is on the value.
+    Value { value: LiteralValue, source: Source },
+    /// Type-only data: schema known, value to be supplied (e.g. via with_values).
+    /// `declared_default` carries the `-> default ...` payload for this binding or
+    /// the default inherited from the parent type chain, if any; value-promoting code
+    /// uses it instead of re-deriving defaults from [`TypeSpecification`].
     TypeDeclaration {
         resolved_type: LemmaType,
+        declared_default: Option<ValueKind>,
         source: Source,
     },
-    /// Spec reference fact: holds the resolved spec and the dependency's plan hash for this slice.
+    /// Spec reference data: holds the resolved spec.
     SpecRef {
         spec: Arc<crate::parsing::ast::LemmaSpec>,
         source: Source,
-        resolved_plan_hash: String,
+    },
+    /// Value-copy reference to another data or a rule result.
+    ///
+    /// `resolved_type` is the merged type that the copied value must satisfy at
+    /// evaluation time. Merging folds together: (1) the LHS's own declared type,
+    /// if any; (2) the target's type (data schema type or rule return type);
+    /// (3) any `local_constraints` written after the `->` on the reference itself.
+    /// Merging happens in a dedicated pass once all data and rule types are
+    /// known; before that pass, `resolved_type` holds a provisional value and
+    /// must not be consumed for type checking.
+    ///
+    /// `local_constraints` preserves the raw constraint list from the reference's
+    /// `-> ...` tail (e.g. `minimum 5` in `data license2: law.other -> minimum 5`)
+    /// for that merging pass. It is `None` when the reference has no trailing
+    /// constraints.
+    ///
+    /// `local_default` carries any `default <value>` constraint from the
+    /// reference's `-> ...` tail. The reference-merge pass extracts it from the
+    /// constraint list during type resolution; the evaluator falls back to it
+    /// when the target value/rule is missing or vetoes for missing data so the
+    /// downstream sees the declared default instead of a missing-data veto.
+    ///
+    /// The reference itself is evaluated by copying the target's value (data path)
+    /// or the target rule's result in topological order; `with_data_values`
+    /// entries for a referenced path override the reference with a literal.
+    Reference {
+        target: ReferenceTarget,
+        resolved_type: LemmaType,
+        local_constraints: Option<Vec<Constraint>>,
+        local_default: Option<ValueKind>,
+        source: Source,
     },
 }
 
-impl FactData {
-    /// Returns the schema type for value and type-declaration facts; `None` for spec references.
+impl DataDefinition {
+    /// Returns the schema type for value, type-declaration, and reference data; `None` for spec references.
     pub fn schema_type(&self) -> Option<&LemmaType> {
         match self {
-            FactData::Value { value, .. } => Some(&value.lemma_type),
-            FactData::TypeDeclaration { resolved_type, .. } => Some(resolved_type),
-            FactData::SpecRef { .. } => None,
+            DataDefinition::Value { value, .. } => Some(&value.lemma_type),
+            DataDefinition::TypeDeclaration { resolved_type, .. } => Some(resolved_type),
+            DataDefinition::Reference { resolved_type, .. } => Some(resolved_type),
+            DataDefinition::SpecRef { .. } => None,
         }
     }
 
-    /// Returns the literal value for value facts; `None` for type-declaration and spec references.
+    /// Returns the literal value when the data already holds one. A `Reference`'s
+    /// value is produced by the evaluator at runtime, so at plan-time it has no
+    /// value yet.
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
-            FactData::Value { value, .. } => Some(value),
-            FactData::TypeDeclaration { .. } | FactData::SpecRef { .. } => None,
+            DataDefinition::Value { value, .. } => Some(value),
+            DataDefinition::TypeDeclaration { .. }
+            | DataDefinition::SpecRef { .. }
+            | DataDefinition::Reference { .. } => None,
         }
     }
 
-    /// Returns the literal value only if it was explicitly defined in the spec
-    /// (not from a type `-> default` constraint). Used by schema methods to decide
-    /// which facts need user input.
-    pub fn explicit_value(&self) -> Option<&LiteralValue> {
+    /// Schema-level default for this data: the value to surface in
+    /// [`SpecSchema::data`]'s `default` field.
+    ///
+    /// Differs from [`Self::value`]: `Value` data already carries the literal
+    /// (a default that planning promoted to a value), so both return the
+    /// same thing for that variant. For `Reference` and `TypeDeclaration` the
+    /// schema-level default lives separately from the runtime value (the
+    /// reference's copied target value, or the type-only data's user-supplied
+    /// value); we synthesize the `LiteralValue` from the declared default and
+    /// the `resolved_type` here so callers don't have to. `SpecRef` has no
+    /// schema default.
+    pub fn schema_default(&self) -> Option<LiteralValue> {
         match self {
-            FactData::Value {
-                value, is_default, ..
-            } => {
-                if *is_default {
-                    None
-                } else {
-                    Some(value)
-                }
-            }
-            FactData::TypeDeclaration { .. } | FactData::SpecRef { .. } => None,
+            DataDefinition::Value { value, .. } => Some(value.clone()),
+            DataDefinition::TypeDeclaration {
+                resolved_type,
+                declared_default: Some(dv),
+                ..
+            } => Some(LiteralValue {
+                value: dv.clone(),
+                lemma_type: resolved_type.clone(),
+            }),
+            DataDefinition::Reference {
+                resolved_type,
+                local_default: Some(dv),
+                ..
+            } => Some(LiteralValue {
+                value: dv.clone(),
+                lemma_type: resolved_type.clone(),
+            }),
+            DataDefinition::TypeDeclaration { .. }
+            | DataDefinition::Reference { .. }
+            | DataDefinition::SpecRef { .. } => None,
         }
     }
 
-    /// Returns the source location for this fact.
+    /// Returns the source location for this data.
     pub fn source(&self) -> &Source {
         match self {
-            FactData::Value { source, .. } => source,
-            FactData::TypeDeclaration { source, .. } => source,
-            FactData::SpecRef { source, .. } => source,
+            DataDefinition::Value { source, .. } => source,
+            DataDefinition::TypeDeclaration { source, .. } => source,
+            DataDefinition::SpecRef { source, .. } => source,
+            DataDefinition::Reference { source, .. } => source,
         }
     }
 
-    /// Returns the resolved dependency plan hash for spec reference facts; `None` for other fact kinds.
-    pub fn resolved_plan_hash(&self) -> Option<&str> {
-        match self {
-            FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::SpecRef {
-                resolved_plan_hash, ..
-            } => Some(resolved_plan_hash.as_str()),
-        }
-    }
-
-    /// Returns the referenced spec Arc for spec reference facts; `None` otherwise.
+    /// Returns the referenced spec Arc for spec reference data; `None` otherwise.
     pub fn spec_arc(&self) -> Option<&Arc<crate::parsing::ast::LemmaSpec>> {
         match self {
-            FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::SpecRef { spec: spec_arc, .. } => Some(spec_arc),
+            DataDefinition::Value { .. }
+            | DataDefinition::TypeDeclaration { .. }
+            | DataDefinition::Reference { .. } => None,
+            DataDefinition::SpecRef { spec: spec_arc, .. } => Some(spec_arc),
         }
     }
 
-    /// Returns the referenced spec name for spec reference facts; `None` otherwise.
+    /// Returns the referenced spec name for spec reference data; `None` otherwise.
     pub fn spec_ref(&self) -> Option<&str> {
         match self {
-            FactData::Value { .. } | FactData::TypeDeclaration { .. } => None,
-            FactData::SpecRef { spec, .. } => Some(&spec.name),
+            DataDefinition::Value { .. }
+            | DataDefinition::TypeDeclaration { .. }
+            | DataDefinition::Reference { .. } => None,
+            DataDefinition::SpecRef { spec, .. } => Some(&spec.name),
+        }
+    }
+
+    /// Returns the reference target when this data copies a value from another
+    /// data path or rule result; `None` otherwise.
+    pub fn reference_target(&self) -> Option<&ReferenceTarget> {
+        match self {
+            DataDefinition::Reference { target, .. } => Some(target),
+            _ => None,
         }
     }
 }
@@ -2021,6 +1928,38 @@ pub(crate) fn time_to_semantic(t: &crate::parsing::ast::TimeValue) -> SemanticTi
     }
 }
 
+/// Compare two semantic date-time values by year, month, day, hour, minute, second.
+///
+/// Microsecond and timezone are intentionally excluded so the ordering matches
+/// what user-facing date constraints can express (lemma date literals do not
+/// expose sub-second precision, and timezone normalisation is a separate concern
+/// handled at evaluation time).
+pub(crate) fn compare_semantic_dates(
+    left: &SemanticDateTime,
+    right: &SemanticDateTime,
+) -> std::cmp::Ordering {
+    left.year
+        .cmp(&right.year)
+        .then_with(|| left.month.cmp(&right.month))
+        .then_with(|| left.day.cmp(&right.day))
+        .then_with(|| left.hour.cmp(&right.hour))
+        .then_with(|| left.minute.cmp(&right.minute))
+        .then_with(|| left.second.cmp(&right.second))
+}
+
+/// Compare two semantic time values by hour, minute, second.
+///
+/// Timezone is excluded for the same reason as [`compare_semantic_dates`].
+pub(crate) fn compare_semantic_times(
+    left: &SemanticTime,
+    right: &SemanticTime,
+) -> std::cmp::Ordering {
+    left.hour
+        .cmp(&right.hour)
+        .then_with(|| left.minute.cmp(&right.minute))
+        .then_with(|| left.second.cmp(&right.second))
+}
+
 /// Convert AST duration unit to semantic (for tests and planning).
 pub(crate) fn duration_unit_to_semantic(
     u: &crate::parsing::ast::DurationUnit,
@@ -2047,7 +1986,7 @@ pub(crate) fn duration_unit_to_semantic(
 /// "percent", "permille").
 pub fn conversion_target_to_semantic(
     ct: &ConversionTarget,
-    unit_index: Option<&HashMap<String, (LemmaType, Option<crate::parsing::ast::TypeDef>)>>,
+    unit_index: Option<&HashMap<String, LemmaType>>,
 ) -> Result<SemanticConversionTarget, String> {
     match ct {
         ConversionTarget::Duration(u) => Ok(SemanticConversionTarget::Duration(
@@ -2057,7 +1996,7 @@ pub fn conversion_target_to_semantic(
             let index = unit_index.ok_or_else(|| {
                 "Unit conversion requires type resolution; unit index not available.".to_string()
             })?;
-            let (lemma_type, _) = index.get(name).ok_or_else(|| {
+            let lemma_type = index.get(name).ok_or_else(|| {
                 format!(
                     "Unknown unit '{}'. Unit must be defined by a scale or ratio type.",
                     name
@@ -2153,16 +2092,16 @@ pub fn type_spec_for_primitive(kind: PrimitiveKind) -> TypeSpecification {
 
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} → {}", self.fact, self.spec)
+        write!(f, "{} → {}", self.data, self.spec)
     }
 }
 
-impl fmt::Display for FactPath {
+impl fmt::Display for DataPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for segment in &self.segments {
             write!(f, "{}.", segment)?;
         }
-        write!(f, "{}", self.fact)
+        write!(f, "{}", self.data)
     }
 }
 
@@ -2298,35 +2237,10 @@ mod tests {
     }
 
     #[test]
-    fn test_spec_type_display() {
-        assert_eq!(format!("{}", primitive_text()), "text");
-        assert_eq!(format!("{}", primitive_number()), "number");
-        assert_eq!(format!("{}", primitive_date()), "date");
-        assert_eq!(format!("{}", primitive_boolean()), "boolean");
-        assert_eq!(format!("{}", primitive_duration()), "duration");
-    }
-
-    #[test]
-    fn test_type_constructor() {
-        let specs = TypeSpecification::number();
-        let lemma_type = LemmaType::new("dice".to_string(), specs, TypeExtends::Primitive);
-        assert_eq!(lemma_type.name(), "dice");
-    }
-
-    #[test]
     fn test_type_display() {
         let specs = TypeSpecification::text();
         let lemma_type = LemmaType::new("name".to_string(), specs, TypeExtends::Primitive);
         assert_eq!(format!("{}", lemma_type), "name");
-    }
-
-    #[test]
-    fn test_type_equality() {
-        let specs1 = TypeSpecification::number();
-        let specs2 = TypeSpecification::number();
-        let lemma_type1 = LemmaType::new("dice".to_string(), specs1, TypeExtends::Primitive);
-        let lemma_type2 = LemmaType::new("dice".to_string(), specs2, TypeExtends::Primitive);
-        assert_eq!(lemma_type1, lemma_type2);
     }
 
     #[test]
@@ -2382,7 +2296,6 @@ mod tests {
                     value: Decimal::from(1),
                 }]),
                 help: String::new(),
-                default: None,
             },
             extends: TypeExtends::Primitive,
         };
@@ -2410,7 +2323,6 @@ mod tests {
                     value: Decimal::from(1),
                 }]),
                 help: String::new(),
-                default: None,
             },
             extends: TypeExtends::Primitive,
         };
@@ -2539,79 +2451,6 @@ mod tests {
     }
 
     #[test]
-    fn test_explicit_value_returns_none_for_default() {
-        let source = crate::Source::new(
-            "test.lemma",
-            crate::parsing::ast::Span {
-                start: 0,
-                end: 1,
-                line: 1,
-                col: 0,
-            },
-        );
-        let fact = FactData::Value {
-            value: LiteralValue::number(Decimal::from(25)),
-            source: source.clone(),
-            is_default: true,
-        };
-        assert!(
-            fact.explicit_value().is_none(),
-            "is_default=true should yield None from explicit_value()"
-        );
-        assert!(
-            fact.value().is_some(),
-            "value() should still return the value regardless of is_default"
-        );
-    }
-
-    #[test]
-    fn test_explicit_value_returns_some_for_non_default() {
-        let source = crate::Source::new(
-            "test.lemma",
-            crate::parsing::ast::Span {
-                start: 0,
-                end: 1,
-                line: 1,
-                col: 0,
-            },
-        );
-        let fact = FactData::Value {
-            value: LiteralValue::number(Decimal::from(42)),
-            source,
-            is_default: false,
-        };
-        assert!(
-            fact.explicit_value().is_some(),
-            "is_default=false should yield Some from explicit_value()"
-        );
-        assert_eq!(
-            fact.explicit_value().unwrap().value,
-            ValueKind::Number(Decimal::from(42))
-        );
-    }
-
-    #[test]
-    fn test_explicit_value_returns_none_for_type_declaration() {
-        let source = crate::Source::new(
-            "test.lemma",
-            crate::parsing::ast::Span {
-                start: 0,
-                end: 1,
-                line: 1,
-                col: 0,
-            },
-        );
-        let fact = FactData::TypeDeclaration {
-            resolved_type: primitive_number().clone(),
-            source,
-        };
-        assert!(
-            fact.explicit_value().is_none(),
-            "TypeDeclaration should yield None from explicit_value()"
-        );
-    }
-
-    #[test]
     fn test_lemma_type_inequality_local_vs_import_same_shape() {
         let dep = Arc::new(LemmaSpec::new("dep".to_string()));
         let scale_spec = TypeSpecification::scale();
@@ -2628,7 +2467,6 @@ mod tests {
                 family: "money".to_string(),
                 defining_spec: TypeDefiningSpec::Import {
                     spec: Arc::clone(&dep),
-                    resolved_plan_hash: "a1b2c3d4".to_string(),
                 },
             },
         );
@@ -2649,7 +2487,6 @@ mod tests {
                 family: "money".to_string(),
                 defining_spec: TypeDefiningSpec::Import {
                     spec: Arc::clone(&spec_a),
-                    resolved_plan_hash: "a1b2c3d4".to_string(),
                 },
             },
         );
@@ -2659,10 +2496,7 @@ mod tests {
             TypeExtends::Custom {
                 parent: "money".to_string(),
                 family: "money".to_string(),
-                defining_spec: TypeDefiningSpec::Import {
-                    spec: spec_b,
-                    resolved_plan_hash: "a1b2c3d4".to_string(),
-                },
+                defining_spec: TypeDefiningSpec::Import { spec: spec_b },
             },
         );
         assert_eq!(left, right);

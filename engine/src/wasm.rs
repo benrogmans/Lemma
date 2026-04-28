@@ -1,6 +1,8 @@
+use crate::error::ErrorKind;
 use crate::parsing::ast::DateTimeValue;
-use crate::serialization::fact_values_from_map;
-use crate::{Engine, SourceType};
+use crate::parsing::source::Source;
+use crate::serialization::data_values_from_map;
+use crate::{Engine, Error, SourceType};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,7 +24,10 @@ impl WasmEngine {
         }
     }
 
-    /// Load Lemma source. Resolves with `undefined` on success; rejects with an array of error strings.
+    /// Load Lemma source. Resolves with `undefined` on success; rejects with an array of
+    /// serialized errors (same shape as `EngineError` in `engine/packages/npm/lemma.d.ts`).
+    ///
+    /// Breaking: previously rejected with an array of strings.
     #[wasm_bindgen(js_name = load)]
     pub fn load_wasm(&self, code: &str, attribute: &str) -> js_sys::Promise {
         let code = code.to_string();
@@ -41,9 +46,10 @@ impl WasmEngine {
             match result {
                 Ok(()) => Ok(JsValue::UNDEFINED),
                 Err(load_err) => {
-                    let messages: Vec<String> =
-                        load_err.errors.iter().map(|e| e.to_string()).collect();
-                    Err(to_js(&messages).expect("BUG: serialize error messages"))
+                    let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
+                    Err(errors
+                        .serialize(&js_error_serializer())
+                        .expect("BUG: serialize JsError array"))
                 }
             }
         })
@@ -55,7 +61,7 @@ impl WasmEngine {
         &self,
         spec: &str,
         rule_names: JsValue,
-        fact_values: JsValue,
+        data_values: JsValue,
         effective: Option<String>,
     ) -> Result<JsValue, JsValue> {
         let effective_dt = effective
@@ -65,12 +71,12 @@ impl WasmEngine {
             .unwrap_or_else(DateTimeValue::now);
 
         let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
-        let facts = parse_fact_values(&fact_values).map_err(js_err)?;
+        let data = parse_data_values(&data_values).map_err(js_err)?;
 
         let engine = self.engine.borrow();
         let mut response = engine
-            .run(spec, Some(&effective_dt), facts, false)
-            .map_err(|e| js_err(e.to_string()))?;
+            .run(spec, Some(&effective_dt), data, false)
+            .map_err(|e| error_to_js(&e))?;
 
         if !rule_names.is_empty() {
             response.filter_rules(&rule_names);
@@ -79,11 +85,33 @@ impl WasmEngine {
         serialize_engine_json(&response)
     }
 
-    /// Spec names from the engine (same order as [`Engine::list_specs`]).
+    /// Loaded specs, each paired with its planning schema.
+    ///
+    /// Each entry has `{ name, effective_from, effective_to, schema }`. The
+    /// pair describes a half-open `[effective_from, effective_to)` validity
+    /// range; `effective_from` is `null` when the first version has no
+    /// declared start, and `effective_to` is `null` for the latest version of
+    /// a name (no successor). Order matches [`Engine::list_specs_with_ranges`].
+    ///
+    /// `schema` is the same envelope returned by [`WasmEngine::schema`] for
+    /// `(name, effective_from)`; shipping it inline saves the N+1 round-trip
+    /// every consumer (playground, dashboards, docs) was doing.
     #[wasm_bindgen(js_name = list)]
     pub fn list(&self) -> Result<JsValue, JsValue> {
-        let specs = self.engine.borrow().list_specs();
-        to_js(&specs).map_err(|e| js_err(e.to_string()))
+        let engine = self.engine.borrow();
+        let mut entries: Vec<SpecListEntry> = Vec::new();
+        for (spec, effective_from, effective_to) in engine.list_specs_with_ranges() {
+            let plan = engine
+                .get_plan(&spec.name, effective_from.as_ref())
+                .map_err(|e| error_to_js(&e))?;
+            entries.push(SpecListEntry {
+                name: spec.name.clone(),
+                effective_from: effective_from.map(|d| d.to_string()),
+                effective_to: effective_to.map(|d| d.to_string()),
+                schema: plan.schema(),
+            });
+        }
+        serialize_engine_json(&entries)
     }
 
     /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
@@ -98,7 +126,7 @@ impl WasmEngine {
         let engine = self.engine.borrow();
         let plan = engine
             .get_plan(spec, Some(&effective_dt))
-            .map_err(|e| js_err(e.to_string()))?;
+            .map_err(|e| error_to_js(&e))?;
         let schema = plan.schema();
 
         serialize_engine_json(&schema)
@@ -128,13 +156,23 @@ impl WasmEngine {
         };
         match crate::format_source(code, attr) {
             Ok(formatted) => Ok(JsValue::from_str(&formatted)),
-            Err(e) => Err(js_err(e.to_string())),
+            Err(e) => Err(error_to_js(&e)),
         }
     }
 }
 
-fn to_js<T: Serialize>(v: &T) -> Result<JsValue, serde_wasm_bindgen::Error> {
-    serde_wasm_bindgen::to_value(v)
+/// Per-version record exposed to JS by [`WasmEngine::list`].
+///
+/// The half-open range is `[effective_from, effective_to)`; both bounds are
+/// `null` in JS when their corresponding bound is unbounded (`None`). The
+/// planning `schema` is included inline so consumers never need an N+1
+/// `engine.schema(name, effective_from)` call.
+#[derive(Serialize)]
+struct SpecListEntry {
+    name: String,
+    effective_from: Option<String>,
+    effective_to: Option<String>,
+    schema: crate::planning::execution_plan::SpecSchema,
 }
 
 /// Same JSON as CLI/HTTP. `serde_wasm_bindgen::to_value(serde_json::Value)` drops
@@ -152,6 +190,66 @@ fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
 
 fn js_err(msg: impl Into<String>) -> JsValue {
     JsValue::from_str(&msg.into())
+}
+
+/// Source slice serialized for JS (`EngineError.source` in TS).
+#[derive(Serialize)]
+struct JsSource<'a> {
+    attribute: &'a str,
+    line: usize,
+    column: usize,
+    length: usize,
+}
+
+impl<'a> From<&'a Source> for JsSource<'a> {
+    fn from(s: &'a Source) -> Self {
+        JsSource {
+            attribute: &s.attribute,
+            line: s.span.line,
+            column: s.span.col,
+            length: s.span.end.saturating_sub(s.span.start),
+        }
+    }
+}
+
+/// Flat view of [`Error`] for `serde_wasm_bindgen` — matches `EngineError` in
+/// `engine/packages/npm/lemma.d.ts`.
+#[derive(Serialize)]
+struct JsError<'a> {
+    kind: ErrorKind,
+    message: &'a str,
+    related_data: Option<&'a str>,
+    spec: Option<&'a str>,
+    related_spec: Option<&'a str>,
+    source: Option<JsSource<'a>>,
+    suggestion: Option<&'a str>,
+}
+
+impl<'a> From<&'a Error> for JsError<'a> {
+    fn from(e: &'a Error) -> Self {
+        JsError {
+            kind: e.kind(),
+            message: e.message(),
+            related_data: e.related_data(),
+            spec: e.spec(),
+            related_spec: e.related_spec(),
+            source: e.source_location().map(JsSource::from),
+            suggestion: e.suggestion(),
+        }
+    }
+}
+
+/// Serializer that emits `null` (not `undefined`) for missing optionals so the object
+/// matches the published `EngineError` TypeScript type.
+fn js_error_serializer() -> serde_wasm_bindgen::Serializer {
+    serde_wasm_bindgen::Serializer::new().serialize_missing_as_null(true)
+}
+
+/// Convert an engine [`Error`] into a plain JS object thrown from WASM.
+fn error_to_js(e: &Error) -> JsValue {
+    let err = JsError::from(e);
+    err.serialize(&js_error_serializer())
+        .expect("BUG: serialize JsError")
 }
 
 fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {
@@ -177,11 +275,11 @@ fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {
     Err("rule_names must be an array of strings".into())
 }
 
-fn parse_fact_values(v: &JsValue) -> Result<HashMap<String, String>, String> {
+fn parse_data_values(v: &JsValue) -> Result<HashMap<String, String>, String> {
     if v.is_undefined() || v.is_null() {
         return Ok(HashMap::new());
     }
     let map: HashMap<String, serde_json::Value> = serde_wasm_bindgen::from_value(v.clone())
-        .map_err(|e| format!("fact_values must be a plain object: {}", e))?;
-    Ok(fact_values_from_map(map))
+        .map_err(|e| format!("data_values must be a plain object: {}", e))?;
+    Ok(data_values_from_map(map))
 }

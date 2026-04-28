@@ -1,0 +1,29 @@
+spec simple_data
+"""
+Introduction to Lemma: Data and Types
+
+This example demonstrates:
+- Basic data declarations
+- Different literal types
+- Type annotations
+"""
+
+data age                  : 32
+data base_salary          : 75_000
+data currency_rate        : 1.18
+data distance_to_office   : 12.5
+data employee_id          : "EMP-2024-001"
+data height               : 175
+data is_active            : true
+data is_manager           : false
+data max_file_size        : 10
+data name                 : "Alice van der Berg"
+data percentage_complete  : 87.5%
+data processing_time      : 2.5 hours
+data review_date          : 2024-07-15
+data start_date           : 2024-01-15
+data tax_rate             : 22%
+data weight               : 68.5
+data optional_description : text
+data unknown_date         : date
+data pending_amount       : number -> minimum 0

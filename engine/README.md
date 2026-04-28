@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.10"
+lemma-engine = "0.8.11"
 ```
 
 ### Minimal example
@@ -36,8 +36,8 @@ let mut engine = Engine::new();
 
 engine.load(r#"
     spec compensation
-    fact base_salary: 60000
-    fact bonus_rate: 10%
+    data base_salary: 60000
+    data bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
     rule total: base_salary + bonus
 "#, Some("example.lemma"))?;
@@ -64,8 +64,8 @@ let mut engine = Engine::new();
 engine.load(r#"
     spec shipping
 
-    fact weight: 5 kilogram
-    fact destination: "domestic"
+    data weight: 5 kilogram
+    data destination: "domestic"
 
     rule rate: 10
       unless weight > 10 kilogram           then 15
@@ -88,9 +88,9 @@ let response = engine.run("shipping", Some(&now), values)?;
 
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
-- **Spec composition** – extend specs, bind facts, and reuse rules across modules
+- **Spec composition** – extend specs, bind data, and reuse rules across modules
 - **Audit trail** – every evaluation returns the operations that led to each result
-- **WebAssembly build** – `npm install @benrogmans/lemma-engine` to run Lemma in browsers and at the edge
+- **WebAssembly build** – `npm install @lemmabase/lemma-engine` to run Lemma in browsers and at the edge
 
 Constraint-style **inversion** (what inputs would yield a given outcome?) is planned; it is not documented as a supported API yet.
 
@@ -119,11 +119,11 @@ lemma server --port 8012
 ### WebAssembly
 
 ```bash
-npm install @benrogmans/lemma-engine
+npm install @lemmabase/lemma-engine
 ```
 
 ```javascript
-import { Lemma } from '@benrogmans/lemma-engine';
+import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 ```
 
@@ -133,8 +133,8 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 
 - Language guide: <https://benrogmans.github.io/lemma/>
 - API documentation: <https://docs.rs/lemma-engine>
-- Examples: <https://github.com/benrogmans/lemma/tree/main/documentation/examples>
-- CLI usage: <https://github.com/benrogmans/lemma/blob/main/documentation/CLI.md>
+- Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
+- CLI usage: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>
 
 ## Use cases
 

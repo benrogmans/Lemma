@@ -9,9 +9,9 @@ fn parentheses_syntax_evaluates_correctly() {
     // Integration test: parentheses syntax is accepted by parser and behaves correctly in evaluation.
     let code = r#"
 spec test
-fact x: true
-fact y: false
-fact num: 16
+data x: true
+data y: false
+data num: 16
 rule not_x: not(x)
 rule sqrt_num: sqrt(num)
 rule sin_zero: sin(0)

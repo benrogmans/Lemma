@@ -1,8 +1,9 @@
-use crate::evaluation::operations::{OperationRecord, OperationResult};
+use crate::evaluation::operations::{OperationRecord, OperationResult, VetoType};
 use crate::parsing::ast::DateTimeValue;
-use crate::planning::semantics::{Expression, Fact, LemmaType, RulePath, Source};
+use crate::planning::semantics::{DataPath, Expression, LemmaType, RulePath, Source};
 use indexmap::IndexMap;
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 /// Rule info with resolved expressions for use in evaluation response.
 /// Evaluation uses only semantics types; no parsing types.
@@ -16,12 +17,12 @@ pub struct EvaluatedRule {
     pub rule_type: LemmaType,
 }
 
-/// Facts from a specific spec (semantics types only).
+/// Grouped data from a specific spec (semantics types only).
 #[derive(Debug, Clone, Serialize)]
-pub struct Facts {
-    pub fact_path: String,
-    pub referencing_fact_name: String,
-    pub facts: Vec<Fact>,
+pub struct DataGroup {
+    pub data_path: String,
+    pub referencing_data_name: String,
+    pub data: Vec<crate::planning::semantics::Data>,
 }
 
 /// Response from evaluating a Lemma spec
@@ -31,7 +32,7 @@ pub struct Response {
     pub spec_hash: Option<String>,
     pub spec_effective_from: Option<DateTimeValue>,
     pub spec_effective_to: Option<DateTimeValue>,
-    pub facts: Vec<Facts>,
+    pub data: Vec<DataGroup>,
     pub results: IndexMap<String, RuleResult>,
 }
 
@@ -41,7 +42,7 @@ pub struct RuleResult {
     #[serde(skip_serializing)]
     pub rule: EvaluatedRule,
     pub result: OperationResult,
-    pub facts: Vec<Fact>,
+    pub data: Vec<DataGroup>,
     #[serde(skip_serializing)]
     pub operations: Vec<OperationRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -51,12 +52,43 @@ pub struct RuleResult {
 }
 
 impl Response {
+    /// Looks up a rule result by name.
+    ///
+    /// Returns an error if the rule is not found.
+    pub fn get(&self, rule_name: &str) -> Result<&RuleResult, crate::error::Error> {
+        self.results
+            .get(rule_name)
+            .ok_or_else(|| crate::error::Error::rule_not_found(rule_name, None::<String>))
+    }
+
     pub fn add_result(&mut self, result: RuleResult) {
         self.results.insert(result.rule.name.clone(), result);
     }
 
     pub fn filter_rules(&mut self, rule_names: &[String]) {
         self.results.retain(|name, _| rule_names.contains(name));
+    }
+
+    /// All [`DataPath`]s reported as missing by any rule result (`VetoType::MissingData`).
+    #[must_use]
+    pub fn missing_data(&self) -> BTreeSet<DataPath> {
+        self.missing_data_ordered().into_iter().collect()
+    }
+
+    /// [`DataPath`]s with `MissingData` vetos, in **rule result order** (matches evaluation order),
+    /// first occurrence only.
+    #[must_use]
+    pub fn missing_data_ordered(&self) -> Vec<DataPath> {
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for rr in self.results.values() {
+            if let OperationResult::Veto(VetoType::MissingData { data }) = &rr.result {
+                if seen.insert(data.clone()) {
+                    out.push(data.clone());
+                }
+            }
+        }
+        out
     }
 }
 
@@ -106,7 +138,7 @@ mod tests {
                 result: OperationResult::Value(Box::new(LiteralValue::number(
                     Decimal::from_str("42").unwrap(),
                 ))),
-                facts: vec![],
+                data: vec![],
                 operations: vec![],
                 explanation: None,
                 rule_type: primitive_number().clone(),
@@ -117,7 +149,7 @@ mod tests {
             spec_hash: None,
             spec_effective_from: None,
             spec_effective_to: None,
-            facts: vec![],
+            data: vec![],
             results,
         };
 
@@ -135,7 +167,7 @@ mod tests {
             RuleResult {
                 rule: dummy_evaluated_rule("rule1"),
                 result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
-                facts: vec![],
+                data: vec![],
                 operations: vec![],
                 explanation: None,
                 rule_type: primitive_boolean().clone(),
@@ -146,7 +178,7 @@ mod tests {
             RuleResult {
                 rule: dummy_evaluated_rule("rule2"),
                 result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
-                facts: vec![],
+                data: vec![],
                 operations: vec![],
                 explanation: None,
                 rule_type: primitive_boolean().clone(),
@@ -157,7 +189,7 @@ mod tests {
             spec_hash: None,
             spec_effective_from: None,
             spec_effective_to: None,
-            facts: vec![],
+            data: vec![],
             results,
         };
 
@@ -172,7 +204,7 @@ mod tests {
         let success = RuleResult {
             rule: dummy_evaluated_rule("rule1"),
             result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
-            facts: vec![],
+            data: vec![],
             operations: vec![],
             explanation: None,
             rule_type: primitive_boolean().clone(),
@@ -181,33 +213,43 @@ mod tests {
 
         let missing = RuleResult {
             rule: dummy_evaluated_rule("rule3"),
-            result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
-            facts: vec![crate::planning::semantics::Fact {
-                path: crate::planning::semantics::FactPath::new(vec![], "fact1".to_string()),
-                value: crate::planning::semantics::FactValue::Literal(
-                    crate::planning::semantics::LiteralValue::from_bool(false),
-                ),
-                source: None,
+            result: OperationResult::Veto(crate::evaluation::operations::VetoType::MissingData {
+                data: crate::planning::semantics::DataPath::new(vec![], "data1".to_string()),
+            }),
+            data: vec![DataGroup {
+                data_path: String::new(),
+                referencing_data_name: String::new(),
+                data: vec![crate::planning::semantics::Data {
+                    path: crate::planning::semantics::DataPath::new(vec![], "data1".to_string()),
+                    value: crate::planning::semantics::DataValue::Literal(
+                        crate::planning::semantics::LiteralValue::from_bool(false),
+                    ),
+                    source: None,
+                }],
             }],
             operations: vec![],
             explanation: None,
             rule_type: LemmaType::veto_type(),
         };
-        assert_eq!(missing.facts.len(), 1);
-        assert_eq!(missing.facts[0].path.fact, "fact1");
+        assert_eq!(missing.data.len(), 1);
+        assert_eq!(missing.data[0].data[0].path.data, "data1");
         assert!(matches!(missing.result, OperationResult::Veto(_)));
 
         let veto = RuleResult {
             rule: dummy_evaluated_rule("rule4"),
-            result: OperationResult::Veto(Some("Vetoed".to_string())),
-            facts: vec![],
+            result: OperationResult::Veto(crate::evaluation::operations::VetoType::UserDefined {
+                message: Some("Vetoed".to_string()),
+            }),
+            data: vec![],
             operations: vec![],
             explanation: None,
             rule_type: LemmaType::veto_type(),
         };
         assert_eq!(
             veto.result,
-            OperationResult::Veto(Some("Vetoed".to_string()))
+            OperationResult::Veto(crate::evaluation::operations::VetoType::UserDefined {
+                message: Some("Vetoed".to_string()),
+            })
         );
     }
 }

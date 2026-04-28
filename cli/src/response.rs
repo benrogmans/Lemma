@@ -30,28 +30,25 @@ pub struct RuleResultJson {
     pub explanation: Option<serde_json::Value>,
 }
 
-/// Evaluation response envelope with spec identity, effective datetime, and plan hash.
+/// Evaluation response envelope with spec identity and effective datetime.
 #[derive(Debug, Serialize)]
 pub struct EvaluationEnvelope {
     pub spec: String,
     pub effective: String,
-    pub hash: String,
     pub result: IndexMap<String, RuleResultJson>,
 }
 
 /// Convert an engine `Response` into an envelope with traceability fields.
-pub fn convert_response_with_hash(
+pub fn convert_response_envelope(
     response: &lemma::Response,
     include_explanations: bool,
     spec_name: &str,
     effective: &lemma::DateTimeValue,
-    hash: &str,
 ) -> EvaluationEnvelope {
     let result = convert_response(response, include_explanations);
     EvaluationEnvelope {
         spec: spec_name.to_string(),
         effective: effective.to_string(),
-        hash: hash.to_string(),
         result,
     }
 }
@@ -72,7 +69,9 @@ pub fn convert_response(
                     let (val, unit) = lemma::serialization::literal_value_to_json(v);
                     (Some(val), unit, Some(v.display_value()), false, None)
                 }
-                lemma::OperationResult::Veto(msg) => (None, None, None, true, msg.clone()),
+                lemma::OperationResult::Veto(reason) => {
+                    (None, None, None, true, Some(reason.to_string()))
+                }
             };
             let explanation = if include_explanations {
                 rule_result

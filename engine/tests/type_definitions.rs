@@ -8,7 +8,7 @@ fn test_type_system_with_imports_and_extensions() {
 
     let age_spec = r#"
 spec age
-type age: number
+data age: number
   -> minimum 0
   -> maximum 150
 "#;
@@ -16,14 +16,12 @@ type age: number
     let test_types_spec = r#"
 spec test_types
 
-type age from age
+data age from age
 
-type adult_age: age
+data adult_age: age
   -> minimum 21
 
-fact age: [age]
-fact adult_age: [adult_age]
-fact twenties: [adult_age -> maximum 30]
+data twenties: adult_age -> maximum 30
 
 rule total: age + adult_age + twenties
 "#;
@@ -39,13 +37,13 @@ rule total: age + adult_age + twenties
         .unwrap();
     let now = DateTimeValue::now();
 
-    let mut facts = HashMap::new();
-    facts.insert("age".to_string(), "25".to_string());
-    facts.insert("adult_age".to_string(), "30".to_string());
-    facts.insert("twenties".to_string(), "25".to_string());
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "25".to_string());
+    data.insert("adult_age".to_string(), "30".to_string());
+    data.insert("twenties".to_string(), "25".to_string());
 
     let response = engine
-        .run("test_types", Some(&now), facts, false)
+        .run("test_types", Some(&now), data, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "test_types");
@@ -71,11 +69,11 @@ fn test_scale_type_default_before_unit_declarations() {
         .load(
             r#"
         spec pricing
-        type money: scale
+        data money: scale
           -> default 4 eur
           -> unit eur 1
           -> unit usd 1.19
-        fact price: [money]
+        data price: money
         rule doubled: price * 2
     "#,
             lemma::SourceType::Labeled("pricing.lemma"),
@@ -85,20 +83,23 @@ fn test_scale_type_default_before_unit_declarations() {
 
     let plan = engine.get_plan("pricing", Some(&now)).unwrap();
     let schema = plan.schema();
-    let (price_type, _) = schema.facts.get("price").expect("price fact in schema");
-    assert!(price_type.is_scale(), "price must be scale money type");
-    assert_eq!(price_type.name(), "money");
-    match &price_type.specifications {
-        TypeSpecification::Scale { units, default, .. } => {
+    let entry = schema.data.get("price").expect("price data in schema");
+    assert!(
+        entry.lemma_type.is_scale(),
+        "price must be scale money type"
+    );
+    assert_eq!(entry.lemma_type.name(), "money");
+    match &entry.lemma_type.specifications {
+        TypeSpecification::Scale { units, .. } => {
             let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
             assert!(names.contains(&"eur") && names.contains(&"usd"));
-            assert!(
-                default.is_some(),
-                "default 4 eur must appear in schema after planning"
-            );
         }
         other => panic!("expected Scale, got {:?}", other),
     }
+    assert!(
+        entry.default.is_some(),
+        "typedef default 4 eur must be promoted into price binding"
+    );
 }
 
 /// Verify that `-> default` after `-> unit` (the original order) still works.
@@ -110,11 +111,11 @@ fn test_scale_type_default_after_unit_declarations() {
         .load(
             r#"
         spec pricing
-        type money: scale
+        data money: scale
           -> unit eur 1
           -> unit usd 1.19
           -> default 4 eur
-        fact price: [money]
+        data price: money
         rule doubled: price * 2
     "#,
             lemma::SourceType::Labeled("pricing.lemma"),
@@ -124,33 +125,36 @@ fn test_scale_type_default_after_unit_declarations() {
 
     let plan = engine.get_plan("pricing", Some(&now)).unwrap();
     let schema = plan.schema();
-    let (price_type, _) = schema.facts.get("price").expect("price fact in schema");
-    assert!(price_type.is_scale(), "price must be scale money type");
-    assert_eq!(price_type.name(), "money");
-    match &price_type.specifications {
-        TypeSpecification::Scale { units, default, .. } => {
+    let entry = schema.data.get("price").expect("price data in schema");
+    assert!(
+        entry.lemma_type.is_scale(),
+        "price must be scale money type"
+    );
+    assert_eq!(entry.lemma_type.name(), "money");
+    match &entry.lemma_type.specifications {
+        TypeSpecification::Scale { units, .. } => {
             let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
             assert!(names.contains(&"eur") && names.contains(&"usd"));
-            assert!(
-                default.is_some(),
-                "default 4 eur must appear in schema after planning"
-            );
         }
         other => panic!("expected Scale, got {:?}", other),
     }
+    assert!(
+        entry.default.is_some(),
+        "typedef default 4 eur must be promoted into price binding"
+    );
 }
 
 #[test]
-fn test_schema_returns_facts_in_definition_order() {
+fn test_schema_returns_data_in_definition_order() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec ordering
-        fact zebra: [number]
-        fact alpha: [number]
-        fact middle: [number]
+        data zebra: number
+        data alpha: number
+        data middle: number
         rule total: zebra + alpha + middle
     "#,
             lemma::SourceType::Labeled("ordering.lemma"),
@@ -160,25 +164,25 @@ fn test_schema_returns_facts_in_definition_order() {
 
     let plan = engine.get_plan("ordering", Some(&now)).unwrap();
     let schema = plan.schema();
-    let fact_names: Vec<&String> = schema.facts.keys().collect();
+    let data_names: Vec<&String> = schema.data.keys().collect();
     assert_eq!(
-        fact_names,
+        data_names,
         vec!["zebra", "alpha", "middle"],
-        "Facts should be in definition order, not alphabetical"
+        "Data should be in definition order, not alphabetical"
     );
 }
 
 #[test]
-fn test_schema_for_rules_returns_facts_in_definition_order() {
+fn test_schema_for_rules_returns_data_in_definition_order() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec ordering
-        fact zebra: [number]
-        fact alpha: [number]
-        fact middle: [number]
+        data zebra: number
+        data alpha: number
+        data middle: number
         rule total: zebra + alpha + middle
     "#,
             lemma::SourceType::Labeled("ordering.lemma"),
@@ -188,26 +192,27 @@ fn test_schema_for_rules_returns_facts_in_definition_order() {
 
     let plan = engine.get_plan("ordering", Some(&now)).unwrap();
     let schema = plan.schema_for_rules(&["total".to_string()]).unwrap();
-    let fact_names: Vec<&String> = schema.facts.keys().collect();
+    let data_names: Vec<&String> = schema.data.keys().collect();
     assert_eq!(
-        fact_names,
+        data_names,
         vec!["zebra", "alpha", "middle"],
         "schema_for_rules should also preserve definition order"
     );
 }
 
 #[test]
-fn test_schema_reports_none_for_default_valued_facts() {
+fn test_schema_default_valued_data_are_values() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec defaults
-        fact quantity: [number -> default 10]
-        fact name: [text]
-        fact price: 99
+        data quantity: number -> default 10
+        data name: text
+        data price: 99
         rule total: quantity * price
+        rule label: name
     "#,
             lemma::SourceType::Labeled("defaults.lemma"),
         )
@@ -217,38 +222,35 @@ fn test_schema_reports_none_for_default_valued_facts() {
     let plan = engine.get_plan("defaults", Some(&now)).unwrap();
     let schema = plan.schema();
 
-    let (_, quantity_val) = schema.facts.get("quantity").expect("quantity should exist");
+    let quantity = schema.data.get("quantity").expect("quantity should exist");
     assert!(
-        quantity_val.is_none(),
-        "Default-valued fact 'quantity' should have None in schema (needs user input)"
+        quantity.default.is_some(),
+        "Type default promotes to value in execution plan"
     );
 
-    let (_, name_val) = schema.facts.get("name").expect("name should exist");
+    let name = schema.data.get("name").expect("name should exist");
     assert!(
-        name_val.is_none(),
-        "Type-only fact 'name' should have None in schema"
+        name.default.is_none(),
+        "Type-only data without default has no value"
     );
 
-    let (_, price_val) = schema.facts.get("price").expect("price should exist");
-    assert!(
-        price_val.is_some(),
-        "Explicit-valued fact 'price' should have Some in schema (skip in interactive)"
-    );
+    let price = schema.data.get("price").expect("price should exist");
+    assert!(price.default.is_some(), "Explicit literal is a value");
 }
 
 #[test]
-fn test_schema_scale_default_reports_none() {
+fn test_schema_scale_default_is_value() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec salary
-        type money: scale
+        data money: scale
           -> unit eur 1
           -> unit usd 1.19
           -> default 3000 eur
-        fact salary: [money]
+        data salary: money
         rule doubled: salary * 2
     "#,
             lemma::SourceType::Labeled("salary.lemma"),
@@ -259,9 +261,42 @@ fn test_schema_scale_default_reports_none() {
     let plan = engine.get_plan("salary", Some(&now)).unwrap();
     let schema = plan.schema();
 
-    let (_, salary_val) = schema.facts.get("salary").expect("salary should exist");
+    let salary = schema.data.get("salary").expect("salary should exist");
     assert!(
-        salary_val.is_none(),
-        "Scale fact with type default should have None in schema"
+        salary.default.is_some(),
+        "Scale type default promotes to value in execution plan"
+    );
+}
+
+/// Default declared on an inner typedef must propagate through all extending
+/// types and land on the data binding's default, without the intermediate
+/// types redeclaring it.
+#[test]
+fn test_typedef_default_inherits_through_extension_chain() {
+    let mut engine = Engine::new();
+    engine
+        .load(
+            r#"
+            spec chain
+            data money: scale
+              -> unit eur 1
+              -> default 4 eur
+            data price: money
+            data final_price: price
+            rule doubled: final_price * 2
+            "#,
+            lemma::SourceType::Labeled("chain.lemma"),
+        )
+        .unwrap();
+    let now = DateTimeValue::now();
+
+    let schema = engine.get_plan("chain", Some(&now)).unwrap().schema();
+    let final_price = schema
+        .data
+        .get("final_price")
+        .expect("final_price should exist");
+    assert!(
+        final_price.default.is_some(),
+        "typedef default declared on ancestor type must inherit down to leaf binding"
     );
 }

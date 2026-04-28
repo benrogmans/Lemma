@@ -25,7 +25,7 @@ lemma run shipping
 # Evaluate specific rules
 lemma run tax_calculation --rules=tax_owed
 
-# Provide fact values
+# Provide data values
 lemma run tax_calculation income=75000 filing_status="married"
 
 # Explore specs interactively
@@ -41,7 +41,7 @@ lemma list ./documentation/examples
 lemma server --port 8012 --dir ./documentation/examples
 
 # Start the MCP server (AI assistant integration)
-lemma mcp --dir ./documentation/examples
+lemma mcp ./documentation/examples
 ```
 
 Each command supports `--help` for full usage details.
@@ -49,7 +49,7 @@ Each command supports `--help` for full usage details.
 ## Features
 
 - **Deterministic evaluations** – same audit trail as the engine library
-- **Interactive mode** – select specs, rules, and facts without typing full paths
+- **Interactive mode** – select specs, rules, and data without typing full paths
 - **HTTP server** – evaluate specs over REST, perfect for integration tests and dashboards
 - **MCP server** – expose Lemma to AI assistants via the Model Context Protocol
 - **Machine-readable output** – `--raw` flag for tooling and pipelines
@@ -76,10 +76,10 @@ lemma run shipping --raw > output.json
 
 ## Documentation
 
-- CLI reference: <https://github.com/benrogmans/lemma/blob/main/documentation/CLI.md>
+- CLI reference: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>
 - Language guide: <https://benrogmans.github.io/lemma/>
 - API docs (engine): <https://docs.rs/lemma-engine>
-- Examples: <https://github.com/benrogmans/lemma/tree/main/documentation/examples>
+- Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
 
 ## Contributing
 

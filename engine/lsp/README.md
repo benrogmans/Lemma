@@ -1,6 +1,6 @@
 # Lemma LSP
 
-Language Server Protocol implementation for [Lemma](https://github.com/benrogmans/lemma). Provides inline diagnostics and editor features for `.lemma` files.
+Language Server Protocol implementation for [Lemma](https://github.com/lemma/lemma). Provides inline diagnostics and editor features for `.lemma` files.
 
 ## Features
 

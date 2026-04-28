@@ -2,19 +2,18 @@ use crate::error::Error;
 use crate::parsing::source::Source;
 
 pub const MAX_SPEC_NAME_LENGTH: usize = 128;
-pub const MAX_FACT_NAME_LENGTH: usize = 256;
+pub const MAX_DATA_NAME_LENGTH: usize = 256;
 pub const MAX_RULE_NAME_LENGTH: usize = 256;
-pub const MAX_TYPE_NAME_LENGTH: usize = 256;
 
 /// Maximum significant digits in a number string. rust_decimal supports at most 28;
 /// more can panic or overflow in parse or arithmetic.
 pub const MAX_NUMBER_DIGITS: usize = 28;
 
-/// Maximum character length for a text value (fact/runtime input).
+/// Maximum character length for a text value (data/runtime input).
 pub const MAX_TEXT_VALUE_LENGTH: usize = 1024;
 
 /// Validate that a name does not exceed the given character limit.
-/// `kind` is a human-readable noun like "spec", "fact", "rule", or "type".
+/// `kind` is a human-readable noun like "spec", "data", "rule", or "type".
 pub fn check_max_length(
     name: &str,
     limit: usize,
@@ -58,10 +57,10 @@ pub struct ResourceLimits {
     /// regulatory systems while bounding total engine workload.
     pub max_total_expression_count: usize,
 
-    /// Maximum size of a single fact value in bytes
+    /// Maximum size of a single data value in bytes
     /// Real usage: ~100 bytes, Limit: 1KB (10x)
     /// Enables server pre-allocation for zero-allocation evaluation
-    pub max_fact_value_bytes: usize,
+    pub max_data_value_bytes: usize,
 
     /// Maximum total bytes to read in a single load_from_paths call (and/or in-memory size of loaded specs)
     pub max_loaded_bytes: usize,
@@ -77,7 +76,7 @@ impl Default for ResourceLimits {
             max_expression_depth: 7,
             max_expression_count: 4096,
             max_total_expression_count: 3_141_592,
-            max_fact_value_bytes: 1024,         // 1 KB
+            max_data_value_bytes: 1024,         // 1 KB
             max_loaded_bytes: 50 * 1024 * 1024, // 50 MB
             max_files: 4096,
         }

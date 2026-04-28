@@ -4,15 +4,15 @@ Corporate Base Compensation Policy
 Foundation for all employee compensation
 """
 
-fact bonus_pool_percentage     : 10%
-fact company_name              : "TechCorp Europe"
-fact cost_of_living_adjustment : 0%
-fact retirement_match_cap      : 5%
-fact retirement_match_rate     : 6%
-fact stock_grant_percentage    : 2%
-fact base_salary_max           : [number -> minimum 0 -> default 250_000]
-fact base_salary_min           : [number -> minimum 0 -> default 45_000]
-fact health_premium_monthly    : [number -> minimum 0 -> default 500]
+data bonus_pool_percentage     : 10%
+data company_name              : "TechCorp Europe"
+data cost_of_living_adjustment : 0%
+data retirement_match_cap      : 5%
+data retirement_match_rate     : 6%
+data stock_grant_percentage    : 2%
+data base_salary_max           : number -> minimum 0 -> default 250_000
+data base_salary_min           : number -> minimum 0 -> default 45_000
+data health_premium_monthly    : number -> minimum 0 -> default 500
 
 rule annual_health_cost:
   health_premium_monthly * 12
@@ -32,15 +32,15 @@ Engineering Department Compensation Rules
 Inherits base policy with engineering-specific bindings
 """
 
-fact department         : "Engineering"
-fact level_multiplier   : [number -> minimum 0 -> default 1.0]
-fact performance_rating : [number -> minimum 0 -> maximum 5 -> default 0.0]
-fact years_of_service   : [number -> minimum 0 -> default 0]
+data department         : "Engineering"
+data level_multiplier   : number -> minimum 0 -> default 1.0
+data performance_rating : number -> minimum 0 -> maximum 5 -> default 0.0
+data years_of_service   : number -> minimum 0 -> default 0
 
-fact policy                           : spec compensation/base_policy
-fact policy.bonus_pool_percentage     : 15%
-fact policy.cost_of_living_adjustment : 3%
-fact policy.stock_grant_percentage    : 5%
+with policy: compensation/base_policy
+data policy.bonus_pool_percentage     : 15%
+data policy.cost_of_living_adjustment : 3%
+data policy.stock_grant_percentage    : 5%
 
 rule base_for_level:
   policy.base_salary_min * level_multiplier
@@ -96,14 +96,14 @@ Senior Engineer (Level 3) - Specific Employee
 Multiple inheritance levels testing
 """
 
-fact employee_name : "Alex van der Berg"
-fact location      : "Amsterdam"
-fact location_cola : 15%
+data employee_name : "Alex van der Berg"
+data location      : "Amsterdam"
+data location_cola : 15%
 
-fact eng_policy                    : spec compensation/engineering_dept
-fact eng_policy.level_multiplier   : 2.5
-fact eng_policy.performance_rating : 4.2
-fact eng_policy.years_of_service   : 7
+with eng_policy: compensation/engineering_dept
+data eng_policy.level_multiplier   : 2.5
+data eng_policy.performance_rating : 4.2
+data eng_policy.years_of_service   : 7
 
 rule effective_base:
   eng_policy.base_for_level * (1 + location_cola)
@@ -159,20 +159,20 @@ Principal Engineer (Level 5) - Maximum complexity test
 Tests deep inheritance and complex calculations
 """
 
-fact employee_name      : "Jordan Schmidt"
-fact has_critical_skill : true
-fact location           : "Berlin"
-fact location_cola      : 20%
-fact manages_team       : true
-fact on_call_rotation   : true
-fact team_size          : [number -> minimum 0 -> default 15]
+data employee_name      : "Jordan Schmidt"
+data has_critical_skill : true
+data location           : "Berlin"
+data location_cola      : 20%
+data manages_team       : true
+data on_call_rotation   : true
+data team_size          : number -> minimum 0 -> default 15
 
-fact eng_policy                               : spec compensation/engineering_dept
-fact eng_policy.level_multiplier              : 4.5
-fact eng_policy.performance_rating            : 4.8
-fact eng_policy.policy.bonus_pool_percentage  : 20%
-fact eng_policy.policy.stock_grant_percentage : 8%
-fact eng_policy.years_of_service              : 12
+with eng_policy: compensation/engineering_dept
+data eng_policy.level_multiplier              : 4.5
+data eng_policy.performance_rating            : 4.8
+data eng_policy.policy.bonus_pool_percentage  : 20%
+data eng_policy.policy.stock_grant_percentage : 8%
+data eng_policy.years_of_service              : 12
 
 rule critical_skill_bonus:
   0

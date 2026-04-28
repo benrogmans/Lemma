@@ -1,5 +1,6 @@
 //! Target specification for inversion queries
 
+use crate::evaluation::operations::VetoType;
 use crate::planning::semantics::LiteralValue;
 use crate::OperationResult;
 use serde::Serialize;
@@ -45,7 +46,7 @@ impl Target {
     pub fn veto(message: Option<String>) -> Self {
         Self {
             op: TargetOp::Eq,
-            outcome: Some(OperationResult::Veto(message)),
+            outcome: Some(OperationResult::Veto(VetoType::UserDefined { message })),
         }
     }
 
@@ -84,8 +85,7 @@ impl Target {
         let value_str = match &self.outcome {
             None => "any".to_string(),
             Some(OperationResult::Value(v)) => v.to_string(),
-            Some(OperationResult::Veto(Some(msg))) => format!("veto({})", msg),
-            Some(OperationResult::Veto(None)) => "veto".to_string(),
+            Some(OperationResult::Veto(reason)) => format!("veto({reason})"),
         };
 
         format!("{} {}", op_str, value_str)

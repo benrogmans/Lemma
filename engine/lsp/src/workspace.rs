@@ -97,27 +97,6 @@ impl WorkspaceModel {
         all_specs
     }
 
-    /// Build the sources map (attribute -> source text) for planning.
-    pub fn sources_map(&self) -> HashMap<String, String> {
-        self.files
-            .iter()
-            .map(|(attribute, tracked)| (attribute.clone(), tracked.text.clone()))
-            .collect()
-    }
-
-    /// Map source attribute to (Url, text) for diagnostics. One entry per file.
-    pub fn attribute_to_url_and_text(&self) -> HashMap<String, (Url, String)> {
-        self.files
-            .iter()
-            .map(|(attribute, tracked)| {
-                (
-                    attribute.clone(),
-                    (tracked.url.clone(), tracked.text.clone()),
-                )
-            })
-            .collect()
-    }
-
     /// Run a full workspace validation: parse errors + planning errors for all files.
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
         let mut ctx = Context::new();
@@ -129,8 +108,7 @@ impl WorkspaceModel {
                 Err(e) => insert_errors.push((attr, e)),
             }
         }
-        let sources = self.sources_map();
-        let mut results = self.validate_workspace_with_resolved_specs(&ctx, &sources);
+        let mut results = self.validate_workspace_with_resolved_specs(&ctx);
         for (attr, e) in insert_errors {
             if let Some(r) = results.iter_mut().find(|d| d.attribute == attr) {
                 r.errors.push(e);
@@ -142,24 +120,24 @@ impl WorkspaceModel {
     }
 
     /// Run planning with the given context. Returns one FileDiagnostics per workspace file.
-    pub fn validate_workspace_with_resolved_specs(
-        &self,
-        ctx: &Context,
-        sources: &HashMap<String, String>,
-    ) -> Vec<FileDiagnostics> {
+    pub fn validate_workspace_with_resolved_specs(&self, ctx: &Context) -> Vec<FileDiagnostics> {
         let mut planning_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
 
-        let planning_result = lemma::planning::plan(ctx, sources.clone());
+        let planning_result = lemma::planning::plan(ctx);
         let all_planning_errors: Vec<Error> = planning_result
-            .global_errors
+            .results
             .into_iter()
-            .chain(planning_result.per_spec.into_iter().flat_map(|r| {
-                let spec = Arc::clone(&r.spec);
-                r.errors
+            .flat_map(|set| {
+                set.specs
                     .into_iter()
-                    .map(move |e| e.with_spec_context(Arc::clone(&spec)))
+                    .flat_map(|sr| {
+                        let ctx_spec = Arc::clone(&sr.spec);
+                        sr.errors
+                            .into_iter()
+                            .map(move |e| e.with_spec_context(Arc::clone(&ctx_spec)))
+                    })
                     .collect::<Vec<_>>()
-            }))
+            })
             .collect();
         for error in all_planning_errors {
             let err_attr = error
@@ -229,7 +207,7 @@ mod tests {
         let url = url_from_path("/tmp/test.lemma");
         workspace.update_file(
             url.clone(),
-            "spec test\nfact x: 10\nrule y: x + 1".to_string(),
+            "spec test\ndata x: 10\nrule y: x + 1".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -263,11 +241,11 @@ mod tests {
 
         workspace.update_file(
             url_a.clone(),
-            "spec person\nfact name: \"Alice\"\nfact age: 30".to_string(),
+            "spec person\ndata name: \"Alice\"\ndata age: 30".to_string(),
         );
         workspace.update_file(
             url_b.clone(),
-            "spec company\nfact employee: spec person\nfact employee.name: \"Bob\"".to_string(),
+            "spec company\nwith employee: person\ndata employee.name: \"Bob\"".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -287,7 +265,7 @@ mod tests {
         let url = url_from_path("/tmp/orphan.lemma");
         workspace.update_file(
             url.clone(),
-            "spec orphan\nfact other: spec nonexistent".to_string(),
+            "spec orphan\nwith other: nonexistent".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -302,7 +280,7 @@ mod tests {
     fn remove_file_clears_it_from_workspace() {
         let mut workspace = WorkspaceModel::new();
         let url = url_from_path("/tmp/remove_me.lemma");
-        workspace.update_file(url.clone(), "spec test\nfact x: 10".to_string());
+        workspace.update_file(url.clone(), "spec test\ndata x: 10".to_string());
         assert!(workspace.contains_file(&url));
 
         workspace.remove_file(&url);
@@ -317,14 +295,46 @@ mod tests {
         let mut workspace = WorkspaceModel::new();
         let url1 = url_from_path("/tmp/test.lemma");
         let url2 = url_from_path("/tmp/test.lemma");
-        workspace.update_file(url1, "spec test\nfact x: 10".to_string());
-        workspace.update_file(url2, "spec test\nfact x: 20".to_string());
+        workspace.update_file(url1, "spec test\ndata x: 10".to_string());
+        workspace.update_file(url2, "spec test\ndata x: 20".to_string());
 
         let results = workspace.validate_workspace();
         assert_eq!(
             results.len(),
             1,
             "Same file should produce exactly one entry"
+        );
+    }
+
+    #[test]
+    fn planning_error_stays_on_owning_file_only() {
+        let mut workspace = WorkspaceModel::new();
+        let url_bad = url_from_path("/tmp/lsp_bad_import.lemma");
+        let url_ok = url_from_path("/tmp/lsp_clean.lemma");
+        workspace.update_file(
+            url_bad.clone(),
+            "spec consumer\ndata money from no_such_spec\ndata x: 1".to_string(),
+        );
+        workspace.update_file(url_ok.clone(), "spec other\ndata y: 2".to_string());
+
+        let results = workspace.validate_workspace();
+        let diag_bad = results
+            .iter()
+            .find(|d| d.url == url_bad)
+            .expect("bad file diagnostics");
+        let diag_ok = results
+            .iter()
+            .find(|d| d.url == url_ok)
+            .expect("ok file diagnostics");
+        assert!(
+            !diag_bad.errors.is_empty(),
+            "bad file should have errors: {:?}",
+            diag_bad.errors
+        );
+        assert!(
+            diag_ok.errors.is_empty(),
+            "clean file should have no errors, got {:?}",
+            diag_ok.errors
         );
     }
 }

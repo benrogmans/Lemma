@@ -18,7 +18,7 @@ fn token_type_index(kind: &TokenKind) -> Option<u32> {
     match kind {
         // Keywords → 0
         TokenKind::Spec
-        | TokenKind::Fact
+        | TokenKind::Data
         | TokenKind::Rule
         | TokenKind::Unless
         | TokenKind::Then

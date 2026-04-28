@@ -5,7 +5,7 @@
 //! Strong separation: Expression (planning) has source; DerivedExpression (inversion) does not.
 
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, FactPath, LiteralValue, MathematicalComputation,
+    ArithmeticComputation, ComparisonComputation, DataPath, LiteralValue, MathematicalComputation,
     NegationType, RulePath, SemanticConversionTarget, VetoExpression,
 };
 use serde::{Deserialize, Serialize};
@@ -19,8 +19,8 @@ pub struct DerivedExpression {
 }
 
 impl DerivedExpression {
-    pub fn collect_fact_paths(&self, facts: &mut HashSet<FactPath>) {
-        self.kind.collect_fact_paths(facts);
+    pub fn collect_data_paths(&self, data: &mut HashSet<DataPath>) {
+        self.kind.collect_data_paths(data);
     }
 }
 
@@ -29,7 +29,7 @@ impl DerivedExpression {
 pub enum DerivedExpressionKind {
     /// Boxed to keep enum size small (LiteralValue is large)
     Literal(Box<LiteralValue>),
-    FactPath(FactPath),
+    DataPath(DataPath),
     RulePath(RulePath),
     LogicalAnd(Arc<DerivedExpression>, Arc<DerivedExpression>),
     Arithmetic(
@@ -49,21 +49,21 @@ pub enum DerivedExpressionKind {
 }
 
 impl DerivedExpressionKind {
-    fn collect_fact_paths(&self, facts: &mut HashSet<FactPath>) {
+    fn collect_data_paths(&self, data: &mut HashSet<DataPath>) {
         match self {
-            DerivedExpressionKind::FactPath(fp) => {
-                facts.insert(fp.clone());
+            DerivedExpressionKind::DataPath(fp) => {
+                data.insert(fp.clone());
             }
             DerivedExpressionKind::LogicalAnd(left, right)
             | DerivedExpressionKind::Arithmetic(left, _, right)
             | DerivedExpressionKind::Comparison(left, _, right) => {
-                left.collect_fact_paths(facts);
-                right.collect_fact_paths(facts);
+                left.collect_data_paths(data);
+                right.collect_data_paths(data);
             }
             DerivedExpressionKind::UnitConversion(inner, _)
             | DerivedExpressionKind::LogicalNegation(inner, _)
             | DerivedExpressionKind::MathematicalComputation(_, inner) => {
-                inner.collect_fact_paths(facts);
+                inner.collect_data_paths(data);
             }
             DerivedExpressionKind::Literal(_)
             | DerivedExpressionKind::RulePath(_)

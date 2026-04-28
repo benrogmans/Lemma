@@ -6,7 +6,7 @@
 //! - `extract_domains_from_constraint()`: extracts domains from constraints
 
 use crate::planning::semantics::{
-    ComparisonComputation, FactPath, LiteralValue, SemanticConversionTarget, ValueKind,
+    ComparisonComputation, DataPath, LiteralValue, SemanticConversionTarget, ValueKind,
 };
 use crate::OperationResult;
 use serde::ser::{Serialize, SerializeStruct, Serializer};
@@ -228,43 +228,43 @@ impl Serialize for Bound {
     }
 }
 
-/// Extract domains for all facts mentioned in a constraint
+/// Extract domains for all data mentioned in a constraint
 pub fn extract_domains_from_constraint(
     constraint: &Constraint,
-) -> Result<HashMap<FactPath, Domain>, crate::Error> {
-    let all_facts = constraint.collect_facts();
+) -> Result<HashMap<DataPath, Domain>, crate::Error> {
+    let all_datas = constraint.collect_data();
     let mut domains = HashMap::new();
 
-    for fact_path in all_facts {
-        // None means the fact appears in the constraint but has no extractable
-        // bound (e.g. only used in equality with another fact). Treating it as
+    for data_path in all_datas {
+        // None means the data appears in the constraint but has no extractable
+        // bound (e.g. only used in equality with another data). Treating it as
         // Unconstrained is correct: the solver will enumerate values.
         let domain =
-            extract_domain_for_fact(constraint, &fact_path)?.unwrap_or(Domain::Unconstrained);
-        domains.insert(fact_path, domain);
+            extract_domain_for_data(constraint, &data_path)?.unwrap_or(Domain::Unconstrained);
+        domains.insert(data_path, domain);
     }
 
     Ok(domains)
 }
 
-fn extract_domain_for_fact(
+fn extract_domain_for_data(
     constraint: &Constraint,
-    fact_path: &FactPath,
+    data_path: &DataPath,
 ) -> Result<Option<Domain>, crate::Error> {
     let domain = match constraint {
         Constraint::True => return Ok(None),
         Constraint::False => Some(Domain::Enumeration(Arc::new(vec![]))),
 
-        Constraint::Comparison { fact, op, value } => {
-            if fact == fact_path {
+        Constraint::Comparison { data, op, value } => {
+            if data == data_path {
                 Some(comparison_to_domain(op, value.as_ref())?)
             } else {
                 None
             }
         }
 
-        Constraint::Fact(fp) => {
-            if fp == fact_path {
+        Constraint::Data(fp) => {
+            if fp == data_path {
                 Some(Domain::Enumeration(Arc::new(vec![
                     LiteralValue::from_bool(true),
                 ])))
@@ -274,8 +274,8 @@ fn extract_domain_for_fact(
         }
 
         Constraint::And(left, right) => {
-            let left_domain = extract_domain_for_fact(left, fact_path)?;
-            let right_domain = extract_domain_for_fact(right, fact_path)?;
+            let left_domain = extract_domain_for_data(left, data_path)?;
+            let right_domain = extract_domain_for_data(right, data_path)?;
             match (left_domain, right_domain) {
                 (None, None) => None,
                 (Some(d), None) | (None, Some(d)) => Some(normalize_domain(d)),
@@ -287,31 +287,31 @@ fn extract_domain_for_fact(
         }
 
         Constraint::Or(left, right) => {
-            let left_domain = extract_domain_for_fact(left, fact_path)?;
-            let right_domain = extract_domain_for_fact(right, fact_path)?;
+            let left_domain = extract_domain_for_data(left, data_path)?;
+            let right_domain = extract_domain_for_data(right, data_path)?;
             union_optional_domains(left_domain, right_domain)
         }
 
         Constraint::Not(inner) => {
-            // Handle not (fact is value)
-            if let Constraint::Comparison { fact, op, value } = inner.as_ref() {
-                if fact == fact_path && op.is_equal() {
+            // Handle not (data is value)
+            if let Constraint::Comparison { data, op, value } = inner.as_ref() {
+                if data == data_path && op.is_equal() {
                     return Ok(Some(normalize_domain(Domain::Complement(Box::new(
                         Domain::Enumeration(Arc::new(vec![value.as_ref().clone()])),
                     )))));
                 }
             }
 
-            // Handle not (boolean_fact)
-            if let Constraint::Fact(fp) = inner.as_ref() {
-                if fp == fact_path {
+            // Handle not (boolean_data)
+            if let Constraint::Data(fp) = inner.as_ref() {
+                if fp == data_path {
                     return Ok(Some(Domain::Enumeration(Arc::new(vec![
                         LiteralValue::from_bool(false),
                     ]))));
                 }
             }
 
-            extract_domain_for_fact(inner, fact_path)?
+            extract_domain_for_data(inner, data_path)?
                 .map(|domain| normalize_domain(Domain::Complement(Box::new(domain))))
         }
     };
@@ -358,7 +358,7 @@ fn comparison_to_domain(
 /// Compute the domain for a single comparison-atom used by inversion constraints.
 ///
 /// This is used by numeric-aware constraint simplification to derive implications/exclusions
-/// between comparison atoms on the same fact.
+/// between comparison atoms on the same data.
 pub(crate) fn domain_for_comparison_atom(
     op: &ComparisonComputation,
     value: &LiteralValue,
@@ -546,8 +546,11 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
                     ValueKind::Scale(v, _) => v,
                     _ => unreachable!("BUG: scale unit conversion returned non-scale value"),
                 },
-                OperationResult::Veto(msg) => {
-                    unreachable!("BUG: scale unit conversion vetoed unexpectedly: {:?}", msg)
+                OperationResult::Veto(reason) => {
+                    unreachable!(
+                        "BUG: scale unit conversion vetoed unexpectedly: {:?}",
+                        reason
+                    )
                 }
             };
 
@@ -1111,8 +1114,8 @@ mod tests {
         LiteralValue::number(Decimal::from(n))
     }
 
-    fn fact(name: &str) -> FactPath {
-        FactPath::new(vec![], name.to_string())
+    fn data(name: &str) -> DataPath {
+        DataPath::new(vec![], name.to_string())
     }
 
     #[test]
@@ -1151,13 +1154,13 @@ mod tests {
     #[test]
     fn test_extract_domain_from_comparison() {
         let constraint = Constraint::Comparison {
-            fact: fact("age"),
+            data: data("age"),
             op: ComparisonComputation::GreaterThan,
             value: Arc::new(num(18)),
         };
 
         let domains = extract_domains_from_constraint(&constraint).unwrap();
-        let age_domain = domains.get(&fact("age")).unwrap();
+        let age_domain = domains.get(&data("age")).unwrap();
 
         assert_eq!(
             *age_domain,
@@ -1172,19 +1175,19 @@ mod tests {
     fn test_extract_domain_from_and() {
         let constraint = Constraint::And(
             Box::new(Constraint::Comparison {
-                fact: fact("age"),
+                data: data("age"),
                 op: ComparisonComputation::GreaterThan,
                 value: Arc::new(num(18)),
             }),
             Box::new(Constraint::Comparison {
-                fact: fact("age"),
+                data: data("age"),
                 op: ComparisonComputation::LessThan,
                 value: Arc::new(num(65)),
             }),
         );
 
         let domains = extract_domains_from_constraint(&constraint).unwrap();
-        let age_domain = domains.get(&fact("age")).unwrap();
+        let age_domain = domains.get(&data("age")).unwrap();
 
         assert_eq!(
             *age_domain,
@@ -1198,13 +1201,13 @@ mod tests {
     #[test]
     fn test_extract_domain_from_equality() {
         let constraint = Constraint::Comparison {
-            fact: fact("status"),
+            data: data("status"),
             op: ComparisonComputation::Is,
             value: Arc::new(LiteralValue::text("active".to_string())),
         };
 
         let domains = extract_domains_from_constraint(&constraint).unwrap();
-        let status_domain = domains.get(&fact("status")).unwrap();
+        let status_domain = domains.get(&data("status")).unwrap();
 
         assert_eq!(
             *status_domain,
@@ -1213,11 +1216,11 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_domain_from_boolean_fact() {
-        let constraint = Constraint::Fact(fact("is_active"));
+    fn test_extract_domain_from_boolean_data() {
+        let constraint = Constraint::Data(data("is_active"));
 
         let domains = extract_domains_from_constraint(&constraint).unwrap();
-        let is_active_domain = domains.get(&fact("is_active")).unwrap();
+        let is_active_domain = domains.get(&data("is_active")).unwrap();
 
         assert_eq!(
             *is_active_domain,
@@ -1226,11 +1229,11 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_domain_from_not_boolean_fact() {
-        let constraint = Constraint::Not(Box::new(Constraint::Fact(fact("is_active"))));
+    fn test_extract_domain_from_not_boolean_data() {
+        let constraint = Constraint::Not(Box::new(Constraint::Data(data("is_active"))));
 
         let domains = extract_domains_from_constraint(&constraint).unwrap();
-        let is_active_domain = domains.get(&fact("is_active")).unwrap();
+        let is_active_domain = domains.get(&data("is_active")).unwrap();
 
         assert_eq!(
             *is_active_domain,

@@ -4,13 +4,13 @@
 //! and `Expression::Display` for syntax; this module handles layout only.
 
 use crate::parsing::ast::{
-    expression_precedence, AsLemmaSource, Expression, ExpressionKind, FactValue, LemmaFact,
-    LemmaRule, LemmaSpec, TypeDef,
+    expression_precedence, AsLemmaSource, DataValue, Expression, ExpressionKind, LemmaData,
+    LemmaRule, LemmaSpec,
 };
 use crate::{parse, Error, ResourceLimits};
 
 /// Soft line length limit. Longer lines may be wrapped (unless clauses, expressions).
-/// Facts and other constructs are not broken if they exceed this.
+/// Data and other constructs are not broken if they exceed this.
 pub const MAX_COLS: usize = 60;
 
 // =============================================================================
@@ -53,7 +53,7 @@ pub(crate) fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
     let mut out = String::new();
     out.push_str("spec ");
     out.push_str(&spec.name);
-    if let Some(ref af) = spec.effective_from {
+    if let crate::parsing::ast::EffectiveDate::DateTimeValue(ref af) = spec.effective_from {
         out.push(' ');
         out.push_str(&af.to_string());
     }
@@ -73,24 +73,8 @@ pub(crate) fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
         ));
     }
 
-    let named_types: Vec<_> = spec
-        .types
-        .iter()
-        .filter(|t| !matches!(t, TypeDef::Inline { .. }))
-        .collect();
-    if !named_types.is_empty() {
-        out.push('\n');
-        for (index, type_def) in named_types.iter().enumerate() {
-            if index > 0 {
-                out.push('\n');
-            }
-            out.push_str(&format!("{}", AsLemmaSource(*type_def)));
-            out.push('\n');
-        }
-    }
-
-    if !spec.facts.is_empty() {
-        format_sorted_facts(&spec.facts, &mut out);
+    if !spec.data.is_empty() {
+        format_sorted_data(&spec.data, &mut out);
     }
 
     if !spec.rules.is_empty() {
@@ -107,94 +91,168 @@ pub(crate) fn format_spec(spec: &LemmaSpec, max_cols: usize) -> String {
 }
 
 // =============================================================================
-// Facts
+// Data
 // =============================================================================
 
-/// Format a fact, optionally with the reference name padded to `align_width` characters
+/// Format a data, optionally with the reference name padded to `align_width` characters
 /// for column-aligned `=` signs within a group.
 /// When `align_width` is 0 or less than the reference length, no padding is added.
-fn format_fact(fact: &LemmaFact, align_width: usize) -> String {
-    let ref_str = format!("{}", fact.reference);
+fn format_data(data: &LemmaData, align_width: usize) -> String {
+    let ref_str = format!("{}", data.reference);
     let padding = if align_width > ref_str.len() {
         " ".repeat(align_width - ref_str.len())
     } else {
         String::new()
     };
-    format!(
-        "fact {}{} : {}",
-        ref_str,
-        padding,
-        AsLemmaSource(&fact.value)
-    )
+    match &data.value {
+        DataValue::TypeDeclaration {
+            base,
+            constraints,
+            from,
+        } if from.is_some() && constraints.is_none() => {
+            format!(
+                "data {}{} from {}",
+                ref_str,
+                padding,
+                from.as_ref().unwrap()
+            )
+        }
+        _ => {
+            format!(
+                "data {}{} : {}",
+                ref_str,
+                padding,
+                AsLemmaSource(&data.value)
+            )
+        }
+    }
 }
 
-/// Compute the maximum fact reference width across a slice of facts.
-fn max_ref_width(facts: &[&LemmaFact]) -> usize {
-    facts
-        .iter()
+/// Compute the maximum data reference width across a slice of data.
+fn max_ref_width(data: &[&LemmaData]) -> usize {
+    data.iter()
         .map(|f| format!("{}", f.reference).len())
         .max()
         .unwrap_or(0)
 }
 
-/// Group facts into two sections separated by a blank line:
-///
-/// 1. Regular facts (literals, type declarations) — original order, aligned
-/// 2. Spec references, each followed by its cross-spec overrides — original order, aligned per sub-group
-fn format_sorted_facts(facts: &[LemmaFact], out: &mut String) {
-    let mut regular: Vec<&LemmaFact> = Vec::new();
-    let mut spec_refs: Vec<&LemmaFact> = Vec::new();
-    let mut overrides: Vec<&LemmaFact> = Vec::new();
-
-    for fact in facts {
-        if !fact.reference.is_local() {
-            overrides.push(fact);
-        } else if matches!(&fact.value, FactValue::SpecReference(_)) {
-            spec_refs.push(fact);
+fn format_with_statement(data: &LemmaData) -> String {
+    let alias = &data.reference.name;
+    if let DataValue::SpecReference(spec_ref) = &data.value {
+        let spec_name = &spec_ref.name;
+        let last_segment = spec_name.rsplit('/').next().unwrap_or(spec_name);
+        if alias == last_segment {
+            format!("with {}", spec_ref)
         } else {
-            regular.push(fact);
+            format!("with {}: {}", alias, spec_ref)
+        }
+    } else {
+        unreachable!("BUG: format_with_statement called on non-SpecReference data")
+    }
+}
+
+/// Group data into two sections separated by a blank line:
+///
+/// 1. Regular data (literals, type declarations) — original order, aligned
+/// 2. With statements (spec refs), each followed by their literal bindings — original order
+fn format_sorted_data(data: &[LemmaData], out: &mut String) {
+    let mut regular: Vec<&LemmaData> = Vec::new();
+    let mut spec_refs: Vec<&LemmaData> = Vec::new();
+    let mut overrides: Vec<&LemmaData> = Vec::new();
+
+    for data in data {
+        if !data.reference.is_local() {
+            overrides.push(data);
+        } else if matches!(&data.value, DataValue::SpecReference(_)) {
+            spec_refs.push(data);
+        } else {
+            regular.push(data);
         }
     }
 
-    // Helper: emit an aligned group of facts
-    let emit_group = |facts: &[&LemmaFact], out: &mut String| {
-        let width = max_ref_width(facts);
-        for fact in facts {
-            out.push_str(&format_fact(fact, width));
+    let emit_group = |data: &[&LemmaData], out: &mut String| {
+        let width = max_ref_width(data);
+        for data in data {
+            out.push_str(&format_data(data, width));
             out.push('\n');
         }
     };
 
-    // Group 1: Regular facts (literals + type declarations), original order, aligned
     if !regular.is_empty() {
         out.push('\n');
         emit_group(&regular, out);
     }
 
-    // Group 2: Spec references, each followed by its overrides
     if !spec_refs.is_empty() {
         out.push('\n');
-        for (i, spec_fact) in spec_refs.iter().enumerate() {
+
+        let has_overrides = |spec_data: &LemmaData| -> bool {
+            let ref_name = &spec_data.reference.name;
+            overrides.iter().any(|o| {
+                o.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str())
+            })
+        };
+
+        let is_bare = |spec_data: &LemmaData| -> bool {
+            if let DataValue::SpecReference(sr) = &spec_data.value {
+                let last = sr.name.rsplit('/').next().unwrap_or(&sr.name);
+                spec_data.reference.name == last
+                    && sr.effective.is_none()
+                    && !has_overrides(spec_data)
+            } else {
+                false
+            }
+        };
+
+        let mut i = 0;
+        while i < spec_refs.len() {
             if i > 0 {
                 out.push('\n');
             }
-            let ref_name = &spec_fact.reference.name;
-            let mut sub_group: Vec<&LemmaFact> = vec![spec_fact];
-            for ovr in &overrides {
-                if ovr.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str()) {
-                    sub_group.push(ovr);
+            if is_bare(spec_refs[i]) {
+                // Collect consecutive bare refs into a comma-separated line
+                let mut group_names = Vec::new();
+                while i < spec_refs.len() && is_bare(spec_refs[i]) {
+                    if let DataValue::SpecReference(sr) = &spec_refs[i].value {
+                        group_names.push(sr.to_string());
+                    }
+                    i += 1;
                 }
+                if group_names.len() == 1 {
+                    out.push_str(&format!("with {}", group_names[0]));
+                } else {
+                    out.push_str(&format!("with {}", group_names.join(", ")));
+                }
+                out.push('\n');
+            } else {
+                let spec_data = spec_refs[i];
+                out.push_str(&format_with_statement(spec_data));
+                out.push('\n');
+                let ref_name = &spec_data.reference.name;
+                let binding_overrides: Vec<&LemmaData> = overrides
+                    .iter()
+                    .filter(|o| {
+                        o.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str())
+                    })
+                    .copied()
+                    .collect();
+                if !binding_overrides.is_empty() {
+                    let width = max_ref_width(&binding_overrides);
+                    for ovr in &binding_overrides {
+                        out.push_str(&format_data(ovr, width));
+                        out.push('\n');
+                    }
+                }
+                i += 1;
             }
-            emit_group(&sub_group, out);
         }
     }
 
-    // Any overrides that didn't match a spec ref (shouldn't happen in valid Lemma, but be safe)
     let matched_prefixes: Vec<&str> = spec_refs
         .iter()
         .map(|f| f.reference.name.as_str())
         .collect();
-    let unmatched: Vec<&LemmaFact> = overrides
+    let unmatched: Vec<&LemmaData> = overrides
         .iter()
         .filter(|o| {
             o.reference
@@ -444,12 +502,12 @@ mod tests {
     fn test_format_source_round_trips_text() {
         let source = r#"spec test
 
-fact name: "Alice"
+data name: "Alice"
 
 rule greeting: "hello"
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
-        assert!(formatted.contains("\"Alice\""), "fact text must be quoted");
+        assert!(formatted.contains("\"Alice\""), "data text must be quoted");
         assert!(formatted.contains("\"hello\""), "rule text must be quoted");
     }
 
@@ -457,91 +515,91 @@ rule greeting: "hello"
     fn test_format_source_preserves_percent() {
         let source = r#"spec test
 
-fact rate: 10 percent
+data rate: 10 percent
 
 rule tax: rate * 21%
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
         assert!(
             formatted.contains("10%"),
-            "fact percent must use shorthand %, got: {}",
+            "data percent must use shorthand %, got: {}",
             formatted
         );
     }
 
     #[test]
-    fn test_format_groups_facts_preserving_order() {
-        // Facts are deliberately mixed: the formatter keeps all regular facts together
+    fn test_format_groups_data_preserving_order() {
+        // Data are deliberately mixed: the formatter keeps all regular data together
         // in original order, aligned
         let source = r#"spec test
 
-fact income: [number -> minimum 0]
-fact filing_status: [filing_status_type -> default "single"]
-fact country: "NL"
-fact deductions: [number -> minimum 0]
-fact name: [text]
+data income: number -> minimum 0
+data filing_status: filing_status_type -> default "single"
+data country: "NL"
+data deductions: number -> minimum 0
+data name: text
 
 rule total: income
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
-        let fact_section = formatted
+        let data_section = formatted
             .split("rule total")
             .next()
             .unwrap()
             .split("spec test\n")
             .nth(1)
             .unwrap();
-        let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
-        // All regular facts in one group, original order, aligned
-        assert_eq!(lines[0], "fact income        : [number -> minimum 0]");
+        let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
+        // All regular data in one group, original order, aligned
+        assert_eq!(lines[0], "data income        : number -> minimum 0");
         assert_eq!(
             lines[1],
-            "fact filing_status : [filing_status_type -> default \"single\"]"
+            "data filing_status : filing_status_type -> default \"single\""
         );
-        assert_eq!(lines[2], "fact country       : \"NL\"");
-        assert_eq!(lines[3], "fact deductions    : [number -> minimum 0]");
-        assert_eq!(lines[4], "fact name          : [text]");
+        assert_eq!(lines[2], "data country       : \"NL\"");
+        assert_eq!(lines[3], "data deductions    : number -> minimum 0");
+        assert_eq!(lines[4], "data name          : text");
     }
 
     #[test]
     fn test_format_groups_spec_refs_with_overrides() {
         let source = r#"spec test
 
-fact retail.quantity: 5
-fact wholesale: spec order/wholesale
-fact retail: spec order/retail
-fact wholesale.quantity: 100
-fact base_price: 50
+data retail.quantity: 5
+with order/wholesale
+with order/retail
+data wholesale.quantity: 100
+data base_price: 50
 
 rule total: base_price
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
-        let fact_section = formatted
+        let data_section = formatted
             .split("rule total")
             .next()
             .unwrap()
             .split("spec test\n")
             .nth(1)
             .unwrap();
-        let lines: Vec<&str> = fact_section.lines().filter(|l| !l.is_empty()).collect();
+        let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
         // Group 1: Literals
-        assert_eq!(lines[0], "fact base_price : 50");
+        assert_eq!(lines[0], "data base_price : 50");
         // Group 4: Spec refs in original order, each with its overrides, aligned
-        assert_eq!(lines[1], "fact wholesale          : spec order/wholesale");
-        assert_eq!(lines[2], "fact wholesale.quantity : 100");
-        assert_eq!(lines[3], "fact retail          : spec order/retail");
-        assert_eq!(lines[4], "fact retail.quantity : 5");
+        assert_eq!(lines[1], "with order/wholesale");
+        assert_eq!(lines[2], "data wholesale.quantity : 100");
+        assert_eq!(lines[3], "with order/retail");
+        assert_eq!(lines[4], "data retail.quantity : 5");
     }
 
     #[test]
     fn test_format_source_weather_clothing_text_quoted() {
         let source = r#"spec weather_clothing
 
-type clothing_style: text
+data clothing_style: text
   -> option "light"
   -> option "warm"
 
-fact temperature: [number]
+data temperature: number
 
 rule clothing_layer: "light"
   unless temperature < 5 then "warm"
@@ -568,11 +626,11 @@ rule clothing_layer: "light"
     fn test_format_text_option_round_trips() {
         let source = r#"spec test
 
-type status: text
+data status: text
   -> option "active"
   -> option "inactive"
 
-fact s: [status]
+data s: status
 
 rule out: s
 "#;
@@ -595,7 +653,7 @@ rule out: s
     #[test]
     fn test_format_help_round_trips() {
         let source = r#"spec test
-fact quantity: [number -> help "Number of items to order"]
+data quantity: number -> help "Number of items to order"
 rule total: quantity
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();
@@ -613,13 +671,13 @@ rule total: quantity
     fn test_format_scale_type_def_round_trips() {
         let source = r#"spec test
 
-type money: scale
+data money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-fact price: [money]
+data price: money
 
 rule total: price
 "#;
@@ -641,7 +699,7 @@ rule total: price
     #[test]
     fn test_format_expression_display_stable_round_trip() {
         let source = r#"spec test
-fact a: 1.00
+data a: 1.00
 rule r: a + 2.00 * 3
 "#;
         let formatted = format_source(source, "test.lemma").unwrap();

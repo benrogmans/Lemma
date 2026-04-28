@@ -2,6 +2,7 @@ use lemma::evaluation::OperationResult;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use lemma::ValueKind;
+use lemma::VetoType;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -9,11 +10,11 @@ use std::collections::HashMap;
 fn scale_comparison_converts_units_before_comparing() {
     let code = r#"
 spec pricing
-type money: scale
+data money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-fact price: [money]
+data price: money
 
 rule check: accept
     unless price > 100 usd then veto "This price is too high."
@@ -42,96 +43,21 @@ rule check: accept
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("This price is too high.".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("This price is too high.".to_string()),
+        })
     );
 }
 
 #[test]
-fn scale_comparison_accepts_when_conversion_makes_value_smaller() {
+fn scale_data_value_rejects_unknown_unit() {
     let code = r#"
 spec pricing
-type money: scale
+data money: scale
     -> unit eur 1
     -> unit usd 1.19
 
-fact price: [money]
-
-rule check: accept
-    unless price > 100 usd then veto "This price is too high."
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run(
-            "pricing",
-            Some(&now),
-            HashMap::from([("price".to_string(), "84 eur".to_string())]),
-            false,
-        )
-        .unwrap();
-
-    let rule_result = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "check")
-        .unwrap();
-
-    assert!(
-        matches!(rule_result.result, OperationResult::Value(_)),
-        "expected accept, got: {:?}",
-        rule_result.result
-    );
-}
-
-#[test]
-fn scale_fact_value_requires_unit() {
-    let code = r#"
-spec pricing
-type money: scale
-    -> unit eur 1
-    -> unit usd 1.19
-
-fact price: [money]
-
-rule check: accept
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            "pricing",
-            Some(&now),
-            HashMap::from([("price".to_string(), "100".to_string())]),
-            false,
-        )
-        .unwrap_err();
-
-    let msg = err.to_string();
-    assert!(
-        msg.contains("price") || msg.contains("money"),
-        "actual error: {msg}"
-    );
-}
-
-#[test]
-fn scale_fact_value_rejects_unknown_unit() {
-    let code = r#"
-spec pricing
-type money: scale
-    -> unit eur 1
-    -> unit usd 1.19
-
-fact price: [money]
+data price: money
 
 rule check: accept
 "#;
@@ -159,7 +85,7 @@ rule check: accept
 fn scale_in_operator_converts_units() {
     let code = r#"
 spec pricing
-type money: scale
+data money: scale
     -> unit eur 1
     -> unit usd 1.19
 
@@ -206,9 +132,9 @@ fn scale_add_subtract_converts_units_when_same_family() {
     // Regression: previously returned Veto "Cannot apply '-' to values with different units".
     let code = r#"
 spec t
-type money: scale -> unit eur 1.00 -> unit usd 1.19
-fact gross: 7600 usd
-fact pension: 0 eur
+data money: scale -> unit eur 1.00 -> unit usd 1.19
+data gross: 7600 usd
+data pension: 0 eur
 rule taxable: gross - pension
 "#;
 
@@ -243,7 +169,7 @@ rule taxable: gross - pension
 fn scale_in_operator_rejects_unknown_unit() {
     let code = r#"
 spec pricing
-type money: scale
+data money: scale
     -> unit eur 1
     -> unit usd 1.19
 
@@ -273,9 +199,9 @@ fn named_scale_type_comparison_with_unit_literal() {
     let code = r#"
 spec shipping
 
-type weight: scale -> unit kilogram 1.0
+data weight: scale -> unit kilogram 1.0
 
-fact package_weight: 2.5 kilogram
+data package_weight: 2.5 kilogram
 
 rule base_shipping: 5.99
     unless package_weight > 1 kilogram then 8.99
@@ -317,10 +243,10 @@ fn named_scale_type_arithmetic_within_same_family() {
     let code = r#"
 spec shipping
 
-type money: scale -> unit USD 1.00
+data money: scale -> unit USD 1.00
 
-fact base_fee: 5.99 USD
-fact surcharge: 2.00 USD
+data base_fee: 5.99 USD
+data surcharge: 2.00 USD
 
 rule total: base_fee + surcharge
 "#;

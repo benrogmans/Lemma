@@ -9,13 +9,11 @@ fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::L
         .run(spec_name, Some(&now), HashMap::new(), false)
         .unwrap();
     response
-        .results
-        .values()
-        .find(|r| r.rule.name == rule_name)
-        .unwrap()
+        .get(rule_name)
+        .expect(rule_name)
         .result
         .value()
-        .unwrap()
+        .expect("value")
         .clone()
 }
 
@@ -24,7 +22,7 @@ fn test_leap_year_feb_29_valid() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact leap_date: 2024-02-29
+data leap_date: 2024-02-29
 rule check: leap_date
     "#;
 
@@ -47,7 +45,7 @@ fn test_leap_year_century_2000() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact leap_date: 2000-02-29
+data leap_date: 2000-02-29
 rule check: leap_date
     "#;
 
@@ -70,7 +68,7 @@ fn test_non_leap_year_century_1900() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 1900-02-28
+data start_date: 1900-02-28
 rule next_day: start_date + 1 day
     "#;
 
@@ -93,7 +91,7 @@ fn test_leap_year_century_2100_not_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2100-02-28
+data start_date: 2100-02-28
 rule next_day: start_date + 1 day
     "#;
 
@@ -116,7 +114,7 @@ fn test_add_month_with_day_overflow_jan_31_to_feb() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2024-01-31
+data start_date: 2024-01-31
 rule next_month: start_date + 1 month
     "#;
 
@@ -139,7 +137,7 @@ fn test_add_month_with_day_overflow_jan_31_to_feb_non_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2023-01-31
+data start_date: 2023-01-31
 rule next_month: start_date + 1 month
     "#;
 
@@ -162,7 +160,7 @@ fn test_add_year_to_feb_29_leap_to_non_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact leap_date: 2024-02-29
+data leap_date: 2024-02-29
 rule next_year: leap_date + 1 year
     "#;
 
@@ -185,7 +183,7 @@ fn test_add_4_years_to_feb_29_leap_to_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact leap_date: 2024-02-29
+data leap_date: 2024-02-29
 rule four_years_later: leap_date + 4 years
     "#;
 
@@ -208,7 +206,7 @@ fn test_subtract_months_cross_year_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2024-02-15
+data start_date: 2024-02-15
 rule three_months_ago: start_date - 3 months
     "#;
 
@@ -231,7 +229,7 @@ fn test_add_months_cross_multiple_years() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2023-01-15
+data start_date: 2023-01-15
 rule twenty_months_later: start_date + 20 months
     "#;
 
@@ -254,7 +252,7 @@ fn test_subtract_year_from_year_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2024-01-01
+data start_date: 2024-01-01
 rule last_year: start_date - 1 year
     "#;
 
@@ -277,8 +275,8 @@ fn test_date_difference_across_leap_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2024-01-01
-fact end_date: 2025-01-01
+data start_date: 2024-01-01
+data end_date: 2025-01-01
 rule days_diff: end_date - start_date
     "#;
 
@@ -300,8 +298,8 @@ fn test_date_difference_non_leap_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2023-01-01
-fact end_date: 2024-01-01
+data start_date: 2023-01-01
+data end_date: 2024-01-01
 rule days_diff: end_date - start_date
     "#;
 
@@ -323,7 +321,7 @@ fn test_add_hours_crossing_midnight() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_datetime: 2024-03-15T22:00:00
+data start_datetime: 2024-03-15T22:00:00
 rule next_day: start_datetime + 5 hours
     "#;
 
@@ -348,7 +346,7 @@ fn test_subtract_hours_crossing_midnight_backward() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_datetime: 2024-03-16T02:00:00
+data start_datetime: 2024-03-16T02:00:00
 rule prev_day: start_datetime - 5 hours
     "#;
 
@@ -373,7 +371,7 @@ fn test_add_minutes_precise() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_time: 2024-03-15T10:30:45
+data start_time: 2024-03-15T10:30:45
 rule later: start_time + 90 minutes
     "#;
 
@@ -396,7 +394,7 @@ fn test_add_seconds_overflow_to_minutes() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_time: 2024-03-15T10:30:30
+data start_time: 2024-03-15T10:30:30
 rule later: start_time + 90 seconds
     "#;
 
@@ -419,7 +417,7 @@ fn test_time_arithmetic_crossing_midnight() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact evening_time: 23:30:00
+data evening_time: 23:30:00
 rule after_midnight: evening_time + 90 minutes
     "#;
 
@@ -442,8 +440,8 @@ fn test_time_difference() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_time: 10:00:00
-fact end_time: 15:30:00
+data start_time: 10:00:00
+data end_time: 15:30:00
 rule timespan: end_time - start_time
     "#;
 
@@ -465,8 +463,8 @@ fn test_negative_time_difference() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_time: 15:30:00
-fact end_time: 10:00:00
+data start_time: 15:30:00
+data end_time: 10:00:00
 rule timespan: end_time - start_time
     "#;
 
@@ -488,7 +486,7 @@ fn test_add_large_duration_days() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2024-01-01
+data start_date: 2024-01-01
 rule future: start_date + 1000 days
     "#;
 
@@ -511,7 +509,7 @@ fn test_fractional_hours() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_time: 2024-03-15T10:00:00
+data start_time: 2024-03-15T10:00:00
 rule later: start_time + 2.5 hours
     "#;
 
@@ -534,8 +532,8 @@ fn test_datetime_comparison_across_years() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact date1: 2023-12-31T23:59:59
-fact date2: 2024-01-01T00:00:00
+data date1: 2023-12-31T23:59:59
+data date2: 2024-01-01T00:00:00
 rule is_before: date1 < date2
     "#;
 
@@ -556,7 +554,7 @@ fn test_month_31_to_30_day_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2024-03-31
+data start_date: 2024-03-31
 rule april: start_date + 1 month
     "#;
 
@@ -579,7 +577,7 @@ fn test_dec_31_plus_1_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2023-12-31
+data start_date: 2023-12-31
 rule january: start_date + 1 month
     "#;
 

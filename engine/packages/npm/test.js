@@ -47,16 +47,37 @@ function literalScaleValue(lit) {
 }
 
 function formatReject(e) {
-  if (Array.isArray(e)) return e.join('\n');
+  if (Array.isArray(e)) {
+    return e.map((it) => (it && it.message) ? it.message : String(it)).join('\n');
+  }
+  if (e && typeof e === 'object' && typeof e.message === 'string') return e.message;
   return String(e);
 }
 
-function runEx(engine, spec, rules, facts, effective) {
+function runEx(engine, spec, rules, data, effective) {
   try {
-    return engine.run(spec, rules, facts, effective ?? null);
+    return engine.run(spec, rules, data, effective ?? null);
   } catch (e) {
     throw new Error(formatReject(e));
   }
+}
+
+const ERROR_KINDS = new Set([
+  'parsing',
+  'validation',
+  'inversion',
+  'registry',
+  'request',
+  'resource_limit',
+]);
+
+function assertEngineError(e) {
+  assert(e && typeof e === 'object' && !Array.isArray(e), 'EngineError must be plain object');
+  assert(ERROR_KINDS.has(e.kind), `kind must be known, got: ${e.kind}`);
+  assert(typeof e.message === 'string', 'message must be string');
+  assert(e.related_data === null || typeof e.related_data === 'string', 'related_data string|null');
+  assert(e.spec === null || typeof e.spec === 'string', 'spec string|null');
+  assert(e.source === null || (e.source && typeof e.source === 'object'), 'source object|null');
 }
 
 function assertResponseShape(resp, specName) {
@@ -66,7 +87,7 @@ function assertResponseShape(resp, specName) {
     resp.results && typeof resp.results === 'object' && !Array.isArray(resp.results),
     'results must be plain object'
   );
-  assert(Array.isArray(resp.facts), 'facts must be array');
+  assert(Array.isArray(resp.data), 'data must be array');
 }
 
 async function case_(name, fn) {
@@ -133,7 +154,7 @@ export async function test() {
     await run('load + run shape + double rule', async () => {
       await engine.load(
         `spec test
-      fact x: 10
+      data x: 10
       rule double: x * 2`,
         'test.lemma'
       );
@@ -144,19 +165,27 @@ export async function test() {
       assert(literalNumberValue(r.results.double.result.value) === 20, 'double=20');
     });
 
-    await run('list includes test spec', async () => {
+    await run('list includes test spec and inlines schema', async () => {
       const listed = engine.list();
       assert(Array.isArray(listed) && listed.length >= 1, `list: ${JSON.stringify(listed)}`);
       assert(specNames(listed).includes('test'), `names: ${specNames(listed)}`);
+      const entry = listed.find((e) => e.name === 'test');
+      assert(entry.schema && entry.schema.spec === 'test', 'list entry carries its schema inline');
+      assert(Object.keys(entry.schema.data).includes('x'), 'inlined schema preserves data keys');
     });
 
-    await run('schema → spec/facts/rules', async () => {
+    await run('schema → spec/data/rules with DataEntry + flat type', async () => {
       const schema = engine.schema('test', null);
       assert(schema.spec === 'test');
-      assert(schema.facts && typeof schema.facts === 'object');
+      assert(schema.data && typeof schema.data === 'object');
       assert(schema.rules && typeof schema.rules === 'object');
-      assert(Object.keys(schema.facts).includes('x'));
+      assert(Object.keys(schema.data).includes('x'));
       assert(Object.keys(schema.rules).includes('double'));
+      const x = schema.data.x;
+      assert(x && typeof x === 'object' && !Array.isArray(x), 'DataEntry is a named object');
+      assert(x.type && typeof x.type.kind === 'string', 'type carries `kind` discriminator');
+      const doubleRule = schema.rules.double;
+      assert(typeof doubleRule.kind === 'string', 'rule types expose `kind` at the top level');
     });
 
     await run('run rule filter', async () => {
@@ -165,19 +194,19 @@ export async function test() {
     });
 
     await run('format()', async () => {
-      const out = engine.format('spec fmt\nfact a: 1\nrule r: a', null);
+      const out = engine.format('spec fmt\ndata a: 1\nrule r: a', null);
       assert(typeof out === 'string' && out.includes('spec fmt'));
     });
 
-    await run('fact overrides', async () => {
+    await run('data overrides', async () => {
       await engine.load(
         `spec type_test
-      fact number_fact: 42
-      fact bool_fact: false
-      fact string_fact: "hello"
-      fact unit_fact: 100
-      fact date_fact: 2024-01-15
-      rule double_number: number_fact * 2`,
+      data number_data: 42
+      data bool_data: false
+      data string_data: "hello"
+      data unit_data: 100
+      data date_data: 2024-01-15
+      rule double_number: number_data * 2`,
         'type_test.lemma'
       );
       const r = runEx(
@@ -185,25 +214,50 @@ export async function test() {
         'type_test',
         [],
         {
-          number_fact: 50,
-          bool_fact: true,
-          string_fact: 'world',
-          unit_fact: '200',
-          date_fact: '2024-12-25',
+          number_data: 50,
+          bool_data: true,
+          string_data: 'world',
+          unit_data: '200',
+          date_data: '2024-12-25',
         },
         null
       );
       assert(literalNumberValue(r.results.double_number.result.value) === 100);
     });
 
-    await run('load parse errors', async () => {
+    await run('load parse errors as JsError array', async () => {
       let threw = false;
       try {
-        await engine.load('spec invalid\nfact x :', 'bad.lemma');
+        await engine.load('spec invalid\ndata x :', 'bad.lemma');
       } catch (e) {
         threw = true;
-        const msgs = Array.isArray(e) ? e : [String(e)];
-        assert(msgs.some((m) => m && m.includes('Parse')));
+        assert(Array.isArray(e), 'load rejection must be array of EngineError');
+        assert(e.length >= 1);
+        for (const err of e) assertEngineError(err);
+        assert(e.some((err) => err.kind === 'parsing'), 'expected at least one parsing error');
+      }
+      assert(threw);
+    });
+
+    await run('run structured error attributes data', async () => {
+      await engine.load(
+        `spec bridge
+      data bridge_height: scale -> unit meter 1.0
+      rule span: bridge_height`,
+        'workspace.lemma'
+      );
+      let threw = false;
+      try {
+        engine.run('bridge', [], { bridge_height: '4 mete' }, null);
+      } catch (e) {
+        threw = true;
+        assertEngineError(e);
+        assert(e.kind === 'validation', `kind=${e.kind}`);
+        assert(e.related_data === 'bridge_height', `related_data=${e.related_data}`);
+        assert(e.message.startsWith('Unknown unit'), `message=${e.message}`);
+        assert(e.source && typeof e.source.line === 'number', 'source has line');
+        assert(typeof e.source.column === 'number');
+        assert(typeof e.source.length === 'number');
       }
       assert(threw);
     });
@@ -218,7 +272,7 @@ export async function test() {
       assert(threw);
     });
 
-    await run('fact_values not object', async () => {
+    await run('data_values not object', async () => {
       let threw = false;
       try {
         engine.run('test', [], 'not-an-object', null);
@@ -231,7 +285,7 @@ export async function test() {
     await run('veto sqrt(-1)', async () => {
       await engine.load(
         `spec veto_test
-      fact x: 10
+      data x: 10
       rule bad_sqrt: sqrt(-1)`,
         'veto.lemma'
       );
@@ -239,11 +293,11 @@ export async function test() {
       assert(opIsVeto(r.results.bad_sqrt.result));
     });
 
-    await run('missing fact veto', async () => {
+    await run('missing data veto', async () => {
       await engine.load(
         `spec missing_test
-      fact x: [number]
-      fact y: [number]
+      data x: number
+      data y: number
       rule sum: x + y`,
         'miss.lemma'
       );
@@ -255,7 +309,7 @@ export async function test() {
     await run('scale eur→usd', async () => {
       await engine.load(
         `spec scale_conv
-      type money: scale
+      data money: scale
         -> unit eur 1
         -> unit usd 1.19
       rule price_usd: 100 eur in usd`,
@@ -267,8 +321,8 @@ export async function test() {
     });
 
     await run('multiple specs', async () => {
-      await engine.load('spec spec1\nfact x: 1', 's1.lemma');
-      await engine.load('spec spec2\nfact y: 2', 's2.lemma');
+      await engine.load('spec spec1\ndata x: 1', 's1.lemma');
+      await engine.load('spec spec2\ndata y: 2', 's2.lemma');
       assert(specNames(engine.list()).length >= 2);
     });
 

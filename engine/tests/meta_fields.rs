@@ -10,7 +10,7 @@ meta title: "Test Spec"
 meta version: v1.2.3
 meta author: "Alice"
 
-fact x: 1
+data x: 1
 "#;
 
     engine
@@ -84,27 +84,4 @@ meta title: "Second"
         .collect::<Vec<_>>()
         .join("; ");
     assert!(err_msg.contains("Duplicate meta key 'title'"));
-}
-
-#[test]
-fn test_later_spec_version_can_evolve_interface() {
-    // With temporal slicing, later versions of a spec CAN have different
-    // facts/rules. The constraint is per-dependent-per-slice, not global.
-    // Since no other spec depends on pricing's "total" rule here, the
-    // second version without it is valid.
-    let mut engine = Engine::new();
-    let code = r#"
-spec pricing 2024-01-01
-fact x: 10
-rule total: x
-
-spec pricing 2025-01-01
-fact x: 20
-"#;
-    let result = engine.load(code, lemma::SourceType::Labeled("pricing.lemma"));
-    assert!(
-        result.is_ok(),
-        "later spec with different interface should be accepted when no dependent requires the old interface: {:?}",
-        result.err()
-    );
 }

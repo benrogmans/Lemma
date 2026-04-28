@@ -34,7 +34,7 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(spec|fact|rule|type|meta)\\b",
+          "match": "\\b(spec|data|rule|type|meta)\\b",
           "name": "keyword.declaration.lemma"
         },
         {
@@ -177,7 +177,7 @@
           }
         },
         {
-          "match": "\\b(fact)\\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*)\\s*:",
+          "match": "\\b(data)\\s+([a-zA-Z_][a-zA-Z0-9_]*(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)*)\\s*:",
           "captures": {
             "1": {
               "name": "keyword.declaration.lemma"

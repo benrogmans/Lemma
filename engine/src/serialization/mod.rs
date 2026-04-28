@@ -1,10 +1,10 @@
 //! Serialization: Lemma values ↔ JSON.
 //!
-//! **Input (deserialization):** JSON → string fact values for evaluation.
+//! **Input (deserialization):** JSON → string data values for evaluation.
 //!
 //! - [`from_json`] parses JSON and converts each value to a string for
 //!   `ExecutionPlan::with_values()`.
-//! - null values are skipped (treated as "fact not provided").
+//! - null values are skipped (treated as "data not provided").
 //!
 //! **Output (serialization):** Lemma evaluation results → JSON.
 //!
@@ -32,5 +32,5 @@
 mod json;
 
 pub use json::literal_value_to_json;
-pub use json::{deserialize_resolved_fact_value_map, serialize_resolved_fact_value_map};
-pub use json::{fact_values_from_map, from_json};
+pub use json::{data_values_from_map, from_json};
+pub use json::{deserialize_resolved_data_value_map, serialize_resolved_data_value_map};

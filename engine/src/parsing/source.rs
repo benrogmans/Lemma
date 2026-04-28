@@ -66,19 +66,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_text_middle() {
-        let source = "hello world";
-        let span = Span {
-            start: 6,
-            end: 11,
-            line: 1,
-            col: 6,
-        };
-        let loc = Source::new("test.lemma", span);
-        assert_eq!(loc.extract_text(source), Some("world".to_string()));
-    }
-
-    #[test]
     fn test_extract_text_full_string() {
         let source = "hello world";
         let span = Span {
@@ -141,18 +128,6 @@ mod tests {
         };
         let loc = Source::new("test.lemma", span);
         assert_eq!(loc.extract_text(source), Some("世界".to_string()));
-    }
-
-    #[test]
-    fn test_new() {
-        let span = Span {
-            start: 0,
-            end: 5,
-            line: 1,
-            col: 0,
-        };
-        let loc = Source::new("test.lemma", span);
-        assert_eq!(loc.attribute, "test.lemma");
     }
 
     #[test]

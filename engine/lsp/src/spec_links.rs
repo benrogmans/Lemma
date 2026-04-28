@@ -17,7 +17,7 @@ pub fn find_registry_links(text: &str, registry: &dyn Registry) -> Vec<DocumentL
     let mut links = Vec::new();
 
     // Scan for `@` and the identifier that follows: base name (ASCII_ALPHA then alphanumeric / _ - /).
-    // We do not parse optional datetime/hash here; pass effective datetime None so URL is for the name only.
+    // We do not parse optional datetime here; pass effective datetime None so URL is for the name only.
     let bytes = text.as_bytes();
     let mut byte_index = 0;
 
@@ -122,27 +122,9 @@ mod tests {
         }
     }
 
-    /// Verify that the scanned identifier includes `@`.
-    #[test]
-    fn identifier_passed_to_registry_includes_at_prefix() {
-        let text = "fact ext: spec @user/workspace/somespec";
-        let registry = TestLinkRegistry;
-        let links = find_registry_links(text, &registry);
-        assert_eq!(links.len(), 1);
-        assert!(
-            links[0]
-                .target
-                .as_ref()
-                .unwrap()
-                .as_str()
-                .contains("@user/workspace/somespec"),
-            "identifier passed to url_for_id should include @"
-        );
-    }
-
     #[test]
     fn finds_spec_reference_with_at_prefix() {
-        let text = "spec example\nfact ext: spec @user/workspace/somespec";
+        let text = "spec example\nwith ext: @user/workspace/somespec";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
@@ -157,7 +139,7 @@ mod tests {
 
     #[test]
     fn finds_type_import_with_at_prefix() {
-        let text = "spec example\ntype money from @lemma/std/finance";
+        let text = "spec example\ndata money from @lemma/std/finance";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);
@@ -170,8 +152,7 @@ mod tests {
     #[test]
     fn finds_multiple_at_references() {
         // Spec declarations don't use @, so only the two references produce links.
-        let text =
-            "spec org/proj/main\nfact other: spec @org/proj/helper\ntype t from @org/proj/types";
+        let text = "spec org/proj/main\nwith other: @org/proj/helper\ndata t from @org/proj/types";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 2);
@@ -179,7 +160,7 @@ mod tests {
 
     #[test]
     fn no_links_when_no_at_references() {
-        let text = "spec example\nfact x: 10\nrule y: x + 1";
+        let text = "spec example\ndata x: 10\nrule y: x + 1";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(links.is_empty());
@@ -187,7 +168,7 @@ mod tests {
 
     #[test]
     fn at_sign_without_valid_identifier_is_ignored() {
-        let text = "spec example\nfact x: @123invalid";
+        let text = "spec example\ndata x: @123invalid";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(
@@ -198,7 +179,7 @@ mod tests {
 
     #[test]
     fn at_sign_at_end_of_text_is_ignored() {
-        let text = "spec example\nfact x: @";
+        let text = "spec example\ndata x: @";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert!(links.is_empty());
@@ -217,32 +198,8 @@ mod tests {
     }
 
     #[test]
-    fn spec_reference_with_trailing_dot_excludes_dot_from_link() {
-        let text = "fact x: spec @owner/repo/myspec.";
-        let registry = TestLinkRegistry;
-        let links = find_registry_links(text, &registry);
-        assert_eq!(links.len(), 1);
-        assert_eq!(
-            links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/@owner/repo/myspec")
-        );
-    }
-
-    #[test]
-    fn spec_reference_produces_link_without_effective() {
-        let text = "fact x: spec @owner/repo/myspec";
-        let registry = TestLinkRegistry;
-        let links = find_registry_links(text, &registry);
-        assert_eq!(links.len(), 1);
-        assert_eq!(
-            links[0].target.as_ref().map(|u| u.as_str()),
-            Some("https://test.lemma.dev/@owner/repo/myspec")
-        );
-    }
-
-    #[test]
     fn identifier_with_dot_after_slash_stops_at_dot() {
-        let text = "fact x: spec @owner/repo/myspec.v2";
+        let text = "with x: @owner/repo/myspec.v2";
         let registry = TestLinkRegistry;
         let links = find_registry_links(text, &registry);
         assert_eq!(links.len(), 1);

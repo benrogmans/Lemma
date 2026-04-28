@@ -11,7 +11,7 @@ fuzz_target!(|data: &[u8]| {
 
         let code = r#"
 spec fuzz_test
-fact x: [number]
+data x: number
 rule doubled: x * 2
 "#;
 
@@ -19,10 +19,10 @@ rule doubled: x * 2
             .load(code, lemma::SourceType::Labeled("fuzz_binding"))
             .is_ok()
         {
-            let mut facts = HashMap::new();
-            facts.insert("x".to_string(), s.to_string());
+            let mut data = HashMap::new();
+            data.insert("x".to_string(), s.to_string());
             let now = DateTimeValue::now();
-            let _ = engine.run("fuzz_test", Some(&now), facts, false);
+            let _ = engine.run("fuzz_test", Some(&now), data, false);
         }
     }
 });

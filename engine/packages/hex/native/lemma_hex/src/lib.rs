@@ -12,6 +12,7 @@ use lemma::{Engine, OperationResult, ResourceLimits, SourceType};
 use rustler::types::atom;
 use rustler::types::MapIterator;
 use rustler::{Encoder, Env, NifResult, OwnedBinary, Resource, ResourceArc, Term};
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -94,33 +95,64 @@ fn lemma_list<'a>(env: Env<'a>, resource: ResourceArc<LemmaEngineResource>) -> N
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    let specs = engine.list_specs();
-    let items: Vec<Term<'a>> = specs
-        .iter()
-        .map(|spec| {
-            let name = spec.name.as_str();
-            let effective_from_term: Term<'a> = match &spec.effective_from {
-                Some(dt) => dt.to_string().encode(env),
-                None => atom::nil().encode(env),
-            };
-            let mut map = rustler::types::map::map_new(env);
-            map = map
-                .map_put(
-                    rustler::Atom::from_str(env, "name").unwrap().encode(env),
-                    name.encode(env),
-                )
-                .unwrap();
-            map = map
-                .map_put(
-                    rustler::Atom::from_str(env, "effective_from")
-                        .unwrap()
-                        .encode(env),
-                    effective_from_term,
-                )
-                .unwrap();
-            map
-        })
-        .collect();
+
+    let datetime_term = |dt: Option<DateTimeValue>| -> Term<'a> {
+        match dt {
+            Some(d) => d.to_string().encode(env),
+            None => atom::nil().encode(env),
+        }
+    };
+
+    let mut items: Vec<Term<'a>> = Vec::new();
+    for (spec, effective_from, effective_to) in engine.list_specs_with_ranges() {
+        let plan = match engine.get_plan(&spec.name, effective_from.as_ref()) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(rustler::Error::RaiseTerm(Box::new(format!(
+                    "Failed to get plan for '{}': {}",
+                    spec.name, e
+                ))))
+            }
+        };
+        let schema_json = serde_json::to_vec(&plan.schema()).map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("Schema serialization failed: {}", e)))
+        })?;
+        let mut schema_bin = OwnedBinary::new(schema_json.len()).ok_or_else(|| {
+            rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
+        })?;
+        schema_bin.as_mut_slice().copy_from_slice(&schema_json);
+
+        let mut map = rustler::types::map::map_new(env);
+        map = map
+            .map_put(
+                rustler::Atom::from_str(env, "name").unwrap().encode(env),
+                spec.name.as_str().encode(env),
+            )
+            .unwrap();
+        map = map
+            .map_put(
+                rustler::Atom::from_str(env, "effective_from")
+                    .unwrap()
+                    .encode(env),
+                datetime_term(effective_from),
+            )
+            .unwrap();
+        map = map
+            .map_put(
+                rustler::Atom::from_str(env, "effective_to")
+                    .unwrap()
+                    .encode(env),
+                datetime_term(effective_to),
+            )
+            .unwrap();
+        map = map
+            .map_put(
+                rustler::Atom::from_str(env, "schema").unwrap().encode(env),
+                rustler::Binary::from_owned(schema_bin, env).to_term(env),
+            )
+            .unwrap();
+        items.push(map);
+    }
     Ok((rustler::Atom::from_str(env, "ok")?, items).encode(env))
 }
 
@@ -135,8 +167,14 @@ fn lemma_schema<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    let effective = parse_effective(effective_opt);
-    match engine.schema(&spec, Some(&effective)) {
+    let effective = match effective_opt {
+        Some(s) => Some(&s.parse::<DateTimeValue>().map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
+        })?),
+        None => None,
+    };
+
+    match engine.schema(&spec, effective) {
         Ok(schema) => {
             let json = serde_json::to_vec(&schema).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Schema serialization failed: {}", e)))
@@ -161,15 +199,20 @@ fn lemma_run<'a>(
     resource: ResourceArc<LemmaEngineResource>,
     spec: String,
     effective_opt: Option<String>,
-    fact_values: Term<'a>,
+    data_values: Term<'a>,
 ) -> NifResult<Term<'a>> {
     let engine = resource
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    let effective = parse_effective(effective_opt);
-    let values = map_term_to_fact_values(fact_values)?;
-    match engine.run(&spec, Some(&effective), values, false) {
+    let effective = match effective_opt {
+        Some(s) => Some(&s.parse::<DateTimeValue>().map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
+        })?),
+        None => None,
+    };
+    let values = map_term_to_data_values(data_values)?;
+    match engine.run(&spec, effective, values, false) {
         Ok(response) => {
             let json = serde_json::to_vec(&response).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Response serialization failed: {}", e)))
@@ -193,7 +236,7 @@ fn lemma_invert<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
     spec_name: String,
-    effective: String,
+    effective_opt: Option<String>,
     rule_name: String,
     target_term: Term<'a>,
     values: Term<'a>,
@@ -202,12 +245,15 @@ fn lemma_invert<'a>(
         .0
         .lock()
         .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    let effective_dt = effective.parse::<DateTimeValue>().map_err(|e| {
-        rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
-    })?;
-    let fact_values = map_term_to_fact_values(values)?;
+    let effective = match effective_opt {
+        Some(s) => Some(&s.parse::<DateTimeValue>().map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
+        })?),
+        None => None,
+    };
+    let data_values = map_term_to_data_values(values)?;
     let target = decode_target(env, target_term)?;
-    match engine.invert(&spec_name, &effective_dt, &rule_name, target, fact_values) {
+    match engine.invert(&spec_name, effective, &rule_name, target, data_values) {
         Ok(inversion) => {
             let json = serde_json::to_vec(&inversion).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!(
@@ -264,8 +310,13 @@ fn lemma_execution_plan<'a>(
             .0
             .lock()
             .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-        let effective = parse_effective(effective_opt);
-        match engine.get_plan(&spec, Some(&effective)) {
+        let effective = match effective_opt {
+            Some(s) => Some(&s.parse::<DateTimeValue>().map_err(|e| {
+                rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
+            })?),
+            None => None,
+        };
+        match engine.get_plan(&spec, effective) {
             Ok(p) => p.clone(),
             Err(err) => {
                 let term = encode_error(env, &err);
@@ -298,6 +349,73 @@ fn lemma_format<'a>(env: Env<'a>, code: String) -> NifResult<Term<'a>> {
     }
 }
 
+#[rustler::nif]
+fn lemma_generate_openapi<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+    explanations_enabled: bool,
+    effective_opt: Option<String>,
+) -> NifResult<Term<'a>> {
+    let engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+
+    let effective = match effective_opt {
+        None => DateTimeValue::now(),
+        Some(s) => s.parse::<DateTimeValue>().map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
+        })?,
+    };
+
+    let spec = lemma_openapi::generate_openapi_effective(&engine, explanations_enabled, &effective);
+    let json = serde_json::to_vec(&spec).map_err(|e| {
+        rustler::Error::RaiseTerm(Box::new(format!(
+            "OpenAPI JSON serialization failed: {}",
+            e
+        )))
+    })?;
+    let mut owned = OwnedBinary::new(json.len()).ok_or_else(|| {
+        rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
+    })?;
+    owned.as_mut_slice().copy_from_slice(&json);
+    let binary = rustler::Binary::from_owned(owned, env);
+    Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
+}
+
+/// Temporal version choices (title + slug) for API docs, aligned with `lemma_openapi::temporal_api_sources`.
+#[rustler::nif]
+fn lemma_temporal_api_sources<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+) -> NifResult<Term<'a>> {
+    let engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+
+    let sources = lemma_openapi::temporal_api_sources(&engine);
+    let rows: Vec<_> = sources
+        .into_iter()
+        .map(|s| {
+            json!({
+                "title": s.title,
+                "slug": s.slug,
+            })
+        })
+        .collect();
+
+    let json = serde_json::to_vec(&rows).map_err(|e| {
+        rustler::Error::RaiseTerm(Box::new(format!("temporal API sources JSON failed: {}", e)))
+    })?;
+    let mut owned = OwnedBinary::new(json.len()).ok_or_else(|| {
+        rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
+    })?;
+    owned.as_mut_slice().copy_from_slice(&json);
+    let binary = rustler::Binary::from_owned(owned, env);
+    Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
+}
+
 fn limits_from_term(term: Term) -> Result<ResourceLimits, String> {
     let iter = MapIterator::new(term).ok_or_else(|| "limits must be a map".to_string())?;
     let mut limits = ResourceLimits::default();
@@ -322,19 +440,14 @@ fn limits_from_term(term: Term) -> Result<ResourceLimits, String> {
             "max_total_expression_count" => limits.max_total_expression_count = value_usize,
             "max_expression_depth" => limits.max_expression_depth = value_usize,
             "max_expression_count" => limits.max_expression_count = value_usize,
-            "max_fact_value_bytes" => limits.max_fact_value_bytes = value_usize,
+            "max_data_value_bytes" => limits.max_data_value_bytes = value_usize,
             _ => return Err(format!("unknown limits key: '{}'", key_str)),
         }
     }
     Ok(limits)
 }
 
-fn parse_effective(opt: Option<String>) -> DateTimeValue {
-    opt.and_then(|s| s.parse::<DateTimeValue>().ok())
-        .unwrap_or_else(DateTimeValue::now)
-}
-
-fn map_term_to_fact_values(term: Term) -> Result<HashMap<String, String>, rustler::Error> {
+fn map_term_to_data_values(term: Term) -> Result<HashMap<String, String>, rustler::Error> {
     let iter = MapIterator::new(term).ok_or(rustler::Error::BadArg)?;
     let mut result = HashMap::new();
     for (key, value) in iter {
@@ -359,7 +472,7 @@ fn term_to_string(term: Term) -> Result<String, rustler::Error> {
         return Ok(f.to_string());
     }
     Err(rustler::Error::RaiseTerm(Box::new(
-        "fact value must be a string, integer, float, or atom".to_string(),
+        "data value must be a string, integer, float, or atom".to_string(),
     )))
 }
 

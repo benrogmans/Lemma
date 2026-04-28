@@ -11,8 +11,8 @@ fn test_cli_run_simple_spec() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec simple_test
-fact x: 10
-fact y: 5
+data x: 10
+data y: 5
 rule sum: x + y
 rule product: x * y
 "#,
@@ -31,13 +31,13 @@ rule product: x * y
 }
 
 #[test]
-fn test_cli_run_with_fact_values() {
+fn test_cli_run_with_data_values() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
         r#"
 spec override_test
-fact base: [number]
+data base: number
 rule doubled: base * 2
 "#,
     )
@@ -83,7 +83,7 @@ fn test_cli_run_with_unless_clause() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec discount_test
-fact quantity: 15
+data quantity: 15
 rule discount: 0
   unless quantity >= 10 then 10
   unless quantity >= 20 then 20
@@ -106,8 +106,8 @@ fn test_cli_schema_spec() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec inspect_test
-fact name: "Test"
-fact value: 42
+data name: "Test"
+data value: 42
 rule doubled: value * 2
 "#,
     )
@@ -119,7 +119,7 @@ rule doubled: value * 2
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("inspect_test"))
-        .stdout(predicate::str::contains("facts"))
+        .stdout(predicate::str::contains("data"))
         .stdout(predicate::str::contains("rules"));
 }
 
@@ -131,7 +131,7 @@ fn test_cli_list_summary() {
         temp_dir.path().join("spec1.lemma"),
         r#"
 spec spec1
-fact x: 1
+data x: 1
 "#,
     )
     .unwrap();
@@ -140,7 +140,7 @@ fact x: 1
         temp_dir.path().join("spec2.lemma"),
         r#"
 spec spec2
-fact y: 2
+data y: 2
 "#,
     )
     .unwrap();
@@ -161,7 +161,7 @@ fn test_cli_run_with_arithmetic() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec arithmetic_test
-fact price: 100
+data price: 100
 rule with_tax: price * 1.21
 "#,
     )
@@ -203,7 +203,7 @@ fn test_cli_reports_errors_from_all_files() {
         temp_dir.path().join("valid.lemma"),
         r#"
 spec valid_spec
-fact price: 100
+data price: 100
 rule doubled: price * 2
 "#,
     )
@@ -251,9 +251,9 @@ fn test_cli_explain_shows_all_operands_in_nested_arithmetic() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec nested_explanation
-fact x: 10
-fact y: 20
-fact z: 30
+data x: 10
+data y: 20
+data z: 30
 rule a: x + 1
 rule b: y + 2
 rule c: z + 3

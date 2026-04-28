@@ -1,7 +1,7 @@
 # Plan: Hex package (Rustler) for Lemma engine
 
 ## Goal
-Elixir/Erlang library on Hex that wraps the Lemma engine via Rustler NIFs. **Slim API** aligned with a small set of NIFs: create engine (optional limits), load (string or paths), list loaded specs, schema, run, invert, remove_spec. **Elixir names mirror NIFs** (drop `lemma_` prefix): `lemma_list` → `Lemma.list`, `lemma_load` → `Lemma.load`, `lemma_schema` → `Lemma.schema`, etc.; `lemma_new` → `Lemma.new`. `add_dependency_files`, `run_json`, hash-pin helpers stay out of scope.
+Elixir/Erlang library on Hex that wraps the Lemma engine via Rustler NIFs. **Slim API** aligned with a small set of NIFs: create engine (optional limits), load (string or paths), list loaded specs, schema, run, invert, remove_spec. **Elixir names mirror NIFs** (drop `lemma_` prefix): `lemma_list` → `Lemma.list`, `lemma_load` → `Lemma.load`, `lemma_schema` → `Lemma.schema`, etc.; `lemma_new` → `Lemma.new`. `add_dependency_files`, `run_json` stay out of scope.
 
 ## 1. Layout
 
@@ -37,8 +37,8 @@ engine/packages/hex/
 | `lemma_load` | resource, code_binary, source_label_binary | `:ok` \| `{:error, errors}` |
 | `lemma_load_from_paths` | resource, paths (list of path binaries) | `:ok` \| `{:error, errors}` |
 | `lemma_list` | resource | `{:ok, list}` (each item e.g. `%{name, effective_from}`) |
-| `lemma_schema` | resource, spec_binary (name or name~hash), effective_opt | `{:ok, schema_json_binary}` \| `{:error, term}` |
-| `lemma_run` | resource, spec_binary, effective_opt, fact_values (map) | `{:ok, response_json_binary}` \| `{:error, term}` |
+| `lemma_schema` | resource, spec_binary, effective_opt | `{:ok, schema_json_binary}` \| `{:error, term}` |
+| `lemma_run` | resource, spec_binary, effective_opt, data_values (map) | `{:ok, response_json_binary}` \| `{:error, term}` |
 | `lemma_invert` | resource, spec_name_binary, effective_binary, rule_name_binary, target_term, values (map) | `{:ok, inversion_response_json_binary}` \| `{:error, term}` |
 | `lemma_remove_spec` | resource, spec_name_binary, effective_binary | `:ok` \| `{:error, term}` |
 | `lemma_format` | code_binary | `{:ok, formatted_binary}` \| `{:error, term}` |
@@ -53,7 +53,7 @@ engine/packages/hex/
 
 ## 4. Type conversions (Rust)
 
-- **Facts**: Elixir map string → string. NIF builds `HashMap<String, String>` for `run` / `invert`.
+- **Data**: Elixir map string → string. NIF builds `HashMap<String, String>` for `run` / `invert`.
 - **effective**: Elixir passes `nil` or datetime string; Rust parses to `DateTimeValue` or uses `DateTimeValue::now()`.
 - **Source type**: `source_label_binary`: use `SourceType::Labeled(str)` if non-empty, else `SourceType::Inline` (Elixir can pass `"inline"` when no label).
 - **Paths**: List of binaries → `Vec<PathBuf>` for `load_from_paths`.
@@ -72,7 +72,7 @@ engine/packages/hex/
 - `rustler = "0.37"`
 - `lemma-engine = { path = "../../../../" }` (engine crate)
 - `serde_json` (workspace)
-- `rust_decimal = "1"` (for parsing numeric values in target/facts)
+- `rust_decimal = "1"` (for parsing numeric values in target/data)
 
 ## 7. Elixir API
 
@@ -84,17 +84,17 @@ Public functions on `Lemma` match the NIF stem (drop `lemma_`): `load`, `load_fr
 {:ok, engine} = Lemma.new(%{"max_files" => 100, "max_loaded_bytes" => 10_000_000})
 
 # Load
-:ok = Lemma.load(engine, "spec foo\nfact x: 1\nrule y: x + 1", "my_spec.lemma")
+:ok = Lemma.load(engine, "spec foo\ndata x: 1\nrule y: x + 1", "my_spec.lemma")
 :ok = Lemma.load_from_paths(engine, ["/app/priv/specs", "/app/other.lemma"])
-{:error, errors} = Lemma.load(engine, "spec foo\nfact x: bad", "spec.lemma")
+{:error, errors} = Lemma.load(engine, "spec foo\ndata x: bad", "spec.lemma")
 
 # Introspection
 {:ok, specs} = Lemma.list(engine)
-{:ok, schema} = Lemma.schema(engine, "foo", effective: nil)   # or "foo~hash", effective: "2024-01-15"
+{:ok, schema} = Lemma.schema(engine, "foo", effective: nil)   # or "foo^hash", effective: "2024-01-15"
 
-# Run (facts: string map)
+# Run (data: string map)
 {:ok, response} = Lemma.run(engine, "foo", [])
-{:ok, response} = Lemma.run(engine, "foo", effective: "2024-01-15", facts: %{"x" => "2"})
+{:ok, response} = Lemma.run(engine, "foo", effective: "2024-01-15", data: %{"x" => "2"})
 {:error, reason} = Lemma.run(engine, "foo", [])
 
 # Invert
@@ -119,7 +119,7 @@ Public functions on `Lemma` match the NIF stem (drop `lemma_`): `load`, `load_fr
 
 ## 10. Out of scope (this plan)
 
-- `Engine::run_json`, `add_dependency_files`, `hash_pin` / `all_hash_pins`, `list_specs_effective`, `get_spec_rules` — not exposed; extend later if needed.
+- `Engine::run_json`, `add_dependency_files`, `list_specs_effective`, `get_spec_rules` — not exposed; extend later if needed.
 - Remote registry fetch in Elixir, not in NIF.
 - No LSP.
 

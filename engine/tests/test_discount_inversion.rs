@@ -5,11 +5,11 @@ use std::collections::HashMap;
 
 #[test]
 fn discount_multiple_paths_to_same_value() {
-    // Use type annotations [text] to make facts free variables for inversion
+    // Use type annotations to make data free variables for inversion
     let code = r#"
         spec shop
-        fact discount_code: [text]
-        fact member_level: [text]
+        data discount_code: text
+        data member_level: text
 
         rule discount: 0.20
           unless discount_code is "SAVE30" then 0.30
@@ -26,7 +26,7 @@ fn discount_multiple_paths_to_same_value() {
     let solutions = engine
         .invert(
             "shop",
-            &now,
+            Some(&now),
             "discount",
             Target::value(LiteralValue::number(
                 Decimal::from_str_exact("0.30").unwrap(),

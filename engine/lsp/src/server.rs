@@ -17,6 +17,20 @@ use crate::semantic_tokens;
 use crate::spec_links;
 use crate::workspace::WorkspaceModel;
 
+async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
+    let file_diagnostics = workspace.validate_workspace();
+    for file_diag in file_diagnostics {
+        let lsp_diagnostics = diagnostics::errors_to_diagnostics(
+            &file_diag.errors,
+            &file_diag.text,
+            &file_diag.attribute,
+        );
+        client
+            .publish_diagnostics(file_diag.url, lsp_diagnostics, None)
+            .await;
+    }
+}
+
 /// Shared mutable state accessed by both the LSP handlers and the debounce background task.
 struct SharedState {
     workspace: RwLock<WorkspaceModel>,
@@ -64,20 +78,8 @@ impl LemmaLanguageServer {
     /// This is fine for the playground: a single file, no registry, fast validation.
     #[cfg(target_arch = "wasm32")]
     async fn publish_full_diagnostics(&self) {
-        let file_diagnostics = {
-            let workspace = self.state.workspace.read().await;
-            workspace.validate_workspace()
-        };
-        for file_diag in file_diagnostics {
-            let lsp_diagnostics = diagnostics::errors_to_diagnostics(
-                &file_diag.errors,
-                &file_diag.text,
-                &file_diag.attribute,
-            );
-            self.client
-                .publish_diagnostics(file_diag.url, lsp_diagnostics, None)
-                .await;
-        }
+        let workspace = self.state.workspace.read().await;
+        publish_workspace_diagnostics(&self.client, &*workspace).await;
     }
 
     /// Discover all `.lemma` files under a directory and add them to the workspace.
@@ -126,28 +128,8 @@ impl LemmaLanguageServer {
                     }
                 }
 
-                let (files, attr_map) = {
-                    let workspace = state.workspace.read().await;
-                    (
-                        workspace.sources_map(),
-                        workspace.attribute_to_url_and_text(),
-                    )
-                };
-
-                let mut engine = lemma::Engine::new();
-                let mut errors = Vec::new();
-                for (attr, code) in &files {
-                    if let Err(load_err) = engine.load(code, lemma::SourceType::Labeled(attr)) {
-                        errors.extend(load_err.errors);
-                    }
-                }
-
-                for (attr, (url, text)) in &attr_map {
-                    let lsp_diagnostics = diagnostics::errors_to_diagnostics(&errors, text, attr);
-                    client
-                        .publish_diagnostics(url.clone(), lsp_diagnostics, None)
-                        .await;
-                }
+                let workspace = state.workspace.read().await;
+                publish_workspace_diagnostics(&client, &workspace).await;
             }
         });
     }
@@ -211,20 +193,8 @@ impl LanguageServer for LemmaLanguageServer {
             if let Some(root_uri) = root_uri {
                 if let Ok(root_path) = root_uri.to_file_path() {
                     self.discover_workspace_files(&root_path).await;
-                    let file_diagnostics = {
-                        let workspace = self.state.workspace.read().await;
-                        workspace.validate_workspace()
-                    };
-                    for file_diag in file_diagnostics {
-                        let lsp_diagnostics = diagnostics::errors_to_diagnostics(
-                            &file_diag.errors,
-                            &file_diag.text,
-                            &file_diag.attribute,
-                        );
-                        self.client
-                            .publish_diagnostics(file_diag.url, lsp_diagnostics, None)
-                            .await;
-                    }
+                    let workspace = self.state.workspace.read().await;
+                    publish_workspace_diagnostics(&self.client, &workspace).await;
                 }
             }
         }

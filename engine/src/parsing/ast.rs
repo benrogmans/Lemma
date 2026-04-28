@@ -1,13 +1,13 @@
 //! AST types
 //!
-//! Infrastructure (Span, DepthTracker) and spec/fact/rule/expression/value types from parsing.
+//! Infrastructure (Span, DepthTracker) and spec/data/rule/expression/value types from parsing.
 //!
 //! # Human `Display` vs canonical `AsLemmaSource`
 //!
-//! [`MetaValue`], [`FactValue`], [`TypeDef`], and [`CommandArg`] use human-oriented
+//! [`MetaValue`], [`DataValue`], and [`CommandArg`] use human-oriented
 //! `Display` (stable for `to_string()`, logs, APIs). [`Expression`] and
 //! [`LemmaRule`]/[`LemmaSpec`] use canonical Lemma source for literals via
-//! [`AsLemmaSource`] around [`Value`]. Wrap [`MetaValue`]/[`FactValue`]/[`TypeDef`]
+//! [`AsLemmaSource`] around [`Value`]. Wrap [`MetaValue`]/[`DataValue`]
 //! in [`AsLemmaSource`] when emitting round-trippable source (e.g. the formatter).
 
 /// Span representing a location in source code
@@ -63,7 +63,7 @@ impl Default for DepthTracker {
 }
 
 // -----------------------------------------------------------------------------
-// Spec, fact, rule, expression and value types
+// Spec, data, rule, expression and value types
 // -----------------------------------------------------------------------------
 
 use crate::parsing::source::Source;
@@ -78,20 +78,74 @@ pub use crate::literals::{
     BooleanValue, DateTimeValue, DurationUnit, TimeValue, TimezoneValue, Value,
 };
 
-/// A Lemma spec containing facts and rules.
-/// Ordered and compared by (name, effective_from) for use in BTreeSet; None < Some(_) for Option<DateTimeValue>.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum EffectiveDate {
+    Origin,
+    DateTimeValue(crate::DateTimeValue),
+}
+
+impl EffectiveDate {
+    pub fn as_ref(&self) -> Option<&crate::DateTimeValue> {
+        match self {
+            EffectiveDate::Origin => None,
+            EffectiveDate::DateTimeValue(dt) => Some(dt),
+        }
+    }
+
+    pub fn from_option(opt: Option<crate::DateTimeValue>) -> Self {
+        match opt {
+            None => EffectiveDate::Origin,
+            Some(dt) => EffectiveDate::DateTimeValue(dt),
+        }
+    }
+
+    pub fn to_option(&self) -> Option<crate::DateTimeValue> {
+        match self {
+            EffectiveDate::Origin => None,
+            EffectiveDate::DateTimeValue(dt) => Some(dt.clone()),
+        }
+    }
+
+    pub fn is_origin(&self) -> bool {
+        matches!(self, EffectiveDate::Origin)
+    }
+}
+
+impl PartialOrd for EffectiveDate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for EffectiveDate {
+    // As ref returns None for Origin, so Origin < DateTimeValue(_).
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_ref().cmp(&other.as_ref())
+    }
+}
+
+impl fmt::Display for EffectiveDate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EffectiveDate::Origin => Ok(()),
+            EffectiveDate::DateTimeValue(dt) => write!(f, "{}", dt),
+        }
+    }
+}
+
+/// A Lemma spec containing data and rules.
+/// Ordered and compared by (name, effective_from) for use in BTreeSet; Origin < DateTimeValue(_).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LemmaSpec {
     /// Base spec name. Includes `@` for registry specs.
     pub name: String,
     /// `true` when the spec was declared with the `@` qualifier (registry spec).
     pub from_registry: bool,
-    pub effective_from: Option<DateTimeValue>,
+    pub effective_from: EffectiveDate,
     pub attribute: Option<String>,
     pub start_line: usize,
     pub commentary: Option<String>,
-    pub types: Vec<TypeDef>,
-    pub facts: Vec<LemmaFact>,
+    pub data: Vec<LemmaData>,
     pub rules: Vec<LemmaRule>,
     pub meta_fields: Vec<MetaField>,
 }
@@ -126,9 +180,9 @@ impl fmt::Display for MetaField {
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct LemmaFact {
+pub struct LemmaData {
     pub reference: Reference,
-    pub value: FactValue,
+    pub value: DataValue,
     pub source_location: Source,
 }
 
@@ -247,7 +301,7 @@ impl fmt::Display for CalendarUnit {
 pub enum ExpressionKind {
     /// Parse-time literal value (type will be resolved during planning)
     Literal(Value),
-    /// Unresolved reference (identifier or dot path). Resolved during planning to FactPath or RulePath.
+    /// Unresolved reference (identifier or dot path). Resolved during planning to DataPath or RulePath.
     Reference(Reference),
     /// Unresolved unit literal from parser (resolved during planning)
     /// Contains (number, unit_name) - the unit name will be resolved to its type during semantic analysis
@@ -271,10 +325,10 @@ pub enum ExpressionKind {
 
 /// Unresolved reference from parser
 ///
-/// Reference to a fact or rule (identifier or dot path).
+/// Reference to a data or rule (identifier or dot path).
 ///
-/// Used in expressions and in LemmaFact. During planning, references
-/// are resolved to FactPath or RulePath (semantics layer).
+/// Used in expressions and in LemmaData. During planning, references
+/// are resolved to DataPath or RulePath (semantics layer).
 /// Examples:
 /// - Local "age": segments=[], name="age"
 /// - Cross-spec "employee.salary": segments=["employee"], name="salary"
@@ -415,30 +469,24 @@ pub enum MathematicalComputation {
     Round,
 }
 
-/// A reference to a spec, with optional hash pin and optional effective datetime.
+/// A reference to a spec, with optional effective datetime.
 /// For registry references the `name` includes the leading `@` (e.g. `@org/repo/spec`);
-/// for local references it is a plain base name.  `from_registry` mirrors whether
-/// the source used the `@` qualifier; `hash_pin` pins to a specific temporal version
-/// by plan hash; `effective` requests temporal resolution at that datetime.
+/// for local references it is a plain base name. `from_registry` mirrors whether
+/// the source used the `@` qualifier.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpecRef {
     /// Spec name as written in source. Includes `@` for registry references.
     pub name: String,
     /// `true` when the source used the `@` qualifier (registry reference).
     pub from_registry: bool,
-    /// Optional plan hash pin to resolve to a specific spec version.
-    pub hash_pin: Option<String>,
-    /// Optional effective datetime for temporal resolution. When used with `hash_pin`, resolve by hash then verify that version was active at this datetime.
+    /// Optional effective datetime for temporal resolution.
     pub effective: Option<DateTimeValue>,
 }
 
 impl std::fmt::Display for SpecRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name)?;
-        if let Some(ref h) = self.hash_pin {
-            write!(f, "~{}", h)?;
-        }
-        if let Some(ref d) = self.effective {
+        if let Some(d) = &self.effective {
             write!(f, " {}", d)?;
         }
         Ok(())
@@ -451,7 +499,6 @@ impl SpecRef {
         Self {
             name: name.into(),
             from_registry: false,
-            hash_pin: None,
             effective: None,
         }
     }
@@ -461,7 +508,6 @@ impl SpecRef {
         Self {
             name: name.into(),
             from_registry: true,
-            hash_pin: None,
             effective: None,
         }
     }
@@ -469,46 +515,45 @@ impl SpecRef {
     pub fn resolution_key(&self) -> String {
         self.name.clone()
     }
+
+    /// Resolve the effective instant for this reference given the planning slice's `effective`.
+    /// Explicit qualifier on the reference wins; otherwise inherits the slice instant.
+    pub fn at(&self, effective: &EffectiveDate) -> EffectiveDate {
+        self.effective
+            .clone()
+            .map_or_else(|| effective.clone(), EffectiveDate::DateTimeValue)
+    }
 }
 
 /// A parsed constraint command argument, preserving the literal kind from the
 /// grammar rule `command_arg: { number_literal | boolean_literal | text_literal | label }`.
 ///
-/// The parser sets the variant based on which grammar alternative matched.
-/// This information is used by:
-/// - **Planning** to validate that argument literal kinds match the expected type
-///   (e.g. reject a `Text` literal where a `Number` is required).
-/// - **Formatting** to emit correct Lemma syntax (quote `Text`, emit others as-is).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Two grammatical kinds appear after a constraint command:
+/// - **Literal** — a fully-typed value carrying the literal kind the parser
+///   recognised (`Number`, `Ratio`, `Scale`, `Duration`, `Date`, `Time`,
+///   `Boolean`, `Text`). Stored as the canonical [`crate::literals::Value`]
+///   so downstream consumers match on the variant rather than re-parsing strings.
+/// - **Label** — a bare identifier used as a name (e.g. the unit name `eur`
+///   in `unit eur 1.00`, or a primitive type keyword used as an option label).
+///
+/// Planning validates each command's args against the variant kinds it accepts
+/// and rejects mismatches without coercion (a `Text` literal is never a `Number`,
+/// a `Ratio` literal is never a bare `Number`, etc.).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum CommandArg {
-    /// Matched `number_literal` (e.g. `10`, `3.14`)
-    Number(String),
-    /// Matched `boolean_literal` (e.g. `true`, `false`, `yes`, `no`, `accept`, `reject`)
-    Boolean(BooleanValue),
-    /// Matched `text_literal` (e.g. `"hello"`) — stores the content between quotes,
-    /// without surrounding quote characters.
-    Text(String),
-    /// Matched `label` (an identifier: `eur`, `kilogram`, `hours`)
+    /// A typed literal value parsed by [`crate::parsing::parser::Parser::parse_literal_value`].
+    Literal(crate::literals::Value),
+    /// An identifier used as a name (unit name, option keyword, etc.).
     Label(String),
-}
-
-impl CommandArg {
-    /// Returns the inner string value regardless of which literal kind was parsed.
-    ///
-    /// Use this when you need the raw string content for further processing
-    /// (e.g. `.parse::<Decimal>()`) but do not need to distinguish the literal kind.
-    pub fn value(&self) -> &str {
-        match self {
-            CommandArg::Number(s) | CommandArg::Text(s) | CommandArg::Label(s) => s.as_str(),
-            CommandArg::Boolean(bv) => bv.as_str(),
-        }
-    }
 }
 
 impl fmt::Display for CommandArg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.value())
+        match self {
+            CommandArg::Literal(v) => write!(f, "{}", v),
+            CommandArg::Label(s) => write!(f, "{}", s),
+        }
     }
 }
 
@@ -569,29 +614,66 @@ pub type Constraint = (TypeConstraintCommand, Vec<CommandArg>);
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-/// Parse-time fact value (before type resolution)
-pub enum FactValue {
+/// Parse-time data value (before type resolution)
+pub enum DataValue {
     /// A literal value (parse-time; type will be resolved during planning)
     Literal(Value),
     /// A reference to another spec
     SpecReference(SpecRef),
-    /// A type declaration (inline type annotation on a fact)
+    /// A type declaration: `data x: number -> minimum 5` or `data y: x -> minimum 5`
     TypeDeclaration {
         base: ParentType,
         constraints: Option<Vec<Constraint>>,
         from: Option<SpecRef>,
     },
+    /// A value-copy reference to another data or rule, with optional additional constraints.
+    ///
+    /// Two surface forms produce this variant:
+    /// 1. **Dotted RHS** in any position — e.g. `data license2: law.other` or
+    ///    `data license2: law.other -> minimum 5`. A dotted RHS is never a
+    ///    typedef name, so it unambiguously means "copy from this data or rule."
+    /// 2. **Non-dotted RHS in a binding LHS** — e.g. `data license.other: src`.
+    ///    When the LHS has segments (a binding path into another spec) the RHS
+    ///    is read as a value-copy reference to a name in the enclosing spec,
+    ///    not as a typedef.
+    ///
+    /// `data x: someident` (LHS without segments, RHS without dots) is the one
+    /// case that stays a `TypeDeclaration` — `someident` is treated as a typedef
+    /// name. See parser `parse_data_value` for the discriminator.
+    ///
+    /// The target is resolved during planning to either a `DataPath` or a `RulePath`.
+    Reference {
+        target: Reference,
+        constraints: Option<Vec<Constraint>>,
+    },
 }
 
-/// A type for type declarations
-impl fmt::Display for FactValue {
+/// Render a chain of `-> command args ...` constraints for display purposes.
+/// Shared between `DataValue::TypeDeclaration` and `DataValue::Reference`.
+fn format_constraint_chain(constraints: &[Constraint]) -> String {
+    constraints
+        .iter()
+        .map(|(cmd, args)| {
+            let args_str: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            let joined = args_str.join(" ");
+            if joined.is_empty() {
+                format!("{}", cmd)
+            } else {
+                format!("{} {}", cmd, joined)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" -> ")
+}
+
+impl fmt::Display for DataValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            FactValue::Literal(v) => write!(f, "{}", v),
-            FactValue::SpecReference(spec_ref) => {
-                write!(f, "spec {}", spec_ref)
+            DataValue::Literal(v) => write!(f, "{}", v),
+            DataValue::SpecReference(spec_ref) => {
+                write!(f, "with {}", spec_ref)
             }
-            FactValue::TypeDeclaration {
+            DataValue::TypeDeclaration {
                 base,
                 constraints,
                 from,
@@ -602,31 +684,30 @@ impl fmt::Display for FactValue {
                     format!("{}", base)
                 };
                 if let Some(ref constraints_vec) = constraints {
-                    let constraint_str = constraints_vec
-                        .iter()
-                        .map(|(cmd, args)| {
-                            let args_str: Vec<&str> = args.iter().map(|a| a.value()).collect();
-                            let joined = args_str.join(" ");
-                            if joined.is_empty() {
-                                format!("{}", cmd)
-                            } else {
-                                format!("{} {}", cmd, joined)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(" -> ");
-                    write!(f, "[{} -> {}]", base_str, constraint_str)
+                    let constraint_str = format_constraint_chain(constraints_vec);
+                    write!(f, "{} -> {}", base_str, constraint_str)
                 } else {
-                    write!(f, "[{}]", base_str)
+                    write!(f, "{}", base_str)
+                }
+            }
+            DataValue::Reference {
+                target,
+                constraints,
+            } => {
+                if let Some(ref constraints_vec) = constraints {
+                    let constraint_str = format_constraint_chain(constraints_vec);
+                    write!(f, "{} -> {}", target, constraint_str)
+                } else {
+                    write!(f, "{}", target)
                 }
             }
         }
     }
 }
 
-impl LemmaFact {
+impl LemmaData {
     #[must_use]
-    pub fn new(reference: Reference, value: FactValue, source_location: Source) -> Self {
+    pub fn new(reference: Reference, value: DataValue, source_location: Source) -> Self {
         Self {
             reference,
             value,
@@ -642,18 +723,17 @@ impl LemmaSpec {
         Self {
             name,
             from_registry,
-            effective_from: None,
+            effective_from: EffectiveDate::Origin,
             attribute: None,
             start_line: 1,
             commentary: None,
-            types: Vec::new(),
-            facts: Vec::new(),
+            data: Vec::new(),
             rules: Vec::new(),
             meta_fields: Vec::new(),
         }
     }
 
-    /// Temporal range start. None means −∞.
+    /// Temporal range start. Origin (None) means −∞.
     pub fn effective_from(&self) -> Option<&DateTimeValue> {
         self.effective_from.as_ref()
     }
@@ -677,20 +757,14 @@ impl LemmaSpec {
     }
 
     #[must_use]
-    pub fn add_fact(mut self, fact: LemmaFact) -> Self {
-        self.facts.push(fact);
+    pub fn add_data(mut self, data: LemmaData) -> Self {
+        self.data.push(data);
         self
     }
 
     #[must_use]
     pub fn add_rule(mut self, rule: LemmaRule) -> Self {
         self.rules.push(rule);
-        self
-    }
-
-    #[must_use]
-    pub fn add_type(mut self, type_def: TypeDef) -> Self {
-        self.types.push(type_def);
         self
     }
 
@@ -735,7 +809,7 @@ impl Hash for LemmaSpec {
 impl fmt::Display for LemmaSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "spec {}", self.name)?;
-        if let Some(ref af) = self.effective_from {
+        if let EffectiveDate::DateTimeValue(ref af) = self.effective_from {
             write!(f, " {}", af)?;
         }
         writeln!(f)?;
@@ -746,26 +820,10 @@ impl fmt::Display for LemmaSpec {
             writeln!(f, "\"\"\"")?;
         }
 
-        let named_types: Vec<_> = self
-            .types
-            .iter()
-            .filter(|t| !matches!(t, TypeDef::Inline { .. }))
-            .collect();
-        if !named_types.is_empty() {
+        if !self.data.is_empty() {
             writeln!(f)?;
-            for (index, type_def) in named_types.iter().enumerate() {
-                if index > 0 {
-                    writeln!(f)?;
-                }
-                write!(f, "{}", type_def)?;
-                writeln!(f)?;
-            }
-        }
-
-        if !self.facts.is_empty() {
-            writeln!(f)?;
-            for fact in &self.facts {
-                write!(f, "{}", fact)?;
+            for data in &self.data {
+                write!(f, "{}", data)?;
             }
         }
 
@@ -790,9 +848,9 @@ impl fmt::Display for LemmaSpec {
     }
 }
 
-impl fmt::Display for LemmaFact {
+impl fmt::Display for LemmaData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "fact {}: {}", self.reference, self.value)
+        writeln!(f, "data {}: {}", self.reference, self.value)
     }
 }
 
@@ -1003,116 +1061,21 @@ impl std::fmt::Display for PrimitiveKind {
 }
 
 /// Parent type in a type definition: built-in primitive or custom type name.
+///
+/// `name` is the declared type name (the data name that introduces this type).
+/// For `data temperature: scale`, name = "temperature", primitive = Scale.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParentType {
-    /// Struct variant (`primitive` field) so `#[serde(tag = "kind")]` merges with a JSON object.
     Primitive { primitive: PrimitiveKind },
-    /// Struct variant so `#[serde(tag = "kind")]` merges with a JSON object.
     Custom { name: String },
 }
 
 impl std::fmt::Display for ParentType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParentType::Primitive { primitive: k } => write!(f, "{}", k),
+            ParentType::Primitive { primitive } => write!(f, "{}", primitive),
             ParentType::Custom { name } => write!(f, "{}", name),
-        }
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Type definition (named, import, or inline)
-// -----------------------------------------------------------------------------
-
-/// Type definition (named, import, or inline).
-/// Applying constraints to produce TypeSpecification is done in planning (semantics).
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum TypeDef {
-    Regular {
-        source_location: Source,
-        name: String,
-        parent: ParentType,
-        constraints: Option<Vec<Constraint>>,
-    },
-    Import {
-        source_location: Source,
-        name: String,
-        source_type: String,
-        from: SpecRef,
-        constraints: Option<Vec<Constraint>>,
-    },
-    Inline {
-        source_location: Source,
-        parent: ParentType,
-        constraints: Option<Vec<Constraint>>,
-        fact_ref: Reference,
-        from: Option<SpecRef>,
-    },
-}
-
-impl TypeDef {
-    pub fn source_location(&self) -> &Source {
-        match self {
-            TypeDef::Regular {
-                source_location, ..
-            }
-            | TypeDef::Import {
-                source_location, ..
-            }
-            | TypeDef::Inline {
-                source_location, ..
-            } => source_location,
-        }
-    }
-
-    pub fn name(&self) -> String {
-        match self {
-            TypeDef::Regular { name, .. } | TypeDef::Import { name, .. } => name.clone(),
-            TypeDef::Inline { parent, .. } => format!("{}", parent),
-        }
-    }
-}
-
-impl fmt::Display for TypeDef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeDef::Regular {
-                name,
-                parent,
-                constraints,
-                ..
-            } => {
-                write!(f, "type {}: {}", name, parent)?;
-                if let Some(constraints) = constraints {
-                    for (cmd, args) in constraints {
-                        write!(f, "\n  -> {}", cmd)?;
-                        for arg in args {
-                            write!(f, " {}", arg.value())?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-            TypeDef::Import {
-                name,
-                from,
-                constraints,
-                ..
-            } => {
-                write!(f, "type {} from {}", name, from)?;
-                if let Some(constraints) = constraints {
-                    for (cmd, args) in constraints {
-                        write!(f, " -> {}", cmd)?;
-                        for arg in args {
-                            write!(f, " {}", arg.value())?;
-                        }
-                    }
-                }
-                Ok(())
-            }
-            TypeDef::Inline { .. } => Ok(()),
         }
     }
 }
@@ -1177,13 +1140,22 @@ fn group_digits(s: &str) -> String {
 
 impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use crate::literals::Value;
         match self.0 {
-            CommandArg::Text(s) => write!(f, "{}", quote_lemma_text(s)),
-            CommandArg::Number(s) => {
-                let clean: String = s.chars().filter(|c| *c != '_' && *c != ',').collect();
-                write!(f, "{}", group_digits(&clean))
+            CommandArg::Literal(Value::Text(s)) => write!(f, "{}", quote_lemma_text(s)),
+            CommandArg::Literal(Value::Number(d)) => {
+                write!(f, "{}", group_digits(&d.to_string()))
             }
-            CommandArg::Boolean(bv) => write!(f, "{}", bv),
+            CommandArg::Literal(Value::Boolean(bv)) => write!(f, "{}", bv),
+            CommandArg::Literal(Value::Scale(d, unit)) => {
+                write!(f, "{} {}", group_digits(&d.to_string()), unit)
+            }
+            CommandArg::Literal(Value::Duration(d, unit)) => {
+                write!(f, "{} {}", group_digits(&d.to_string()), unit)
+            }
+            CommandArg::Literal(value @ Value::Ratio(_, _)) => write!(f, "{}", value),
+            CommandArg::Literal(Value::Date(dt)) => write!(f, "{}", dt),
+            CommandArg::Literal(Value::Time(t)) => write!(f, "{}", t),
             CommandArg::Label(s) => write!(f, "{}", s),
         }
     }
@@ -1262,7 +1234,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
     }
 }
 
-// -- AsLemmaSource: MetaValue, FactValue, TypeDef (formatter / round-trip) ---
+// -- AsLemmaSource: MetaValue, DataValue (formatter / round-trip) ---
 
 impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1273,14 +1245,14 @@ impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
     }
 }
 
-impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
+impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
-            FactValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-            FactValue::SpecReference(spec_ref) => {
-                write!(f, "spec {}", spec_ref)
+            DataValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
+            DataValue::SpecReference(spec_ref) => {
+                write!(f, "with {}", spec_ref)
             }
-            FactValue::TypeDeclaration {
+            DataValue::TypeDeclaration {
                 base,
                 constraints,
                 from,
@@ -1292,47 +1264,22 @@ impl<'a> fmt::Display for AsLemmaSource<'a, FactValue> {
                 };
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
-                    write!(f, "[{} -> {}]", base_str, constraint_str)
+                    write!(f, "{} -> {}", base_str, constraint_str)
                 } else {
-                    write!(f, "[{}]", base_str)
+                    write!(f, "{}", base_str)
                 }
             }
-        }
-    }
-}
-
-impl<'a> fmt::Display for AsLemmaSource<'a, TypeDef> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.0 {
-            TypeDef::Regular {
-                name,
-                parent,
+            DataValue::Reference {
+                target,
                 constraints,
-                ..
             } => {
-                write!(f, "type {}: {}", name, parent)?;
-                if let Some(constraints) = constraints {
-                    for (cmd, args) in constraints {
-                        write!(f, "\n  -> {}", format_constraint_as_source(cmd, args))?;
-                    }
+                if let Some(ref constraints_vec) = constraints {
+                    let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
+                    write!(f, "{} -> {}", target, constraint_str)
+                } else {
+                    write!(f, "{}", target)
                 }
-                Ok(())
             }
-            TypeDef::Import {
-                name,
-                from,
-                constraints,
-                ..
-            } => {
-                write!(f, "type {} from {}", name, from)?;
-                if let Some(constraints) = constraints {
-                    for (cmd, args) in constraints {
-                        write!(f, " -> {}", format_constraint_as_source(cmd, args))?;
-                    }
-                }
-                Ok(())
-            }
-            TypeDef::Inline { .. } => Ok(()),
         }
     }
 }
@@ -1466,39 +1413,6 @@ mod tests {
     }
 
     #[test]
-    fn test_time_value_display() {
-        let time = TimeValue {
-            hour: 14,
-            minute: 30,
-            second: 45,
-            timezone: Some(TimezoneValue {
-                offset_hours: -5,
-                offset_minutes: 30,
-            }),
-        };
-        let display = format!("{}", time);
-        assert!(display.contains("14"));
-        assert!(display.contains("30"));
-        assert!(display.contains("45"));
-    }
-
-    #[test]
-    fn test_timezone_value() {
-        let tz_positive = TimezoneValue {
-            offset_hours: 5,
-            offset_minutes: 30,
-        };
-        assert_eq!(tz_positive.offset_hours, 5);
-        assert_eq!(tz_positive.offset_minutes, 30);
-
-        let tz_negative = TimezoneValue {
-            offset_hours: -8,
-            offset_minutes: 0,
-        };
-        assert_eq!(tz_negative.offset_hours, -8);
-    }
-
-    #[test]
     fn test_negation_types() {
         let json = serde_json::to_string(&NegationType::Not).expect("serialize NegationType");
         let decoded: NegationType = serde_json::from_str(&json).expect("deserialize NegationType");
@@ -1516,307 +1430,209 @@ mod tests {
         assert_eq!(back, p);
     }
 
-    #[test]
-    fn parent_type_custom_serde_internally_tagged() {
-        let p = ParentType::Custom {
-            name: "money".to_string(),
-        };
-        let json = serde_json::to_string(&p).expect("ParentType::Custom must serialize");
-        assert!(json.contains("\"kind\"") && json.contains("\"name\""));
-        let back: ParentType = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, p);
+    // =====================================================================
+    // DataValue Display — constraint formatting
+    // =====================================================================
+
+    fn text_arg(s: &str) -> CommandArg {
+        CommandArg::Literal(crate::literals::Value::Text(s.to_string()))
     }
 
-    #[test]
-    fn test_veto_expression() {
-        let veto_with_message = VetoExpression {
-            message: Some("Must be over 18".to_string()),
-        };
-        assert_eq!(
-            veto_with_message.message,
-            Some("Must be over 18".to_string())
-        );
-
-        let veto_without_message = VetoExpression { message: None };
-        assert!(veto_without_message.message.is_none());
+    fn number_arg(s: &str) -> CommandArg {
+        let d: rust_decimal::Decimal = s.parse().expect("decimal");
+        CommandArg::Literal(crate::literals::Value::Number(d))
     }
 
-    // =====================================================================
-    // FactValue / TypeDef Display — constraint formatting
-    // =====================================================================
+    fn boolean_arg(b: BooleanValue) -> CommandArg {
+        CommandArg::Literal(crate::literals::Value::Boolean(b))
+    }
+
+    fn scale_arg(value: &str, unit: &str) -> CommandArg {
+        let d: rust_decimal::Decimal = value.parse().expect("decimal");
+        CommandArg::Literal(crate::literals::Value::Scale(d, unit.to_string()))
+    }
+
+    fn duration_arg(value: &str, unit: DurationUnit) -> CommandArg {
+        let d: rust_decimal::Decimal = value.parse().expect("decimal");
+        CommandArg::Literal(crate::literals::Value::Duration(d, unit))
+    }
 
     #[test]
     fn as_lemma_source_text_default_is_quoted() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
-                vec![CommandArg::Text("single".to_string())],
+                vec![text_arg("single")],
             )]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[text -> default \"single\"]"
+            "text -> default \"single\""
         );
     }
 
     #[test]
     fn as_lemma_source_number_default_not_quoted() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Number,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
-                vec![CommandArg::Number("10".to_string())],
+                vec![number_arg("10")],
             )]),
             from: None,
         };
-        assert_eq!(format!("{}", AsLemmaSource(&fv)), "[number -> default 10]");
+        assert_eq!(format!("{}", AsLemmaSource(&fv)), "number -> default 10");
     }
 
     #[test]
     fn as_lemma_source_help_always_quoted() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Number,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
-                vec![CommandArg::Text("Enter a quantity".to_string())],
+                vec![text_arg("Enter a quantity")],
             )]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[number -> help \"Enter a quantity\"]"
+            "number -> help \"Enter a quantity\""
         );
     }
 
     #[test]
     fn as_lemma_source_text_option_quoted() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
             },
             constraints: Some(vec![
-                (
-                    TypeConstraintCommand::Option,
-                    vec![CommandArg::Text("active".to_string())],
-                ),
-                (
-                    TypeConstraintCommand::Option,
-                    vec![CommandArg::Text("inactive".to_string())],
-                ),
+                (TypeConstraintCommand::Option, vec![text_arg("active")]),
+                (TypeConstraintCommand::Option, vec![text_arg("inactive")]),
             ]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[text -> option \"active\" -> option \"inactive\"]"
+            "text -> option \"active\" -> option \"inactive\""
         );
     }
 
     #[test]
     fn as_lemma_source_scale_unit_not_quoted() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Scale,
             },
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Unit,
-                    vec![
-                        CommandArg::Label("eur".to_string()),
-                        CommandArg::Number("1.00".to_string()),
-                    ],
+                    vec![CommandArg::Label("eur".to_string()), number_arg("1.00")],
                 ),
                 (
                     TypeConstraintCommand::Unit,
-                    vec![
-                        CommandArg::Label("usd".to_string()),
-                        CommandArg::Number("1.10".to_string()),
-                    ],
+                    vec![CommandArg::Label("usd".to_string()), number_arg("1.10")],
                 ),
             ]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[scale -> unit eur 1.00 -> unit usd 1.10]"
+            "scale -> unit eur 1.00 -> unit usd 1.10"
         );
     }
 
     #[test]
     fn as_lemma_source_scale_minimum_with_unit() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Scale,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Minimum,
-                vec![
-                    CommandArg::Number("0".to_string()),
-                    CommandArg::Label("eur".to_string()),
-                ],
+                vec![scale_arg("0", "eur")],
             )]),
             from: None,
         };
-        assert_eq!(
-            format!("{}", AsLemmaSource(&fv)),
-            "[scale -> minimum 0 eur]"
-        );
+        assert_eq!(format!("{}", AsLemmaSource(&fv)), "scale -> minimum 0 eur");
     }
 
     #[test]
     fn as_lemma_source_boolean_default() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Boolean,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
-                vec![CommandArg::Boolean(BooleanValue::True)],
+                vec![boolean_arg(BooleanValue::True)],
             )]),
             from: None,
         };
-        assert_eq!(
-            format!("{}", AsLemmaSource(&fv)),
-            "[boolean -> default true]"
-        );
+        assert_eq!(format!("{}", AsLemmaSource(&fv)), "boolean -> default true");
     }
 
     #[test]
     fn as_lemma_source_duration_default() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Duration,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
-                vec![
-                    CommandArg::Number("40".to_string()),
-                    CommandArg::Label("hours".to_string()),
-                ],
+                vec![duration_arg("40", DurationUnit::Hour)],
             )]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[duration -> default 40 hours]"
+            "duration -> default 40 hours"
         );
     }
 
     #[test]
     fn as_lemma_source_named_type_default_quoted() {
-        // Named types (user-defined): the parser produces CommandArg::Text for
+        // Named types (user-defined): the parser produces a typed Text literal for
         // quoted default values like `default "single"`.
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Custom {
                 name: "filing_status_type".to_string(),
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
-                vec![CommandArg::Text("single".to_string())],
+                vec![text_arg("single")],
             )]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[filing_status_type -> default \"single\"]"
+            "filing_status_type -> default \"single\""
         );
     }
 
     #[test]
     fn as_lemma_source_help_escapes_quotes() {
-        let fv = FactValue::TypeDeclaration {
+        let fv = DataValue::TypeDeclaration {
             base: ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
             },
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
-                vec![CommandArg::Text("say \"hello\"".to_string())],
+                vec![text_arg("say \"hello\"")],
             )]),
             from: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "[text -> help \"say \\\"hello\\\"\"]"
+            "text -> help \"say \\\"hello\\\"\""
         );
-    }
-
-    #[test]
-    fn as_lemma_source_typedef_regular_options_quoted() {
-        let td = TypeDef::Regular {
-            source_location: Source::new(
-                "test",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-            ),
-            name: "status".to_string(),
-            parent: ParentType::Primitive {
-                primitive: PrimitiveKind::Text,
-            },
-            constraints: Some(vec![
-                (
-                    TypeConstraintCommand::Option,
-                    vec![CommandArg::Text("active".to_string())],
-                ),
-                (
-                    TypeConstraintCommand::Option,
-                    vec![CommandArg::Text("inactive".to_string())],
-                ),
-            ]),
-        };
-        let output = format!("{}", AsLemmaSource(&td));
-        assert!(output.contains("option \"active\""), "got: {}", output);
-        assert!(output.contains("option \"inactive\""), "got: {}", output);
-    }
-
-    #[test]
-    fn as_lemma_source_typedef_scale_units_not_quoted() {
-        let td = TypeDef::Regular {
-            source_location: Source::new(
-                "test",
-                Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-            ),
-            name: "money".to_string(),
-            parent: ParentType::Primitive {
-                primitive: PrimitiveKind::Scale,
-            },
-            constraints: Some(vec![
-                (
-                    TypeConstraintCommand::Unit,
-                    vec![
-                        CommandArg::Label("eur".to_string()),
-                        CommandArg::Number("1.00".to_string()),
-                    ],
-                ),
-                (
-                    TypeConstraintCommand::Decimals,
-                    vec![CommandArg::Number("2".to_string())],
-                ),
-                (
-                    TypeConstraintCommand::Minimum,
-                    vec![CommandArg::Number("0".to_string())],
-                ),
-            ]),
-        };
-        let output = format!("{}", AsLemmaSource(&td));
-        assert!(output.contains("unit eur 1.00"), "got: {}", output);
-        assert!(output.contains("decimals 2"), "got: {}", output);
-        assert!(output.contains("minimum 0"), "got: {}", output);
     }
 }

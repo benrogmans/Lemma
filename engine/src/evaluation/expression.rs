@@ -4,7 +4,7 @@
 //! All runtime errors (division by zero, etc.) result in Veto instead of errors.
 
 use super::explanation::{ExplanationNode, ValueSource};
-use super::operations::{ComputationKind, OperationKind, OperationResult};
+use super::operations::{ComputationKind, OperationKind, OperationResult, VetoType};
 use crate::computation::{arithmetic_operation, comparison_operation};
 use crate::planning::semantics::{
     negated_comparison, Expression, ExpressionKind, LiteralValue, MathematicalComputation,
@@ -117,20 +117,20 @@ pub(crate) fn evaluate_rule(
                 get_explanation_node_required(context, condition, "condition");
 
             let matched = match condition_result {
-                OperationResult::Veto(ref msg) => {
+                OperationResult::Veto(ref reason) => {
                     // Condition vetoed - this becomes the result
                     let unless_clause_index = branch_index - 1;
                     context.push_operation(OperationKind::RuleBranchEvaluated {
                         index: Some(unless_clause_index),
                         matched: true,
-                        result_value: Some(OperationResult::Veto(msg.clone())),
+                        result_value: Some(OperationResult::Veto(reason.clone())),
                     });
 
                     // Build Branches node with this as the matched branch
                     let matched_branch = Branch {
                         condition: Some(Box::new(condition_explanation)),
                         result: Box::new(ExplanationNode::Veto {
-                            message: msg.clone(),
+                            message: Some(reason.to_string()),
                             source_location: branch.result.source_location.clone(),
                         }),
                         clause_index: Some(unless_clause_index),
@@ -146,16 +146,16 @@ pub(crate) fn evaluate_rule(
                     let explanation = crate::evaluation::explanation::Explanation {
                         rule_path: exec_rule.path.clone(),
                         source: Some(exec_rule.source.clone()),
-                        result: OperationResult::Veto(msg.clone()),
+                        result: OperationResult::Veto(reason.clone()),
                         tree: Arc::new(branches_node),
                     };
-                    return (OperationResult::Veto(msg.clone()), explanation);
+                    return (OperationResult::Veto(reason.clone()), explanation);
                 }
                 OperationResult::Value(lit) => match &lit.value {
                     ValueKind::Boolean(b) => *b,
                     _ => {
-                        let veto = OperationResult::Veto(Some(
-                            "Unless condition must evaluate to boolean".to_string(),
+                        let veto = OperationResult::Veto(VetoType::computation(
+                            "Unless condition must evaluate to boolean",
                         ));
                         let explanation = crate::evaluation::explanation::Explanation {
                             rule_path: exec_rule.path.clone(),
@@ -388,22 +388,51 @@ fn evaluate_single_expression(
             OperationResult::Value(Box::new(value))
         }
 
-        ExpressionKind::FactPath(fact_path) => {
-            // Fact lookup: a fact can legitimately be missing (TypeDeclaration without a
-            // provided value at runtime). Returning None → Veto("Missing fact: ...") is
+        ExpressionKind::DataPath(data_path) => {
+            // Data lookup: a data can legitimately be missing (TypeDeclaration without a
+            // provided value at runtime). Returning None → Veto("Missing data: ...") is
             // correct domain behavior.
-            let fact_path_clone = fact_path.clone();
-            let value = context.get_fact(fact_path).cloned();
+            //
+            // Rule-target references are not pre-populated in `data_values`; on
+            // first read we lazily resolve them from the (already-evaluated,
+            // by topological-sort guarantee) target rule's result. A target
+            // rule veto propagates with the exact same reason — copying the
+            // veto type without rewrapping in `MissingData`.
+            let data_path_clone = data_path.clone();
+            let mut value = context.get_data(data_path).cloned();
+            if value.is_none() {
+                if let Some(resolved) = context.lazy_rule_reference_resolve(data_path) {
+                    match resolved {
+                        Ok(v) => value = Some(v),
+                        Err(veto) => {
+                            let explanation_node = ExplanationNode::Veto {
+                                message: Some(veto.to_string()),
+                                source_location: current.source_location.clone(),
+                            };
+                            context.set_explanation_node(current, explanation_node);
+                            return OperationResult::Veto(veto);
+                        }
+                    }
+                } else if let Some(veto) = context.get_reference_veto(data_path) {
+                    let veto = veto.clone();
+                    let explanation_node = ExplanationNode::Veto {
+                        message: Some(veto.to_string()),
+                        source_location: current.source_location.clone(),
+                    };
+                    context.set_explanation_node(current, explanation_node);
+                    return OperationResult::Veto(veto);
+                }
+            }
             match value {
                 Some(v) => {
-                    context.push_operation(OperationKind::FactUsed {
-                        fact_ref: fact_path_clone.clone(),
+                    context.push_operation(OperationKind::DataUsed {
+                        data_ref: data_path_clone.clone(),
                         value: v.clone(),
                     });
                     let explanation_node = ExplanationNode::Value {
                         value: v.clone(),
-                        source: ValueSource::Fact {
-                            fact_ref: fact_path_clone,
+                        source: ValueSource::Data {
+                            data_ref: data_path_clone,
                         },
                         source_location: current.source_location.clone(),
                     };
@@ -411,12 +440,15 @@ fn evaluate_single_expression(
                     OperationResult::Value(Box::new(v))
                 }
                 None => {
+                    let reason = VetoType::MissingData {
+                        data: data_path_clone.clone(),
+                    };
                     let explanation_node = ExplanationNode::Veto {
-                        message: Some(format!("Missing fact: {}", fact_path)),
+                        message: Some(reason.to_string()),
                         source_location: current.source_location.clone(),
                     };
                     context.set_explanation_node(current, explanation_node);
-                    OperationResult::Veto(Some(format!("Missing fact: {}", fact_path)))
+                    OperationResult::Veto(reason)
                 }
             }
         }
@@ -694,7 +726,9 @@ fn evaluate_single_expression(
                 source_location: current.source_location.clone(),
             };
             context.set_explanation_node(current, explanation_node);
-            OperationResult::Veto(veto_expr.message.clone())
+            OperationResult::Veto(VetoType::UserDefined {
+                message: veto_expr.message.clone(),
+            })
         }
 
         ExpressionKind::Now => {
@@ -836,8 +870,8 @@ fn evaluate_mathematical_operator(
             let float_val = match n.to_f64() {
                 Some(v) => v,
                 None => {
-                    return OperationResult::Veto(Some(
-                        "Cannot convert to float for mathematical operation".to_string(),
+                    return OperationResult::Veto(VetoType::computation(
+                        "Cannot convert to float for mathematical operation",
                     ));
                 }
             };
@@ -881,8 +915,8 @@ fn evaluate_mathematical_operator(
             let decimal_result = match rust_decimal::Decimal::from_f64_retain(math_result) {
                 Some(d) => d,
                 None => {
-                    return OperationResult::Veto(Some(
-                        "Mathematical operation result cannot be represented".to_string(),
+                    return OperationResult::Veto(VetoType::computation(
+                        "Mathematical operation result cannot be represented",
                     ));
                 }
             };

@@ -8,7 +8,7 @@ title: Contributing
 ## Setup
 
 ```bash
-git clone https://github.com/benrogmans/lemma
+git clone https://github.com/lemma/lemma
 cd lemma
 cargo nextest run --workspace
 ```

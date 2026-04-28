@@ -9,8 +9,8 @@ fn test_money_minus_percentage() {
     let code = r#"
 spec test_money_minus_percentage
 
-fact base_price: 200
-fact discount_rate: 25%
+data base_price: 200
+data discount_rate: 25%
 
 rule price_after_discount: base_price - discount_rate
 rule expected: 150
@@ -48,8 +48,8 @@ fn test_money_plus_percentage() {
     let code = r#"
 spec test_money_plus_percentage
 
-fact base: 100
-fact markup: 10%
+data base: 100
+data markup: 10%
 
 rule price_with_markup: base + markup
 rule expected: 110
@@ -84,8 +84,8 @@ fn test_number_times_percentage() {
     let code = r#"
 spec test_number_times_percentage
 
-fact amount: 1000
-fact rate: 15%
+data amount: 1000
+data rate: 15%
 
 rule result: amount * rate
 rule expected: 150
@@ -120,8 +120,8 @@ fn test_money_minus_percentage_with_rule_reference() {
     let code = r#"
 spec test_with_rule_reference
 
-fact base_price: 200
-fact discount_rate: 25%
+data base_price: 200
+data discount_rate: 25%
 
 rule discount_amount: base_price * discount_rate
 rule final_price: base_price - discount_amount
@@ -157,9 +157,9 @@ fn test_chained_percentage_operations() {
     let code = r#"
 spec test_chained_percentages
 
-fact original_price: 100
-fact first_discount: 20%
-fact second_discount: 10%
+data original_price: 100
+data first_discount: 20%
+data second_discount: 10%
 
 rule after_first: original_price - first_discount
 rule after_second: after_first - second_discount

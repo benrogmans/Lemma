@@ -1,31 +1,31 @@
 spec stress_test
 """
 Comprehensive Lemma Stress Test
-Demonstrates: type annotations, complex rules, rule references,
+Demonstrates: data annotations, complex rules, rule references,
 unless clauses (last matching wins), arithmetic, comparisons, and veto
 """
 
-type customer_tier_type: text
+data customer_tier_type: text
   -> option "standard"
   -> option "premium"
   -> option "vip"
 
-type payment_method_type: text
+data payment_method_type: text
   -> option "credit"
   -> option "cash"
   -> option "debit"
 
-fact min_order_value         : 50
-fact free_shipping_threshold : 500
-fact is_fragile              : [boolean]
-fact is_express              : [boolean]
-fact customer_tier           : [customer_tier_type]
-fact payment_method          : [payment_method_type]
-fact base_price              : [number -> minimum 0]
-fact delivery_distance       : [number -> minimum 0]
-fact loyalty_points          : [number -> minimum 0]
-fact package_weight          : [number -> minimum 0]
-fact quantity                : [number -> minimum 0]
+data min_order_value         : 50
+data free_shipping_threshold : 500
+data is_fragile              : boolean
+data is_express              : boolean
+data customer_tier           : customer_tier_type
+data payment_method          : payment_method_type
+data base_price              : number -> minimum 0
+data delivery_distance       : number -> minimum 0
+data loyalty_points          : number -> minimum 0
+data package_weight          : number -> minimum 0
+data quantity                : number -> minimum 0
 
 rule is_standard:
   customer_tier is "standard"
@@ -176,38 +176,38 @@ spec stress_test_config
 Configuration spec - demonstrates spec composition
 """
 
-fact base_tax_rate                 : 8%
-fact customer_tier_points_premium  : 2
-fact customer_tier_points_standard : 1
-fact customer_tier_points_vip      : 5
-fact expedited_handling_fee        : 25
-fact express_processing_days       : 1
-fact international_fee_rate        : 20%
-fact luxury_tax_rate               : 15%
-fact luxury_tax_threshold          : 1_000
-fact max_discount_cap              : 40%
-fact min_profitable_margin         : 15%
-fact rush_processing_days          : 0
-fact standard_processing_days      : 3
-fact weekend_delivery_surcharge    : 10%
-fact weight_limit_express          : 100
-fact weight_limit_standard         : 50
+data base_tax_rate                 : 8%
+data customer_tier_points_premium  : 2
+data customer_tier_points_standard : 1
+data customer_tier_points_vip      : 5
+data expedited_handling_fee        : 25
+data express_processing_days       : 1
+data international_fee_rate        : 20%
+data luxury_tax_rate               : 15%
+data luxury_tax_threshold          : 1_000
+data max_discount_cap              : 40%
+data min_profitable_margin         : 15%
+data rush_processing_days          : 0
+data standard_processing_days      : 3
+data weekend_delivery_surcharge    : 10%
+data weight_limit_express          : 100
+data weight_limit_standard         : 50
 
 
 spec stress_test_extended
 """
 Extended stress test with spec composition
-Demonstrates: cross-spec references, field access, complex dependencies, fact bindings
+Demonstrates: cross-spec references, field access, complex dependencies, data bindings
 """
 
-fact config                      : spec stress_test_config
-fact config.base_tax_rate        : 7%
-fact config.luxury_tax_threshold : 1_200
-fact config.max_discount_cap     : 35%
+with config: stress_test_config
+data config.base_tax_rate        : 7%
+data config.luxury_tax_threshold : 1_200
+data config.max_discount_cap     : 35%
 
-fact order                         : spec stress_test
-fact order.free_shipping_threshold : 600
-fact order.min_order_value         : 100
+with order: stress_test
+data order.free_shipping_threshold : 600
+data order.min_order_value         : 100
 
 rule is_luxury_order:
   order.grand_total > config.luxury_tax_threshold

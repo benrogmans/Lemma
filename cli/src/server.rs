@@ -74,11 +74,10 @@ pub mod http {
 
     #[derive(serde::Serialize)]
     struct GetSpecResponse {
-        spec_id: String,
+        spec_set_id: String,
         effective_from: Option<String>,
-        hash: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        facts: Option<serde_json::Value>,
+        data: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         rules: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -86,22 +85,23 @@ pub mod http {
         versions: Vec<VersionEntry>,
     }
 
+    /// Temporal version entry for a single spec row.
+    ///
+    /// Ranges are half-open: `[effective_from, effective_to)`. `effective_from = None`
+    /// means the range is unbounded at the start (no earlier version exists).
+    /// `effective_to = None` means the range is unbounded at the end (no later
+    /// version exists; this row is still the latest).
     #[derive(serde::Serialize)]
     struct VersionEntry {
         effective_from: Option<String>,
-        hash: String,
+        effective_to: Option<String>,
     }
 
-    /// Build ETag, Memento-Datetime, Vary for the resolved spec.
+    /// Build Memento-Datetime, Vary for the resolved spec.
     fn spec_response_headers(
-        _spec_name: &String,
         effective_from: Option<&DateTimeValue>,
-        hash: &String,
     ) -> Vec<(axum::http::header::HeaderName, HeaderValue)> {
         let mut h = Vec::new();
-        if let Ok(v) = HeaderValue::from_str(&format!("\"{}\"", hash)) {
-            h.push((axum::http::header::ETAG, v));
-        }
         if let Some(af) = effective_from {
             if let Ok(v) = HeaderValue::from_str(&af.to_string()) {
                 h.push((
@@ -120,8 +120,8 @@ pub mod http {
     /// Start the Lemma HTTP server.
     ///
     ///         The server auto-generates typed REST endpoints for each loaded spec:
-    /// - `GET /{spec}/{rules?}` — evaluate rules (all if rules omitted), facts as query params
-    /// - `POST /{spec}/{rules?}` — evaluate rules (all if rules omitted), facts as JSON body
+    /// - `GET /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as query params
+    /// - `POST /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as JSON body
     ///
     /// Meta routes:
     /// - `GET /` — list all specs
@@ -322,18 +322,18 @@ pub mod http {
     // Doc path (wildcard): GET = schema with versions, POST = evaluate
     // -----------------------------------------------------------------------
 
-    /// `GET /{*path}` — schema of resolved version; path = spec id (name or name~hash). `Accept-Datetime` for temporal, `?rules=` to scope.
+    /// `GET /{*path}` — schema of resolved version; path = SpecSet id. `Accept-Datetime` for temporal, `?rules=` to scope.
     async fn spec_get_schema(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<SpecQuery>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let spec_id = parse_spec_path(&path);
+        let spec_set_id = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = state.engine.read().await;
 
-        let schema = engine.schema(&spec_id, Some(&effective)).map_err(|e| {
+        let schema = engine.schema(&spec_set_id, Some(&effective)).map_err(|e| {
             (
                 lemma_error_to_status(&e),
                 Json(ErrorResponse {
@@ -346,14 +346,16 @@ pub mod http {
         let schema = if rule_names.is_empty() {
             schema
         } else {
-            let plan = engine.get_plan(&spec_id, Some(&effective)).map_err(|e| {
-                (
-                    lemma_error_to_status(&e),
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
+            let plan = engine
+                .get_plan(&spec_set_id, Some(&effective))
+                .map_err(|e| {
+                    (
+                        lemma_error_to_status(&e),
+                        Json(ErrorResponse {
+                            error: e.to_string(),
+                        }),
+                    )
+                })?;
             plan.schema_for_rules(&rule_names).map_err(|err| {
                 (
                     lemma_error_to_status(&err),
@@ -364,35 +366,8 @@ pub mod http {
             })?
         };
 
-        let spec_arc = engine.get_spec(&spec_id, Some(&effective)).map_err(|e| {
-            (
-                lemma_error_to_status(&e),
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
-
-        let versions: Vec<VersionEntry> = engine
-            .list_specs()
-            .into_iter()
-            .filter(|s| s.name == spec_arc.name)
-            .map(|arc| {
-                let effective_from = arc.effective_from().cloned();
-                let hash = engine
-                    .get_plan(&arc.name, effective_from.as_ref())
-                    .expect("BUG: loaded spec has no plan")
-                    .plan_hash();
-                VersionEntry {
-                    effective_from: effective_from.map(|d| d.to_string()),
-                    hash,
-                }
-            })
-            .collect();
-
-        let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
-        let hash = engine
-            .get_plan(&spec_id, Some(&effective))
+        let spec_arc = engine
+            .get_spec(&spec_set_id, Some(&effective))
             .map_err(|e| {
                 (
                     lemma_error_to_status(&e),
@@ -400,15 +375,26 @@ pub mod http {
                         error: e.to_string(),
                     }),
                 )
-            })?
-            .plan_hash();
+            })?;
+
+        let spec_set = engine
+            .get_spec_set(&spec_arc.name)
+            .expect("BUG: spec resolved by get_spec but spec set missing from engine");
+        let versions: Vec<VersionEntry> = spec_set
+            .iter_with_ranges()
+            .map(|(_, effective_from, effective_to)| VersionEntry {
+                effective_from: effective_from.map(|d| d.to_string()),
+                effective_to: effective_to.map(|d| d.to_string()),
+            })
+            .collect();
+
+        let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
 
         let body = GetSpecResponse {
-            spec_id,
+            spec_set_id,
             effective_from: effective_from_str,
-            hash: hash.clone(),
-            facts: Some(
-                serde_json::to_value(&schema.facts).expect("BUG: failed to serialize schema facts"),
+            data: Some(
+                serde_json::to_value(&schema.data).expect("BUG: failed to serialize schema data"),
             ),
             rules: Some(
                 serde_json::to_value(&schema.rules).expect("BUG: failed to serialize schema rules"),
@@ -421,27 +407,27 @@ pub mod http {
 
         let mut response = Json(body).into_response();
         let headers_mut = response.headers_mut();
-        for (k, v) in spec_response_headers(&spec_arc.name, spec_arc.effective_from(), &hash) {
+        for (k, v) in spec_response_headers(spec_arc.effective_from()) {
             headers_mut.insert(k, v);
         }
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = spec id (name or name~hash). `Accept-Datetime` for temporal, `?rules=` to limit. Body = form-encoded facts.
+    /// `POST /{*path}` — evaluate; path = SpecSet id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = form-encoded data.
     async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<SpecQuery>,
         headers: HeaderMap,
-        Form(fact_values): Form<std::collections::HashMap<String, String>>,
+        Form(data_values): Form<std::collections::HashMap<String, String>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let spec_id = parse_spec_path(&path);
+        let spec_set_id = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
 
         let mut response = engine
-            .run(&spec_id, Some(&effective), fact_values, false)
+            .run(&spec_set_id, Some(&effective), data_values, false)
             .map_err(|err| {
                 (
                     lemma_error_to_status(&err),
@@ -454,32 +440,33 @@ pub mod http {
             response.filter_rules(&rule_names);
         }
 
-        let spec_arc = engine.get_spec(&spec_id, Some(&effective)).ok();
+        let spec_arc = engine.get_spec(&spec_set_id, Some(&effective)).ok();
         let effective_from = spec_arc.as_ref().and_then(|a| a.effective_from());
-        let hash = engine
-            .get_plan(&spec_id, Some(&effective))
-            .expect("BUG: run succeeded but get_plan failed")
-            .plan_hash();
-        let results = response::convert_response_with_hash(
+        let results = response::convert_response_envelope(
             &response,
             want_explanations(&state, &headers),
             &response.spec_name,
             &effective,
-            &hash,
         );
         let mut axum_response = Json(results).into_response();
         let headers_mut = axum_response.headers_mut();
-        for (k, v) in spec_response_headers(&response.spec_name, effective_from, &hash) {
+        for (k, v) in spec_response_headers(effective_from) {
             headers_mut.insert(k, v);
         }
         Ok(axum_response)
     }
 
     // -----------------------------------------------------------------------
-    // Schema routes (legacy)
+    // Schema routes (legacy — kept for backward compatibility only)
     // -----------------------------------------------------------------------
+    //
+    // These routes predate the spec envelope returned by `GET /{spec_name}`
+    // (`spec_get_schema`). New clients must use `GET /{spec_name}` instead; it
+    // returns the same schema plus `spec_set_id`, `effective_from`, `versions`,
+    // and `meta`. The `/schema/*` routes are intentionally omitted from the
+    // generated OpenAPI document and are not part of the public contract.
 
-    /// `GET /schema/{spec_name}` — full spec schema (all facts and rules).
+    /// `GET /schema/{spec_name}` — full spec schema (all data and rules).
     async fn schema_all_rules(
         State(state): State<AppState>,
         Path(spec_name): Path<String>,
@@ -490,7 +477,7 @@ pub mod http {
     }
 
     /// `GET /schema/{spec_name}/{rules}` — schema scoped to specific rules and
-    /// only the facts those rules need.
+    /// only the data those rules need.
     async fn schema_for_rules(
         State(state): State<AppState>,
         Path((spec_name, rules)): Path<(String, String)>,

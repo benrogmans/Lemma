@@ -2,20 +2,20 @@ use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
-/// Test cross-spec fact references (should work)
+/// Test cross-spec data references (should work)
 #[test]
-fn test_cross_spec_fact_reference() {
+fn test_cross_spec_data_reference() {
     let mut engine = Engine::new();
 
     let base_spec = r#"
 spec base
-fact price: 100
-fact quantity: 5
+data price: 100
+data quantity: 5
 "#;
 
     let derived_spec = r#"
 spec derived
-fact base_data: spec base
+with base_data: base
 rule total: base_data.price * base_data.quantity
 "#;
 
@@ -46,13 +46,13 @@ fn test_cross_spec_rule_reference() {
 
     let base_spec = r#"
 spec base
-fact value: 50
+data value: 50
 rule doubled: value * 2
 "#;
 
     let derived_spec = r#"
 spec derived
-fact base_data: spec base
+with base_data: base
 rule derived_value: base_data.doubled + 10
 "#;
 
@@ -83,14 +83,14 @@ fn test_cross_spec_rule_reference_with_dependencies() {
 
     let base_spec = r#"
 spec base_employee
-fact monthly_salary: 5000
+data monthly_salary: 5000
 rule annual_salary: monthly_salary * 12
 rule with_bonus: annual_salary * 1.1
 "#;
 
     let derived_spec = r#"
 spec manager
-fact employee: spec base_employee
+with employee: base_employee
 rule manager_bonus: employee.annual_salary * 0.15
 "#;
 
@@ -114,23 +114,23 @@ rule manager_bonus: employee.annual_salary * 0.15
     assert_eq!(bonus.result.value().unwrap().to_string(), "9000");
 }
 
-/// Test fact binding with cross-spec rule reference
+/// Test data binding with cross-spec rule reference
 #[test]
-fn test_cross_spec_fact_binding_with_rule_reference() {
+fn test_cross_spec_data_binding_with_rule_reference() {
     let mut engine = Engine::new();
 
     let base_spec = r#"
 spec base
-fact price: 100
-fact quantity: 5
+data price: 100
+data quantity: 5
 rule total: price * quantity
 "#;
 
     let derived_spec = r#"
 spec derived
-fact config: spec base
-fact config.price: 200
-fact config.quantity: 3
+with config: base
+data config.price: 200
+data config.quantity: 3
 rule derived_total: config.total
 "#;
 
@@ -161,21 +161,21 @@ fn test_nested_cross_spec_rule_reference() {
 
     let config_spec = r#"
 spec config
-fact base_days: 3
+data base_days: 3
 rule standard_processing_days: base_days
 rule express_processing_days: 1
 "#;
 
     let order_spec = r#"
 spec order
-fact is_express: false
+data is_express: false
 rule processing_days: 5
 "#;
 
     let derived_spec = r#"
 spec derived
-fact settings: spec config
-fact order_info: spec order
+with settings: config
+with order_info: order
 rule total_days: settings.standard_processing_days + order_info.processing_days
 "#;
 
@@ -209,14 +209,14 @@ fn test_cross_spec_rule_reference_in_unless_clause() {
 
     let base_spec = r#"
 spec base
-fact threshold: 100
-fact value: 150
+data threshold: 100
+data value: 150
 rule is_valid: value >= threshold
 "#;
 
     let derived_spec = r#"
 spec derived
-fact base_data: spec base
+with base_data: base
 rule status: "invalid"
   unless base_data.is_valid then "valid"
 "#;
@@ -241,20 +241,20 @@ rule status: "invalid"
     assert_eq!(status.result.value().unwrap().to_string(), "valid");
 }
 
-/// Test that we can mix cross-spec fact and rule references
+/// Test that we can mix cross-spec data and rule references
 #[test]
-fn test_cross_spec_mixed_fact_and_rule_references() {
+fn test_cross_spec_mixed_data_and_rule_references() {
     let mut engine = Engine::new();
 
     let base_spec = r#"
 spec base
-fact input: 50
+data input: 50
 rule calculated: input * 2
 "#;
 
     let derived_spec = r#"
 spec derived
-fact base_data: spec base
+with base_data: base
 rule combined: base_data.input + base_data.calculated
 "#;
 
@@ -278,24 +278,24 @@ rule combined: base_data.input + base_data.calculated
     assert_eq!(combined.result.value().unwrap().to_string(), "150");
 }
 
-/// Test cross-spec fact binding with multiple levels (should work)
+/// Test cross-spec data binding with multiple levels (should work)
 #[test]
-fn test_multi_level_fact_binding() {
+fn test_multi_level_data_binding() {
     let mut engine = Engine::new();
 
     let base_spec = r#"
 spec base
-fact x: 10
-fact y: 20
-fact z: 30
+data x: 10
+data y: 20
+data z: 30
 "#;
 
     let derived_spec = r#"
 spec derived
-fact data: spec base
-fact data.x: 100
-fact data.y: 200
-rule sum: data.x + data.y + data.z
+with b: base
+data b.x: 100
+data b.y: 200
+rule sum: b.x + b.y + b.z
 "#;
 
     engine
@@ -320,22 +320,22 @@ rule sum: data.x + data.y + data.z
     assert_eq!(sum.result.value().unwrap().to_string(), "330");
 }
 
-/// Test simple fact binding without rule references (should work)
+/// Test simple data binding without rule references (should work)
 #[test]
-fn test_simple_fact_binding() {
+fn test_simple_data_binding() {
     let mut engine = Engine::new();
 
     let base_spec = r#"
 spec base
-fact price: 100
-fact quantity: 5
+data price: 100
+data quantity: 5
 "#;
 
     let derived_spec = r#"
 spec derived
-fact config: spec base
-fact config.price: 200
-fact config.quantity: 3
+with config: base
+data config.price: 200
+data config.quantity: 3
 rule total: config.price * config.quantity
 "#;
 
@@ -356,34 +356,34 @@ rule total: config.price * config.quantity
         .find(|r| r.rule.name == "total")
         .unwrap();
 
-    // Should be 200 * 3 = 600 (using overridden fact values)
+    // Should be 200 * 3 = 600 (using overridden data values)
     assert_eq!(total.result.value().unwrap().to_string(), "600");
 }
 
-/// Test that different fact paths to the same rule produce different results
+/// Test that different data paths to the same rule produce different results
 /// This is the critical test for the RulePath implementation!
 #[test]
-fn test_different_fact_paths_produce_different_results() {
+fn test_different_data_paths_produce_different_results() {
     let mut engine = Engine::new();
 
     let example1_spec = r#"
 spec example1
-fact price: 99
+data price: 99
 rule total: price * 1.21
 "#;
 
     let example2_spec = r#"
 spec example2
-fact base: spec example1
+with base: example1
 "#;
 
     let example3_spec = r#"
 spec example3
-fact base: spec example2
+with base: example2
 rule total1: base.base.total
 
-fact base2: spec example2
-fact base2.base.price: 79
+with base2: example2
+data base2.base.price: 79
 rule total2: base2.base.total
 "#;
 
@@ -427,10 +427,10 @@ fn spec_ref_evaluates_to_referenced_spec() {
 
     let code = r#"
 spec pricing
-fact base_price: 200
+data base_price: 200
 
 spec order
-fact p: spec pricing
+with p: pricing
 rule total: p.base_price
 "#;
 
@@ -461,8 +461,8 @@ fn cross_spec_dependency_rules_excluded_from_results() {
 
     let base_spec = r#"
 spec base_employee
-fact monthly_salary: 5000
-fact employment_duration: 3 years
+data monthly_salary: 5000
+data employment_duration: 3 years
 rule annual_salary: monthly_salary * 12
 rule is_eligible_for_bonus: false
   unless employment_duration >= 1 years then true
@@ -470,7 +470,7 @@ rule is_eligible_for_bonus: false
 
     let derived_spec = r#"
 spec specific_employee
-fact employee: spec base_employee
+with employee: base_employee
 rule salary_with_bonus: employee.annual_salary
   unless employee.is_eligible_for_bonus then employee.annual_salary * 1.1
 rule employee_summary: employee.monthly_salary
@@ -516,10 +516,10 @@ fn spec_ref_from_order_to_pricing_evaluates_correctly() {
 
     let code = r#"
 spec pricing
-fact base_price: 150
+data base_price: 150
 
 spec order
-fact p: spec pricing
+with p: pricing
 rule total: p.base_price
 "#;
 

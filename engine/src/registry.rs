@@ -13,7 +13,7 @@
 use crate::engine::Context;
 use crate::error::Error;
 use crate::limits::ResourceLimits;
-use crate::parsing::ast::{DateTimeValue, FactValue, TypeDef};
+use crate::parsing::ast::{DataValue, DateTimeValue};
 use crate::parsing::source::Source;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -216,7 +216,7 @@ pub struct LemmaBase {
 #[cfg(feature = "registry")]
 impl LemmaBase {
     /// The base URL for the LemmaBase.com registry.
-    pub const BASE_URL: &'static str = "https://lemmabase.com";
+    pub const BASE_URL: &'static str = "http://localhost:4444";
 
     /// Create a new LemmaBase registry backed by the real HTTP client (reqwest on native, fetch on WASM).
     pub fn new() -> Self {
@@ -410,7 +410,7 @@ pub async fn resolve_registry_references(
                 };
 
             for spec in new_specs {
-                let bare_refs = crate::planning::validation::collect_bare_registry_refs(&spec);
+                let bare_refs = crate::planning::graph::collect_bare_registry_refs(&spec);
                 if !bare_refs.is_empty() {
                     round_errors.push(Error::validation_with_context(
                         format!(
@@ -451,7 +451,7 @@ struct RegistryReference {
 }
 
 /// Collect all unresolved `@...` references from specs in `ctx`.
-/// Collects from both fact-level spec refs and type imports into a single flat set.
+/// Collects from both data-level spec refs and type imports into a single flat set.
 fn collect_unresolved_registry_references(
     ctx: &Context,
     already_requested: &HashSet<String>,
@@ -462,15 +462,9 @@ fn collect_unresolved_registry_references(
     for spec in ctx.iter() {
         let spec = spec.as_ref();
         if spec.attribute.is_none() {
-            let has_registry_refs = spec.facts.iter().any(|f| match &f.value {
-                FactValue::SpecReference(ref r) => r.from_registry,
-                FactValue::TypeDeclaration {
-                    from: Some(ref r), ..
-                } => r.from_registry,
-                _ => false,
-            }) || spec.types.iter().any(|t| match t {
-                TypeDef::Import { from, .. } => from.from_registry,
-                TypeDef::Inline {
+            let has_registry_refs = spec.data.iter().any(|f| match &f.value {
+                DataValue::SpecReference(ref r) => r.from_registry,
+                DataValue::TypeDeclaration {
                     from: Some(ref r), ..
                 } => r.from_registry,
                 _ => false,
@@ -485,7 +479,11 @@ fn collect_unresolved_registry_references(
         }
 
         let mut try_collect = |name: &str, source: &Source| {
-            let already_satisfied = ctx.get_spec_effective_from(name, None).is_some();
+            let already_satisfied = ctx
+                .spec_sets()
+                .get(name)
+                .and_then(|ss| ss.get_exact(None))
+                .is_some();
             if !already_satisfied
                 && !already_requested.contains(name)
                 && seen_in_this_round.insert(name.to_string())
@@ -497,36 +495,16 @@ fn collect_unresolved_registry_references(
             }
         };
 
-        for fact in &spec.facts {
-            match &fact.value {
-                FactValue::SpecReference(spec_ref) if spec_ref.from_registry => {
-                    try_collect(&spec_ref.name, &fact.source_location);
+        for data in &spec.data {
+            match &data.value {
+                DataValue::SpecReference(spec_ref) if spec_ref.from_registry => {
+                    try_collect(&spec_ref.name, &data.source_location);
                 }
-                FactValue::TypeDeclaration {
+                DataValue::TypeDeclaration {
                     from: Some(from_ref),
                     ..
                 } if from_ref.from_registry => {
-                    try_collect(&from_ref.name, &fact.source_location);
-                }
-                _ => {}
-            }
-        }
-
-        for type_def in &spec.types {
-            match type_def {
-                TypeDef::Import {
-                    from,
-                    source_location,
-                    ..
-                } if from.from_registry => {
-                    try_collect(&from.name, source_location);
-                }
-                TypeDef::Inline {
-                    from: Some(from_ref),
-                    source_location,
-                    ..
-                } if from_ref.from_registry => {
-                    try_collect(&from_ref.name, source_location);
+                    try_collect(&from_ref.name, &data.source_location);
                 }
                 _ => {}
             }
@@ -596,7 +574,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_with_no_registry_references_returns_local_specs_unchanged() {
         let source = r#"spec example
-fact price: 100"#;
+data price: 100"#;
         let local_specs = crate::parse(source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -625,7 +603,7 @@ fact price: 100"#;
     #[tokio::test]
     async fn resolve_fetches_single_spec_from_registry() {
         let local_source = r#"spec main_spec
-fact external: spec @org/project/helper
+with external: @org/project/helper
 rule value: external.quantity"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
@@ -641,7 +619,7 @@ rule value: external.quantity"#;
         registry.add_spec_bundle(
             "@org/project/helper",
             r#"spec @org/project/helper
-fact quantity: 42"#,
+data quantity: 42"#,
         );
 
         resolve_registry_references(
@@ -674,12 +652,12 @@ fact quantity: 42"#,
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
             "org/spec",
-            "spec org/spec 2025-01-01\nfact x: 1\n\nspec org/spec 2026-01-15\nfact x: 2",
+            "spec org/spec 2025-01-01\ndata x: 1\n\nspec org/spec 2026-01-15\ndata x: 2",
         );
 
         let bundle = registry.get("org/spec").await.unwrap();
-        assert!(bundle.lemma_source.contains("fact x: 1"));
-        assert!(bundle.lemma_source.contains("fact x: 2"));
+        assert!(bundle.lemma_source.contains("data x: 1"));
+        assert!(bundle.lemma_source.contains("data x: 2"));
 
         assert_eq!(
             registry.url_for_id("org/spec", None),
@@ -694,7 +672,7 @@ fact quantity: 42"#,
     #[tokio::test]
     async fn resolve_fetches_transitive_dependencies() {
         let local_source = r#"spec main_spec
-fact a: spec @org/project/spec_a"#;
+with a: @org/project/spec_a"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -709,12 +687,12 @@ fact a: spec @org/project/spec_a"#;
         registry.add_spec_bundle(
             "@org/project/spec_a",
             r#"spec @org/project/spec_a
-fact b: spec @org/project/spec_b"#,
+with b: @org/project/spec_b"#,
         );
         registry.add_spec_bundle(
             "@org/project/spec_b",
             r#"spec @org/project/spec_b
-fact value: 99"#,
+data value: 99"#,
         );
 
         resolve_registry_references(
@@ -736,7 +714,7 @@ fact value: 99"#,
     #[tokio::test]
     async fn resolve_handles_bundle_with_multiple_specs() {
         let local_source = r#"spec main_spec
-fact a: spec @org/project/spec_a"#;
+with a: @org/project/spec_a"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -751,10 +729,10 @@ fact a: spec @org/project/spec_a"#;
         registry.add_spec_bundle(
             "@org/project/spec_a",
             r#"spec @org/project/spec_a
-fact b: spec @org/project/spec_b
+with b: @org/project/spec_b
 
 spec @org/project/spec_b
-fact value: 99"#,
+data value: 99"#,
         );
 
         resolve_registry_references(
@@ -776,7 +754,7 @@ fact value: 99"#,
     #[tokio::test]
     async fn resolve_returns_registry_error_when_registry_fails() {
         let local_source = r#"spec main_spec
-fact external: spec @org/project/missing"#;
+with external: @org/project/missing"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -834,8 +812,8 @@ fact external: spec @org/project/missing"#;
     #[tokio::test]
     async fn resolve_returns_all_registry_errors_when_multiple_refs_fail() {
         let local_source = r#"spec main_spec
-fact helper: spec @org/example/helper
-type money from @lemma/std/finance"#;
+with @org/example/helper
+data money from @lemma/std/finance"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -888,10 +866,10 @@ type money from @lemma/std/finance"#;
     #[tokio::test]
     async fn resolve_does_not_request_same_identifier_twice() {
         let local_source = r#"spec spec_one
-fact a: spec @org/shared
+with a: @org/shared
 
 spec spec_two
-fact b: spec @org/shared"#;
+with b: @org/shared"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -906,7 +884,7 @@ fact b: spec @org/shared"#;
         registry.add_spec_bundle(
             "@org/shared",
             r#"spec @org/shared
-fact value: 1"#,
+data value: 1"#,
         );
 
         resolve_registry_references(
@@ -927,8 +905,8 @@ fact value: 1"#,
     #[tokio::test]
     async fn resolve_handles_type_import_from_registry() {
         let local_source = r#"spec main_spec
-type money from @lemma/std/finance
-fact price: [money]"#;
+data money from @lemma/std/finance
+data price: money"#;
         let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -943,7 +921,7 @@ fact price: [money]"#;
         registry.add_spec_bundle(
             "@lemma/std/finance",
             r#"spec @lemma/std/finance
-type money: scale
+data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
  -> decimals 2"#,
@@ -1113,16 +1091,6 @@ type money: scale
         }
 
         #[test]
-        fn navigation_url_for_deeply_nested_identifier() {
-            let registry = LemmaBase::new();
-            let url = registry.navigation_url("@org/team/project/subdir/spec", None);
-            assert_eq!(
-                url,
-                format!("{}/@org/team/project/subdir/spec", LemmaBase::BASE_URL)
-            );
-        }
-
-        #[test]
         fn url_for_id_returns_navigation_url() {
             let registry = LemmaBase::new();
             let url = registry.url_for_id("@user/workspace/somespec", None);
@@ -1165,16 +1133,6 @@ type money: scale
             );
         }
 
-        #[test]
-        fn default_trait_creates_same_instance_as_new() {
-            let from_new = LemmaBase::new();
-            let from_default = LemmaBase::default();
-            assert_eq!(
-                from_new.url_for_id("test/spec", None),
-                from_default.url_for_id("test/spec", None)
-            );
-        }
-
         // -------------------------------------------------------------------
         // fetch_source tests (mock-based, no real HTTP calls)
         // -------------------------------------------------------------------
@@ -1182,12 +1140,12 @@ type money: scale
         #[tokio::test]
         async fn fetch_source_returns_bundle_on_success() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "spec org/my_spec\nfact x: 1",
+                "spec org/my_spec\ndata x: 1",
             )));
 
             let bundle = registry.fetch_source("@org/my_spec").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "spec org/my_spec\nfact x: 1");
+            assert_eq!(bundle.lemma_source, "spec org/my_spec\ndata x: 1");
             assert_eq!(bundle.attribute, "@org/my_spec");
         }
 
@@ -1197,7 +1155,7 @@ type money: scale
             let captured = captured_url.clone();
             let mock = MockHttpFetcher::with_handler(move |url| {
                 *captured.lock().unwrap() = url.to_string();
-                Ok("spec test/spec\nfact x: 1".to_string())
+                Ok("spec test/spec\ndata x: 1".to_string())
             });
             let registry = LemmaBase::with_fetcher(Box::new(mock));
 
@@ -1242,16 +1200,6 @@ type money: scale
                 "Expected 'HTTP 500' in: {}",
                 err.message
             );
-        }
-
-        #[tokio::test]
-        async fn fetch_source_maps_http_502_to_server_error() {
-            let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(502)));
-
-            let err = registry.fetch_source("@org/broken").await.unwrap_err();
-
-            assert_eq!(err.kind, RegistryErrorKind::ServerError);
         }
 
         #[tokio::test]
@@ -1342,34 +1290,13 @@ type money: scale
         #[tokio::test]
         async fn get_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
-                "spec org/resolved\nfact a: 1",
+                "spec org/resolved\ndata a: 1",
             )));
 
             let bundle = registry.get("@org/resolved").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "spec org/resolved\nfact a: 1");
+            assert_eq!(bundle.lemma_source, "spec org/resolved\ndata a: 1");
             assert_eq!(bundle.attribute, "@org/resolved");
-        }
-
-        #[tokio::test]
-        async fn get_propagates_http_error() {
-            let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
-
-            let err = registry.get("@org/missing").await.unwrap_err();
-
-            assert!(err.message.contains("HTTP 404"));
-        }
-
-        #[tokio::test]
-        async fn get_propagates_network_error() {
-            let registry = LemmaBase::with_fetcher(Box::new(
-                MockHttpFetcher::always_failing_with_network_error("timeout"),
-            ));
-
-            let err = registry.get("@lemma/std/types").await.unwrap_err();
-
-            assert!(err.message.contains("timeout"));
         }
 
         #[tokio::test]

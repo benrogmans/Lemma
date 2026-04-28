@@ -1,96 +1,87 @@
-# AGENTS.md — Guide for AI assistants working on Lemma
+# AGENTS.md — Mandatory rules for AI agents working on Lemma
 
-This file states **implementation quality standards** and **non-negotiable guarantees** for the engine, CLI, and tooling. It does **not** describe Lemma’s language design, syntax, or pipeline—read **`documentation/`**, **`README.md`**, and the **codebase** for that.
-
----
-
-## Core guarantees (do not weaken these)
-
-### Validation before execution
-
-- **Planning** (semantic + graph + execution plan) fully validates the spec. Only if planning succeeds does the engine run evaluation.
-- Invalid Lemma must be rejected with **Error** (Parse, Semantic, Engine, CircularDependency, etc.). Never “try to run and see.”
-
-### Post-validation: evaluation is guaranteed to complete
-
-- **After** a spec has been successfully planned, evaluation is **guaranteed** to run to completion for the requested rules (modulo resource limits). The execution plan is self-contained and fully resolved.
-- If something **impossible** happens during evaluation (e.g. missing explanation node, wrong variant in a match that was supposed to be exhaustive), the program must **fail fast**: use `unreachable!()` or `panic!()`. Do **not** return a fallback value or “best guess.”
-
-### No silent defaults or heuristics
-
-- **Silent defaults and heuristics are forbidden.** If the semantics don’t define a value, the code must either:
-  - return **Error** (during parse/planning), or
-  - return **Veto** (during evaluation, for domain-level “no value” or impossible computations based on facts like "division by zero"), or
-  - **panic / unreachable** when an invariant is violated.
-- Never infer or guess to “keep going”; that undermines certainty.
-
-### Determinism
-
-- **Execution plans** are deterministic: same spec + same fact inputs ⇒ same evaluation order and same results (or same Veto).
-- Evaluation must not depend on undefined order (e.g. iteration over unordered collections in a way that affects results). Rules are evaluated in **topological order** by dependency.
-
-### Veto is a result, not an error
-
-- Rules that **cannot produce a value** (e.g. division by zero, missing fact, user-defined `veto "reason"`, date overflow) yield **Veto**, not Error.
-- **OperationResult** is either `Value(LiteralValue)` or `Veto(Option<String>)`.
-- Veto propagates to dependent rules only when the dependent rule **needs** the vetoed value; if an `unless` branch provides a value without evaluating the vetoed rule, that branch can still succeed. See `documentation/veto_semantics.md`.
-- **Planning returns Error** for invalid specs (type mismatches, unsupported operations). **Runtime panics** for bugs that fell through validation (use `unreachable!()`). **Veto** is only for domain-level “no value”.
-
-### No placeholders in Lemma code
-
-- **Placeholders in `.lemma` sources, docs, tests, or examples are unacceptable** (dummy values, “TODO” literals, fake numbers, placeholder text). They make specs look valid while hiding missing or wrong logic.
-- Use **real, intended** values that match the domain, or omit and fail validation—do **not** fill gaps with placeholders.
+These are **non-negotiable rules**, not guidelines. Violating any of them is a bug you introduced. This file does not describe Lemma's language — read `documentation/`, `README.md`, and the codebase for that.
 
 ---
 
-## Research the codebase before adding behavior
+## The 10 Rules
 
-**Do not add new functionality until existing implementations are thoroughly explored.** Lemma already encodes many invariants, helpers, and code paths; parallel or duplicate logic (second parsers, overlapping validators, ad hoc conversions, copy-pasted checks) drifts from guarantees, hides bugs, and makes review harder.
+### 1. Find existing code before writing new code
 
-- **Search and read:** Use ripgrep, navigation, and semantic search across `engine/`, `cli/`, `openapi/`, and related crates. Find call sites, tests, and modules that already address the same concern (planning, evaluation, computation, serialization, registry, WASM, LSP, etc.).
-- **Prefer extension:** Reuse or extend existing types and functions; wire into the established pipeline instead of introducing a parallel one.
-- **When in doubt:** Follow tests and production callers to see how the engine is supposed to behave; align with that rather than inventing a second path.
+**Before writing any function, type, or code path, search the codebase for existing implementations that already do what you need.** If the value you need is already computed, use it. If a function already exists, call it. If a type already carries the data, use that type.
 
-Skipping this step is how duplicate implementations appear—treat discovery as mandatory, not optional.
+Do not write a parallel implementation. Do not re-derive a value that is already stored. Do not create a second function that transforms the same inputs into the same outputs. If you are about to do any of these things, STOP and find the existing code.
 
----
+This is the single most common mistake. Treat discovery as mandatory.
 
-## Error handling rules for implementers
+### 2. Invariant violations crash — no exceptions
 
-- **Parse/planning:** Invalid input ⇒ return **Error** with clear, localized message (include source location where possible). Do not continue with a “best effort” plan.
-- **Evaluation:**
-  - Domain failures (e.g. division by zero, missing fact, user veto, date overflow) ⇒ **OperationResult::Veto(...)**.
-  - Type/operator mismatches that planning should have rejected ⇒ **unreachable!()** (planning bug).
-  - Bug or invariant violation (e.g. missing node, wrong enum variant) ⇒ **panic!()** or **unreachable!()** with a message that includes context (e.g. “BUG: …”).
-- **No silent fallbacks:** Do not use default values or heuristics to avoid failing; that violates Lemma’s guarantee of certainty.
+**NEVER write a soft error path (error-and-return, default value, empty fallback) for a condition that cannot happen if the code is correct.** Use `expect()`, `unreachable!()`, or `panic!("BUG: ...")`.
 
----
+- `if x.is_none() { return Err(...) }` for an invariant = **WRONG**
+- `x.unwrap_or(default)` for an invariant = **WRONG**
+- `x.unwrap_or_else(|| panic!(...))` when `.expect()` works = **WRONG**
+- `x.expect("BUG: x must be present after phase Y")` = **CORRECT**
 
-## Testing and development
+A wrong value that silently propagates is infinitely worse than a crash. This is rocket-ship code. A crash is safe. A wrong value kills.
 
-- **Use TDD.** Failing tests define missing or broken behaviour; do not hide or remove them to make the suite pass.
-- **Unit tests** live in the same module (to allow testing private functions); **integration tests** in `engine/tests/`.
-- Run tests with **cargo nextest**, not `cargo test`.
-- From repo root, **cargo precommit** runs **`versions-verify`**, then `fmt --check`, clippy, nextest, and cargo-deny (needs `cargo-nextest` and `cargo-deny` on `PATH`; CI runs the same checks across lint / test / security jobs).
-- **The release version** is `[workspace.package] version` in the root `Cargo.toml`. Use **`cargo bump <version>`** to bump the version everywhere, then commit. **`cargo verify`** verifies that all version values are aligned.
-- When adding features, add tests that lock in the intended behaviour (including Veto propagation and error cases).
+### 3. Error vs Veto vs panic — three-way split, no gray area
+
+| Phase | Bad input / invalid spec | Domain "no value" | Bug / impossible state |
+|-------|-------------------------|-------------------|----------------------|
+| Parse/Planning | `Err(Error)` | — | `panic!` / `unreachable!` |
+| Evaluation | — | `Veto(reason)` | `panic!` / `unreachable!` |
+
+- **Error** = user wrote invalid Lemma. Return it with source location.
+- **Veto** = valid spec, but data make a rule impossible (division by zero, missing data, user `veto`). Veto is a result, not an error.
+- **panic/unreachable** = the code has a bug. Crash immediately with a `"BUG: ..."` message.
+
+There is no fourth option. Do not invent one.
+
+### 4. No silent defaults, heuristics, or guesses
+
+If the semantics do not define a value, the code must Error, Veto, or panic. Never infer, guess, or substitute a default to "keep going." Never return an empty string, zero, `None`, or a fallback value when the real answer is "this shouldn't happen" or "this is undefined."
+
+### 5. No placeholders anywhere
+
+Placeholders in `.lemma` sources, documentation, tests, or examples are forbidden. No dummy values, no "TODO" literals, no fake numbers, no `"example"` strings. Use real domain values or omit and fail validation.
+
+### 6. Validation before execution — always
+
+Planning fully validates the spec. Only after planning succeeds does evaluation run. Invalid Lemma is rejected with Error during planning. Never "try to run and see."
+
+After planning succeeds, evaluation is **guaranteed** to complete. The execution plan is self-contained. If something impossible happens during evaluation, it is a bug — panic.
+
+### 7. Determinism is non-negotiable
+
+Same spec + same data = same evaluation order = same results (or same Veto). Do not iterate over unordered collections in ways that affect output. Rules evaluate in topological order by dependency.
+
+### 8. Failing tests are valuable — never suppress them
+
+Failing tests reveal missing or broken functionality. Do not:
+- Delete or skip a failing test to make the suite green
+- Weaken an assertion to match wrong output
+- Comment out a test "temporarily"
+
+If a test fails, either fix the code or fix the test to match correct behavior. A red test is information. A deleted test is a hidden bug.
+
+### 9. Partial implementations must be guarded
+
+If you cannot finish an implementation completely, every unfinished path must have a `todo!()` macro. Do not write code that compiles and runs but silently skips unimplemented branches. Rust will warn about unreachable code after `todo!()` — that warning is correct and intentional. A partial implementation that pretends to be complete is worse than one that refuses to compile.
+
+### 10. Use `cargo nextest run`, not `cargo test`
+
+Unit tests go in the same module as the code (to test private functions). Integration tests go in `engine/tests/`. Always run with `cargo nextest run`. From repo root, `cargo precommit` runs the full CI pipeline (versions-verify, fmt, clippy, nextest, cargo-deny).
 
 ---
 
 ## Where to read more
 
 | Resource | Purpose |
-|----------|--------|
+|----------|---------|
 | **README.md** | Project overview, quick start |
-| **xtask/README.md** | precommit, `cargo bump` / `cargo verify`, tracked release paths |
+| **xtask/README.md** | precommit, `cargo bump` / `cargo verify`, release paths |
 | **documentation/index.md** | Language concepts |
 | **documentation/reference.md** | Operators, types, literals, syntax |
-| **documentation/veto_semantics.md** | When Veto applies and propagates |
+| **documentation/veto_semantics.md** | Veto propagation rules |
 | **documentation/examples/** | Example `.lemma` files |
-| **.cursor/rules/** | Project rules (e.g. tests, TDD) |
-
----
-
-## Summary
-
-**Research the codebase before adding behavior** (first section). Preserve **Error** vs **Veto** vs **panic/unreachable** as above. **Execution plans** stay **deterministic**. **Never** use placeholders in Lemma-facing content. Prefer **cargo nextest** and TDD. For CLI/API surface details (`lemma schema`, plan hash pins, etc.), see **README.md** and **OpenAPI** / CLI sources.

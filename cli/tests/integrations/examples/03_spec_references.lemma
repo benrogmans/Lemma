@@ -2,14 +2,14 @@ spec base_employee
 """
 Base Employee Spec
 
-Defines basic employee facts that can be referenced and extended.
+Defines basic employee data that can be referenced and extended.
 """
 
-fact department          : "Engineering"
-fact employment_duration : 0 years
-fact is_full_time        : true
-fact name                : "John Doe"
-fact monthly_salary      : [number -> minimum 0 -> default 5_000]
+data department          : "Engineering"
+data employment_duration : 0 years
+data is_full_time        : true
+data name                : "John Doe"
+data monthly_salary      : number -> minimum 0 -> default 5_000
 
 rule annual_salary:
   monthly_salary * 12
@@ -23,14 +23,14 @@ spec specific_employee
 """
 Specific Employee Spec
 
-References the base employee spec and binds specific facts.
-Demonstrates spec composition, fact binding, and rule references.
+References the base employee spec and binds specific data.
+Demonstrates spec composition, data binding, and rule references.
 """
 
-fact employee                     : spec base_employee
-fact employee.employment_duration : 3 years
-fact employee.monthly_salary      : 7_500
-fact employee.name                : "Alice Smith"
+with employee: base_employee
+data employee.employment_duration : 3 years
+data employee.monthly_salary      : 7_500
+data employee.name                : "Alice Smith"
 
 rule salary_with_bonus:
   employee.annual_salary
@@ -48,14 +48,14 @@ Contractor Spec
 Shows a different employment model using spec references.
 """
 
-type money: scale
+data money: scale
   -> unit eur 1.00
 
-fact hours_worked : 120 hours
-fact hourly_rate  : [money -> minimum 0 -> default 85 eur]
+data hours_worked : 120 hours
+data hourly_rate  : money -> minimum 0 -> default 85 eur
 
-fact person              : spec base_employee
-fact person.is_full_time : false
+with person: base_employee
+data person.is_full_time : false
 
 rule total_payment:
   hourly_rate * hours_worked

@@ -1,4 +1,4 @@
-use crate::planning::semantics::{FactData, FactPath, LiteralValue, ValueKind};
+use crate::planning::semantics::{DataDefinition, DataPath, LiteralValue, ValueKind};
 use crate::Error;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
@@ -14,11 +14,11 @@ pub fn from_json(json: &[u8]) -> Result<HashMap<String, String>, Error> {
     let map: HashMap<String, Value> = serde_json::from_slice(json)
         .map_err(|e| Error::validation(format!("JSON parse error: {}", e), None, None::<String>))?;
 
-    Ok(fact_values_from_map(map))
+    Ok(data_values_from_map(map))
 }
 
 /// Same string coercion as [`from_json`], for maps already parsed as JSON values (e.g. WASM).
-pub fn fact_values_from_map(map: HashMap<String, Value>) -> HashMap<String, String> {
+pub fn data_values_from_map(map: HashMap<String, Value>) -> HashMap<String, String> {
     map.into_iter()
         .filter(|(_, v)| !v.is_null())
         .map(|(k, v)| (k, json_value_to_string(&v)))
@@ -33,7 +33,7 @@ fn json_value_to_string(value: &Value) -> String {
         Value::Array(_) | Value::Object(_) => serde_json::to_string(value)
             .expect("BUG: serde_json::to_string failed on a serde_json::Value"),
         Value::Null => unreachable!(
-            "null JSON values are filtered in fact_values_from_map before json_value_to_string"
+            "null JSON values are filtered in data_values_from_map before json_value_to_string"
         ),
     }
 }
@@ -81,29 +81,29 @@ fn decimal_to_json(d: &Decimal) -> Value {
 }
 
 // -----------------------------------------------------------------------------
-// Serde helpers for FactPath / FactData
+// Serde helpers for DataPath / DataDefinition
 // -----------------------------------------------------------------------------
 
-/// Serializes IndexMap<FactPath, FactData> as array of [FactPath, FactData] tuples.
-pub fn serialize_resolved_fact_value_map<S>(
-    map: &IndexMap<FactPath, FactData>,
+/// Serializes IndexMap<DataPath, DataDefinition> as array of [DataPath, DataDefinition] tuples.
+pub fn serialize_resolved_data_value_map<S>(
+    map: &IndexMap<DataPath, DataDefinition>,
     serializer: S,
 ) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
-    let entries: Vec<(&FactPath, &FactData)> = map.iter().collect();
+    let entries: Vec<(&DataPath, &DataDefinition)> = map.iter().collect();
     entries.serialize(serializer)
 }
 
-/// Deserializes from array of [FactPath, FactData] tuples, preserving order.
-pub fn deserialize_resolved_fact_value_map<'de, D>(
+/// Deserializes from array of [DataPath, DataDefinition] tuples, preserving order.
+pub fn deserialize_resolved_data_value_map<'de, D>(
     deserializer: D,
-) -> Result<IndexMap<FactPath, FactData>, D::Error>
+) -> Result<IndexMap<DataPath, DataDefinition>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let entries: Vec<(FactPath, FactData)> = Vec::deserialize(deserializer)?;
+    let entries: Vec<(DataPath, DataDefinition)> = Vec::deserialize(deserializer)?;
     Ok(entries.into_iter().collect())
 }
 

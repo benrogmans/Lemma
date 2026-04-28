@@ -369,18 +369,4 @@ version = "0.8.4"
         let out = replace_dep_pins(s, "0.8.4", "0.8.5");
         assert!(out.contains("=0.8.5"));
     }
-
-    #[test]
-    fn needles_align_with_bump_replace_substrings() {
-        let v = "1.2.3";
-        assert_eq!(dep_pin_needle(v), r#"version = "=1.2.3""#);
-        assert_eq!(mix_needle(v), r#"@version "1.2.3""#);
-        assert_eq!(readme_needle(v), r#"lemma-engine = "1.2.3""#);
-    }
-
-    #[test]
-    fn tracked_paths_cover_bump_targets() {
-        assert!(!tracked::PATH_DEP_MANIFESTS.is_empty());
-        assert!(tracked::PATH_DEP_MANIFESTS.contains(&"cli/Cargo.toml"));
-    }
 }

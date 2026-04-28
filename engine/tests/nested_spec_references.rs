@@ -11,15 +11,15 @@ fn test_single_level_spec_ref_with_rule_reference() {
 
     let base_spec = r#"
 spec pricing
-fact base_price: 100
-fact tax_rate: 21%
+data base_price: 100
+data tax_rate: 21%
 rule final_price: base_price * (1 + tax_rate)
 "#;
 
     let line_item_spec = r#"
 spec line_item
-fact pricing: spec pricing
-fact quantity: 10
+with pricing
+data quantity: 10
 rule line_total: pricing.final_price * quantity
 "#;
 
@@ -62,19 +62,19 @@ fn test_multi_level_spec_rule_reference() {
 
     let base_spec = r#"
 spec base
-fact value: 100
+data value: 100
 rule doubled: value * 2
 "#;
 
     let middle_spec = r#"
 spec middle
-fact base_ref: spec base
+with base_ref: base
 rule middle_calc: base_ref.doubled + 50
 "#;
 
     let top_spec = r#"
 spec top
-fact middle_ref: spec middle
+with middle_ref: middle
 rule top_calc: middle_ref.middle_calc
 "#;
 
@@ -108,92 +108,49 @@ rule top_calc: middle_ref.middle_calc
     }
 }
 
-/// Overriding nested spec references should propagate through rule evaluations.
-/// When we bind a nested spec reference and reference rules through that chain,
-/// the overridden spec should be used in the evaluation.
+/// The old `data X: spec Y` syntax is rejected with a helpful error.
 #[test]
-fn test_nested_spec_binding_with_rule_reference() {
+fn test_old_data_spec_syntax_rejected() {
     let mut engine = Engine::new();
 
-    let pricing_spec = r#"
-spec pricing
-fact base_price: 100
-rule final_price: base_price * 1.1
+    let specs = r#"
+spec a
+data x: spec other
 "#;
 
-    let wholesale_spec = r#"
-spec wholesale_pricing
-fact base_price: 75
-rule final_price: base_price * 1.1
-"#;
-
-    let line_item_spec = r#"
-spec line_item
-fact pricing: spec pricing
-fact quantity: 10
-rule line_total: pricing.final_price * quantity
-"#;
-
-    let order_spec = r#"
-spec order
-fact line: spec line_item
-fact line.pricing: spec wholesale_pricing
-fact line.quantity: 100
-rule order_total: line.line_total
-"#;
-
-    engine
-        .load(pricing_spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    engine
-        .load(wholesale_spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    engine
-        .load(line_item_spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    engine
-        .load(order_spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("order", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let order_total = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "order_total")
-        .expect("order_total rule not found in results");
-
-    match &order_total.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("8250").unwrap()),
-            other => panic!("Expected Number for order_total, got {:?}", other),
-        },
-        other => panic!("Expected Value for order_total, got {:?}", other),
-    }
+    let errs = engine
+        .load(specs, lemma::SourceType::Labeled("test.lemma"))
+        .unwrap_err();
+    let msg = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        msg.contains("syntax has been removed"),
+        "expected old syntax rejection, got: {msg}"
+    );
 }
 
-/// Accessing facts through multi-level spec references with nested bindings works correctly.
+/// Accessing data through multi-level spec references with nested bindings works correctly.
 #[test]
-fn test_multi_level_fact_access_through_spec_refs() {
+fn test_multi_level_data_access_through_spec_refs() {
     let mut engine = Engine::new();
 
     let base_spec = r#"
 spec base
-fact value: 50
+data value: 50
 "#;
 
     let middle_spec = r#"
 spec middle
-fact config: spec base
-fact config.value: 100
+with config: base
+data config.value: 100
 "#;
 
     let top_spec = r#"
 spec top
-fact settings: spec middle
+with settings: middle
 rule final_value: settings.config.value * 2
 "#;
 
@@ -227,31 +184,31 @@ rule final_value: settings.config.value * 2
     }
 }
 
-/// Deep nested fact bindings through multiple spec layers should work.
-/// Overriding facts like order.line.pricing.tax_rate through multiple levels.
+/// Deep nested data bindings through multiple spec layers should work.
+/// Overriding data like order.line.pricing.tax_rate through multiple levels.
 #[test]
-fn test_deep_nested_fact_binding() {
+fn test_deep_nested_data_binding() {
     let mut engine = Engine::new();
 
     let pricing_spec = r#"
 spec pricing
-fact base_price: 100
-fact tax_rate: 21%
+data base_price: 100
+data tax_rate: 21%
 rule final_price: base_price * (1 + tax_rate)
 "#;
 
     let line_item_spec = r#"
 spec line_item
-fact pricing: spec pricing
-fact quantity: 10
+with pricing
+data quantity: 10
 rule line_total: pricing.final_price * quantity
 "#;
 
     let order_spec = r#"
 spec order
-fact line: spec line_item
-fact line.pricing.tax_rate: 10%
-fact line.quantity: 5
+with line: line_item
+data line.pricing.tax_rate: 10%
+data line.quantity: 5
 rule order_total: line.line_total
 "#;
 
@@ -287,7 +244,7 @@ rule order_total: line.line_total
     }
 }
 
-/// Different fact paths to the same base spec should produce different results
+/// Different data paths to the same base spec should produce different results
 /// when bindings are applied. This tests that rule evaluation respects the specific
 /// path through spec references.
 #[test]
@@ -296,20 +253,20 @@ fn test_different_paths_different_results() {
 
     let base_spec = r#"
 spec base
-fact price: 100
+data price: 100
 rule total: price * 1.21
 "#;
 
     let wrapper_spec = r#"
 spec wrapper
-fact base: spec base
+with base
 "#;
 
     let comparison_spec = r#"
 spec comparison
-fact path1: spec wrapper
-fact path2: spec wrapper
-fact path2.base.price: 75
+with path1: wrapper
+with path2: wrapper
+data path2.base.price: 75
 rule total1: path1.base.total
 rule total2: path2.base.total
 rule difference: total2 - total1
@@ -380,20 +337,20 @@ fn test_multiple_independent_spec_refs() {
 
     let config1_spec = r#"
 spec config1
-fact value: 100
+data value: 100
 rule doubled: value * 2
 "#;
 
     let config2_spec = r#"
 spec config2
-fact value: 50
+data value: 50
 rule tripled: value * 3
 "#;
 
     let combined_spec = r#"
 spec combined
-fact c1: spec config1
-fact c2: spec config2
+with c1: config1
+with c2: config2
 rule sum: c1.doubled + c2.tripled
 rule product: c1.value * c2.value
 "#;
@@ -450,20 +407,20 @@ fn test_transitive_rule_dependencies() {
 
     let base_spec = r#"
 spec base
-fact x: 10
+data x: 10
 rule x_squared: x * x
 "#;
 
     let middle_spec = r#"
 spec middle
-fact base_config: spec base
-fact base_config.x: 20
+with base_config: base
+data base_config.x: 20
 rule x_squared_plus_ten: base_config.x_squared + 10
 "#;
 
     let top_spec = r#"
 spec top
-fact middle_config: spec middle
+with middle_config: middle
 rule final_result: middle_config.x_squared_plus_ten * 2
 "#;
 
@@ -506,19 +463,19 @@ fn test_same_spec_different_bindings() {
 
     let pricing_spec = r#"
 spec pricing
-fact price: 100
-fact discount: 0%
+data price: 100
+data discount: 0%
 rule final_price: price * (1 - discount)
 "#;
 
     let scenario_spec = r#"
 spec scenarios
-fact retail: spec pricing
-fact retail.discount: 5%
+with retail: pricing
+data retail.discount: 5%
 
-fact wholesale: spec pricing
-fact wholesale.discount: 15%
-fact wholesale.price: 80
+with wholesale: pricing
+data wholesale.discount: 15%
+data wholesale.price: 80
 
 rule retail_final: retail.final_price
 rule wholesale_final: wholesale.final_price
@@ -579,60 +536,35 @@ rule price_difference: retail_final - wholesale_final
     }
 }
 
-/// Binding interface validation: binding a spec ref to a spec with the same rule name
-/// but incompatible result type is rejected at the binding site.
+/// The old `data X: spec Y` syntax is rejected even with dotted paths.
 #[test]
-fn test_spec_ref_binding_interface_rule_type_rejected() {
+fn test_old_data_spec_syntax_rejected_with_dotted_path() {
     let mut engine = Engine::new();
 
-    let spec_a = r#"
+    let specs = r#"
 spec a
 rule x: 5
-"#;
 
-    let spec_b = r#"
-spec b
-rule x: true
-"#;
-
-    let spec_c = r#"
 spec c
-fact aa: spec a
+with aa: a
 rule y: aa.x > 1
-"#;
 
-    let spec_d = r#"
 spec d
-fact cc: spec c
-fact cc.aa: spec b
+with cc: c
+data cc.aa: spec a
 rule yy: cc.y
 "#;
 
-    engine
-        .load(spec_a, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    engine
-        .load(spec_b, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    engine
-        .load(spec_c, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
     let errs = engine
-        .load(spec_d, lemma::SourceType::Labeled("test.lemma"))
+        .load(specs, lemma::SourceType::Labeled("test.lemma"))
         .unwrap_err();
-    let err_str = errs
+    let msg = errs
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<_>>()
         .join("; ");
-    // We must reject the bad binding. Either we report at the binding site (preferred)
-    // or the expression type checker reports the comparison error.
-    let binding_site_error =
-        err_str.contains("Fact binding 'cc.aa'") && err_str.contains("sets spec reference to 'b'");
-    let comparison_error = err_str.contains("Cannot compare") && err_str.contains("Boolean");
     assert!(
-        binding_site_error || comparison_error,
-        "expected binding-site or comparison type error for bad spec binding, got: {}",
-        err_str
+        msg.contains("syntax has been removed"),
+        "expected old syntax rejection, got: {msg}"
     );
 }

@@ -16,22 +16,21 @@ cargo install lemma-cli
 ### `lemma run` -- evaluate a spec
 
 ```bash
-lemma run [<spec>] [--rules=rule1,rule2] [facts...] [options]
+lemma run [<spec>] [--rules=rule1,rule2] [data...] [options]
 ```
 
 **Syntax:**
 - `spec` -- evaluate all rules
 - `spec --rules=rule` -- evaluate one rule
 - `spec --rules=rule1,rule2` -- evaluate specific rules (comma-separated)
-- `spec~hash` -- pin to plan hash
 - No arguments with `-i` -- interactive mode
 
 **Options:**
 - `-d, --dir <path>` -- workspace root (default: `.`)
 - `--rules <rules>` -- comma-separated rule names (omit to evaluate all)
 - `-o, --output <format>` -- `table` (default) or `json`
-- `-x, --explain` -- show facts and reasoning
-- `-i, --interactive` -- guided spec/rule/fact selection
+- `-x, --explain` -- show data and reasoning
+- `-i, --interactive` -- guided spec/rule/data selection
 - `--effective <datetime>` -- evaluate at effective datetime (e.g. `2025`, `2025-03`, `2025-03-04`)
 
 **Examples:**
@@ -44,20 +43,16 @@ lemma run pricing quantity=10 is_vip=true
 lemma run pricing -o json
 lemma run pricing -x
 lemma run pricing --effective 2025-01-01
-lemma run spec~a1b2c3d4
 lemma run -i
 ```
 
-### `lemma schema` -- spec schema (facts and rules)
+### `lemma schema` -- spec schema (data and rules)
 
-Shows facts, rules, and plan hash. Use the hash with `spec~hash` to pin evaluation.
+Shows data and rules.
 
 ```bash
-lemma schema <spec> [-d <path>] [--effective <datetime>] [--hash]
+lemma schema <spec> [-d <path>] [--effective <datetime>]
 ```
-
-**Options:**
-- `--hash` -- output only the plan hash (for piping, e.g. `lemma run spec~$(lemma schema spec --hash)`)
 
 ### `lemma list` -- list all specs
 
@@ -112,8 +107,8 @@ lemma server [-d <path>] [--host <host>] [-p <port>] [--watch] [--explanations]
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/{spec}?fact=value` | Evaluate all rules (facts as query params) |
-| POST | `/{spec}` | Evaluate all rules (facts as JSON body) |
+| GET | `/{spec}?data=value` | Evaluate all rules (data as query params) |
+| POST | `/{spec}` | Evaluate all rules (data as JSON body) |
 | GET/POST | `/{spec}/{rules}` | Evaluate specific rules (comma-separated) |
 | GET | `/` | List all specs with schemas |
 | GET | `/openapi.json` | OpenAPI 3.1 specification |

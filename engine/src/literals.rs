@@ -7,6 +7,126 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 // -----------------------------------------------------------------------------
+// Unit tables for Scale and Ratio types
+// -----------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ScaleUnit {
+    pub name: String,
+    pub value: Decimal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ScaleUnits(pub Vec<ScaleUnit>);
+
+impl ScaleUnits {
+    pub fn new() -> Self {
+        ScaleUnits(Vec::new())
+    }
+    pub fn get(&self, name: &str) -> Result<&ScaleUnit, String> {
+        self.0.iter().find(|u| u.name == name).ok_or_else(|| {
+            let valid: Vec<&str> = self.0.iter().map(|u| u.name.as_str()).collect();
+            format!(
+                "Unknown unit '{}' for this scale type. Valid units: {}",
+                name,
+                valid.join(", ")
+            )
+        })
+    }
+    pub fn iter(&self) -> std::slice::Iter<'_, ScaleUnit> {
+        self.0.iter()
+    }
+    pub fn push(&mut self, u: ScaleUnit) {
+        self.0.push(u);
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl Default for ScaleUnits {
+    fn default() -> Self {
+        ScaleUnits::new()
+    }
+}
+
+impl From<Vec<ScaleUnit>> for ScaleUnits {
+    fn from(v: Vec<ScaleUnit>) -> Self {
+        ScaleUnits(v)
+    }
+}
+
+impl<'a> IntoIterator for &'a ScaleUnits {
+    type Item = &'a ScaleUnit;
+    type IntoIter = std::slice::Iter<'a, ScaleUnit>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct RatioUnit {
+    pub name: String,
+    pub value: Decimal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct RatioUnits(pub Vec<RatioUnit>);
+
+impl RatioUnits {
+    pub fn new() -> Self {
+        RatioUnits(Vec::new())
+    }
+    pub fn get(&self, name: &str) -> Result<&RatioUnit, String> {
+        self.0.iter().find(|u| u.name == name).ok_or_else(|| {
+            let valid: Vec<&str> = self.0.iter().map(|u| u.name.as_str()).collect();
+            format!(
+                "Unknown unit '{}' for this ratio type. Valid units: {}",
+                name,
+                valid.join(", ")
+            )
+        })
+    }
+    pub fn iter(&self) -> std::slice::Iter<'_, RatioUnit> {
+        self.0.iter()
+    }
+    pub fn push(&mut self, u: RatioUnit) {
+        self.0.push(u);
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl Default for RatioUnits {
+    fn default() -> Self {
+        RatioUnits::new()
+    }
+}
+
+impl From<Vec<RatioUnit>> for RatioUnits {
+    fn from(v: Vec<RatioUnit>) -> Self {
+        RatioUnits(v)
+    }
+}
+
+impl<'a> IntoIterator for &'a RatioUnits {
+    type Item = &'a RatioUnit;
+    type IntoIter = std::slice::Iter<'a, RatioUnit>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Literal value types
 // -----------------------------------------------------------------------------
 
@@ -531,7 +651,11 @@ impl std::str::FromStr for DurationLiteral {
     }
 }
 
-/// Number with unit name (e.g. "1 eur", "50 percent"). Unit not validated against a type.
+/// Strict scale literal: `<number> <unit-name>` separated by any whitespace run.
+///
+/// Does NOT accept ratio sigils (`%`, `%%`) — those are a `Ratio` concern. See
+/// [`RatioLiteral`] for runtime ratio input parsing. Trailing tokens after the
+/// unit are rejected (no silent truncation).
 pub(crate) struct NumberWithUnit(pub Decimal, pub String);
 
 impl std::str::FromStr for NumberWithUnit {
@@ -539,28 +663,162 @@ impl std::str::FromStr for NumberWithUnit {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let trimmed = s.trim();
-        let mut parts = trimmed.split_whitespace();
-        let number_part = parts.next().ok_or_else(|| {
-            if trimmed.is_empty() {
+        if trimmed.is_empty() {
+            return Err(
                 "Scale value cannot be empty. Use a number followed by a unit (e.g. '10 eur')."
-                    .to_string()
-            } else {
-                format!(
-                    "Invalid scale value: '{}'. Scale value must be a number followed by a unit (e.g. '10 eur').",
-                    s
-                )
-            }
-        })?;
+                    .to_string(),
+            );
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let number_part = parts
+            .next()
+            .expect("split_whitespace yields >=1 token after non-empty guard");
         let unit_part = parts.next().ok_or_else(|| {
             format!(
                 "Scale value must include a unit (e.g. '{} eur').",
                 number_part
             )
         })?;
+        if parts.next().is_some() {
+            return Err(format!(
+                "Invalid scale value: '{}'. Expected exactly '<number> <unit>', got extra tokens.",
+                s
+            ));
+        }
         let n = number_part
             .parse::<NumberLiteral>()
             .map_err(|_| format!("Invalid scale: '{}'", s))?
             .0;
         Ok(NumberWithUnit(n, unit_part.to_string()))
+    }
+}
+
+/// Strict ratio runtime literal.
+///
+/// Grammar (all inputs trimmed first):
+/// - `<number>`                      → `Bare(n)`
+/// - `<number>%`  (glued, no inner whitespace) → `Percent(n / 100)`
+/// - `<number>%%` (glued, no inner whitespace) → `Permille(n / 1000)`
+/// - `<number> <unit-name>`          → `Named { value: n, unit: <unit-name> }`
+///
+/// `<number>` is parsed by [`NumberLiteral`] (signed, allows `_`/`,` separators).
+/// Whitespace between the number and a keyword unit may be any non-empty run
+/// (`"50 percent"`, `"50    percent"`, `"50\tpercent"` are all accepted).
+///
+/// The sigils `%` / `%%` are language-level constants meaning "divide by 100 / 1000"
+/// and unconditionally produce the canonical unit names `"percent"` / `"permille"`.
+/// They are NOT accepted as standalone unit-position tokens (i.e. `"5 %"` is rejected).
+///
+/// Signedness is intentionally not constrained at this layer: bounds are the
+/// type-system's job (`-> minimum 0%`), and the evaluator can produce signed
+/// ratios from non-negative inputs (e.g. `this_year - last_year` on `percent`).
+/// The parser must accept everything the evaluator can emit (round-trip symmetry).
+///
+/// `Named` carries the raw unit name; the caller in `parse_number_unit::Ratio`
+/// resolves it against the type's [`RatioUnits`] table (covering built-in
+/// `percent`/`permille` and any user-defined units like `basis_points`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RatioLiteral {
+    Bare(Decimal),
+    Percent(Decimal),
+    Permille(Decimal),
+    Named { value: Decimal, unit: String },
+}
+
+impl std::str::FromStr for RatioLiteral {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err(
+                "Ratio value cannot be empty. Use a number, optionally followed by '%', '%%', or a unit name (e.g. '0.5', '50%', '25%%', '50 percent')."
+                    .to_string(),
+            );
+        }
+
+        let mut parts = trimmed.split_whitespace();
+        let first = parts
+            .next()
+            .expect("split_whitespace yields >=1 token after non-empty guard");
+        let second = parts.next();
+        if parts.next().is_some() {
+            return Err(format!(
+                "Invalid ratio value: '{}'. Expected '<number>', '<number>%', '<number>%%', or '<number> <unit>'.",
+                s
+            ));
+        }
+
+        match second {
+            // 1-token forms: bare number, or sigil-suffixed number.
+            None => {
+                if let Some(rest) = first.strip_suffix("%%") {
+                    if rest.is_empty() {
+                        return Err(format!(
+                            "Invalid ratio value: '{}'. '%%' must follow a number (e.g. '25%%').",
+                            s
+                        ));
+                    }
+                    let n = rest
+                        .parse::<NumberLiteral>()
+                        .map_err(|_| {
+                            format!(
+                            "Invalid ratio value: '{}'. '{}' is not a valid number before '%%'.",
+                            s, rest
+                        )
+                        })?
+                        .0;
+                    return Ok(RatioLiteral::Permille(n / Decimal::from(1000)));
+                }
+                if let Some(rest) = first.strip_suffix('%') {
+                    if rest.is_empty() {
+                        return Err(format!(
+                            "Invalid ratio value: '{}'. '%' must follow a number (e.g. '50%').",
+                            s
+                        ));
+                    }
+                    let n = rest
+                        .parse::<NumberLiteral>()
+                        .map_err(|_| {
+                            format!(
+                                "Invalid ratio value: '{}'. '{}' is not a valid number before '%'.",
+                                s, rest
+                            )
+                        })?
+                        .0;
+                    return Ok(RatioLiteral::Percent(n / Decimal::from(100)));
+                }
+                let n = first.parse::<NumberLiteral>().map_err(|_| {
+                    format!(
+                        "Invalid ratio value: '{}'. Must be a number, '<n>%', '<n>%%', '<n> percent', '<n> permille', or '<n> <unit>'.",
+                        s
+                    )
+                })?.0;
+                Ok(RatioLiteral::Bare(n))
+            }
+            // 2-token form: <number> <unit-name>. Sigils are not accepted as unit-position tokens.
+            Some(unit) => {
+                if unit == "%" || unit == "%%" {
+                    return Err(format!(
+                        "Invalid ratio value: '{}'. '{}' must be glued to the number (e.g. '{}{}'), not separated by whitespace.",
+                        s, unit, first, unit
+                    ));
+                }
+                let n = first
+                    .parse::<NumberLiteral>()
+                    .map_err(|_| {
+                        format!(
+                            "Invalid ratio value: '{}'. '{}' is not a valid number.",
+                            s, first
+                        )
+                    })?
+                    .0;
+                Ok(RatioLiteral::Named {
+                    value: n,
+                    unit: unit.to_string(),
+                })
+            }
+        }
     }
 }

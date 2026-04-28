@@ -1,5 +1,5 @@
 use lemma::evaluation::explanation::{ExplanationNode, NonMatchedBranch, ValueSource};
-use lemma::planning::semantics::{FactPath, FactValue, TypeSpecification, ValueKind};
+use lemma::planning::semantics::{DataPath, DataValue, TypeSpecification, ValueKind};
 use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult, SpecSchema};
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
@@ -26,7 +26,7 @@ impl Default for Formatter {
 
 impl Formatter {
     /// Format evaluation response. When `explain` is false: one line for a single rule, or one table
-    /// for multiple rules. When true: facts tree and full explanation trees per rule.
+    /// for multiple rules. When true: data tree and full explanation trees per rule.
     pub fn format_response(&self, response: &Response, explain: bool) -> String {
         if response.results.is_empty() {
             return String::new();
@@ -61,9 +61,9 @@ impl Formatter {
 
     fn format_response_explain(&self, response: &Response) -> String {
         let mut output = String::new();
-        if !response.facts.is_empty() {
-            output.push_str("Facts\n");
-            output.push_str(&self.format_facts_tree(&response.facts, &response.spec_name));
+        if !response.data.is_empty() {
+            output.push_str("Data\n");
+            output.push_str(&self.format_data_tree(&response.data, &response.spec_name));
             output.push('\n');
         }
         if !response.results.is_empty() {
@@ -76,12 +76,9 @@ impl Formatter {
         output
     }
 
-    pub fn format_spec_inspection(&self, plan: &ExecutionPlan, hash: &str) -> String {
-        let local_fact_paths: Vec<&FactPath> = plan
-            .facts
-            .keys()
-            .filter(|p| p.segments.is_empty())
-            .collect();
+    pub fn format_spec_inspection(&self, plan: &ExecutionPlan) -> String {
+        let local_data_paths: Vec<&DataPath> =
+            plan.data.keys().filter(|p| p.segments.is_empty()).collect();
 
         let mut table = Table::new();
         table.load_preset(presets::UTF8_FULL);
@@ -94,15 +91,15 @@ impl Formatter {
 
         let mut content_lines = Vec::new();
 
-        if !local_fact_paths.is_empty() {
-            content_lines.push("facts".to_string());
-            for (i, path) in local_fact_paths.iter().enumerate() {
-                let prefix = if i == local_fact_paths.len() - 1 {
+        if !local_data_paths.is_empty() {
+            content_lines.push("data".to_string());
+            for (i, path) in local_data_paths.iter().enumerate() {
+                let prefix = if i == local_data_paths.len() - 1 {
                     "└─"
                 } else {
                     "├─"
                 };
-                content_lines.push(format!("{} {}", prefix, path.fact));
+                content_lines.push(format!("{} {}", prefix, path.data));
             }
         }
 
@@ -117,8 +114,6 @@ impl Formatter {
                 content_lines.push(format!("{} {}", prefix, rule.name));
             }
         }
-
-        content_lines.push(format!("hash: {}", hash));
 
         table.add_row(vec![
             Cell::new(content_lines.join("\n")).set_alignment(CellAlignment::Left)
@@ -156,9 +151,9 @@ impl Formatter {
                 Cell::new(""),
             ]);
 
-            if schema.facts.is_empty() && schema.rules.is_empty() {
+            if schema.data.is_empty() && schema.rules.is_empty() {
                 table.add_row(vec![
-                    Cell::new("(no facts or rules)").set_alignment(CellAlignment::Left),
+                    Cell::new("(no data or rules)").set_alignment(CellAlignment::Left),
                     Cell::new(""),
                     Cell::new(""),
                 ]);
@@ -170,18 +165,24 @@ impl Formatter {
             let mut col_type = Vec::new();
             let mut col_default = Vec::new();
 
-            if !schema.facts.is_empty() {
-                col_name.push("Facts".to_string());
+            if !schema.data.is_empty() {
+                col_name.push("Data".to_string());
                 col_type.push(String::new());
                 col_default.push(String::new());
-                for (name, (lemma_type, default)) in &schema.facts {
+                for (name, entry) in &schema.data {
                     col_name.push(format!("  {}", name));
-                    col_type.push(lemma_type.name());
-                    col_default.push(default.as_ref().map(|v| v.to_string()).unwrap_or_default());
+                    col_type.push(entry.lemma_type.name());
+                    col_default.push(
+                        entry
+                            .default
+                            .as_ref()
+                            .map(|v| v.to_string())
+                            .unwrap_or_default(),
+                    );
                 }
             }
 
-            if !schema.facts.is_empty() && !schema.rules.is_empty() {
+            if !schema.data.is_empty() && !schema.rules.is_empty() {
                 col_name.push(String::new());
                 col_type.push(String::new());
                 col_default.push(String::new());
@@ -210,11 +211,11 @@ impl Formatter {
         output
     }
 
-    fn format_facts_tree(&self, facts_groups: &[lemma::Facts], spec_name: &str) -> String {
+    fn format_data_tree(&self, data_groups: &[lemma::DataGroup], spec_name: &str) -> String {
         let mut output = String::new();
 
-        for group in facts_groups {
-            if group.facts.is_empty() {
+        for group in data_groups {
+            if group.data.is_empty() {
                 continue;
             }
 
@@ -229,7 +230,7 @@ impl Formatter {
                 Cell::new("").set_alignment(CellAlignment::Left),
             ]);
 
-            let (name_content, type_content, value_content) = self.build_facts_content(group);
+            let (name_content, type_content, value_content) = self.build_data_content(group);
 
             table.add_row(vec![
                 Cell::new(name_content).set_alignment(CellAlignment::Left),
@@ -244,19 +245,19 @@ impl Formatter {
         output
     }
 
-    fn build_facts_content(&self, group: &lemma::Facts) -> (String, String, String) {
+    fn build_data_content(&self, group: &lemma::DataGroup) -> (String, String, String) {
         let mut name_lines = Vec::new();
         let mut type_lines = Vec::new();
         let mut value_lines = Vec::new();
 
-        for fact in &group.facts {
-            let value_str = match &fact.value {
-                FactValue::Literal(lit) => self.format_literal(lit),
-                FactValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
-                FactValue::TypeDeclaration { .. } => String::new(),
+        for data in &group.data {
+            let value_str = match &data.value {
+                DataValue::Literal(lit) => self.format_literal(lit),
+                DataValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
+                DataValue::TypeDeclaration { .. } => String::new(),
             };
-            name_lines.push(fact.path.to_string());
-            type_lines.push(Self::fact_type_str(&fact.value));
+            name_lines.push(data.path.to_string());
+            type_lines.push(Self::data_type_str(&data.value));
             value_lines.push(value_str);
         }
 
@@ -267,11 +268,11 @@ impl Formatter {
         )
     }
 
-    fn fact_type_str(value: &FactValue) -> String {
+    fn data_type_str(value: &DataValue) -> String {
         match value {
-            FactValue::Literal(lit) => lit.lemma_type.name(),
-            FactValue::TypeDeclaration { resolved_type } => resolved_type.name(),
-            FactValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
+            DataValue::Literal(lit) => lit.lemma_type.name(),
+            DataValue::TypeDeclaration { resolved_type } => resolved_type.name(),
+            DataValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
         }
     }
 
@@ -389,8 +390,8 @@ impl Formatter {
         match node {
             ExplanationNode::Value { value, source, .. } => {
                 let display = match source {
-                    ValueSource::Fact { fact_ref } => {
-                        format!("{} is {}", fact_ref, self.format_literal_inline(value))
+                    ValueSource::Data { data_ref } => {
+                        format!("{} is {}", data_ref, self.format_literal_inline(value))
                     }
                     ValueSource::Literal | ValueSource::Computed => {
                         self.format_literal_inline(value)
@@ -425,8 +426,8 @@ impl Formatter {
 
     fn render_value(&self, value: &LiteralValue, source: &ValueSource, ctx: &mut RenderContext) {
         let display = match source {
-            ValueSource::Fact { fact_ref } => {
-                format!("{} is {}", fact_ref, self.format_literal_inline(value))
+            ValueSource::Data { data_ref } => {
+                format!("{} is {}", data_ref, self.format_literal_inline(value))
             }
             ValueSource::Literal | ValueSource::Computed => self.format_literal_inline(value),
         };
@@ -683,10 +684,7 @@ impl Formatter {
     fn format_result_inline(&self, result: &OperationResult) -> String {
         match result {
             OperationResult::Value(v) => self.format_literal_inline(v),
-            OperationResult::Veto(msg) => match msg {
-                Some(m) => format!("Veto: {}", m),
-                None => "Veto".to_string(),
-            },
+            OperationResult::Veto(reason) => format!("Veto: {reason}"),
         }
     }
 
@@ -750,7 +748,7 @@ impl Formatter {
                 ..
             } => original_expression.clone(),
             ExplanationNode::Value { value, source, .. } => match source {
-                ValueSource::Fact { fact_ref } => fact_ref.to_string(),
+                ValueSource::Data { data_ref } => data_ref.to_string(),
                 ValueSource::Literal | ValueSource::Computed => value.to_string(),
             },
             ExplanationNode::RuleReference { rule_path, .. } => rule_path.to_string(),

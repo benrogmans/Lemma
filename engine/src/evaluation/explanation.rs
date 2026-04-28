@@ -1,5 +1,5 @@
 use crate::evaluation::operations::{ComputationKind, OperationResult};
-use crate::planning::semantics::{FactPath, LiteralValue, RulePath, Source};
+use crate::planning::semantics::{DataPath, LiteralValue, RulePath, Source};
 use serde::{Serialize, Serializer};
 use std::sync::Arc;
 
@@ -64,7 +64,7 @@ pub enum ExplanationNode {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueSource {
-    Fact { fact_ref: FactPath },
+    Data { data_ref: DataPath },
     Literal,
     Computed,
 }

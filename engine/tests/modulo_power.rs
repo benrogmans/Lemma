@@ -11,8 +11,8 @@ fn test_modulo_simple() {
         .load(
             r#"
 spec test
-fact a: 10
-fact b: 3
+data a: 10
+data b: 3
 rule remainder: a % b
 "#,
             lemma::SourceType::Labeled("test"),
@@ -44,8 +44,8 @@ fn test_power_simple() {
         .load(
             r#"
 spec test
-fact base: 2
-fact exponent: 3
+data base: 2
+data exponent: 3
 rule result: base ^ exponent
 "#,
             lemma::SourceType::Labeled("test"),
@@ -77,7 +77,7 @@ fn test_modulo_in_expression() {
         .load(
             r#"
 spec test
-fact value: 17
+data value: 17
 rule is_even: (value % 2) is 0
 rule is_odd: (value % 2) is 1
 "#,
@@ -110,7 +110,7 @@ fn test_power_with_fractions() {
         .load(
             r#"
 spec test
-fact base: 4
+data base: 4
 rule square_root: base ^ 0.5
 "#,
             lemma::SourceType::Labeled("test"),
@@ -142,8 +142,8 @@ fn test_combined_operations() {
         .load(
             r#"
 spec test
-fact x: 10
-fact y: 3
+data x: 10
+data y: 3
 rule calculation: (x % y) + (2 ^ 3)
 "#,
             lemma::SourceType::Labeled("test"),

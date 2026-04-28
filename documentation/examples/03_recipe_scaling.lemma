@@ -6,21 +6,21 @@ Demonstrates calculations and scaling.
 Scale a recipe up or down based on servings needed.
 """
 
-type temperature: scale
+data temperature: scale
   -> unit celsius 1.0
 
-type recipe: text
+data recipe: text
   -> option "chocolate_cake"
   -> option "bread"
   -> option "cookies"
 
-fact butter_needed     : 0.5
-fact eggs_needed       : 3
-fact flour_needed      : 2
-fact sugar_needed      : 1.5
-fact recipe_name       : [recipe]
-fact desired_servings  : [number -> minimum 1]
-fact original_servings : [number -> minimum 1]
+data butter_needed     : 0.5
+data eggs_needed       : 3
+data flour_needed      : 2
+data sugar_needed      : 1.5
+data recipe_name       : recipe
+data desired_servings  : number -> minimum 1
+data original_servings : number -> minimum 1
 
 rule scaling_factor:
   desired_servings / original_servings

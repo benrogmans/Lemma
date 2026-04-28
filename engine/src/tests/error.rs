@@ -35,10 +35,10 @@ fn test_error_creation_and_display() {
     );
 
     let parse_error_with_suggestion =
-        Error::parsing_with_suggestion("Typo in fact name", typo_source, "Did you mean 'amount'?");
+        Error::parsing_with_suggestion("Typo in data name", typo_source, "Did you mean 'amount'?");
     assert_eq!(
         format!("{parse_error_with_suggestion}"),
-        "Parse error: Typo in fact name (suggestion: Did you mean 'amount'?) at suggestion.lemma:1:6"
+        "Parse error: Typo in data name (suggestion: Did you mean 'amount'?) at suggestion.lemma:1:6"
     );
 
     let engine_error =

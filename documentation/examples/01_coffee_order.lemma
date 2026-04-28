@@ -2,37 +2,33 @@ spec coffee_order
 """
 Coffee Shop Pricing
 
-A simple example showing how facts and rules work together.
+A simple example showing how data and rules work together.
 Perfect for understanding the basics of Lemma.
 """
 
-type money: scale
+data money: scale
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
   -> minimum 0 eur
 
-type coffee: text
+data product: text
   -> option "espresso"
   -> option "latte"
   -> option "cappuccino"
   -> option "mocha"
 
-type size: text
+data size: text
   -> option "small"
   -> option "medium"
   -> option "large"
 
-type age: number
+data age: number
   -> maximum 100
   -> minimum 0
 
-fact age              : [age]
-fact has_loyalty_card : [boolean]
-fact price            : [money]
-fact product          : [coffee]
-fact size             : [size]
-fact number_of_cups   : [number -> maximum 10]
+data number_of_cups   : number -> maximum 10
+data has_loyalty_card : boolean
 
 rule base_price:
   veto "Unknown type of coffee"

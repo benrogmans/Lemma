@@ -21,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
     }
 
     let code = format!(
-        "spec fuzz_nested\nfact x: 1\nrule deeply_nested: {}\n",
+        "spec fuzz_nested\ndata x: 1\nrule deeply_nested: {}\n",
         expr
     );
 

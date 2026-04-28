@@ -1,6 +1,6 @@
 //! Type-aware arithmetic operations
 
-use crate::evaluation::OperationResult;
+use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::planning::semantics::{
     primitive_number, ArithmeticComputation, LiteralValue, SemanticConversionTarget, ValueKind,
 };
@@ -18,7 +18,7 @@ pub fn arithmetic_operation(
                 result,
                 left.lemma_type.clone(),
             ))),
-            Err(msg) => OperationResult::Veto(Some(msg)),
+            Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
         },
 
         (ValueKind::Date(_), _) | (_, ValueKind::Date(_)) => {
@@ -67,7 +67,7 @@ pub fn arithmetic_operation(
                     unit.clone(),
                     left.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
 
@@ -79,7 +79,7 @@ pub fn arithmetic_operation(
                     unit.clone(),
                     right.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
 
@@ -104,7 +104,7 @@ pub fn arithmetic_operation(
                     result,
                     primitive_number().clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             },
         },
 
@@ -129,7 +129,7 @@ pub fn arithmetic_operation(
                     result,
                     primitive_number().clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             },
         },
 
@@ -157,7 +157,7 @@ pub fn arithmetic_operation(
                     unit.clone(),
                     left.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             },
         },
 
@@ -185,7 +185,7 @@ pub fn arithmetic_operation(
                     unit.clone(),
                     right.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             },
         },
         // Ratio op Ratio → Ratio
@@ -197,7 +197,7 @@ pub fn arithmetic_operation(
                     lu.clone(),
                     left.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
         // Scale operations with Scale
@@ -220,8 +220,11 @@ pub fn arithmetic_operation(
                         ValueKind::Scale(r_conv, _) => (*l_val, r_conv),
                         _ => unreachable!("BUG: scale unit conversion returned non-scale value"),
                     },
-                    OperationResult::Veto(msg) => {
-                        unreachable!("BUG: scale unit conversion vetoed unexpectedly: {:?}", msg)
+                    OperationResult::Veto(reason) => {
+                        unreachable!(
+                            "BUG: scale unit conversion vetoed unexpectedly: {:?}",
+                            reason
+                        )
                     }
                 }
             };
@@ -233,7 +236,7 @@ pub fn arithmetic_operation(
                     preserved_unit,
                     left.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
         // Ratio op Scale → Scale (inherits Scale type and unit)
@@ -248,12 +251,12 @@ pub fn arithmetic_operation(
                                 right.lemma_type.clone(),
                             )))
                         }
-                        Err(msg) => OperationResult::Veto(Some(msg)),
+                        Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
                     }
                 }
                 ArithmeticComputation::Divide => {
                     if *scale_val == Decimal::ZERO {
-                        return OperationResult::Veto(Some("Division by zero".to_string()));
+                        return OperationResult::Veto(VetoType::computation("Division by zero"));
                     }
                     match number_arithmetic(*ratio_val, op, *scale_val) {
                         Ok(result) => {
@@ -263,7 +266,7 @@ pub fn arithmetic_operation(
                                 right.lemma_type.clone(),
                             )))
                         }
-                        Err(msg) => OperationResult::Veto(Some(msg)),
+                        Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
                     }
                 }
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
@@ -301,12 +304,12 @@ pub fn arithmetic_operation(
                                 left.lemma_type.clone(),
                             )))
                         }
-                        Err(msg) => OperationResult::Veto(Some(msg)),
+                        Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
                     }
                 }
                 ArithmeticComputation::Divide => {
                     if *ratio_val == Decimal::ZERO {
-                        return OperationResult::Veto(Some("Division by zero".to_string()));
+                        return OperationResult::Veto(VetoType::computation("Division by zero"));
                     }
                     match number_arithmetic(*scale_val, op, *ratio_val) {
                         Ok(result) => {
@@ -316,7 +319,7 @@ pub fn arithmetic_operation(
                                 left.lemma_type.clone(), // Inherit Scale type
                             )))
                         }
-                        Err(msg) => OperationResult::Veto(Some(msg)),
+                        Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
                     }
                 }
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
@@ -351,7 +354,7 @@ pub fn arithmetic_operation(
                     scale_unit.clone(),
                     left.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
         // Number op Scale → Scale (preserves unit)
@@ -362,7 +365,7 @@ pub fn arithmetic_operation(
                     scale_unit.clone(),
                     right.lemma_type.clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
         // Scale with Duration → Number
@@ -372,7 +375,7 @@ pub fn arithmetic_operation(
                     result,
                     primitive_number().clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
 
@@ -383,7 +386,7 @@ pub fn arithmetic_operation(
                     result,
                     primitive_number().clone(),
                 ))),
-                Err(msg) => OperationResult::Veto(Some(msg)),
+                Err(msg) => OperationResult::Veto(VetoType::computation(msg)),
             }
         }
         _ => unreachable!(

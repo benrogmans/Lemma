@@ -27,7 +27,6 @@ pub fn parse(
 #[cfg(test)]
 mod tests {
     use super::parse;
-    use crate::parsing::ast::ParentType;
     use crate::Error;
     use crate::ResourceLimits;
 
@@ -40,55 +39,55 @@ mod tests {
     }
 
     #[test]
-    fn parse_workspace_file_yields_expected_spec_facts_and_rules() {
+    fn parse_workspace_file_yields_expected_spec_datas_and_rules() {
         let input = r#"spec person
-fact name: "John Doe"
+data name: "John Doe"
 rule adult: true"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "person");
-        assert_eq!(result[0].facts.len(), 1);
+        assert_eq!(result[0].data.len(), 1);
         assert_eq!(result[0].rules.len(), 1);
         assert_eq!(result[0].rules[0].name, "adult");
     }
 
     #[test]
-    fn mixing_facts_and_rules_is_collected_into_spec() {
+    fn mixing_data_and_rules_is_collected_into_spec() {
         let input = r#"spec test
-fact name: "John"
+data name: "John"
 rule is_adult: age >= 18
-fact age: 25
+data age: 25
 rule can_drink: age >= 21
-fact status: "active"
+data status: "active"
 rule is_eligible: is_adult and status is "active""#;
 
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].facts.len(), 3);
+        assert_eq!(result[0].data.len(), 3);
         assert_eq!(result[0].rules.len(), 3);
     }
 
     #[test]
-    fn parse_simple_spec_collects_facts() {
+    fn parse_simple_spec_collects_data() {
         let input = r#"spec person
-fact name: "John"
-fact age: 25"#;
+data name: "John"
+data age: 25"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "person");
-        assert_eq!(result[0].facts.len(), 2);
+        assert_eq!(result[0].data.len(), 2);
     }
 
     #[test]
     fn parse_spec_name_with_slashes_is_preserved() {
         let input = r#"spec contracts/employment/jack
-fact name: "Jack""#;
+data name: "Jack""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -114,7 +113,7 @@ fact name: "Jack""#;
 This is a markdown comment
 with **bold** text
 """
-fact name: "John""#;
+data name: "John""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -138,10 +137,10 @@ rule is_adult: age >= 18"#;
     #[test]
     fn parse_multiple_specs_returns_all_specs() {
         let input = r#"spec person
-fact name: "John"
+data name: "John"
 
 spec company
-fact name: "Acme Corp""#;
+data name: "Acme Corp""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -151,14 +150,14 @@ fact name: "Acme Corp""#;
     }
 
     #[test]
-    fn parse_allows_duplicate_fact_names() {
+    fn parse_allows_duplicate_data_names() {
         let input = r#"spec person
-fact name: "John"
-fact name: "Jane""#;
+data name: "John"
+data name: "Jane""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_ok(),
-            "Parser should succeed even with duplicate facts"
+            "Parser should succeed even with duplicate data"
         );
     }
 
@@ -216,12 +215,12 @@ rule is_adult: age >= 21"#;
     fn parse_error_cases_are_rejected() {
         let error_cases = vec![
             (
-                "spec test\nfact name: \"unclosed string",
+                "spec test\ndata name: \"unclosed string",
                 "unclosed string literal",
             ),
             ("spec test\nrule test: (2 + 3", "unclosed parenthesis"),
             ("spec test\nrule test: 2 + 3)", "extra closing paren"),
-            ("spec test\nfact spec: 123", "reserved keyword as fact name"),
+            ("spec test\ndata spec: 123", "reserved keyword as data name"),
             (
                 "spec test\nrule rule: true",
                 "reserved keyword as rule name",
@@ -325,8 +324,8 @@ rule is_adult: age >= 21"#;
         let result = parse(
             r#"
 spec test
-fact name: "Unclosed string
-fact age: 25
+data name: "Unclosed string
+data age: 25
 "#,
             "test.lemma",
             &ResourceLimits::default(),
@@ -348,7 +347,7 @@ fact age: 25
     #[test]
     fn parse_registry_style_spec_name() {
         let input = r#"spec user/workspace/somespec
-fact name: "Alice""#;
+data name: "Alice""#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -357,16 +356,16 @@ fact name: "Alice""#;
     }
 
     #[test]
-    fn parse_fact_spec_reference_with_at_prefix() {
+    fn parse_with_registry_spec_explicit_alias() {
         let input = r#"spec example
-fact external: spec @user/workspace/somespec"#;
+with external: @user/workspace/somespec"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].facts.len(), 1);
-        match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
+        assert_eq!(result[0].data.len(), 1);
+        match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "@user/workspace/somespec");
                 assert!(spec_ref.from_registry, "expected registry reference");
             }
@@ -375,33 +374,13 @@ fact external: spec @user/workspace/somespec"#;
     }
 
     #[test]
-    fn parse_type_import_with_at_prefix() {
-        let input = r#"spec example
-type money from @lemma/std/finance
-fact price: [money]"#;
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].types.len(), 1);
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.from_registry, "expected registry reference");
-                assert_eq!(name, "money");
-            }
-            other => panic!("Expected Import type, got: {:?}", other),
-        }
-    }
-
-    #[test]
     fn parse_multiple_registry_specs_in_same_file() {
         let input = r#"spec user/workspace/spec_a
-fact x: 10
+data x: 10
 
 spec user/workspace/spec_b
-fact y: 20
-fact a: spec @user/workspace/spec_a"#;
+data y: 20
+with a: @user/workspace/spec_a"#;
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
@@ -411,29 +390,13 @@ fact a: spec @user/workspace/spec_a"#;
     }
 
     #[test]
-    fn parse_registry_spec_ref_name_only() {
-        let input = "spec example\nfact x: spec @owner/repo/somespec";
+    fn parse_with_registry_spec_default_alias() {
+        let input = "spec example\nwith @owner/repo/somespec";
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
-        match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
-                assert_eq!(spec_ref.name, "@owner/repo/somespec");
-                assert_eq!(spec_ref.hash_pin, None);
-                assert!(spec_ref.from_registry);
-            }
-            other => panic!("Expected SpecReference, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_registry_spec_ref_name_with_dots_is_whole_name() {
-        let input = "spec example\nfact x: spec @owner/repo/somespec";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
+        match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "@owner/repo/somespec");
                 assert!(spec_ref.from_registry);
             }
@@ -442,15 +405,14 @@ fact a: spec @user/workspace/spec_a"#;
     }
 
     #[test]
-    fn parse_local_spec_ref_name_only() {
-        let input = "spec example\nfact x: spec myspec";
+    fn parse_with_local_spec_default_alias() {
+        let input = "spec example\nwith myspec";
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
-        match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(spec_ref) => {
+        match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(spec_ref) => {
                 assert_eq!(spec_ref.name, "myspec");
-                assert_eq!(spec_ref.hash_pin, None);
                 assert!(!spec_ref.from_registry);
             }
             other => panic!("Expected SpecReference, got: {:?}", other),
@@ -459,38 +421,12 @@ fact a: spec @user/workspace/spec_a"#;
 
     #[test]
     fn parse_spec_name_with_trailing_dot_is_error() {
-        let input = "spec myspec.\nfact x: 1";
+        let input = "spec myspec.\ndata x: 1";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
         assert!(
             result.is_err(),
             "Trailing dot after spec name should be a parse error"
         );
-    }
-
-    #[test]
-    fn parse_type_import_from_registry() {
-        let input = "spec example\ntype money from @lemma/std/finance\nfact price: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.from_registry);
-                assert_eq!(name, "money");
-            }
-            other => panic!("Expected Import type, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_spec_declaration_no_version() {
-        let input = "spec myspec\nrule x: 1";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        assert_eq!(result[0].name, "myspec");
-        assert_eq!(result[0].effective_from(), None);
     }
 
     #[test]
@@ -505,189 +441,103 @@ fact a: spec @user/workspace/spec_a"#;
     }
 
     #[test]
-    fn parse_spec_reference_grammar_accepts_name_only() {
-        let input = "spec consumer\nfact m: spec other";
+    fn parse_with_accepts_name_only() {
+        let input = "spec consumer\nwith other";
         let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(result.is_ok(), "spec name without hash should parse");
-        let spec_ref = match &result.as_ref().unwrap().specs[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(r) => r,
+        assert!(result.is_ok(), "with name should parse");
+        let spec_ref = match &result.as_ref().unwrap().specs[0].data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(r) => r,
             _ => panic!("expected SpecReference"),
         };
         assert_eq!(spec_ref.name, "other");
-        assert_eq!(spec_ref.hash_pin, None);
     }
 
     #[test]
-    fn parse_spec_reference_with_hash() {
-        let input = "spec consumer\nfact cfg: spec config~a1b2c3d4";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec_ref = match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(r) => r,
-            other => panic!("expected SpecReference, got: {:?}", other),
+    fn parse_with_bare_year_effective() {
+        let input = "spec consumer\nwith other 2026";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let spec_ref = match &result.specs[0].data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(r) => r,
+            _ => panic!("expected SpecReference"),
         };
-        assert_eq!(spec_ref.name, "config");
-        assert_eq!(spec_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
+        assert_eq!(spec_ref.name, "other");
+        let eff = spec_ref.effective.as_ref().expect("effective");
+        assert_eq!(eff.year, 2026);
+        assert_eq!(eff.month, 1);
+        assert_eq!(eff.day, 1);
     }
 
     #[test]
-    fn parse_spec_reference_registry_with_hash() {
-        let input = "spec consumer\nfact ext: spec @user/workspace/cfg~ab12cd34";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        let spec_ref = match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::SpecReference(r) => r,
-            other => panic!("expected SpecReference, got: {:?}", other),
+    fn parse_with_comma_separated_bare() {
+        let input = "spec consumer\nwith a, b, c";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let data = &result.specs[0].data;
+        assert_eq!(data.len(), 3);
+        for (i, expected) in ["a", "b", "c"].iter().enumerate() {
+            let sr = match &data[i].value {
+                crate::parsing::ast::DataValue::SpecReference(r) => r,
+                _ => panic!("expected SpecReference for item {i}"),
+            };
+            assert_eq!(sr.name, *expected);
+            assert_eq!(data[i].reference.name, *expected);
+            assert!(sr.effective.is_none());
+        }
+    }
+
+    #[test]
+    fn parse_with_comma_separated_paths() {
+        let input = "spec consumer\nwith pricing/retail, pricing/wholesale";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let data = &result.specs[0].data;
+        assert_eq!(data.len(), 2);
+        let sr0 = match &data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(r) => r,
+            _ => panic!("expected SpecReference"),
         };
-        assert_eq!(spec_ref.name, "@user/workspace/cfg");
-        assert!(spec_ref.from_registry);
-        assert_eq!(spec_ref.hash_pin.as_deref(), Some("ab12cd34"));
+        assert_eq!(sr0.name, "pricing/retail");
+        assert_eq!(data[0].reference.name, "retail");
+        let sr1 = match &data[1].value {
+            crate::parsing::ast::DataValue::SpecReference(r) => r,
+            _ => panic!("expected SpecReference"),
+        };
+        assert_eq!(sr1.name, "pricing/wholesale");
+        assert_eq!(data[1].reference.name, "wholesale");
     }
 
     #[test]
-    fn parse_type_import_with_hash() {
-        let input = "spec consumer\ntype money from finance~a1b2c3d4\nfact p: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(name, "money");
-                assert_eq!(from.name, "finance");
-                assert_eq!(from.hash_pin.as_deref(), Some("a1b2c3d4"));
-            }
-            other => panic!("expected Import, got: {:?}", other),
-        }
+    fn parse_with_comma_separated_registry() {
+        let input = "spec consumer\nwith @org/repo/spec_a, @org/repo/spec_b";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let data = &result.specs[0].data;
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0].reference.name, "spec_a");
+        assert_eq!(data[1].reference.name, "spec_b");
     }
 
     #[test]
-    fn parse_type_import_registry_with_hash() {
-        let input = "spec consumer\ntype money from @lemma/std/finance~ab12cd34\nfact p: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(name, "money");
-                assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.from_registry);
-                assert_eq!(from.hash_pin.as_deref(), Some("ab12cd34"));
-            }
-            other => panic!("expected Import, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_inline_type_from_with_hash() {
-        let input = "spec consumer\nfact price: [money from finance~a1b2c3d4 -> minimum 0]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::TypeDeclaration {
-                base,
-                from,
-                constraints,
-                ..
-            } => {
-                assert_eq!(
-                    base,
-                    &ParentType::Custom {
-                        name: "money".to_string(),
-                    }
-                );
-                let spec_ref = from.as_ref().expect("expected from spec ref");
-                assert_eq!(spec_ref.name, "finance");
-                assert_eq!(spec_ref.hash_pin.as_deref(), Some("a1b2c3d4"));
-                assert!(constraints.is_some());
-            }
-            other => panic!("expected TypeDeclaration, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_type_import_with_effective() {
-        let input = "spec consumer\ntype money from finance 2026-01-15\nfact p: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(name, "money");
-                assert_eq!(from.name, "finance");
-                assert!(from.hash_pin.is_none());
-                let eff = from
-                    .effective
-                    .as_ref()
-                    .expect("expected effective datetime");
-                assert_eq!(eff.year, 2026);
-                assert_eq!(eff.month, 1);
-                assert_eq!(eff.day, 15);
-            }
-            other => panic!("expected Import, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_type_import_with_hash_and_effective() {
-        let input =
-            "spec consumer\ntype money from finance~a1b2c3d4 2026-01-15T00:00:03\nfact p: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(name, "money");
-                assert_eq!(from.name, "finance");
-                assert_eq!(from.hash_pin.as_deref(), Some("a1b2c3d4"));
-                let eff = from
-                    .effective
-                    .as_ref()
-                    .expect("expected effective datetime");
-                assert_eq!(eff.year, 2026);
-                assert_eq!(eff.month, 1);
-                assert_eq!(eff.day, 15);
-                assert_eq!(eff.second, 3);
-            }
-            other => panic!("expected Import, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_type_import_registry_with_effective() {
-        let input = "spec consumer\ntype money from @lemma/std/finance 2026-03-01\nfact p: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        match &result[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, name, .. } => {
-                assert_eq!(name, "money");
-                assert_eq!(from.name, "@lemma/std/finance");
-                assert!(from.from_registry);
-                let eff = from
-                    .effective
-                    .as_ref()
-                    .expect("expected effective datetime");
-                assert_eq!(eff.year, 2026);
-                assert_eq!(eff.month, 3);
-            }
-            other => panic!("expected Import, got: {:?}", other),
-        }
+    fn parse_with_alias_no_comma_continuation() {
+        let input = "spec consumer\nwith alias: pricing/retail\ndata x: 1";
+        let result = parse(input, "test.lemma", &ResourceLimits::default()).unwrap();
+        let data = &result.specs[0].data;
+        assert_eq!(data.len(), 2);
+        assert_eq!(data[0].reference.name, "alias");
+        let sr = match &data[0].value {
+            crate::parsing::ast::DataValue::SpecReference(r) => r,
+            _ => panic!("expected SpecReference"),
+        };
+        assert_eq!(sr.name, "pricing/retail");
     }
 
     #[test]
     fn parse_inline_type_from_with_effective() {
-        let input = "spec consumer\nfact price: [money from finance 2026-06-01 -> minimum 0]";
+        let input = "spec consumer\ndata price: money from finance 2026-06-01 -> minimum 0";
         let result = parse(input, "test.lemma", &ResourceLimits::default())
             .unwrap()
             .specs;
-        match &result[0].facts[0].value {
-            crate::parsing::ast::FactValue::TypeDeclaration { from, .. } => {
+        match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::TypeDeclaration { from, .. } => {
                 let spec_ref = from.as_ref().expect("expected from spec ref");
                 assert_eq!(spec_ref.name, "finance");
-                assert!(spec_ref.hash_pin.is_none());
                 let eff = spec_ref
                     .effective
                     .as_ref()
@@ -696,19 +546,6 @@ fact a: spec @user/workspace/spec_a"#;
                 assert_eq!(eff.month, 6);
             }
             other => panic!("expected TypeDeclaration, got: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn parse_type_import_spec_name_with_slashes() {
-        let input = "spec consumer\ntype money from @lemma/std/finance\nfact p: [money]";
-        let result = parse(input, "test.lemma", &ResourceLimits::default());
-        assert!(result.is_ok(), "type import from registry should parse");
-        match &result.unwrap().specs[0].types[0] {
-            crate::parsing::ast::TypeDef::Import { from, .. } => {
-                assert_eq!(from.name, "@lemma/std/finance")
-            }
-            _ => panic!("expected Import"),
         }
     }
 
@@ -730,6 +567,156 @@ this is not valid lemma syntax @#$%
             }
             Err(e) => panic!("Expected Parse error, got: {e:?}"),
             Ok(_) => panic!("Expected parse error"),
+        }
+    }
+
+    // ─── Parser-level pins for DataValue variants ────────────────────
+
+    /// `data x: a.b` (local LHS, dotted RHS) must be parsed as Reference.
+    /// This is the value-copy reference form for local references.
+    #[test]
+    fn parse_data_with_dotted_rhs_is_reference() {
+        let input = r#"spec s
+data a: number -> default 1
+data x: a.something"#;
+        let result = parse(input, "t.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let x_value = &result[0]
+            .data
+            .iter()
+            .find(|d| d.reference.name == "x")
+            .expect("data x not found")
+            .value;
+        assert!(
+            matches!(x_value, crate::parsing::ast::DataValue::Reference { .. }),
+            "dotted RHS must yield DataValue::Reference, got: {:?}",
+            x_value
+        );
+    }
+
+    /// `data x: a.b.c.d` (3+ segment RHS) must parse and preserve segments.
+    #[test]
+    fn parse_data_with_multi_segment_reference_rhs() {
+        let input = r#"spec s
+data x: alpha.beta.gamma.delta"#;
+        let result = parse(input, "t.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let value = &result[0].data[0].value;
+        match value {
+            crate::parsing::ast::DataValue::Reference { target, .. } => {
+                assert_eq!(target.segments, vec!["alpha", "beta", "gamma"]);
+                assert_eq!(target.name, "delta");
+            }
+            other => panic!("expected Reference, got: {:?}", other),
+        }
+    }
+
+    /// `data x: a.b -> minimum 5` must parse as Reference WITH the
+    /// trailing constraint chain captured in `constraints`.
+    #[test]
+    fn parse_reference_with_trailing_constraint_captures_constraints() {
+        let input = r#"spec s
+data x: foo.bar -> minimum 5"#;
+        let result = parse(input, "t.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let value = &result[0].data[0].value;
+        match value {
+            crate::parsing::ast::DataValue::Reference { constraints, .. } => {
+                let c = constraints.as_ref().expect("constraints expected");
+                assert_eq!(c.len(), 1, "exactly one constraint expected, got: {:?}", c);
+            }
+            other => panic!("expected Reference, got: {:?}", other),
+        }
+    }
+
+    /// `data x: notdotted` (local LHS, non-dotted RHS) MUST stay a
+    /// TypeDeclaration — not silently reinterpreted as a Reference. Pin the
+    /// parser behavior so future refactors cannot change the shape without
+    /// the test flipping.
+    #[test]
+    fn parse_local_non_dotted_rhs_stays_type_declaration() {
+        let input = r#"spec s
+data x: myothertype"#;
+        let result = parse(input, "t.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let value = &result[0].data[0].value;
+        assert!(
+            matches!(
+                value,
+                crate::parsing::ast::DataValue::TypeDeclaration { .. }
+            ),
+            "non-dotted local RHS must stay TypeDeclaration, got: {:?}",
+            value
+        );
+    }
+
+    /// `data x.y: notdotted` (binding LHS, non-dotted RHS) IS parsed as
+    /// Reference per the current implementation — even though the AST doc
+    /// comment claims otherwise. Pin the real behavior.
+    #[test]
+    fn parse_binding_non_dotted_rhs_is_reference() {
+        let input = r#"spec s
+data child.slot: somename"#;
+        let result = parse(input, "t.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let value = &result[0].data[0].value;
+        assert!(
+            matches!(value, crate::parsing::ast::DataValue::Reference { .. }),
+            "non-dotted RHS in binding context must yield Reference; got: {:?}",
+            value
+        );
+    }
+
+    /// Legacy syntax `data x: spec other` was removed; must be rejected.
+    #[test]
+    fn parse_legacy_data_colon_spec_is_rejected() {
+        let result = parse(
+            r#"
+spec s
+data x: spec other
+"#,
+            "t.lemma",
+            &ResourceLimits::default(),
+        );
+        match result {
+            Ok(_) => panic!("legacy `data x: spec other` must fail to parse"),
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("spec") && (msg.contains("removed") || msg.contains("syntax")),
+                    "error must indicate the legacy syntax was removed, got: {msg}"
+                );
+            }
+        }
+    }
+
+    /// `data x.y: z.w` (binding LHS, dotted RHS) → Reference with two LHS
+    /// segments and two RHS segments.
+    #[test]
+    fn parse_binding_with_dotted_rhs_preserves_both_sides() {
+        let input = r#"spec s
+data outer.inner: target.field"#;
+        let result = parse(input, "t.lemma", &ResourceLimits::default())
+            .unwrap()
+            .specs;
+        let datum = &result[0].data[0];
+        assert_eq!(datum.reference.segments, vec!["outer"]);
+        assert_eq!(datum.reference.name, "inner");
+        match &datum.value {
+            crate::parsing::ast::DataValue::Reference {
+                target,
+                constraints,
+            } => {
+                assert_eq!(target.segments, vec!["target"]);
+                assert_eq!(target.name, "field");
+                assert!(constraints.is_none(), "no trailing constraints expected");
+            }
+            other => panic!("expected Reference, got: {:?}", other),
         }
     }
 }

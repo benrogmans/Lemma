@@ -6,19 +6,19 @@ Shows conditional logic with unless clauses.
 Easy to understand: books returned late incur fees.
 """
 
-type money: scale
+data money: scale
   -> decimals 2
   -> unit eur 1.00
   -> minimum 0 eur
 
-type book_kind: text
+data book_kind: text
   -> option "regular"
   -> option "reference"
   -> option "new_release"
 
-fact book_type        : [book_kind]
-fact is_first_offense : [boolean]
-fact days_overdue     : [number -> minimum 0]
+data book_type        : book_kind
+data is_first_offense : boolean
+data days_overdue     : number -> minimum 0
 
 rule daily_fee:
   0 eur

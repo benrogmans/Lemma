@@ -9,13 +9,13 @@ JS API mirrors Rust types (`Response`, `SpecSchema`, spec list entries) as plain
 ## Install
 
 ```bash
-npm install @benrogmans/lemma-engine
+npm install @lemmabase/lemma-engine
 ```
 
 ## Usage
 
 ```javascript
-import { Lemma } from '@benrogmans/lemma-engine';
+import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
 ```
@@ -26,7 +26,7 @@ const engine = await Lemma();
 try {
   await engine.load(`
   spec example
-  fact price: 100
+  data price: 100
   rule total: price * 2
 `, 'example.lemma');
 } catch (errs) {
@@ -52,9 +52,9 @@ console.log(response.results);
 - **`init()`** — await once (browser).
 - **`initSync({ module })`** — Node + `readFileSync('…/lemma_bg.wasm')`.
 - **`Engine`** — `load`, `list`, `schema`, `run`, `format` (supported surface for now).
-- **`@benrogmans/lemma-engine/lsp-client`** — `LspClient`: `start()` (no args), `initialize()`, `didOpen`, `onDiagnostics`, `formatting`, `semanticTokensFull`. Call `init()` first.
+- **`@lemmabase/lemma-engine/lsp-client`** — `LspClient`: `start()` (no args), `initialize()`, `didOpen`, `onDiagnostics`, `formatting`, `semanticTokensFull`. Call `init()` first.
 
-**Spec id** (for `show` / `run`): `name` or `name~` + 8 hex chars (same as CLI).
+**Spec id** (for `show` / `run`): `name`.
 
 See [engine/packages/npm/README.md](../engine/packages/npm/README.md).
 

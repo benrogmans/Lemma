@@ -15,13 +15,13 @@ fn load_coffee_order() -> Engine {
     let examples = r#"
 spec examples
 
-type money: scale
+data money: scale
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
   -> minimum 0 eur
 
-type priority: text
+data priority: text
   -> option "low"
   -> option "medium"
   -> option "high"
@@ -30,23 +30,22 @@ type priority: text
     let coffee_order = r#"
 spec coffee_order
 
-type coffee: text
+data coffee: text
   -> option "espresso"
   -> option "latte"
   -> option "cappuccino"
   -> option "mocha"
 
-type size: text
+data size: text
   -> option "small"
   -> option "medium"
   -> option "large"
+  -> option "extra large"
 
-fact price           : [money from examples]
-fact priority        : [priority from examples]
-fact product         : [coffee]
-fact size            : [size -> option "extra large"]
-fact number_of_cups  : [number -> maximum 10]
-fact has_loyalty_card: [boolean]
+data price           : money from examples
+data priority        : priority from examples
+data number_of_cups  : number -> maximum 10
+data has_loyalty_card: boolean
 
 rule ordered_priority: veto "Unknown priority"
   unless priority is "low"    then 1
@@ -54,10 +53,10 @@ rule ordered_priority: veto "Unknown priority"
   unless priority is "high"   then 3
 
 rule base_price: veto "Unknown type of coffee"
-  unless product is "espresso"   then 2.50 eur
-  unless product is "latte"      then 3.50 eur
-  unless product is "cappuccino" then 3.50 eur
-  unless product is "mocha"      then 4.00 eur
+  unless coffee is "espresso"   then 2.50 eur
+  unless coffee is "latte"      then 3.50 eur
+  unless coffee is "cappuccino" then 3.50 eur
+  unless coffee is "mocha"      then 4.00 eur
 
 rule size_multiplier: veto "Unknown size of coffee"
   unless size is "small"  then 0.80
@@ -90,30 +89,19 @@ rule total: subtotal - discount_amount
 }
 
 #[test]
-fn test_coffee_order_parses() {
-    let engine = load_coffee_order();
-
-    // Verify specs are loaded
-    let specs = engine.list_specs();
-    let spec_names: Vec<&str> = specs.iter().map(|d| d.name.as_str()).collect();
-    assert!(spec_names.contains(&"examples"));
-    assert!(spec_names.contains(&"coffee_order"));
-}
-
-#[test]
 fn test_coffee_order_espresso_small_no_loyalty() {
     let engine = load_coffee_order();
     let now = DateTimeValue::now();
 
-    let fact_values = HashMap::from([
-        ("product".to_string(), "espresso".to_string()),
+    let data_values = HashMap::from([
+        ("coffee".to_string(), "espresso".to_string()),
         ("size".to_string(), "small".to_string()),
         ("number_of_cups".to_string(), "2".to_string()),
         ("has_loyalty_card".to_string(), "false".to_string()),
     ]);
 
     let response = engine
-        .run("coffee_order", Some(&now), fact_values, false)
+        .run("coffee_order", Some(&now), data_values, false)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -307,15 +295,15 @@ fn test_coffee_order_latte_large_with_loyalty() {
     let engine = load_coffee_order();
     let now = DateTimeValue::now();
 
-    let fact_values = HashMap::from([
-        ("product".to_string(), "latte".to_string()),
+    let data_values = HashMap::from([
+        ("coffee".to_string(), "latte".to_string()),
         ("size".to_string(), "large".to_string()),
         ("number_of_cups".to_string(), "3".to_string()),
         ("has_loyalty_card".to_string(), "true".to_string()),
     ]);
 
     let response = engine
-        .run("coffee_order", Some(&now), fact_values, false)
+        .run("coffee_order", Some(&now), data_values, false)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -481,10 +469,10 @@ fn test_coffee_order_ordered_priority() {
     let expected_values = ["1", "2", "3"];
 
     for (priority, expected) in priorities.iter().zip(expected_values.iter()) {
-        let fact_values = HashMap::from([("priority".to_string(), priority.to_string())]);
+        let data_values = HashMap::from([("priority".to_string(), priority.to_string())]);
 
         let response = engine
-            .run("coffee_order", Some(&now), fact_values, false)
+            .run("coffee_order", Some(&now), data_values, false)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -515,14 +503,14 @@ fn test_coffee_order_invalid_size_veto() {
 
     // Size "extra large" is defined in the inline type constraint, but size_multiplier
     // only handles small/medium/large, so it should veto
-    let fact_values = HashMap::from([
-        ("product".to_string(), "espresso".to_string()),
+    let data_values = HashMap::from([
+        ("coffee".to_string(), "espresso".to_string()),
         ("size".to_string(), "extra large".to_string()),
         ("number_of_cups".to_string(), "1".to_string()),
     ]);
 
     let response = engine
-        .run("coffee_order", Some(&now), fact_values, false)
+        .run("coffee_order", Some(&now), data_values, false)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response

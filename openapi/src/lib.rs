@@ -6,7 +6,7 @@
 //! ## Temporal versioning
 //!
 //! Lemma specs can have multiple temporal versions (e.g. `spec pricing 2024-01-01`
-//! and `spec pricing 2025-01-01`) with potentially different interfaces (facts, rules,
+//! and `spec pricing 2025-01-01`) with potentially different interfaces (data, rules,
 //! types). The OpenAPI spec must reflect the interface active at a specific point in
 //! time. Use [`generate_openapi_effective`] with an explicit `DateTimeValue` to get the
 //! spec for a given instant. [`generate_openapi`] is a convenience wrapper that uses
@@ -18,6 +18,9 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LemmaType, TypeSpecification};
 use serde_json::{json, Map, Value};
+
+/// Query slug for the default temporal view (request-time instant). OpenAPI URLs use no `?effective=`.
+pub const NOW_SLUG: &str = "now";
 
 /// A single Scalar API reference source entry.
 ///
@@ -33,12 +36,12 @@ pub struct ApiSource {
 /// Compute the list of Scalar multi-source entries for temporal versioning.
 ///
 /// Returns one [`ApiSource`] per distinct temporal version boundary across all
-/// loaded specs, plus one "current" source that uses no `effective` (i.e. the
-/// latest version). "Current" is first (Scalar default), then boundaries in
-/// descending chronological order (newest first).
+/// loaded specs, plus one **now** source (slug [`NOW_SLUG`]) that uses no `effective`
+/// query (evaluation instant = request time). That entry is first (Scalar default),
+/// then boundaries in descending chronological order (newest first).
 ///
 /// If there are no temporal version boundaries (all specs are unversioned),
-/// returns a single "current" entry.
+/// returns a single **now** entry.
 pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
     let mut all_boundaries: std::collections::BTreeSet<DateTimeValue> =
         std::collections::BTreeSet::new();
@@ -57,8 +60,8 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
 
     if all_boundaries.is_empty() {
         return vec![ApiSource {
-            title: "Current".to_string(),
-            slug: "current".to_string(),
+            title: "Now".to_string(),
+            slug: NOW_SLUG.to_string(),
             url: "/openapi.json".to_string(),
         }];
     }
@@ -66,8 +69,8 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
     let mut sources: Vec<ApiSource> = Vec::with_capacity(all_boundaries.len() + 1);
 
     sources.push(ApiSource {
-        title: "Current".to_string(),
-        slug: "current".to_string(),
+        title: "Now".to_string(),
+        slug: NOW_SLUG.to_string(),
         url: "/openapi.json".to_string(),
     });
 
@@ -94,13 +97,23 @@ pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
 /// Generate a complete OpenAPI 3.1 specification for a specific point in time.
 ///
 /// The specification includes:
-/// - Spec endpoints (`/{spec_name}`) with `?rules=` query parameter; path is spec id (name or name~hash)
-/// - GET operations (schema) and POST operations (evaluate) with `Accept-Datetime` header
-/// - Response schemas with evaluation envelope (`spec`, `effective`, `hash`, `result`)
-/// - Meta routes (`/`, `/health`, `/openapi.json`, `/docs`)
+/// - `GET /` — list loaded specs (name, data/rule counts)
+/// - Spec endpoints (`/{spec_name}`) with `?rules=` query parameter
+/// - GET (schema: `spec_set_id`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
+///   POST (evaluate: envelope `spec`, `effective`, `result`) with `Accept-Datetime` header
+/// - `x-effective-from` / `x-effective-to` vendor extensions on each spec PathItem
+///   exposing the half-open `[effective_from, effective_to)` range of the version
+///   resolved at the document's effective instant (both `null` when unbounded)
+///
+/// CLI `lemma server` also exposes shell routes (`/openapi.json`, `/health`, `/docs`) and
+/// legacy schema routes (`/schema/{spec_name}`, `/schema/{spec_name}/{rules}`); both are
+/// intentionally omitted from the generated document. The legacy `/schema/*` routes
+/// predate the spec envelope returned by `GET /{spec_name}` and are kept for backward
+/// compatibility only; use `GET /{spec_name}` instead. `GET /` (list loaded specs) is
+/// included alongside `GET|POST /{spec_name}`.
 ///
 /// When `explanations_enabled` is true, the spec adds the `x-explanations` header parameter
-/// to evaluation endpoints and describes the optional `explanation` object in responses.
+/// to evaluation endpoints and describes the optional `explanation` field on rule results.
 pub fn generate_openapi_effective(
     engine: &Engine,
     explanations_enabled: bool,
@@ -109,26 +122,51 @@ pub fn generate_openapi_effective(
     let mut paths = Map::new();
     let mut components_schemas = Map::new();
 
+    components_schemas.insert(
+        "LemmaRuleResult".to_string(),
+        build_rule_result_schema(explanations_enabled),
+    );
+
     let active_specs = engine.list_specs_effective(effective);
     let unique_spec_names: Vec<String> = active_specs.iter().map(|s| s.name.clone()).collect();
+
+    paths.insert(
+        "/".to_string(),
+        index_path_item(&unique_spec_names, engine, effective),
+    );
 
     for spec_name in &unique_spec_names {
         if let Ok(plan) = engine.get_plan(spec_name, Some(effective)) {
             let schema = plan.schema();
-            let facts = collect_input_facts_from_schema(&schema);
+            let data = collect_input_data_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
 
+            let spec_set = engine
+                .get_spec_set(spec_name)
+                .expect("BUG: spec in list_specs_effective but spec set missing from engine");
+            let active_spec = active_specs
+                .iter()
+                .find(|s| s.name == *spec_name)
+                .expect("BUG: active_specs was produced by this engine for this name");
+            let (spec_effective_from, spec_effective_to) = spec_set.effective_range(active_spec);
+
             let safe_name = spec_name.replace('/', "_");
-            let response_schema_name = format!("{}_response", safe_name);
+            let get_response_schema_name = format!("{}_get_response", safe_name);
             components_schemas.insert(
-                response_schema_name.clone(),
-                build_response_schema(&schema, &rule_names, explanations_enabled),
+                get_response_schema_name.clone(),
+                build_get_schema_response(),
+            );
+
+            let evaluate_response_schema_name = format!("{}_evaluate_response", safe_name);
+            components_schemas.insert(
+                evaluate_response_schema_name.clone(),
+                build_evaluate_response_schema(&schema, &rule_names),
             );
 
             let post_body_schema_name = format!("{}_request", safe_name);
             components_schemas.insert(
                 post_body_schema_name.clone(),
-                build_post_request_schema(&facts),
+                build_post_request_schema(&data),
             );
 
             let path = format!("/{}", spec_name);
@@ -136,22 +174,16 @@ pub fn generate_openapi_effective(
                 path,
                 build_spec_path_item(
                     spec_name,
-                    &facts,
-                    &response_schema_name,
+                    &get_response_schema_name,
+                    &evaluate_response_schema_name,
                     &post_body_schema_name,
                     &rule_names,
                     explanations_enabled,
+                    (spec_effective_from.as_ref(), spec_effective_to.as_ref()),
                 ),
             );
         }
     }
-
-    paths.insert(
-        "/".to_string(),
-        index_path_item(&unique_spec_names, engine, effective),
-    );
-    paths.insert("/health".to_string(), health_path_item());
-    paths.insert("/openapi.json".to_string(), openapi_json_path_item());
 
     let mut tags = vec![json!({
         "name": "Specs",
@@ -165,10 +197,6 @@ pub fn generate_openapi_effective(
             "description": format!("GET schema or POST evaluate for spec '{}'. Use ?rules= to scope.", spec_name)
         }));
     }
-    tags.push(json!({
-        "name": "Meta",
-        "description": "Server metadata and introspection endpoints"
-    }));
 
     let spec_tags: Vec<Value> = unique_spec_names
         .iter()
@@ -178,7 +206,6 @@ pub fn generate_openapi_effective(
     let tag_groups = vec![
         json!({ "name": "Overview", "tags": ["Specs"] }),
         json!({ "name": "Specs", "tags": spec_tags }),
-        json!({ "name": "Meta", "tags": ["Meta"] }),
     ];
 
     let version_label = format!("{} (effective {})", env!("CARGO_PKG_VERSION"), effective);
@@ -187,7 +214,7 @@ pub fn generate_openapi_effective(
         "openapi": "3.1.0",
         "info": {
             "title": "Lemma API",
-            "description": "Lemma is a declarative language for expressing business logic — pricing rules, tax calculations, eligibility criteria, contracts, and policies. Learn more at [LemmaBase.com](https://lemmabase.com).",
+            "description": "Lemma is a declarative language for expressing business logic — pricing rules, tax calculations, eligibility criteria, contracts, and policies. Learn more at [LemmaBase.com](https://lemmabase.com).\n\n**Temporal resolution.** `GET /{spec}` describes **version boundaries**: each entry in `versions` carries the half-open `[effective_from, effective_to)` validity range of a temporal version. `POST /{spec}` treats the request's effective instant (from the `Accept-Datetime` header, or the evaluation envelope's `effective` field) as the **evaluation instant** used to pick the active version and compute the result.",
             "version": version_label
         },
         "tags": tags,
@@ -199,36 +226,36 @@ pub fn generate_openapi_effective(
     })
 }
 
-/// Information about a single input fact for OpenAPI generation.
-struct InputFact {
-    /// The fact name as it appears in the API (e.g. "quantity", "is_member").
+/// Information about a single input data for OpenAPI generation.
+struct InputData {
+    /// The data name as it appears in the API (e.g. "quantity", "is_member").
     name: String,
-    /// The resolved Lemma type for this fact.
+    /// The resolved Lemma type for this data.
     lemma_type: LemmaType,
-    /// The fact's literal value if defined in the spec (e.g. `fact quantity: 10`).
-    /// None for type-only facts (e.g. `fact quantity: [number]`).
+    /// The data's literal value if defined in the spec (e.g. `data quantity: 10`).
+    /// None for type-only data (e.g. `data quantity: number`).
     default_value: Option<lemma::LiteralValue>,
 }
 
-/// Collect all local input facts from a pre-built schema.
+/// Collect all local input data from a pre-built schema.
 ///
-/// Only includes facts local to the spec (no dot-separated cross-spec
+/// Only includes data local to the spec (no dot-separated cross-spec
 /// paths like `calc.price`). Already sorted alphabetically by `schema()`.
-fn collect_input_facts_from_schema(schema: &lemma::SpecSchema) -> Vec<InputFact> {
+fn collect_input_data_from_schema(schema: &lemma::SpecSchema) -> Vec<InputData> {
     schema
-        .facts
+        .data
         .iter()
         .filter(|(name, _)| !name.contains('.'))
-        .map(|(name, (lemma_type, default))| InputFact {
+        .map(|(name, entry)| InputData {
             name: name.clone(),
-            lemma_type: lemma_type.clone(),
-            default_value: default.clone(),
+            lemma_type: entry.lemma_type.clone(),
+            default_value: entry.default.clone(),
         })
         .collect()
 }
 
 // ---------------------------------------------------------------------------
-// Meta route path items
+// Index path (list specs)
 // ---------------------------------------------------------------------------
 
 fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
@@ -236,11 +263,11 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
         .iter()
         .map(|name| match engine.schema(name, Some(effective)) {
             Ok(s) => {
-                let facts_count = s.facts.keys().filter(|n| !n.contains('.')).count();
+                let data_count = s.data.keys().filter(|n| !n.contains('.')).count();
                 let rules_count = s.rules.len();
                 json!({
                     "name": name,
-                    "facts": facts_count,
+                    "data": data_count,
                     "rules": rules_count
                 })
             }
@@ -268,7 +295,7 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
                                     "type": "object",
                                     "properties": {
                                         "name": { "type": "string" },
-                                        "facts": { "type": "integer" },
+                                        "data": { "type": "integer" },
                                         "rules": { "type": "integer" },
                                         "schema_error": { "type": "boolean" },
                                         "message": { "type": "string" }
@@ -277,54 +304,6 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
                                 }
                             },
                             "example": spec_items
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn health_path_item() -> Value {
-    json!({
-        "get": {
-            "operationId": "healthCheck",
-            "summary": "Health check",
-            "tags": ["Meta"],
-            "responses": {
-                "200": {
-                    "description": "Server is healthy",
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "status": { "type": "string" },
-                                    "service": { "type": "string" },
-                                    "version": { "type": "string" }
-                                },
-                                "required": ["status", "service", "version"]
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    })
-}
-
-fn openapi_json_path_item() -> Value {
-    json!({
-        "get": {
-            "operationId": "getOpenApiSpec",
-            "summary": "OpenAPI 3.1 specification",
-            "tags": ["Meta"],
-            "responses": {
-                "200": {
-                    "description": "OpenAPI specification as JSON",
-                    "content": {
-                        "application/json": {
-                            "schema": { "type": "object" }
                         }
                     }
                 }
@@ -371,6 +350,144 @@ fn not_found_response_schema() -> Value {
     })
 }
 
+fn memento_spec_response_headers() -> Value {
+    json!({
+        "Memento-Datetime": {
+            "description": "RFC 7089: datetime of the resolved spec version (absent for unversioned specs)",
+            "schema": { "type": "string" }
+        },
+        "Vary": {
+            "description": "Indicates negotiation on Accept-Datetime",
+            "schema": { "type": "string", "example": "Accept-Datetime" }
+        }
+    })
+}
+
+/// GET `/{spec}` body: matches [cli::server::GetSpecResponse].
+fn build_get_schema_response() -> Value {
+    json!({
+        "type": "object",
+        "required": ["spec_set_id", "data", "rules", "meta", "versions"],
+        "properties": {
+            "spec_set_id": {
+                "type": "string",
+                "description": "Spec set identifier (path segments, e.g. org/product/pricing)"
+            },
+            "effective_from": {
+                "type": ["string", "null"],
+                "description": "Effective-from of the resolved temporal version, if any"
+            },
+            "data": {
+                "type": "object",
+                "description": "Input data names mapped to type metadata and optional defaults",
+                "additionalProperties": true
+            },
+            "rules": {
+                "type": "object",
+                "description": "Rule names mapped to result types (scoped by ?rules= when provided)",
+                "additionalProperties": true
+            },
+            "meta": {
+                "type": "object",
+                "description": "Spec metadata key/value pairs",
+                "additionalProperties": true
+            },
+            "versions": {
+                "type": "array",
+                "description": "All loaded temporal versions for this spec name, each with a half-open [effective_from, effective_to) range",
+                "items": {
+                    "type": "object",
+                    "required": ["effective_from", "effective_to"],
+                    "properties": {
+                        "effective_from": {
+                            "type": ["string", "null"],
+                            "description": "Start of validity for this version; null when unbounded (no earlier version exists)"
+                        },
+                        "effective_to": {
+                            "type": ["string", "null"],
+                            "description": "Exclusive end of validity (same instant as the next version's effective_from); null when this is the latest version and has no successor"
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Single rule output: matches [cli::response::RuleResultJson].
+fn build_rule_result_schema(explanations_enabled: bool) -> Value {
+    let mut explanation = json!({
+        "type": "object",
+        "description": "Structured explanation tree when explanations are enabled"
+    });
+    if explanations_enabled {
+        explanation["description"] = Value::String(
+            "Structured explanation tree (present when x-explanations is sent and server uses --explanations)"
+                .to_string(),
+        );
+    }
+
+    json!({
+        "type": "object",
+        "required": ["vetoed", "rule_type"],
+        "properties": {
+            "value": {
+                "description": "Native JSON value when not vetoed (boolean, number, string, array, object)"
+            },
+            "unit": {
+                "type": "string",
+                "description": "Unit for scale/duration results (e.g. currency code, hours)"
+            },
+            "display": {
+                "type": "string",
+                "description": "Human-readable formatted value"
+            },
+            "vetoed": { "type": "boolean" },
+            "veto_reason": { "type": "string" },
+            "rule_type": {
+                "type": "string",
+                "description": "Result type name (e.g. number, boolean, money)"
+            },
+            "explanation": explanation
+        }
+    })
+}
+
+/// POST evaluate body: matches [cli::response::EvaluationEnvelope].
+fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[String]) -> Value {
+    let mut result_props = Map::new();
+    for rule_name in rule_names {
+        if schema.rules.contains_key(rule_name) {
+            result_props.insert(
+                rule_name.clone(),
+                json!({
+                    "$ref": "#/components/schemas/LemmaRuleResult"
+                }),
+            );
+        }
+    }
+
+    json!({
+        "type": "object",
+        "required": ["spec", "effective", "result"],
+        "properties": {
+            "spec": {
+                "type": "string",
+                "description": "Spec set id that was evaluated"
+            },
+            "effective": {
+                "type": "string",
+                "description": "Evaluation instant used for temporal resolution (matches request instant unless overridden)"
+            },
+            "result": {
+                "type": "object",
+                "description": "Rule names to evaluation results (definition order in response; keys match ?rules= filter when set)",
+                "properties": Value::Object(result_props)
+            }
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Spec path items
 // ---------------------------------------------------------------------------
@@ -390,22 +507,37 @@ fn accept_datetime_header_parameter() -> Value {
         "name": "Accept-Datetime",
         "in": "header",
         "required": false,
-        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit for current. Path may be spec id (name or name~hash) to pin to a content version.",
+        "description": "RFC 7089 (Memento): resolve the spec version active at this datetime. Omit to evaluate at the request instant (now).",
         "schema": { "type": "string", "format": "date-time" },
         "example": "Sat, 01 Jan 2025 00:00:00 GMT"
     })
 }
 
+/// Build the PathItem for `/{spec_name}` (GET schema + POST evaluate).
+///
+/// `effective_range` is the half-open `[effective_from, effective_to)`
+/// validity range of the temporal version resolved at the OpenAPI document's
+/// effective instant. Both bounds are emitted as the `x-effective-from` /
+/// `x-effective-to` vendor extensions on the PathItem so tooling can render
+/// the active version's window without having to inspect the `versions`
+/// array. `None` in either position (unbounded start for the first row,
+/// unbounded end for the latest row) is serialised as JSON `null`.
 fn build_spec_path_item(
     spec_name: &str,
-    _facts: &[InputFact],
-    response_schema_name: &str,
+    get_response_schema_name: &str,
+    evaluate_response_schema_name: &str,
     post_body_schema_name: &str,
     rule_names: &[String],
     explanations_enabled: bool,
+    effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
 ) -> Value {
-    let response_ref = json!({
-        "$ref": format!("#/components/schemas/{}", response_schema_name)
+    let (effective_from, effective_to) = effective_range;
+
+    let get_schema_ref = json!({
+        "$ref": format!("#/components/schemas/{}", get_response_schema_name)
+    });
+    let evaluate_schema_ref = json!({
+        "$ref": format!("#/components/schemas/{}", evaluate_response_schema_name)
     });
     let body_ref = json!({
         "$ref": format!("#/components/schemas/{}", post_body_schema_name)
@@ -434,7 +566,7 @@ fn build_spec_path_item(
         get_parameters.push(x_explanations_header_parameter());
     }
 
-    let get_summary = "Schema of resolved version (spec, facts, rules, meta, versions)".to_string();
+    let get_summary = "Schema of resolved version (spec, data, rules, meta, versions)".to_string();
     let post_summary = "Evaluate".to_string();
     let get_operation_id = format!("get_{}", spec_name);
     let post_operation_id = format!("post_{}", spec_name);
@@ -445,7 +577,16 @@ fn build_spec_path_item(
         post_parameters.push(x_explanations_header_parameter());
     }
 
+    let datetime_or_null = |dt: Option<&DateTimeValue>| -> Value {
+        match dt {
+            Some(d) => Value::String(d.to_string()),
+            None => Value::Null,
+        }
+    };
+
     json!({
+        "x-effective-from": datetime_or_null(effective_from),
+        "x-effective-to": datetime_or_null(effective_to),
         "get": {
             "operationId": get_operation_id,
             "summary": get_summary,
@@ -453,10 +594,11 @@ fn build_spec_path_item(
             "parameters": get_parameters,
             "responses": {
                 "200": {
-                    "description": "Schema of resolved version. Includes spec identity, hash, facts, rules, meta, and versions. Headers: ETag, Memento-Datetime, Vary.",
+                    "description": "Schema of resolved version (spec_set_id, effective_from, data, rules, meta, versions).",
+                    "headers": memento_spec_response_headers(),
                     "content": {
                         "application/json": {
-                            "schema": response_ref
+                            "schema": get_schema_ref
                         }
                     }
                 },
@@ -479,10 +621,11 @@ fn build_spec_path_item(
             },
             "responses": {
                 "200": {
-                    "description": "Evaluation results with traceability envelope (spec, effective, hash, result). Headers: ETag, Memento-Datetime, Vary.",
+                    "description": "Evaluation envelope: spec, effective, result (per-rule RuleResultJson).",
+                    "headers": memento_spec_response_headers(),
                     "content": {
                         "application/json": {
-                            "schema": response_ref
+                            "schema": evaluate_schema_ref
                         }
                     }
                 },
@@ -515,43 +658,21 @@ fn type_help(lemma_type: &LemmaType) -> String {
     }
 }
 
-/// Default value as a string for form-encoded POST body schema.
-fn type_default_as_string(lemma_type: &LemmaType) -> Option<String> {
-    match &lemma_type.specifications {
-        TypeSpecification::Boolean { default, .. } => default.map(|b| b.to_string()),
-        TypeSpecification::Scale { default, .. } => {
-            default.as_ref().map(|(d, u)| format!("{} {}", d, u))
-        }
-        TypeSpecification::Number { default, .. } => default.as_ref().map(|d| d.to_string()),
-        TypeSpecification::Ratio { default, .. } => default.as_ref().map(|d| d.to_string()),
-        TypeSpecification::Text { default, .. } => default.clone(),
-        TypeSpecification::Date { default, .. } => default.as_ref().map(|dt| format!("{}", dt)),
-        TypeSpecification::Time { default, .. } => default.as_ref().map(|t| format!("{}", t)),
-        TypeSpecification::Duration { default, .. } => {
-            default.as_ref().map(|(v, u)| format!("{} {}", v, u))
-        }
-        TypeSpecification::Veto { .. } => None,
-        TypeSpecification::Undetermined => unreachable!(
-            "BUG: type_default_as_string called with Undetermined sentinel type; this type must never reach OpenAPI generation"
-        ),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // POST request body schema generation (form-encoded — all string values)
 // ---------------------------------------------------------------------------
 
-fn build_post_request_schema(facts: &[InputFact]) -> Value {
+fn build_post_request_schema(data: &[InputData]) -> Value {
     let mut properties = Map::new();
     let mut required = Vec::new();
 
-    for fact in facts {
+    for data in data {
         properties.insert(
-            fact.name.clone(),
-            build_post_property_schema(&fact.lemma_type, fact.default_value.as_ref()),
+            data.name.clone(),
+            build_post_property_schema(&data.lemma_type, data.default_value.as_ref()),
         );
-        if fact.default_value.is_none() {
-            required.push(Value::String(fact.name.clone()));
+        if data.default_value.is_none() {
+            required.push(Value::String(data.name.clone()));
         }
     }
 
@@ -567,7 +688,7 @@ fn build_post_request_schema(facts: &[InputFact]) -> Value {
 
 fn build_post_property_schema(
     lemma_type: &LemmaType,
-    fact_value: Option<&lemma::LiteralValue>,
+    data_value: Option<&lemma::LiteralValue>,
 ) -> Value {
     let mut schema = build_post_type_schema(lemma_type);
 
@@ -576,12 +697,8 @@ fn build_post_property_schema(
         schema["description"] = Value::String(help);
     }
 
-    // Priority: fact's actual value > type's default > nothing
-    let default_str = fact_value
-        .map(|v| v.display_value())
-        .or_else(|| type_default_as_string(lemma_type));
-    if let Some(d) = default_str {
-        schema["default"] = Value::String(d);
+    if let Some(v) = data_value {
+        schema["default"] = Value::String(v.display_value());
     }
 
     schema
@@ -605,96 +722,8 @@ fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Response schema generation
-// ---------------------------------------------------------------------------
-
-fn build_response_schema(
-    schema: &lemma::SpecSchema,
-    rule_names: &[String],
-    explanations_enabled: bool,
-) -> Value {
-    let mut properties = Map::new();
-
-    let explanation_prop = explanations_enabled.then(|| {
-        json!({
-            "type": "object",
-            "description": "Explanation tree (included when x-explanations header is sent and server started with --explanations)"
-        })
-    });
-
-    for rule_name in rule_names {
-        if let Some(rule_type) = schema.rules.get(rule_name) {
-            let result_type_name = type_base_name(rule_type);
-            let mut value_props = Map::new();
-            value_props.insert(
-                "value".to_string(),
-                json!({
-                    "type": "string",
-                    "description": format!("Computed value (type: {})", result_type_name)
-                }),
-            );
-            if let Some(ref p) = explanation_prop {
-                value_props.insert("explanation".to_string(), p.clone());
-            }
-            let mut veto_props = Map::new();
-            veto_props.insert(
-                "veto_reason".to_string(),
-                json!({
-                    "type": "string",
-                    "description": "Reason the rule was vetoed (no value produced)"
-                }),
-            );
-            if let Some(ref p) = explanation_prop {
-                veto_props.insert("explanation".to_string(), p.clone());
-            }
-            let value_branch = json!({
-                "type": "object",
-                "properties": Value::Object(value_props),
-                "required": ["value"]
-            });
-            let veto_branch = json!({
-                "type": "object",
-                "properties": Value::Object(veto_props)
-            });
-            properties.insert(
-                rule_name.clone(),
-                json!({
-                    "oneOf": [ value_branch, veto_branch ]
-                }),
-            );
-        }
-    }
-
-    json!({
-        "type": "object",
-        "properties": Value::Object(properties)
-    })
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Get a human-readable base type name for display purposes.
-fn type_base_name(lemma_type: &LemmaType) -> String {
-    if let Some(ref name) = lemma_type.name {
-        return name.clone();
-    }
-    match &lemma_type.specifications {
-        TypeSpecification::Boolean { .. } => "boolean".to_string(),
-        TypeSpecification::Number { .. } => "number".to_string(),
-        TypeSpecification::Scale { .. } => "scale".to_string(),
-        TypeSpecification::Text { .. } => "text".to_string(),
-        TypeSpecification::Date { .. } => "date".to_string(),
-        TypeSpecification::Time { .. } => "time".to_string(),
-        TypeSpecification::Duration { .. } => "duration".to_string(),
-        TypeSpecification::Ratio { .. } => "ratio".to_string(),
-        TypeSpecification::Veto { .. } => "veto".to_string(),
-        TypeSpecification::Undetermined => unreachable!(
-            "BUG: type_base_name called with Undetermined sentinel type; this type must never reach OpenAPI generation"
-        ),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -740,75 +769,36 @@ mod tests {
             .unwrap_or(false)
     }
 
-    fn find_param<'a>(params: &'a Value, name: &str) -> &'a Value {
-        params
-            .as_array()
-            .expect("parameters should be array")
-            .iter()
-            .find(|p| p["name"] == name)
-            .unwrap_or_else(|| panic!("parameter '{}' not found", name))
-    }
-
     // =======================================================================
     // Basic spec structure (pre-existing, adapted)
     // =======================================================================
 
     #[test]
-    fn test_generate_openapi_has_required_fields() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        assert_eq!(spec["openapi"], "3.1.0");
-        assert!(spec["info"]["title"].is_string());
-        assert!(spec["tags"].is_array());
-        assert!(spec["paths"].is_object());
-        assert!(spec["components"]["schemas"].is_object());
-    }
-
-    #[test]
-    fn test_generate_openapi_tags_order() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        let tags = spec["tags"].as_array().expect("tags should be array");
-        let tag_names: Vec<&str> = tags.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(tag_names, vec!["Specs", "pricing", "Meta"]);
-    }
-
-    #[test]
     fn test_generate_openapi_x_tag_groups() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
+        let engine = create_engine_with_code(
+            "spec pricing
+            data quantity: 10
+            rule total: quantity * 2",
+        );
         let spec = generate_openapi(&engine, false);
 
         let groups = spec["x-tagGroups"]
             .as_array()
             .expect("x-tagGroups should be array");
-        assert_eq!(groups.len(), 3);
+        assert_eq!(groups.len(), 2);
         assert_eq!(groups[0]["name"], "Overview");
         assert_eq!(groups[0]["tags"], json!(["Specs"]));
         assert_eq!(groups[1]["name"], "Specs");
         assert_eq!(groups[1]["tags"], json!(["pricing"]));
-        assert_eq!(groups[2]["name"], "Meta");
-        assert_eq!(groups[2]["tags"], json!(["Meta"]));
-    }
-
-    #[test]
-    fn test_index_endpoint_uses_specs_tag() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        let index_tag = &spec["paths"]["/"]["get"]["tags"][0];
-        assert_eq!(index_tag, "Specs");
     }
 
     #[test]
     fn test_spec_path_has_get_and_post() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
+        let engine = create_engine_with_code(
+            "spec pricing
+            data quantity: 10
+            rule total: quantity * 2",
+        );
         let spec = generate_openapi(&engine, false);
 
         assert!(
@@ -843,68 +833,87 @@ mod tests {
             param_names.contains(&"Accept-Datetime"),
             "GET must have Accept-Datetime header"
         );
+
+        let get_ref = spec["paths"]["/pricing"]["get"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["$ref"]
+            .as_str()
+            .unwrap();
+        let post_ref = spec["paths"]["/pricing"]["post"]["responses"]["200"]["content"]
+            ["application/json"]["schema"]["$ref"]
+            .as_str()
+            .unwrap();
+        assert_eq!(get_ref, "#/components/schemas/pricing_get_response");
+        assert_eq!(post_ref, "#/components/schemas/pricing_evaluate_response");
+        assert_ne!(get_ref, post_ref);
+
+        let get_schema = &spec["components"]["schemas"]["pricing_get_response"];
+        assert!(get_schema["properties"]["spec_set_id"]["type"] == "string");
+        assert!(get_schema["properties"]["versions"].is_object());
+
+        let h200 = &spec["paths"]["/pricing"]["get"]["responses"]["200"];
+        assert!(h200["headers"]["Memento-Datetime"].is_object());
+        assert!(h200["headers"]["Vary"].is_object());
     }
 
+    /// The generated OpenAPI document describes the public spec surface only.
+    /// Server shell routes (`/openapi.json`, `/health`, `/docs`) and legacy
+    /// schema routes (`/schema/{spec_name}` and `/schema/{spec_name}/{rules}`)
+    /// are intentionally omitted; consumers must not rely on them for code
+    /// generation or contract inspection.
     #[test]
-    fn test_spec_endpoint_has_accept_datetime_and_rules() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
+    fn test_openapi_omits_shell_and_legacy_schema_routes() {
+        let engine = create_engine_with_code(
+            "spec pricing
+            data quantity: 10
+            rule total: quantity * 2",
+        );
         let spec = generate_openapi(&engine, false);
 
-        let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
-        assert!(has_param(get_params, "Accept-Datetime"));
-        assert!(has_param(get_params, "rules"));
-
-        let post_params = &spec["paths"]["/pricing"]["post"]["parameters"];
-        assert!(has_param(post_params, "Accept-Datetime"));
-    }
-
-    #[test]
-    fn test_generate_openapi_meta_routes() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        assert!(spec["paths"]["/"].is_object());
-        assert!(spec["paths"]["/health"].is_object());
-        assert!(spec["paths"]["/openapi.json"].is_object());
-        assert!(spec["paths"]["/docs"].is_null());
-    }
-
-    #[test]
-    fn test_generate_openapi_spec_routes() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        assert!(spec["paths"]["/pricing"].is_object());
-        assert!(spec["paths"]["/pricing"]["get"].is_object());
-        assert!(spec["paths"]["/pricing"]["post"].is_object());
-    }
-
-    #[test]
-    fn test_generate_openapi_schemas() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        assert!(spec["components"]["schemas"]["pricing_response"].is_object());
-        assert!(spec["components"]["schemas"]["pricing_request"].is_object());
+        let paths = spec["paths"].as_object().expect("paths object");
+        assert!(paths.contains_key("/"));
+        assert_eq!(paths["/"]["get"]["operationId"], "list");
+        assert!(!paths.contains_key("/openapi.json"));
+        assert!(!paths.contains_key("/health"));
+        assert!(!paths.contains_key("/docs"));
+        assert!(!paths.contains_key("/schema/pricing"));
+        assert!(!paths.contains_key("/schema/pricing/{rules}"));
+        assert!(!paths.keys().any(|key| key.starts_with("/schema/")));
     }
 
     #[test]
     fn test_generate_openapi_explanations_enabled_adds_x_explanations_and_explanation_schema() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
+        let engine = create_engine_with_code(
+            "spec pricing
+            data quantity: 10
+            rule total: quantity * 2",
+        );
         let spec = generate_openapi(&engine, true);
 
         let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
         assert!(has_param(get_params, "x-explanations"));
 
-        let response_schema = &spec["components"]["schemas"]["pricing_response"];
-        let total_props = &response_schema["properties"]["total"]["oneOf"];
-        let first_branch = &total_props[0]["properties"];
-        assert!(first_branch["explanation"].is_object());
+        let rule_result = &spec["components"]["schemas"]["LemmaRuleResult"];
+        assert!(rule_result["properties"]["explanation"].is_object());
+        assert!(rule_result["properties"]["vetoed"]["type"] == "boolean");
+        assert!(rule_result["properties"]["rule_type"]["type"] == "string");
+
+        let evaluate = &spec["components"]["schemas"]["pricing_evaluate_response"];
+        assert!(evaluate["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("spec")));
+        assert!(evaluate["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("effective")));
+        assert!(evaluate["required"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("result")));
+        let total_ref = evaluate["properties"]["result"]["properties"]["total"]["$ref"]
+            .as_str()
+            .unwrap();
+        assert_eq!(total_ref, "#/components/schemas/LemmaRuleResult");
     }
 
     #[test]
@@ -912,11 +921,15 @@ mod tests {
         let engine = create_engine_with_files(vec![
             (
                 "pricing.lemma",
-                "spec pricing\nfact quantity: 10\nrule total: quantity * 2",
+                "spec pricing
+                data quantity: 10
+                rule total: quantity * 2",
             ),
             (
                 "shipping.lemma",
-                "spec shipping\nfact weight: 5\nrule cost: weight * 3",
+                "spec shipping
+                data weight: 5
+                rule cost: weight * 3",
             ),
         ]);
         let spec = generate_openapi(&engine, false);
@@ -927,7 +940,11 @@ mod tests {
 
     #[test]
     fn test_nested_spec_path_schema_refs_are_valid() {
-        let engine = create_engine_with_code("spec a/b/c\nfact x: [number]\nrule result: x");
+        let engine = create_engine_with_code(
+            "spec a/b/c
+        data x: number
+        rule result: x",
+        );
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/a/b/c"]["post"].is_object());
@@ -940,36 +957,17 @@ mod tests {
         assert!(spec["components"]["schemas"]["a_b_c_request"]["properties"]["x"].is_object());
     }
 
-    #[test]
-    fn test_spec_endpoint_has_accept_datetime_header() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let spec = generate_openapi(&engine, false);
-
-        let get_params = &spec["paths"]["/pricing"]["get"]["parameters"];
-        assert!(
-            has_param(get_params, "Accept-Datetime"),
-            "GET must have Accept-Datetime header"
-        );
-        let accept_dt = find_param(get_params, "Accept-Datetime");
-        assert_eq!(accept_dt["in"], "header");
-        assert_eq!(accept_dt["required"], false);
-
-        let post_params = &spec["paths"]["/pricing"]["post"]["parameters"];
-        assert!(
-            has_param(post_params, "Accept-Datetime"),
-            "POST must have Accept-Datetime header"
-        );
-    }
-
     // =======================================================================
     // generate_openapi_effective with explicit timestamp
     // =======================================================================
 
     #[test]
     fn test_generate_openapi_effective_reflects_specific_time() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
+        let engine = create_engine_with_code(
+            "spec pricing
+            data quantity: 10
+            rule total: quantity * 2",
+        );
         let effective = date(2025, 6, 15);
         let spec = generate_openapi_effective(&engine, false, &effective);
 
@@ -988,14 +986,16 @@ mod tests {
             "policy.lemma",
             r#"
 spec policy
-fact base: 100
+data base: 100
 rule discount: 10
 
 spec policy 2025-06-01
-fact base: 200
-fact premium: [boolean]
+data base: 200
+data premium: boolean
 rule discount: 20
-rule surcharge: 5
+rule surcharge:
+  5
+  unless premium then 10
 "#,
         )]);
 
@@ -1003,116 +1003,113 @@ rule surcharge: 5
         let spec_v1 = generate_openapi_effective(&engine, false, &before);
 
         assert!(spec_v1["paths"]["/policy"].is_object());
-        let v1_response = &spec_v1["components"]["schemas"]["policy_response"];
-        assert!(
-            v1_response["properties"]["discount"].is_object(),
+        let v1_evaluate = &spec_v1["components"]["schemas"]["policy_evaluate_response"];
+        let v1_result = &v1_evaluate["properties"]["result"]["properties"];
+        assert_eq!(
+            v1_result["discount"]["$ref"].as_str(),
+            Some("#/components/schemas/LemmaRuleResult"),
             "v1 should have discount rule"
         );
         assert!(
-            v1_response["properties"]["surcharge"].is_null(),
+            v1_result["surcharge"].is_null(),
             "v1 must NOT have surcharge rule"
         );
         let v1_request = &spec_v1["components"]["schemas"]["policy_request"];
         assert!(
             v1_request["properties"]["premium"].is_null(),
-            "v1 must NOT have premium fact"
+            "v1 must NOT have premium data"
         );
 
         let after = date(2025, 8, 1);
         let spec_v2 = generate_openapi_effective(&engine, false, &after);
 
-        let v2_response = &spec_v2["components"]["schemas"]["policy_response"];
+        let v2_evaluate = &spec_v2["components"]["schemas"]["policy_evaluate_response"];
+        let v2_result = &v2_evaluate["properties"]["result"]["properties"];
         assert!(
-            v2_response["properties"]["discount"].is_object(),
+            v2_result["discount"]["$ref"].is_string(),
             "v2 should have discount rule"
         );
         assert!(
-            v2_response["properties"]["surcharge"].is_object(),
+            v2_result["surcharge"]["$ref"].is_string(),
             "v2 should have surcharge rule"
         );
         let v2_request = &spec_v2["components"]["schemas"]["policy_request"];
         assert!(
             v2_request["properties"]["premium"].is_object(),
-            "v2 should have premium fact"
+            "v2 should have premium data"
         );
     }
 
+    /// Each spec PathItem carries `x-effective-from` and `x-effective-to`
+    /// describing the half-open `[effective_from, effective_to)` validity
+    /// range of the version resolved at the document's effective instant.
+    ///
+    /// - Earlier row: `x-effective-to` = next row's `effective_from`.
+    /// - Latest row: `x-effective-to` = `null` (no successor).
+    /// - Unversioned spec (no declared `effective_from`): both extensions are
+    ///   `null`.
     #[test]
-    fn test_effective_per_rule_endpoints_match_temporal_version() {
+    fn test_spec_path_item_exposes_half_open_effective_range_as_vendor_extensions() {
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
-spec policy
-fact base: 100
-rule discount: 10
+spec policy 2025-01-01
+data base: 10
+rule total: base
 
-spec policy 2025-06-01
-fact base: 200
-rule discount: 20
-rule surcharge: 5
+spec policy 2026-01-01
+data base: 99
+rule total: base
 "#,
         )]);
 
-        let before = date(2025, 3, 1);
-        let spec_v1 = generate_openapi_effective(&engine, false, &before);
-        let v1_response = &spec_v1["components"]["schemas"]["policy_response"];
-        assert!(
-            v1_response["properties"]["discount"].is_object(),
-            "v1 should have discount rule"
+        let at_earlier = date(2025, 6, 1);
+        let earlier_doc = generate_openapi_effective(&engine, false, &at_earlier);
+        let earlier_path = &earlier_doc["paths"]["/policy"];
+        assert_eq!(
+            earlier_path["x-effective-from"].as_str(),
+            Some("2025-01-01"),
+            "earlier version effective_from on PathItem"
         );
-        assert!(
-            v1_response["properties"]["surcharge"].is_null(),
-            "v1 must NOT have surcharge rule"
+        assert_eq!(
+            earlier_path["x-effective-to"].as_str(),
+            Some("2026-01-01"),
+            "earlier version effective_to equals next version's effective_from"
         );
 
-        let after = date(2025, 8, 1);
-        let spec_v2 = generate_openapi_effective(&engine, false, &after);
-        let v2_response = &spec_v2["components"]["schemas"]["policy_response"];
-        assert!(
-            v2_response["properties"]["discount"].is_object(),
-            "v2 should have discount rule"
+        let at_latest = date(2026, 6, 1);
+        let latest_doc = generate_openapi_effective(&engine, false, &at_latest);
+        let latest_path = &latest_doc["paths"]["/policy"];
+        assert_eq!(
+            latest_path["x-effective-from"].as_str(),
+            Some("2026-01-01"),
+            "latest version effective_from on PathItem"
         );
         assert!(
-            v2_response["properties"]["surcharge"].is_object(),
-            "v2 should have surcharge rule"
+            latest_path["x-effective-to"].is_null(),
+            "latest version has no successor; x-effective-to must be null: {latest_path}"
         );
     }
 
+    /// Unversioned specs (no declared `effective_from`) have both extensions
+    /// serialised as JSON `null`, not omitted.
     #[test]
-    fn test_effective_tags_reflect_temporal_version() {
-        let engine = create_engine_with_files(vec![(
-            "policy.lemma",
-            r#"
-spec policy
-fact base: 100
-rule discount: 10
-
-spec policy 2025-06-01
-fact base: 200
-rule discount: 20
-rule surcharge: 5
-"#,
-        )]);
-
-        let before = date(2025, 3, 1);
-        let spec_v1 = generate_openapi_effective(&engine, false, &before);
-        let v1_tags: Vec<&str> = spec_v1["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
-        assert!(v1_tags.contains(&"policy"));
-
-        let after = date(2025, 8, 1);
-        let spec_v2 = generate_openapi_effective(&engine, false, &after);
-        let v2_tags: Vec<&str> = spec_v2["tags"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
-        assert!(v2_tags.contains(&"policy"));
+    fn test_spec_path_item_effective_extensions_null_for_unversioned_spec() {
+        let engine = create_engine_with_code(
+            "spec pricing
+            data quantity: 10
+            rule total: quantity * 2",
+        );
+        let document = generate_openapi(&engine, false);
+        let path_item = &document["paths"]["/pricing"];
+        assert!(
+            path_item["x-effective-from"].is_null(),
+            "unversioned spec: x-effective-from must be null: {path_item}"
+        );
+        assert!(
+            path_item["x-effective-to"].is_null(),
+            "unversioned spec: x-effective-to must be null: {path_item}"
+        );
     }
 
     // =======================================================================
@@ -1120,38 +1117,26 @@ rule surcharge: 5
     // =======================================================================
 
     #[test]
-    fn test_temporal_sources_unversioned_returns_single_current() {
-        let engine =
-            create_engine_with_code("spec pricing\nfact quantity: 10\nrule total: quantity * 2");
-        let sources = temporal_api_sources(&engine);
-
-        assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].title, "Current");
-        assert_eq!(sources[0].slug, "current");
-        assert_eq!(sources[0].url, "/openapi.json");
-    }
-
-    #[test]
-    fn test_temporal_sources_versioned_returns_boundaries_plus_current() {
+    fn test_temporal_sources_versioned_returns_boundaries_plus_now() {
         let engine = create_engine_with_files(vec![(
             "policy.lemma",
             r#"
 spec policy
-fact base: 100
+data base: 100
 rule discount: 10
 
 spec policy 2025-06-01
-fact base: 200
+data base: 200
 rule discount: 20
 "#,
         )]);
 
         let sources = temporal_api_sources(&engine);
 
-        assert_eq!(sources.len(), 2, "should have 1 current + 1 boundary");
+        assert_eq!(sources.len(), 2, "should have 1 now + 1 boundary");
 
-        assert_eq!(sources[0].title, "Current");
-        assert_eq!(sources[0].slug, "current");
+        assert_eq!(sources[0].title, "Now");
+        assert_eq!(sources[0].slug, NOW_SLUG);
         assert_eq!(sources[0].url, "/openapi.json");
 
         assert_eq!(sources[1].title, "Effective 2025-06-01");
@@ -1166,11 +1151,11 @@ rule discount: 20
                 "policy.lemma",
                 r#"
 spec policy
-fact base: 100
+data base: 100
 rule discount: 10
 
 spec policy 2025-06-01
-fact base: 200
+data base: 200
 rule discount: 20
 "#,
             ),
@@ -1178,15 +1163,15 @@ rule discount: 20
                 "rates.lemma",
                 r#"
 spec rates
-fact rate: 5
+data rate: 5
 rule total: rate * 2
 
 spec rates 2025-03-01
-fact rate: 7
+data rate: 7
 rule total: rate * 2
 
 spec rates 2025-06-01
-fact rate: 9
+data rate: 9
 rule total: rate * 2
 "#,
             ),
@@ -1203,8 +1188,8 @@ rule total: rate * 2
             slugs.contains(&"2025-06-01"),
             "should contain shared boundary"
         );
-        assert!(slugs.contains(&"current"), "should contain current");
-        assert_eq!(slugs.len(), 3, "2 unique boundaries + current");
+        assert!(slugs.contains(&NOW_SLUG), "should contain now");
+        assert_eq!(slugs.len(), 3, "2 unique boundaries + now");
     }
 
     #[test]
@@ -1213,22 +1198,22 @@ rule total: rate * 2
             "policy.lemma",
             r#"
 spec policy
-fact base: 100
+data base: 100
 rule discount: 10
 
 spec policy 2024-01-01
-fact base: 50
+data base: 50
 rule discount: 5
 
 spec policy 2025-06-01
-fact base: 200
+data base: 200
 rule discount: 20
 "#,
         )]);
 
         let sources = temporal_api_sources(&engine);
         let slugs: Vec<&str> = sources.iter().map(|s| s.slug.as_str()).collect();
-        assert_eq!(slugs, vec!["current", "2025-06-01", "2024-01-01"]);
+        assert_eq!(slugs, vec![NOW_SLUG, "2025-06-01", "2024-01-01"]);
     }
 
     // =======================================================================
@@ -1238,7 +1223,9 @@ rule discount: 20
     #[test]
     fn test_post_schema_text_with_options_has_enum() {
         let engine = create_engine_with_code(
-            "spec test\nfact product: [text -> option \"A\" -> option \"B\"]\nrule result: product",
+            "spec test
+            data product: text -> option \"A\" -> option \"B\"
+            rule result: product",
         );
         let spec = generate_openapi(&engine, false);
 
@@ -1252,8 +1239,11 @@ rule discount: 20
 
     #[test]
     fn test_post_schema_boolean_is_string_with_enum() {
-        let engine =
-            create_engine_with_code("spec test\nfact is_active: [boolean]\nrule result: is_active");
+        let engine = create_engine_with_code(
+            "spec test
+            data is_active: boolean
+            rule result: is_active",
+        );
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1264,8 +1254,11 @@ rule discount: 20
 
     #[test]
     fn test_post_schema_number_is_string() {
-        let engine =
-            create_engine_with_code("spec test\nfact quantity: [number]\nrule result: quantity");
+        let engine = create_engine_with_code(
+            "spec test
+            data quantity: number
+            rule result: quantity",
+        );
         let spec = generate_openapi(&engine, false);
 
         let schema = &spec["components"]["schemas"]["test_request"];
@@ -1273,19 +1266,13 @@ rule discount: 20
     }
 
     #[test]
-    fn test_post_schema_date_is_string() {
-        let engine =
-            create_engine_with_code("spec test\nfact deadline: [date]\nrule result: deadline");
-        let spec = generate_openapi(&engine, false);
-
-        let schema = &spec["components"]["schemas"]["test_request"];
-        assert_eq!(schema["properties"]["deadline"]["type"], "string");
-    }
-
-    #[test]
-    fn test_fact_with_default_is_not_required() {
+    fn test_data_with_default_is_not_required() {
         let engine = create_engine_with_code(
-            "spec test\nfact quantity: 10\nfact name: [text]\nrule result: quantity",
+            "spec test
+            data quantity: 10
+            data name: text
+            rule result: quantity
+            rule label: name",
         );
         let spec = generate_openapi(&engine, false);
 
@@ -1302,9 +1289,11 @@ rule discount: 20
     fn test_help_and_default_in_openapi() {
         let engine = create_engine_with_code(
             r#"spec test
-fact quantity: [number -> help "Number of items to order" -> default 10]
-fact active: [boolean -> help "Whether the feature is enabled" -> default true]
-rule result: quantity
+data quantity: number -> help "Number of items to order" -> default 10
+data active: boolean -> help "Whether the feature is enabled" -> default true
+rule result:
+  quantity
+  unless active then 0
 "#,
         );
         let spec = generate_openapi(&engine, false);

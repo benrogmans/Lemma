@@ -1,5 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, LiteralValue, OperationResult};
+use lemma::{Engine, LiteralValue, OperationResult, VetoType};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -10,7 +10,7 @@ fn test_explanation_generated_during_evaluation() {
     let spec = r#"
 spec test_explanation
 
-fact base_value: 100
+data base_value: 100
 
 rule doubled: base_value * 2
 "#;
@@ -63,7 +63,7 @@ fn test_explanation_with_rule_reference() {
     let spec = r#"
 spec test_explanation_ref
 
-fact base_value: 50
+data base_value: 50
 
 rule doubled: base_value * 2
 rule quadruple: doubled * 2
@@ -133,8 +133,8 @@ fn test_explanation_with_unless_clauses() {
     let spec = r#"
 spec test_unless
 
-fact quantity: 5
-fact is_premium: false
+data quantity: 5
+data is_premium: false
 
 rule discount_percentage: 0%
   unless quantity >= 10 then 10%
@@ -206,7 +206,7 @@ fn test_explanation_with_veto_result() {
     let spec = r#"
 spec test_veto
 
-fact age: 17
+data age: 17
 
 rule age_validation: accept
   unless age < 18 then veto "Must be 18 or older"
@@ -229,7 +229,9 @@ rule age_validation: accept
     // Verify veto result
     assert_eq!(
         validation_result.result,
-        OperationResult::Veto(Some("Must be 18 or older".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Must be 18 or older".to_string()),
+        })
     );
 
     // Verify explanation exists even for veto
@@ -241,7 +243,9 @@ rule age_validation: accept
     assert_eq!(explanation.rule_path.rule, "age_validation");
     assert_eq!(
         explanation.result,
-        OperationResult::Veto(Some("Must be 18 or older".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Must be 18 or older".to_string()),
+        })
     );
 }
 
@@ -251,13 +255,13 @@ fn test_explanation_with_cross_spec_rule_reference() {
 
     let base_spec = r#"
 spec base
-fact value: 100
+data value: 100
 rule doubled: value * 2
 "#;
 
     let main_spec = r#"
 spec main
-fact base_ref: spec base
+with base_ref: base
 rule result: base_ref.doubled + 50
 "#;
 
@@ -303,7 +307,7 @@ rule result: base_ref.doubled + 50
                 } => {
                     assert_eq!(rule_path.rule, "doubled");
                     assert_eq!(rule_path.segments.len(), 1);
-                    assert_eq!(rule_path.segments[0].fact, "base_ref");
+                    assert_eq!(rule_path.segments[0].data, "base_ref");
 
                     // Expansion should exist
                     match expansion.as_ref() {
@@ -334,13 +338,13 @@ fn test_cross_spec_explanation_has_correct_path() {
 
     let base_spec = r#"
 spec base
-fact value: 100
+data value: 100
 rule doubled: value * 2
 "#;
 
     let main_spec = r#"
 spec main
-fact base_ref: spec base
+with base_ref: base
 rule use_cross_spec: base_ref.doubled + 1
 "#;
 
@@ -390,7 +394,7 @@ rule use_cross_spec: base_ref.doubled + 1
                         1,
                         "Cross-spec rule reference MUST have segments showing the path"
                     );
-                    assert_eq!(ref_path.segments[0].fact, "base_ref");
+                    assert_eq!(ref_path.segments[0].data, "base_ref");
                     assert_eq!(ref_path.segments[0].spec, "base");
                 }
                 other => panic!("Expected RuleReference, got {:?}", other),
@@ -409,13 +413,13 @@ fn test_explanation_serialization_preserves_cross_spec_paths() {
 
     let base_spec = r#"
 spec base
-fact value: 50
+data value: 50
 rule doubled: value * 2
 "#;
 
     let main_spec = r#"
 spec main
-fact base_ref: spec base
+with base_ref: base
 rule use_doubled: base_ref.doubled + 10
 "#;
 
@@ -519,9 +523,9 @@ rule use_doubled: base_ref.doubled + 10
     );
 
     assert_eq!(
-        segments[0]["fact"].as_str().unwrap(),
+        segments[0]["data"].as_str().unwrap(),
         "base_ref",
-        "Segment should reference base_ref fact"
+        "Segment should reference base_ref data"
     );
     assert_eq!(
         segments[0]["spec"].as_str().unwrap(),

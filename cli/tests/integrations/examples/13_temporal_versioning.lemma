@@ -1,6 +1,6 @@
 spec money
 
-type salary: scale
+data salary: scale
   -> unit eur 1.00
   -> decimals 2
   -> minimum 0 eur
@@ -15,11 +15,11 @@ must earn at least the threshold for their age bracket to qualify.
 Source: IND Inkomensnormen 2024.
 """
 
-type salary from money
+data salary from money
 
-fact threshold_age_30_plus : 5_008 eur
-fact threshold_under_30    : 3_672 eur
-fact application_fee       : 345 eur
+data threshold_age_30_plus : 5_008 eur
+data threshold_under_30    : 3_672 eur
+data application_fee       : 345 eur
 
 rule min_annual_salary_30_plus:
   threshold_age_30_plus * 12
@@ -36,11 +36,11 @@ Updated thresholds effective 1 January 2025.
 Source: IND Inkomensnormen 2025.
 """
 
-type salary from money
+data salary from money
 
-fact threshold_age_30_plus : 5_331 eur
-fact threshold_under_30    : 3_909 eur
-fact application_fee       : 365 eur
+data threshold_age_30_plus : 5_331 eur
+data threshold_under_30    : 3_909 eur
+data application_fee       : 365 eur
 
 rule min_annual_salary_30_plus:
   threshold_age_30_plus * 12
@@ -59,12 +59,12 @@ resolved temporally from ind/kennismigrant — the
 version active at evaluation time is used automatically.
 """
 
-type salary from money
+data salary from money
 
-fact applicant_age        : [number -> minimum 18 -> maximum 67]
-fact gross_monthly_salary : [salary]
+data applicant_age        : number -> minimum 18 -> maximum 67
+data gross_monthly_salary : salary
 
-fact thresholds : spec ind/kennismigrant
+with thresholds: ind/kennismigrant
 
 rule eligible:
   meets_salary_requirement

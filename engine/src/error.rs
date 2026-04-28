@@ -14,6 +14,21 @@ pub struct ErrorDetails {
     pub spec_context: Option<Arc<LemmaSpec>>,
     /// When the cause involves a referenced spec, that temporal version. Displayed as "See spec 'X' (active from Y)."
     pub related_spec: Option<Arc<LemmaSpec>>,
+    /// Data name this error is about. Populated by the data-binding site so consumers can attribute
+    /// the error to a specific input field without string parsing. Displayed as "Failed to parse data 'X':".
+    pub related_data: Option<String>,
+}
+
+/// Classification of an [`Error`]. Serialized as the `kind` field on the flat object returned to JavaScript from WASM (`engine/src/wasm.rs`, `JsError`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorKind {
+    Parsing,
+    Validation,
+    Inversion,
+    Registry,
+    Request,
+    ResourceLimit,
 }
 
 /// Error types for the Lemma system with source location tracking
@@ -60,8 +75,10 @@ pub enum Error {
 /// Distinguishes HTTP 404 (not found) from 400 (bad request) for request errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestErrorKind {
-    /// Spec not found, no temporal version for effective, or plan hash pin not found — map to 404.
+    /// Spec not found or no temporal version for effective — map to 404.
     SpecNotFound,
+    /// Rule not found
+    RuleNotFound,
     /// Invalid spec id, etc. — map to 400.
     InvalidRequest,
 }
@@ -90,6 +107,7 @@ impl Error {
             suggestion: suggestion.map(Into::into),
             spec_context,
             related_spec,
+            related_data: None,
         }))
     }
 
@@ -125,6 +143,7 @@ impl Error {
             suggestion: suggestion.map(Into::into),
             spec_context,
             related_spec,
+            related_data: None,
         }))
     }
 
@@ -168,6 +187,7 @@ impl Error {
             suggestion: suggestion.map(Into::into),
             spec_context,
             related_spec,
+            related_data: None,
         }))
     }
 
@@ -185,6 +205,15 @@ impl Error {
         Self::request_with_kind(message, suggestion, RequestErrorKind::SpecNotFound)
     }
 
+    /// Create a rule not found error
+    pub fn rule_not_found(rule_name: &str, suggestion: Option<impl Into<String>>) -> Self {
+        Self::request_with_kind(
+            format!("Rule '{}' not found", rule_name),
+            suggestion,
+            RequestErrorKind::RuleNotFound,
+        )
+    }
+
     fn request_with_kind(
         message: impl Into<String>,
         suggestion: Option<impl Into<String>>,
@@ -197,6 +226,7 @@ impl Error {
                 suggestion: suggestion.map(Into::into),
                 spec_context: None,
                 related_spec: None,
+                related_data: None,
             }),
             kind,
         }
@@ -223,6 +253,7 @@ impl Error {
                 suggestion: Some(suggestion.into()),
                 spec_context,
                 related_spec,
+                related_data: None,
             }),
             limit_name,
             limit_value,
@@ -247,6 +278,7 @@ impl Error {
                 suggestion: suggestion.map(Into::into),
                 spec_context,
                 related_spec,
+                related_data: None,
             }),
             identifier: identifier.into(),
             kind,
@@ -255,20 +287,33 @@ impl Error {
 
     /// Attach spec context for display grouping. Returns a new Error with context set.
     pub fn with_spec_context(self, spec: Arc<LemmaSpec>) -> Self {
+        self.map_details(|d| d.spec_context = Some(spec))
+    }
+
+    /// Attach a data-binding attribution. Returns a new Error carrying the data name.
+    /// Consumers (WASM `JsError`, LSP, HTTP) can read this via [`Error::related_data`] to attribute
+    /// the failure to a specific input field without parsing strings.
+    pub fn with_related_data(self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        self.map_details(|d| d.related_data = Some(name))
+    }
+
+    /// Apply a mutator to the inner [`ErrorDetails`] regardless of variant.
+    fn map_details(self, f: impl FnOnce(&mut ErrorDetails)) -> Self {
         match self {
             Error::Parsing(details) => {
                 let mut d = *details;
-                d.spec_context = Some(spec.clone());
+                f(&mut d);
                 Error::Parsing(Box::new(d))
             }
             Error::Inversion(details) => {
                 let mut d = *details;
-                d.spec_context = Some(spec.clone());
+                f(&mut d);
                 Error::Inversion(Box::new(d))
             }
             Error::Validation(details) => {
                 let mut d = *details;
-                d.spec_context = Some(spec.clone());
+                f(&mut d);
                 Error::Validation(Box::new(d))
             }
             Error::Registry {
@@ -277,7 +322,7 @@ impl Error {
                 kind,
             } => {
                 let mut d = *details;
-                d.spec_context = Some(spec.clone());
+                f(&mut d);
                 Error::Registry {
                     details: Box::new(d),
                     identifier,
@@ -291,7 +336,7 @@ impl Error {
                 actual_value,
             } => {
                 let mut d = *details;
-                d.spec_context = Some(spec.clone());
+                f(&mut d);
                 Error::ResourceLimitExceeded {
                     details: Box::new(d),
                     limit_name,
@@ -301,7 +346,7 @@ impl Error {
             }
             Error::Request { details, kind } => {
                 let mut d = *details;
-                d.spec_context = Some(spec);
+                f(&mut d);
                 Error::Request {
                     details: Box::new(d),
                     kind,
@@ -374,7 +419,11 @@ impl fmt::Display for Error {
                 if let Some(ref spec) = details.spec_context {
                     write_spec_context(f, spec)?;
                 }
-                write!(f, "Validation error: {}", details.message)?;
+                write!(f, "Validation error: ")?;
+                if let Some(ref name) = details.related_data {
+                    write!(f, "Failed to parse data '{}': ", name)?;
+                }
+                write!(f, "{}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
                     write!(f, " (suggestion: {suggestion})")?;
                 }
@@ -442,30 +491,42 @@ impl From<std::fmt::Error> for Error {
 }
 
 impl Error {
-    /// Get the error message.
-    pub fn message(&self) -> &str {
+    /// Classify this error. Used by FFI/WASM consumers that need to branch on error category
+    /// without depending on internal variant shapes.
+    pub fn kind(&self) -> ErrorKind {
         match self {
-            Error::Parsing(details)
-            | Error::Inversion(details)
-            | Error::Validation(details)
-            | Error::Request { details, .. } => &details.message,
-            Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
-                &details.message
-            }
+            Error::Parsing(_) => ErrorKind::Parsing,
+            Error::Validation(_) => ErrorKind::Validation,
+            Error::Inversion(_) => ErrorKind::Inversion,
+            Error::Registry { .. } => ErrorKind::Registry,
+            Error::Request { .. } => ErrorKind::Request,
+            Error::ResourceLimitExceeded { .. } => ErrorKind::ResourceLimit,
         }
     }
 
-    /// Get the source location if available
-    pub fn location(&self) -> Option<&Source> {
+    /// Shared access to the inner [`ErrorDetails`] regardless of variant.
+    fn details(&self) -> &ErrorDetails {
         match self {
-            Error::Parsing(details)
-            | Error::Inversion(details)
-            | Error::Validation(details)
-            | Error::Request { details, .. } => details.source.as_ref(),
-            Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
-                details.source.as_ref()
-            }
+            Error::Parsing(d) | Error::Inversion(d) | Error::Validation(d) => d,
+            Error::Registry { details, .. }
+            | Error::ResourceLimitExceeded { details, .. }
+            | Error::Request { details, .. } => details,
         }
+    }
+
+    /// Get the error message.
+    pub fn message(&self) -> &str {
+        &self.details().message
+    }
+
+    /// Get the source location if available.
+    pub fn location(&self) -> Option<&Source> {
+        self.details().source.as_ref()
+    }
+
+    /// Alias for [`Error::location`]. Preferred name when building the WASM/JS error payload.
+    pub fn source_location(&self) -> Option<&Source> {
+        self.location()
     }
 
     /// Resolve source text from the sources map (for display). Source no longer stores text.
@@ -477,17 +538,30 @@ impl Error {
             .and_then(|s| s.text_from(sources).map(|c| c.into_owned()))
     }
 
-    /// Get the suggestion if available
+    /// Get the suggestion if available.
     pub fn suggestion(&self) -> Option<&str> {
-        match self {
-            Error::Parsing(details)
-            | Error::Inversion(details)
-            | Error::Validation(details)
-            | Error::Request { details, .. } => details.suggestion.as_deref(),
-            Error::Registry { details, .. } | Error::ResourceLimitExceeded { details, .. } => {
-                details.suggestion.as_deref()
-            }
-        }
+        self.details().suggestion.as_deref()
+    }
+
+    /// Data name this error is attributed to (set at the data-binding call site).
+    pub fn related_data(&self) -> Option<&str> {
+        self.details().related_data.as_deref()
+    }
+
+    /// Name of the spec being planned when the error occurred.
+    pub fn spec(&self) -> Option<&str> {
+        self.details()
+            .spec_context
+            .as_ref()
+            .map(|s| s.name.as_str())
+    }
+
+    /// Name of a related spec referenced by this error (e.g. a transitive dependency).
+    pub fn related_spec(&self) -> Option<&str> {
+        self.details()
+            .related_spec
+            .as_ref()
+            .map(|s| s.name.as_str())
     }
 }
 
@@ -526,12 +600,12 @@ mod tests {
         );
 
         let parse_error_with_suggestion = Error::parsing_with_suggestion(
-            "Typo in fact name",
+            "Typo in data name",
             suggestion_source,
             "Did you mean 'amount'?",
         );
         let parse_error_with_suggestion_display = format!("{parse_error_with_suggestion}");
-        assert!(parse_error_with_suggestion_display.contains("Typo in fact name"));
+        assert!(parse_error_with_suggestion_display.contains("Typo in data name"));
         assert!(parse_error_with_suggestion_display.contains("Did you mean 'amount'?"));
 
         let engine_error = Error::validation("Something went wrong", None, None::<String>);
@@ -542,5 +616,82 @@ mod tests {
             Error::validation("Circular dependency: a -> b -> a", None, None::<String>);
         assert!(format!("{validation_error}")
             .contains("Validation error: Circular dependency: a -> b -> a"));
+    }
+
+    #[test]
+    fn test_error_kind_accessor() {
+        assert_eq!(
+            Error::parsing("x", test_source(), None::<String>).kind(),
+            ErrorKind::Parsing
+        );
+        assert_eq!(
+            Error::validation("x", None, None::<String>).kind(),
+            ErrorKind::Validation
+        );
+        assert_eq!(
+            Error::inversion("x", None, None::<String>).kind(),
+            ErrorKind::Inversion
+        );
+        assert_eq!(
+            Error::request("x", None::<String>).kind(),
+            ErrorKind::Request
+        );
+        assert_eq!(
+            Error::resource_limit_exceeded("cap", "1", "2", "try less", None, None, None).kind(),
+            ErrorKind::ResourceLimit
+        );
+    }
+
+    #[test]
+    fn test_related_data_attribution_and_display() {
+        let err = Error::validation(
+            "Unknown unit 'mete' for this scale type",
+            Some(test_source()),
+            None::<String>,
+        )
+        .with_related_data("bridge_height");
+
+        assert_eq!(err.related_data(), Some("bridge_height"));
+        assert_eq!(err.kind(), ErrorKind::Validation);
+        assert_eq!(err.message(), "Unknown unit 'mete' for this scale type");
+
+        let display = format!("{err}");
+        assert!(
+            display.contains(
+                "Validation error: Failed to parse data 'bridge_height': Unknown unit 'mete'"
+            ),
+            "unexpected display: {display}"
+        );
+
+        let at_occurrences = display.matches(" at ").count();
+        assert_eq!(
+            at_occurrences, 1,
+            "expected exactly one ` at ` in display, got {at_occurrences}: {display}"
+        );
+    }
+
+    #[test]
+    fn test_related_data_none_by_default() {
+        let err = Error::validation("x", None, None::<String>);
+        assert!(err.related_data().is_none());
+        assert!(err.spec().is_none());
+        assert!(err.related_spec().is_none());
+    }
+
+    #[test]
+    fn test_related_data_builder_preserves_other_variants() {
+        let err = Error::resource_limit_exceeded(
+            "max_data_value_bytes",
+            "100",
+            "200",
+            "reduce size",
+            Some(test_source()),
+            None,
+            None,
+        )
+        .with_related_data("big_blob");
+
+        assert_eq!(err.kind(), ErrorKind::ResourceLimit);
+        assert_eq!(err.related_data(), Some("big_blob"));
     }
 }

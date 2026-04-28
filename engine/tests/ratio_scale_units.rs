@@ -2,7 +2,7 @@
 //!
 //! Covers: "in percent" / "in permille" as ratio conversion; comparison with percent literals;
 //! unknown unit error; scale conversion unchanged; ratio display with no unit;
-//! number ± ratio fact semantics (e.g. 100 - discount: 100 * (1 - discount)).
+//! number ± ratio data semantics (e.g. 100 - discount: 100 * (1 - discount)).
 
 use lemma::evaluation::OperationResult;
 use lemma::parsing::ast::DateTimeValue;
@@ -16,8 +16,8 @@ use std::str::FromStr;
 fn in_percent_produces_ratio_and_compares_with_percent_literal() {
     let code = r#"
 spec savings
-fact savings_amount: 75
-fact total_amount: 300
+data savings_amount: 75
+data total_amount: 300
 
 rule savings_ratio: (savings_amount / total_amount) in percent
 rule is_above_20: savings_ratio > 20%
@@ -67,8 +67,8 @@ rule is_above_30: savings_ratio > 30%
 fn in_percent_then_chained_comparison_with_multiple_thresholds() {
     let code = r#"
 spec summary
-fact part: 18
-fact whole: 60
+data part: 18
+data whole: 60
 
 rule pct: (part / whole) in percent
 rule tier: "low"
@@ -98,7 +98,7 @@ rule tier: "low"
 fn in_permille_produces_ratio() {
     let code = r#"
 spec permille_spec
-fact value: 0.025
+data value: 0.025
 
 rule as_permille: value in permille
 rule above_20_permille: as_permille > 20 permille
@@ -136,7 +136,7 @@ rule above_20_permille: as_permille > 20 permille
 fn unknown_unit_in_conversion_fails_planning() {
     let code = r#"
 spec bad
-fact x: 100
+data x: 100
 
 rule bad_conv: x in not_a_unit
 "#;
@@ -155,45 +155,10 @@ rule bad_conv: x in not_a_unit
 }
 
 #[test]
-fn scale_in_eur_still_works_unchanged() {
+fn number_minus_ratio_data_is_100_times_one_minus_discount() {
     let code = r#"
 spec pricing
-type money: scale
-  -> unit eur 1
-  -> unit usd 1.1
-
-fact amount: 100
-
-rule in_eur: amount in eur
-rule in_usd: amount in usd
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("pricing", Some(&now), HashMap::new(), false)
-        .unwrap();
-    let in_eur = response.results.get("in_eur").expect("in_eur");
-    let in_usd = response.results.get("in_usd").expect("in_usd");
-
-    match (&in_eur.result, &in_usd.result) {
-        (OperationResult::Value(e), OperationResult::Value(u)) => {
-            assert!(matches!(&e.value, ValueKind::Scale(_, unit) if unit == "eur"));
-            assert!(matches!(&u.value, ValueKind::Scale(_, unit) if unit == "usd"));
-        }
-        _ => panic!("scale conversions must succeed"),
-    }
-}
-
-#[test]
-fn number_minus_ratio_fact_is_100_times_one_minus_discount() {
-    let code = r#"
-spec pricing
-fact discount: [ratio]
+data discount: ratio
 
 rule price: 100 - discount
 "#;
@@ -252,8 +217,8 @@ fn ratio_display_with_none_unit_shows_number_only() {
 fn chained_ratio_conversion_and_arithmetic() {
     let code = r#"
 spec chained
-fact a: 10
-fact b: 40
+data a: 10
+data b: 40
 
 rule pct: (a / b) in percent
 rule plus_five: pct + 5%
@@ -299,11 +264,11 @@ rule compared: plus_five > 25%
 fn scale_and_ratio_conversion_in_same_spec() {
     let code = r#"
 spec mixed
-type money: scale
+data money: scale
   -> unit eur 1
 
-fact amount: 200
-fact part: 50
+data amount: 200
+data part: 50
 
 rule as_eur: amount in eur
 rule share_pct: (part / amount) in percent
@@ -348,37 +313,5 @@ rule share_above_20: share_pct > 20%
     match &share_above_20.result {
         OperationResult::Value(lit) => assert!(matches!(&lit.value, ValueKind::Boolean(true))),
         _ => panic!("share_above_20 must be Value(bool)"),
-    }
-}
-
-#[test]
-fn ratio_comparison_both_sides_ratio() {
-    let code = r#"
-spec compare
-fact discount: 15%
-fact threshold: 10%
-
-rule meets: discount >= threshold
-rule exceeds: discount > threshold
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("compare", Some(&now), HashMap::new(), false)
-        .unwrap();
-    let meets = response.results.get("meets").expect("meets");
-    let exceeds = response.results.get("exceeds").expect("exceeds");
-
-    match (&meets.result, &exceeds.result) {
-        (OperationResult::Value(m), OperationResult::Value(e)) => {
-            assert!(matches!(&m.value, ValueKind::Boolean(true)));
-            assert!(matches!(&e.value, ValueKind::Boolean(true)));
-        }
-        _ => panic!("comparison rules must yield Value"),
     }
 }

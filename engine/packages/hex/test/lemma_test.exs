@@ -3,8 +3,8 @@ defmodule LemmaTest do
 
   @simple_spec """
   spec pricing
-  fact quantity: [number]
-  fact price: 10
+  data quantity: number
+  data price: 10
   rule total: quantity * price
   rule discount: 0
     unless quantity >= 10 then 5
@@ -56,7 +56,7 @@ defmodule LemmaTest do
 
     test "returns errors for invalid spec" do
       {:ok, engine} = Lemma.new()
-      assert {:error, errors} = Lemma.load(engine, "spec bad\nfact x: [bogus]", "bad.lemma")
+      assert {:error, errors} = Lemma.load(engine, "spec bad\ndata x: [bogus]", "bad.lemma")
       assert is_list(errors)
       assert length(errors) > 0
       first = hd(errors)
@@ -66,12 +66,12 @@ defmodule LemmaTest do
 
     test "uses 'inline' as default source label" do
       {:ok, engine} = Lemma.new()
-      assert :ok = Lemma.load(engine, "spec inline_test\nfact x: 1\nrule y: x + 1")
+      assert :ok = Lemma.load(engine, "spec inline_test\ndata x: 1\nrule y: x + 1")
     end
   end
 
   describe "list/1" do
-    test "lists loaded specs" do
+    test "lists loaded specs with inline schema" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
       assert {:ok, specs} = Lemma.list(engine)
@@ -79,6 +79,10 @@ defmodule LemmaTest do
       assert length(specs) == 1
       spec = hd(specs)
       assert spec[:name] == "pricing"
+      assert is_map(spec[:schema])
+      assert spec[:schema]["spec"] == "pricing"
+      assert is_map(spec[:schema]["data"])
+      assert is_map(spec[:schema]["rules"])
     end
 
     test "empty engine returns empty list" do
@@ -88,24 +92,60 @@ defmodule LemmaTest do
 
     test "effective_from is nil when not set" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec no_effective\nfact x: 1", "test.lemma")
+      :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
       {:ok, [spec]} = Lemma.list(engine)
       assert spec[:effective_from] == nil
+    end
+
+    test "effective_to is nil for an unversioned spec (no successor)" do
+      {:ok, engine} = Lemma.new()
+      :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
+      {:ok, [spec]} = Lemma.list(engine)
+      assert spec[:effective_to] == nil
+    end
+
+    test "effective_to equals the next version's effective_from for earlier rows" do
+      {:ok, engine} = Lemma.new()
+
+      code = """
+      spec pricing 2025-01-01
+      data base: 10
+      rule total: base
+
+      spec pricing 2026-01-01
+      data base: 99
+      rule total: base
+      """
+
+      :ok = Lemma.load(engine, code, "temporal.lemma")
+      {:ok, entries} = Lemma.list(engine)
+      assert length(entries) == 2
+
+      [earlier, latest] = entries
+      assert earlier[:effective_from] == "2025-01-01"
+      assert earlier[:effective_to] == "2026-01-01"
+      assert latest[:effective_from] == "2026-01-01"
+      assert latest[:effective_to] == nil
     end
   end
 
   describe "schema/3" do
-    test "returns schema for loaded spec" do
+    test "returns schema for loaded spec with DataEntry + kind-tagged types" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
       assert {:ok, schema} = Lemma.schema(engine, "pricing")
       assert is_map(schema)
       assert schema["spec"] == "pricing"
-      assert is_map(schema["facts"])
+      assert is_map(schema["data"])
       assert is_map(schema["rules"])
-      assert Map.has_key?(schema["facts"], "quantity")
+      assert Map.has_key?(schema["data"], "quantity")
       assert Map.has_key?(schema["rules"], "total")
       assert Map.has_key?(schema["rules"], "discount")
+
+      quantity = schema["data"]["quantity"]
+      assert is_map(quantity), "DataEntry is a named object, not a tuple"
+      assert is_map(quantity["type"])
+      assert is_binary(quantity["type"]["kind"]), "type carries `kind` discriminator"
     end
 
     test "returns error for unknown spec" do
@@ -115,10 +155,10 @@ defmodule LemmaTest do
   end
 
   describe "run/3" do
-    test "runs spec with provided facts" do
+    test "runs spec with provided data" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
-      assert {:ok, response} = Lemma.run(engine, "pricing", facts: %{"quantity" => "5"})
+      assert {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "5"})
       assert is_map(response)
       assert response["spec_name"] == "pricing"
       results = response["results"]
@@ -130,14 +170,14 @@ defmodule LemmaTest do
     test "runs spec with quantity triggering unless clause" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
-      {:ok, response} = Lemma.run(engine, "pricing", facts: %{"quantity" => "10"})
+      {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "10"})
       results = response["results"]
       assert results["discount"]["result"]["value"]["display_value"] == "5"
     end
 
-    test "runs spec with no optional facts" do
+    test "runs spec with no optional data" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec simple\nfact x: 1\nrule y: x + 1", "s.lemma")
+      :ok = Lemma.load(engine, "spec simple\ndata x: 1\nrule y: x + 1", "s.lemma")
       {:ok, response} = Lemma.run(engine, "simple")
       results = response["results"]
       assert results["y"]["result"]["value"]["display_value"] == "2"
@@ -155,7 +195,7 @@ defmodule LemmaTest do
 
       spec = """
       spec invertible
-      fact x: [number]
+      data x: number
       rule y: x * 2
       """
 
@@ -172,7 +212,7 @@ defmodule LemmaTest do
 
       spec = """
       spec invertible2
-      fact x: [number]
+      data x: number
       rule y: x * 2
       """
 
@@ -186,7 +226,7 @@ defmodule LemmaTest do
 
     test "rejects target without outcome" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec inv3\nfact x: [number]\nrule y: x + 1", "inv3.lemma")
+      :ok = Lemma.load(engine, "spec inv3\ndata x: number\nrule y: x + 1", "inv3.lemma")
 
       assert_raise ErlangError, fn ->
         Lemma.invert(engine, "inv3", "2025-01-01", "y", %{op: :eq, value: "5"})
@@ -197,7 +237,7 @@ defmodule LemmaTest do
   describe "remove_spec/3" do
     test "removes a loaded spec" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec removable\nfact x: 1\nrule y: x + 1", "rm.lemma")
+      :ok = Lemma.load(engine, "spec removable\ndata x: 1\nrule y: x + 1", "rm.lemma")
       {:ok, specs} = Lemma.list(engine)
       assert length(specs) == 1
 
@@ -217,7 +257,7 @@ defmodule LemmaTest do
     test "engines are independent" do
       {:ok, e1} = Lemma.new()
       {:ok, e2} = Lemma.new()
-      :ok = Lemma.load(e1, "spec a\nfact x: 1\nrule y: x + 1", "a.lemma")
+      :ok = Lemma.load(e1, "spec a\ndata x: 1\nrule y: x + 1", "a.lemma")
       {:ok, specs1} = Lemma.list(e1)
       {:ok, specs2} = Lemma.list(e2)
       assert length(specs1) == 1
@@ -229,7 +269,7 @@ defmodule LemmaTest do
     test "loads specs from a directory" do
       dir = System.tmp_dir!()
       path = Path.join(dir, "hex_test_spec.lemma")
-      File.write!(path, "spec from_file\nfact x: 1\nrule y: x + 1")
+      File.write!(path, "spec from_file\ndata x: 1\nrule y: x + 1")
 
       {:ok, engine} = Lemma.new()
       assert :ok = Lemma.load_from_paths(engine, [path])
@@ -250,11 +290,11 @@ defmodule LemmaTest do
 
   describe "format/1" do
     test "formats valid lemma source" do
-      input = "spec foo\nfact   x:  1\nrule y: x +  1"
+      input = "spec foo\ndata   x:  1\nrule y: x +  1"
       assert {:ok, formatted} = Lemma.format(input)
       assert is_binary(formatted)
       assert formatted =~ "spec foo"
-      assert formatted =~ "fact x"
+      assert formatted =~ "data x"
       assert formatted =~ "rule y:"
       assert formatted =~ "x + 1"
     end
@@ -266,7 +306,7 @@ defmodule LemmaTest do
     end
 
     test "preserves semantics after formatting" do
-      input = "spec fmt\nfact x: [number]\nrule y: x *   2\nrule z: y + 1"
+      input = "spec fmt\ndata x: number\nrule y: x *   2\nrule z: y + 1"
       {:ok, formatted} = Lemma.format(input)
 
       {:ok, e1} = Lemma.new()
@@ -274,8 +314,8 @@ defmodule LemmaTest do
       :ok = Lemma.load(e1, input, "original")
       :ok = Lemma.load(e2, formatted, "formatted")
 
-      {:ok, r1} = Lemma.run(e1, "fmt", facts: %{"x" => "5"})
-      {:ok, r2} = Lemma.run(e2, "fmt", facts: %{"x" => "5"})
+      {:ok, r1} = Lemma.run(e1, "fmt", data: %{"x" => "5"})
+      {:ok, r2} = Lemma.run(e2, "fmt", data: %{"x" => "5"})
 
       assert r1["results"]["y"]["result"] == r2["results"]["y"]["result"]
       assert r1["results"]["z"]["result"] == r2["results"]["z"]["result"]

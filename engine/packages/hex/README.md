@@ -1,6 +1,6 @@
 # Lemma
 
-Elixir client for the [Lemma](https://github.com/benrogmans/lemma) rules engine, via precompiled NIFs.
+Elixir client for the [Lemma](https://github.com/lemma/lemma) rules engine, via precompiled NIFs.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ end
 Or from git:
 
 ```elixir
-{:lemma_engine, git: "https://github.com/benrogmans/lemma", sparse: "engine/packages/hex"}
+{:lemma_engine, git: "https://github.com/lemma/lemma", sparse: "engine/packages/hex"}
 ```
 
 ## Usage
@@ -49,23 +49,23 @@ Or from git:
 # Load a spec
 :ok = Lemma.load(engine, """
 spec pricing
-fact quantity: [number]
-fact price: 10
+data quantity: number
+data price: 10
 rule total: quantity * price
 rule discount: 0
   unless quantity >= 10 then 5
   unless quantity >= 50 then 15
 """)
 
-# Run with facts
-{:ok, response} = Lemma.run(engine, "pricing", facts: %{"quantity" => "25"})
+# Run with data
+{:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "25"})
 
 # Introspect
 {:ok, specs} = Lemma.list(engine)
 {:ok, schema} = Lemma.schema(engine, "pricing")
 
 # Format source code (no engine needed)
-{:ok, formatted} = Lemma.format("spec foo\nfact x: 1\nrule y: x + 1")
+{:ok, formatted} = Lemma.format("spec foo\ndata x: 1\nrule y: x + 1")
 
 # Clean up
 :ok = Lemma.remove_spec(engine, "pricing", "2025-01-01")
@@ -79,8 +79,8 @@ rule discount: 0
 | `Lemma.load/3` | Load spec from string |
 | `Lemma.load_from_paths/2` | Load specs from file paths |
 | `Lemma.list/1` | List loaded specs |
-| `Lemma.schema/3` | Get spec schema (facts, rules, types) |
-| `Lemma.run/3` | Evaluate a spec with facts |
+| `Lemma.schema/3` | Get spec schema (data, rules, types) |
+| `Lemma.run/3` | Evaluate a spec with data |
 | `Lemma.remove_spec/3` | Remove a spec from the engine |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 

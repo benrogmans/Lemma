@@ -12,12 +12,12 @@ default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.8.10"
+version = "0.8.11"
 edition = "2021"
 authors = ["Ben Rogmans <ben@amrai.nl>"]
 description = "A language that means business."
 license = "Apache-2.0"
-repository = "https://github.com/benrogmans/lemma"
+repository = "https://github.com/lemma/lemma"
 
 [workspace.lints.rust]
 dead_code = "deny"

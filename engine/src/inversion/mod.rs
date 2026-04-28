@@ -18,7 +18,8 @@ pub use domain::{extract_domains_from_constraint, Bound, Domain};
 pub use target::{Target, TargetOp};
 pub use world::World;
 
-use crate::planning::semantics::{Expression, FactPath, LiteralValue, ValueKind};
+use crate::evaluation::operations::VetoType;
+use crate::planning::semantics::{DataPath, Expression, LiteralValue, ValueKind};
 use crate::planning::ExecutionPlan;
 use crate::{Error, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
@@ -32,7 +33,7 @@ use world::{WorldEnumerator, WorldSolution};
 
 /// A single solution from inversion
 ///
-/// Contains the outcome for a solution. For fact constraints,
+/// Contains the outcome for a solution. For data constraints,
 /// use the corresponding entry in `InversionResponse.domains`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Solution {
@@ -52,22 +53,22 @@ pub struct InversionResponse {
     /// All valid solutions
     pub solutions: Vec<Solution>,
     /// Domain constraints for each solution (indexed by solution index)
-    pub domains: Vec<HashMap<FactPath, Domain>>,
-    /// Facts that still need values (appear in conditions but aren't fully constrained)
-    pub undetermined_facts: Vec<FactPath>,
-    /// True if all facts are fully constrained to specific values
+    pub domains: Vec<HashMap<DataPath, Domain>>,
+    /// Data that still need values (appear in conditions but aren't fully constrained)
+    pub undetermined_data: Vec<DataPath>,
+    /// True if all data are fully constrained to specific values
     pub is_determined: bool,
 }
 
 impl InversionResponse {
     /// Create a new inversion response, computing metadata from solutions and domains
-    pub fn new(solutions: Vec<Solution>, domains: Vec<HashMap<FactPath, Domain>>) -> Self {
-        let undetermined_facts = compute_undetermined_facts(&domains);
+    pub fn new(solutions: Vec<Solution>, domains: Vec<HashMap<DataPath, Domain>>) -> Self {
+        let undetermined_data = compute_undetermined_data(&domains);
         let is_determined = compute_is_determined(&domains);
         Self {
             solutions,
             domains,
-            undetermined_facts,
+            undetermined_data,
             is_determined,
         }
     }
@@ -83,7 +84,7 @@ impl InversionResponse {
     }
 
     /// Iterate over solutions with their domains
-    pub fn iter(&self) -> impl Iterator<Item = (&Solution, &HashMap<FactPath, Domain>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&Solution, &HashMap<DataPath, Domain>)> {
         self.solutions.iter().zip(self.domains.iter())
     }
 }
@@ -108,11 +109,11 @@ impl Serialize for InversionResponse {
         state.serialize_field("domains", &domains_serializable)?;
 
         let undetermined_serializable: Vec<String> = self
-            .undetermined_facts
+            .undetermined_data
             .iter()
             .map(|fp| fp.to_string())
             .collect();
-        state.serialize_field("undetermined_facts", &undetermined_serializable)?;
+        state.serialize_field("undetermined_data", &undetermined_serializable)?;
         state.serialize_field("is_determined", &self.is_determined)?;
         state.end()
     }
@@ -125,18 +126,18 @@ impl Serialize for InversionResponse {
 /// Invert a rule to find input domains that produce a desired outcome.
 ///
 /// Given an execution plan and rule name, determines what values the unknown
-/// facts must have to produce the target outcome.
+/// data must have to produce the target outcome.
 ///
-/// The `provided_facts` set contains fact paths that are fixed (user-provided values).
-/// Only these facts are substituted during hydration; other fact values remain as
-/// undetermined facts for inversion.
+/// The `provided_data` set contains data paths that are fixed (user-provided values).
+/// Only these data are substituted during hydration; other data values remain as
+/// undetermined data for inversion.
 ///
 /// Returns an [`InversionResponse`] containing all valid solutions.
 pub fn invert(
     rule_name: &str,
     target: Target,
     plan: &ExecutionPlan,
-    provided_facts: &HashSet<FactPath>,
+    provided_data: &HashSet<DataPath>,
 ) -> Result<InversionResponse, Error> {
     let executable_rule = plan.get_rule(rule_name).ok_or_else(|| {
         Error::request(
@@ -149,7 +150,7 @@ pub fn invert(
 
     // Enumerate all valid worlds for this rule
     let mut enumerator = WorldEnumerator::new(plan, &rule_path)?;
-    let enumeration_result = enumerator.enumerate(provided_facts)?;
+    let enumeration_result = enumerator.enumerate(provided_data)?;
 
     // Build Solution objects with domains
     let mut solutions = Vec::new();
@@ -179,7 +180,7 @@ pub fn invert(
             let algebraic_solutions = solve::solve_arithmetic_batch(
                 enumeration_result.arithmetic_solutions.clone(),
                 target_value,
-                provided_facts,
+                provided_data,
             );
 
             // Track which arithmetic solutions were successfully solved
@@ -200,8 +201,8 @@ pub fn invert(
 
                 // Check if solved values are compatible with constraint domains
                 let mut is_valid = true;
-                for (fact_path, solved_domain) in &solved_domains {
-                    if let Some(constraint_domain) = constraint_domains.get(fact_path) {
+                for (data_path, solved_domain) in &solved_domains {
+                    if let Some(constraint_domain) = constraint_domains.get(data_path) {
                         // Check if the solved value is within the constraint domain
                         if let Domain::Enumeration(values) = solved_domain {
                             for value in values.iter() {
@@ -224,8 +225,8 @@ pub fn invert(
                 let solved_outcome_result = OperationResult::Value(Box::new(solved_outcome));
 
                 let mut combined_domains = constraint_domains;
-                for (fact_path, domain) in solved_domains {
-                    combined_domains.insert(fact_path, domain);
+                for (data_path, domain) in solved_domains {
+                    combined_domains.insert(data_path, domain);
                 }
 
                 let solution = Solution {
@@ -253,15 +254,14 @@ pub fn invert(
             // Add as underdetermined solution with shape
             let mut combined_domains = extract_domains_from_constraint(&arith_solution.constraint)?;
 
-            // Extract unknown facts from the shape expression and add them as Unconstrained
-            let unknown_facts =
-                extract_fact_paths_from_expression(&arith_solution.outcome_expression);
-            for fact_path in unknown_facts {
-                // Only add if not already constrained and not a provided fact
-                if !combined_domains.contains_key(&fact_path)
-                    && !provided_facts.contains(&fact_path)
+            // Extract unknown data from the shape expression and add them as Unconstrained
+            let unknown_data =
+                extract_data_paths_from_expression(&arith_solution.outcome_expression);
+            for data_path in unknown_data {
+                // Only add if not already constrained and not a provided data
+                if !combined_domains.contains_key(&data_path) && !provided_data.contains(&data_path)
                 {
-                    combined_domains.insert(fact_path, Domain::Unconstrained);
+                    combined_domains.insert(data_path, Domain::Unconstrained);
                 }
             }
 
@@ -324,11 +324,19 @@ fn filter_literal_solutions_by_target(
                     }
                 }
             }
-            (Some(OperationResult::Veto(target_msg)), OperationResult::Veto(outcome_msg)) => {
-                // Veto target, outcome is a veto - check message match
-                match target_msg {
-                    None => true, // Target any veto
-                    Some(t_msg) => outcome_msg.as_ref().map(|m| m == t_msg).unwrap_or(false),
+            (Some(OperationResult::Veto(target_reason)), OperationResult::Veto(outcome_reason)) => {
+                match target_reason {
+                    VetoType::UserDefined { message: None } => true, // Target any veto
+                    VetoType::UserDefined {
+                        message: Some(ref t_msg),
+                    } => matches!(
+                        outcome_reason,
+                        VetoType::UserDefined {
+                            message: Some(ref o_msg)
+                        }
+                        if o_msg == t_msg
+                    ),
+                    _ => false,
                 }
             }
             _ => false, // Mismatch between value/veto targets and outcomes
@@ -359,36 +367,36 @@ fn compare_values(a: &LiteralValue, b: &LiteralValue) -> Option<std::cmp::Orderi
     }
 }
 
-/// Extract all FactPath references from a derived expression
-fn extract_fact_paths_from_expression(expr: &Expression) -> Vec<FactPath> {
+/// Extract all DataPath references from a derived expression
+fn extract_data_paths_from_expression(expr: &Expression) -> Vec<DataPath> {
     let mut set = std::collections::HashSet::new();
-    expr.collect_fact_paths(&mut set);
+    expr.collect_data_paths(&mut set);
     set.into_iter().collect()
 }
 
-/// Compute the list of undetermined facts from all solution domains
-fn compute_undetermined_facts(all_domains: &[HashMap<FactPath, Domain>]) -> Vec<FactPath> {
-    let mut undetermined: HashSet<FactPath> = HashSet::new();
+/// Compute the list of undetermined data from all solution domains
+fn compute_undetermined_data(all_domains: &[HashMap<DataPath, Domain>]) -> Vec<DataPath> {
+    let mut undetermined: HashSet<DataPath> = HashSet::new();
 
     for solution_domains in all_domains {
-        for (fact_path, domain) in solution_domains {
+        for (data_path, domain) in solution_domains {
             let is_determined = matches!(
                 domain,
                 Domain::Enumeration(values) if values.len() == 1
             );
             if !is_determined {
-                undetermined.insert(fact_path.clone());
+                undetermined.insert(data_path.clone());
             }
         }
     }
 
-    let mut result: Vec<FactPath> = undetermined.into_iter().collect();
+    let mut result: Vec<DataPath> = undetermined.into_iter().collect();
     result.sort_by_key(|a| a.to_string());
     result
 }
 
-/// Check if all facts across all solutions are fully determined
-fn compute_is_determined(all_domains: &[HashMap<FactPath, Domain>]) -> bool {
+/// Check if all data across all solutions are fully determined
+fn compute_is_determined(all_domains: &[HashMap<DataPath, Domain>]) -> bool {
     if all_domains.is_empty() {
         return true;
     }
@@ -436,42 +444,42 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_undetermined_facts_empty() {
-        let domains: Vec<HashMap<FactPath, Domain>> = vec![];
-        let undetermined = compute_undetermined_facts(&domains);
+    fn test_compute_undetermined_data_empty() {
+        let domains: Vec<HashMap<DataPath, Domain>> = vec![];
+        let undetermined = compute_undetermined_data(&domains);
         assert!(undetermined.is_empty());
     }
 
     #[test]
-    fn test_compute_undetermined_facts_single_value() {
+    fn test_compute_undetermined_data_single_value() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::new(vec![], "age".to_string()),
+            DataPath::new(vec![], "age".to_string()),
             Domain::Enumeration(Arc::new(vec![LiteralValue::number(Decimal::from(25))])),
         );
         let domains = vec![domain_map];
-        let undetermined = compute_undetermined_facts(&domains);
+        let undetermined = compute_undetermined_data(&domains);
         assert!(undetermined.is_empty());
     }
 
     #[test]
-    fn test_compute_undetermined_facts_range() {
+    fn test_compute_undetermined_data_range() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::new(vec![], "age".to_string()),
+            DataPath::new(vec![], "age".to_string()),
             Domain::Range {
                 min: Bound::Exclusive(Arc::new(LiteralValue::number(Decimal::from(18)))),
                 max: Bound::Unbounded,
             },
         );
         let domains = vec![domain_map];
-        let undetermined = compute_undetermined_facts(&domains);
+        let undetermined = compute_undetermined_data(&domains);
         assert_eq!(undetermined.len(), 1);
     }
 
     #[test]
     fn test_compute_is_determined_empty() {
-        let domains: Vec<HashMap<FactPath, Domain>> = vec![];
+        let domains: Vec<HashMap<DataPath, Domain>> = vec![];
         assert!(compute_is_determined(&domains));
     }
 
@@ -479,7 +487,7 @@ mod tests {
     fn test_compute_is_determined_true() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::new(vec![], "age".to_string()),
+            DataPath::new(vec![], "age".to_string()),
             Domain::Enumeration(Arc::new(vec![LiteralValue::number(Decimal::from(25))])),
         );
         let domains = vec![domain_map];
@@ -490,7 +498,7 @@ mod tests {
     fn test_compute_is_determined_false() {
         let mut domain_map = HashMap::new();
         domain_map.insert(
-            FactPath::new(vec![], "age".to_string()),
+            DataPath::new(vec![], "age".to_string()),
             Domain::Range {
                 min: Bound::Exclusive(Arc::new(LiteralValue::number(Decimal::from(18)))),
                 max: Bound::Unbounded,
@@ -506,7 +514,7 @@ mod tests {
         // and veto conditions should constrain the domains.
         let code = r#"
 spec example
-fact x: [number]
+data x: number
 rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
@@ -524,7 +532,7 @@ rule another: base
         let inv = engine
             .invert(
                 "example",
-                &now,
+                Some(&now),
                 "another",
                 Target::value(LiteralValue::number(3.into())),
                 HashMap::new(),
@@ -533,7 +541,7 @@ rule another: base
 
         assert!(!inv.is_empty(), "expected at least one solution");
 
-        let x = FactPath::new(vec![], "x".to_string());
+        let x = DataPath::new(vec![], "x".to_string());
         let three = LiteralValue::number(3.into());
 
         // For target value 3, x must be exactly 3 (not just within a broad range).
@@ -551,7 +559,7 @@ rule another: base
     fn test_invert_strict_no_solution_when_value_is_blocked_by_veto() {
         let code = r#"
 spec example
-fact x: [number]
+data x: number
 rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
@@ -569,7 +577,7 @@ rule another: base
         let inv = engine
             .invert(
                 "example",
-                &now,
+                Some(&now),
                 "another",
                 Target::value(LiteralValue::number(7.into())),
                 HashMap::new(),
@@ -586,7 +594,7 @@ rule another: base
     fn test_invert_strict_veto_target_constrains_domain() {
         let code = r#"
 spec example
-fact x: [number]
+data x: number
 rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
@@ -604,7 +612,7 @@ rule another: base
         let inv = engine
             .invert(
                 "example",
-                &now,
+                Some(&now),
                 "another",
                 Target::veto(Some("way too much".to_string())),
                 HashMap::new(),
@@ -613,14 +621,16 @@ rule another: base
 
         assert!(!inv.is_empty(), "expected solutions for veto query");
 
-        let x = FactPath::new(vec![], "x".to_string());
+        let x = DataPath::new(vec![], "x".to_string());
         let five = LiteralValue::number(5.into());
         let six = LiteralValue::number(6.into());
 
         for (solution, domains) in inv.iter() {
             assert_eq!(
                 solution.outcome,
-                OperationResult::Veto(Some("way too much".to_string())),
+                OperationResult::Veto(VetoType::UserDefined {
+                    message: Some("way too much".to_string()),
+                }),
                 "Expected solution outcome to be veto('way too much'), got: {:?}",
                 solution.outcome
             );
@@ -658,7 +668,7 @@ rule another: base
     fn test_invert_strict_any_veto_target_matches_all_veto_ranges() {
         let code = r#"
 spec example
-fact x: [number]
+data x: number
 rule base: x
   unless x > 3 then veto "too much"
   unless x < 0 then veto "too little"
@@ -676,7 +686,7 @@ rule another: base
         let inv = engine
             .invert(
                 "example",
-                &now,
+                Some(&now),
                 "another",
                 Target::any_veto(),
                 HashMap::new(),
@@ -685,7 +695,7 @@ rule another: base
 
         assert!(!inv.is_empty(), "expected solutions for any-veto query");
 
-        let x = FactPath::new(vec![], "x".to_string());
+        let x = DataPath::new(vec![], "x".to_string());
         let minus_one = LiteralValue::number((-1).into());
         let zero = LiteralValue::number(0.into());
         let two = LiteralValue::number(2.into());
@@ -707,7 +717,9 @@ rule another: base
             );
 
             match &solution.outcome {
-                OperationResult::Veto(Some(msg)) if msg == "too little" => {
+                OperationResult::Veto(VetoType::UserDefined {
+                    message: Some(ref msg),
+                }) if msg == "too little" => {
                     saw_too_little = true;
 
                     match d {
@@ -737,7 +749,9 @@ rule another: base
                         d
                     );
                 }
-                OperationResult::Veto(Some(msg)) if msg == "too much" => {
+                OperationResult::Veto(VetoType::UserDefined {
+                    message: Some(ref msg),
+                }) if msg == "too much" => {
                     saw_too_much = true;
 
                     match d {
@@ -777,7 +791,9 @@ rule another: base
                         d
                     );
                 }
-                OperationResult::Veto(Some(msg)) if msg == "way too much" => {
+                OperationResult::Veto(VetoType::UserDefined {
+                    message: Some(ref msg),
+                }) if msg == "way too much" => {
                     saw_way_too_much = true;
 
                     match d {
@@ -807,11 +823,8 @@ rule another: base
                         d
                     );
                 }
-                OperationResult::Veto(Some(other)) => {
-                    panic!("Unexpected veto message in any-veto results: {:?}", other)
-                }
-                OperationResult::Veto(None) => {
-                    panic!("Unexpected veto(None) in any-veto results (expected a message)")
+                OperationResult::Veto(other) => {
+                    panic!("Unexpected veto in any-veto results: {:?}", other)
                 }
                 OperationResult::Value(v) => {
                     panic!("Unexpected value result in any-veto results: {:?}", v)

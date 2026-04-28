@@ -10,7 +10,7 @@ You can compile Lemma without a registry for complete isolation, or implement yo
 
 The `Engine` does not hold a registry and never performs network calls. External `@...` references must be resolved before loading into the engine:
 
-- **CLI:** `lemma get` resolves `@` references and caches them in `.deps/` inside the workspace directory. All other commands (`run`, `server`, `hash`, `show`, `list`, `mcp`) load cached deps via `load_from_paths` or `load` in a loop. Since there is no lock file, `.deps/` should be checked into version control.
+- **CLI:** `lemma get` resolves `@` references and caches them in `.deps/` inside the workspace directory. All other commands (`run`, `server`, `schema`, `show`, `list`, `mcp`) load cached deps via `load_from_paths` or `load` in a loop. Since there is no lock file, `.deps/` should be checked into version control.
 - **Crate users:** Call `resolve_registry_references` to resolve deps, then pass the resulting source to `engine.load(code, attribute?)` (e.g. in a loop) or use `load_from_paths`.
 - **WASM:** Resolve deps via `resolve_registry_references` with the browser `fetch()` fetcher, then pass each bundle to `engine.load()` in a loop.
 
@@ -26,7 +26,7 @@ Implement `lemma::Registry`. All methods receive the identifier **without** the 
 
 | Method | Purpose |
 |--------|---------|
-| `get(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for an `@...` identifier (both spec refs and type imports). |
+| `get(&self, name) -> Result<RegistryBundle, RegistryError>` | Download all temporal versions for an `@...` identifier (both spec refs and data imports). |
 | `url_for_id(&self, name, effective) -> Option<String>` | Optional: return a URL for editor navigation. |
 
 The trait is **async** and requires `Send + Sync`. On WASM the future is `?Send`.
@@ -79,7 +79,7 @@ The engine enforces strict isolation between local specs and registry specs. A `
 
 1. **All spec declarations must use `@`-prefixed names.** A bundle must not contain bare-named specs like `spec billing` — only `spec @org/project/billing`.
 
-2. **All references must use `@`-prefixed names.** This includes `fact x: spec ...`, `type x from ...`, and inline type annotations with `from`. A registry spec must not reference a bare name like `spec local_rates`.
+2. **All references must use `@`-prefixed names.** This includes `with` references, `data x from ...`, and inline type annotations with `from`. A registry spec must not reference a bare name like `spec local_rates`.
 
 3. **All dependencies must be inlined.** If `spec @org/billing` references `spec @org/rates`, the bundle must include both specs. The engine resolves transitive `@` references automatically, but the bundle should be self-contained when possible.
 

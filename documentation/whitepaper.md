@@ -63,7 +63,7 @@ Lemma addresses these problems by providing a declarative language that:
 - **Last wins semantics**: The "unless" clause uses "last matching wins" logic that mirrors how humans naturally express exceptions and special cases.
 - **Fully executable**: Despite its natural syntax, Lemma uses a pure Rust evaluator, providing rigorous logical inference and deterministic evaluation.
 - **Composable**: Specs reference and extend each other, enabling modular rule design.
-- **Auditable**: Every decision can be traced back to specific facts and rules with operation records.
+- **Auditable**: Every decision can be traced back to specific data and rules with operation records.
 
 ### 1.3 Example
 
@@ -72,8 +72,8 @@ Consider a simple pricing rule:
 ```lemma
 spec pricing
 
-fact quantity: [number]
-fact is_vip: false
+data quantity: number
+data is_vip: false
 
 rule discount: 0%
   unless quantity >= 10 then 10%
@@ -119,37 +119,37 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
-type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
+data mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact salary: 75000              // Number type inferred
-fact vacation: 3 weeks          // Duration type inferred
-fact weight: 15 kilograms       // Uses custom mass type
-fact deadline: 2024-12-31       // Date type inferred
-fact tax_rate: 22%              // Ratio type inferred
+data salary: 75000              // Number type inferred
+data vacation: 3 weeks          // Duration type inferred
+data weight: 15 kilograms       // Uses custom mass type
+data deadline: 2024-12-31       // Date type inferred
+data tax_rate: 22%              // Ratio type inferred
 ```
 
 The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions within the same type:
 
 ```lemma
-type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
+data mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact weight: 70 kilograms
+data weight: 70 kilograms
 rule weight_in_pounds: weight in pounds  // Automatic conversion within type
 ```
 
 ### 2.4 Composition over configuration
 
-Lemma encourages building complex systems from simple, composable pieces. Specs can reference other specs, rules can reference other rules, and facts can be overridden in specific contexts:
+Lemma encourages building complex systems from simple, composable pieces. Specs can reference other specs, rules can reference other rules, and data can be overridden in specific contexts:
 
 ```lemma
 spec base_employee
-fact salary: 50000
-fact bonus_rate: 5%
+data salary: 50000
+data bonus_rate: 5%
 
 spec manager
-fact employee: spec base_employee
-fact employee.salary: 80000
-fact employee.bonus_rate: 15%
+with employee: base_employee
+data employee.salary: 80000
+data employee.bonus_rate: 15%
 
 rule manager_bonus: employee.salary * employee.bonus_rate
 ```
@@ -160,29 +160,29 @@ This compositional design enables reusable rule libraries and reduces duplicatio
 
 ## 3. Language features
 
-### 3.1 Facts
+### 3.1 Data
 
-Facts are named values of a certain type. They represent inputs to the system:
+Data are named values of a certain type. They represent inputs to the system:
 
 ```lemma
-fact name: "Alice"
-fact age: 35
-fact start_date: 2024-01-15
-fact salary: 75000
-fact is_manager: true
+data name: "Alice"
+data age: 35
+data start_date: 2024-01-15
+data salary: 75000
+data is_manager: true
 ```
 
-Facts can also be type annotations, declaring expected inputs without values:
+Data can also be type annotations, declaring expected inputs without values:
 
 ```lemma
-fact birth_date: [date]
-fact employee_count: [number]
-fact location: [text]
+data birth_date: date
+data employee_count: number
+data location: text
 ```
 
 ### 3.2 Rules
 
-Rules compute values based on facts and other rules. A rule has a name, a default value, and optional "unless" clauses:
+Rules compute values based on data and other rules. A rule has a name, a default value, and optional "unless" clauses:
 
 ```lemma
 rule discount: 0%
@@ -191,7 +191,7 @@ rule discount: 0%
   unless is_vip then 25%
 ```
 
-Rules can reference other rules by name (the engine resolves whether a name is a fact or a rule during planning):
+Rules can reference other rules by name (the engine resolves whether a name is a data or a rule during planning):
 
 ```lemma
 rule is_adult: age >= 18
@@ -280,34 +280,34 @@ Lemma provides several primitive types:
 - **Ratio**: Proportional values (percent, permille)
 
 ```lemma
-fact count: 42
-fact name: "Alice"
-fact is_active: true
-fact deadline: 2024-12-31
-fact workweek: 40 hours
-fact tax_rate: 15%
+data count: 42
+data name: "Alice"
+data is_active: true
+data deadline: 2024-12-31
+data workweek: 40 hours
+data tax_rate: 15%
 ```
 
 ### 4.2 User-defined types
 
-Lemma allows users to define custom types with units, constraints, and validation. This provides flexibility while maintaining type safety.
+Lemma allows users to define custom types using the `data` keyword with type commands. This provides flexibility while maintaining type safety.
 
-**Basic type definition:**
+**Defining a typed data:**
 
 ```lemma
-type money: scale
+data money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-type mass: scale
+data mass: scale
   -> unit kilogram 1.0
   -> unit gram 0.001
   -> unit pound 0.453592
 
-fact price: 100 eur
-fact weight: 75 kilograms
+data price: 100 eur
+data weight: 75 kilograms
 ```
 
 **Type commands** allow fine-grained control:
@@ -319,18 +319,24 @@ fact weight: 75 kilograms
 - `help "<text>"` - Add documentation
 - `default <value>` - Set default values
 
-**Type imports** enable reuse across specs:
+Data can also extend another data's type:
 
 ```lemma
-type currency from base_types
-type discount_rate from pricing -> maximum 0.5
+data price: money -> minimum 0
 ```
 
-**Inline types** allow type definitions directly in fact declarations:
+**Data imports** enable reuse across specs:
 
 ```lemma
-fact age: [number -> minimum 0 -> maximum 120]
-fact price: [scale -> unit eur 1.00 -> unit usd 1.10]
+data currency from base_types
+data discount_rate from pricing -> maximum 0.5
+```
+
+**Inline type constraints** in data declarations:
+
+```lemma
+data age: number -> minimum 0 -> maximum 120
+data price: scale -> unit eur 1.00 -> unit usd 1.10
 ```
 
 ### 4.3 Unit conversion
@@ -338,16 +344,16 @@ fact price: [scale -> unit eur 1.00 -> unit usd 1.10]
 Unit conversions work within the same type definition. This ensures type safety while allowing flexible unit systems.
 
 ```lemma
-type money: scale -> unit eur 1.00 -> unit usd 1.10
+data money: scale -> unit eur 1.00 -> unit usd 1.10
 
-fact price: 100 eur
+data price: 100 eur
 rule price_usd: price in usd  // Converts to 110 usd
 ```
 
 **Duration units** are built-in (the only exception):
 
 ```lemma
-fact workweek: 40 hours
+data workweek: 40 hours
 rule workweek_days: workweek in days  // Converts to ~1.67 days
 ```
 
@@ -364,20 +370,20 @@ This design eliminates manual conversion logic while maintaining clear type boun
 Ratios represent proportional values. The `ratio` type includes `percent` and `permille` units by default.
 
 ```lemma
-fact tax_rate: 15%        // or 15 percent
-fact discount: 25%
-fact error_rate: 2 permille  // or 2%%
-fact completion: 87.5%
+data tax_rate: 15%        // or 15 percent
+data discount: 25%
+data error_rate: 2 permille  // or 2%%
+data completion: 87.5%
 ```
 
 **Custom ratio types:**
 
 ```lemma
-type discount_ratio: ratio
+data discount_ratio: ratio
   -> minimum 0
   -> maximum 1
 
-fact discount: 0.25  // 25% as decimal ratio
+data discount: 0.25  // 25% as decimal ratio
 ```
 
 Ratios interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
@@ -388,7 +394,7 @@ Ratios interact intelligently with other types in arithmetic operations, automat
 
 ### 5.1 Specs
 
-Every Lemma file contains one or more specs. Specs are namespaces that encapsulate related facts and rules:
+Every Lemma file contains one or more specs. Specs are namespaces that encapsulate related data and rules:
 
 ```lemma
 spec employee/benefits
@@ -396,8 +402,8 @@ spec employee/benefits
 Company benefits policy for full-time employees
 """
 
-fact base_vacation: 15 days
-fact years_of_service: [number]
+data base_vacation: 15 days
+data years_of_service: number
 
 rule vacation_days: base_vacation
   unless years_of_service >= 5 then 20 days
@@ -412,30 +418,30 @@ Specs can reference other specs, enabling composition and reuse:
 
 ```lemma
 spec base_employee
-fact name: "John Doe"
-fact salary: 50000
+data name: "John Doe"
+data salary: 50000
 
 spec manager
-fact employee: spec base_employee
-fact employee.salary: 80000
+with employee: base_employee
+data employee.salary: 80000
 
 rule manager_bonus: employee.salary * 0.15
 ```
 
 This pattern allows creating specialized variants of base specs without duplication.
 
-### 5.3 Fact bindings
+### 5.3 Data bindings
 
-Facts can be bound at different levels:
+Data can be bound at different levels:
 
 ```lemma
 spec pricing
-fact quantity: 100
-fact unit_price: 50
+data quantity: 100
+data unit_price: 50
 
 spec wholesale_pricing
-fact pricing.quantity: 1000
-fact pricing.unit_price: 35
+data pricing.quantity: 1000
+data pricing.unit_price: 35
 
 rule total: pricing.quantity * pricing.unit_price
 ```
@@ -511,7 +517,7 @@ The parser produces an Abstract Syntax Tree (AST) that captures the structure of
 After parsing, the semantic validator performs several checks:
 
 1. **Type Checking**: Ensures operations are performed on compatible types
-2. **Reference Resolution**: Verifies that all fact and rule references are valid
+2. **Reference Resolution**: Verifies that all data and rule references are valid
 3. **Scope Checking**: Ensures identifiers are used in appropriate scopes
 4. **Circular Dependency Detection**: Identifies and reports circular rule references
 
@@ -523,7 +529,7 @@ The evaluator processes the semantic model directly in Rust, providing fast and 
 
 The evaluator handles:
 
-- **Fact resolution**: Direct lookup of facts and rule references
+- **Data resolution**: Direct lookup of data and rule references
 - **Rule evaluation**: Recursive evaluation of expressions with proper dependency ordering
 - **Unless clauses**: "Last match wins" semantics implemented through conditional evaluation
 - **Unit conversions**: Conversion between units within the same type definition
@@ -582,8 +588,8 @@ Progressive tax systems are naturally expressed in Lemma:
 ```lemma
 spec tax_policy
 
-fact income: 85000
-fact filing_status: "single"
+data income: 85000
+data filing_status: "single"
 
 rule taxable_income: income - standard_deduction
 
@@ -606,9 +612,9 @@ Complex pricing rules with volume discounts and customer tiers:
 ```lemma
 spec pricing
 
-fact quantity: [number]
-fact customer_tier: "standard"
-fact unit_price: 100
+data quantity: number
+data customer_tier: "standard"
+data unit_price: 100
 
 rule volume_discount: 0%
   unless quantity >= 10 then 5%
@@ -633,10 +639,10 @@ Determining eligibility based on multiple criteria:
 ```lemma
 spec insurance/eligibility
 
-fact age: [number]
-fact pre_existing_conditions: [boolean]
-fact employment_status: [text]
-fact coverage_start: [date]
+data age: number
+data pre_existing_conditions: boolean
+data employment_status: text
+data coverage_start: date
 
 rule eligible_age: age >= 18 and age <= 65
 
@@ -659,12 +665,12 @@ Complex shipping calculations with multiple factors:
 ```lemma
 spec shipping
 
-fact order_total: [number]
-type mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
+data order_total: number
+data mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
 
-fact weight: [mass]
-fact destination: [text]
-fact is_expedited: false
+data weight: mass
+data destination: text
+data is_expedited: false
 
 rule base_rate: 12.99
   unless destination is "CA" then 25.00
@@ -690,10 +696,10 @@ Complex compensation rules with multiple variables:
 ```lemma
 spec compensation
 
-fact base_salary: [number]
-fact years_of_service: [number]
-fact performance_rating: [number]
-fact department: [text]
+data base_salary: number
+data years_of_service: number
+data performance_rating: number
+data department: text
 
 rule tenure_bonus: 0
   unless years_of_service >= 5 then base_salary * 5%
@@ -853,11 +859,11 @@ Lemma provides better readability, version control, testing, and composition.
 
 ### 9.1 Tables (collections)
 
-**Planned feature**: Support facts that hold multiple values with declarative operations.
+**Planned feature**: Support data that hold multiple values with declarative operations.
 
 ```lemma
-fact employees: multi [text]
-fact salaries: multi [number]
+data employees: multi text
+data salaries: multi number
 
 rule total_payroll: sum of salaries
 rule average_salary: avg of salaries
@@ -946,8 +952,8 @@ cargo install lemma
 cat > example.lemma << 'EOF'
 spec example
 
-fact age: 25
-fact income: 50000
+data age: 25
+data income: 50000
 
 rule can_vote: false
   unless age >= 18 then true
@@ -957,14 +963,14 @@ rule tax_bracket: "10%"
   unless income > 95375 then "22%"
 EOF
 
-# Provide fact values
+# Provide data values
 lemma run example income=100000
 ```
 
 Documentation, examples, and source code are available at:
-- Repository: https://github.com/benrogmans/lemma
-- Documentation: https://github.com/benrogmans/lemma/tree/main/documentation
-- Examples: https://github.com/benrogmans/lemma/tree/main/documentation/examples
+- Repository: https://github.com/lemma/lemma
+- Documentation: https://github.com/lemma/lemma/tree/main/documentation
+- Examples: https://github.com/lemma/lemma/tree/main/documentation/examples
 
 ---
 
@@ -982,13 +988,13 @@ This spec encodes the complete compensation rules including
 base salary, bonuses, equity, and benefits.
 """
 
-fact employee_id: [text]
-fact base_salary: [number]
-fact years_of_service: [number]
-fact performance_rating: [number]
-fact department: [text]
-fact location: [text]
-fact is_manager: false
+data employee_id: text
+data base_salary: number
+data years_of_service: number
+data performance_rating: number
+data department: text
+data location: text
+data is_manager: false
 
 rule cost_of_living_adjustment: 0%
   unless location is "San Francisco" then 25%
@@ -1053,12 +1059,12 @@ Spec:
   ["""documentation"""]
   <statements>
 
-Fact Definition:
-  fact <name>: <value>
-  fact <name>: [<type>]
+Data Definition:
+  data <name>: <value>
+  data <name>: <type>
 
-Fact Binding:
-  fact <qualified.name>: <value>
+Data Binding:
+  data <qualified.name>: <value>
 
 Rule Definition:
   rule <name>: <expression>
@@ -1070,8 +1076,8 @@ Expressions:
   <logical>          // and, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
   <unit-conversion>  // <value> in <unit>
-  <reference>        // name or path (resolved to fact or rule)
-  <fact-reference>   // <name>
+  <reference>        // name or path (resolved to data or rule)
+  <data-reference>   // <name>
   veto [<message>]
 
 Literals:
@@ -1089,4 +1095,4 @@ Literals:
 **Last Updated**: October 2025
 **License**: Apache 2.0
 **Authors**: Ben Rogmans
-**Contact**: https://github.com/benrogmans/lemma
+**Contact**: https://github.com/lemma/lemma

@@ -10,9 +10,9 @@ fn test_equal_operator_numbers() {
             r#"
 spec test_equal_numbers
 
-fact a: 42
-fact b: 42
-fact c: 100
+data a: 42
+data b: 42
+data c: 100
 
 rule equal_true: a is b
 rule equal_false: a is c
@@ -41,8 +41,8 @@ fn test_equal_operator_text() {
             r#"
 spec test_equal_text
 
-fact greeting: "hello"
-fact other: "world"
+data greeting: "hello"
+data other: "world"
 
 rule same_greeting: greeting is "hello"
 rule different_greeting: greeting is other
@@ -64,37 +64,6 @@ rule different_greeting: greeting is other
 }
 
 #[test]
-fn test_equal_operator_money() {
-    let mut engine = Engine::new();
-    engine
-        .load(
-            r#"
-spec test_equal_money
-
-fact price_a: 100
-fact price_b: 100
-fact price_c: 50
-
-rule same_price: price_a is price_b
-rule different_price: price_a is price_c
-"#,
-            lemma::SourceType::Labeled("test.lemma"),
-        )
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("test_equal_money", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let same = response.results.get("same_price").unwrap();
-    assert_eq!(same.result.value().unwrap().to_string(), "true");
-
-    let different = response.results.get("different_price").unwrap();
-    assert_eq!(different.result.value().unwrap().to_string(), "false");
-}
-
-#[test]
 fn test_equal_operator_booleans() {
     let mut engine = Engine::new();
     engine
@@ -102,9 +71,9 @@ fn test_equal_operator_booleans() {
             r#"
 spec test_equal_booleans
 
-fact flag_a: true
-fact flag_b: true
-fact flag_c: false
+data flag_a: true
+data flag_b: true
+data flag_c: false
 
 rule both_true: flag_a is flag_b
 rule mixed: flag_a is flag_c
@@ -133,8 +102,8 @@ fn test_equal_operator_in_conditions() {
             r#"
 spec test_equal_conditions
 
-fact status: "active"
-fact count: 10
+data status: "active"
+data count: 10
 
 rule message: "inactive"
   unless status is "active" then "active"

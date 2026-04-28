@@ -9,13 +9,13 @@ fn test_inline_type_import() -> Result<(), Error> {
     // Define a type in one spec
     let age_spec = r#"
 spec age
-type age: number -> minimum 0 -> maximum 150
+data age: number -> minimum 0 -> maximum 150
 "#;
 
     // Use that type inline in another spec (without commands)
     let test_spec = r#"
 spec test
-fact user_age: [age from age]
+data user_age: age from age
 rule is_adult: user_age >= 18
 "#;
 
@@ -27,12 +27,12 @@ rule is_adult: user_age >= 18
         .expect("add test spec");
     let now = DateTimeValue::now();
 
-    let mut facts = HashMap::new();
-    facts.insert("user_age".to_string(), "25".to_string());
+    let mut data = HashMap::new();
+    data.insert("user_age".to_string(), "25".to_string());
 
-    let response = engine.run("test", Some(&now), facts, false)?;
+    let response = engine.run("test", Some(&now), data, false)?;
 
-    // The fact should be evaluated correctly with the imported type
+    // The data should be evaluated correctly with the imported type
 
     // Check the rule result
     let is_adult_result = response
@@ -62,13 +62,13 @@ fn test_inline_type_import_with_constraints() -> Result<(), Error> {
     // Define a type in one spec
     let age_spec = r#"
 spec age
-type age: number -> minimum 0 -> maximum 150
+data age: number -> minimum 0 -> maximum 150
 "#;
 
     // Use that type inline with additional constraints
     let test_spec = r#"
 spec test
-fact user_age: [age from age -> maximum 120]
+data user_age: age from age -> maximum 120
 rule is_senior: user_age >= 65
 "#;
 
@@ -80,10 +80,10 @@ rule is_senior: user_age >= 65
         .expect("add test spec");
     let now = DateTimeValue::now();
 
-    let mut facts = HashMap::new();
-    facts.insert("user_age".to_string(), "70".to_string());
+    let mut data = HashMap::new();
+    data.insert("user_age".to_string(), "70".to_string());
 
-    let response = engine.run("test", Some(&now), facts, false)?;
+    let response = engine.run("test", Some(&now), data, false)?;
 
     // Check the rule result
     let is_senior_result = response

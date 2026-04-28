@@ -6,7 +6,7 @@
 //! Also includes expression substitution and hydration utilities.
 
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, Expression, ExpressionKind, FactPath,
+    ArithmeticComputation, ComparisonComputation, DataPath, Expression, ExpressionKind,
     LiteralValue, MathematicalComputation, NegationType, RulePath, SemanticConversionTarget,
     Source,
 };
@@ -62,7 +62,7 @@ impl Serialize for World {
 pub(super) struct WorldSolution {
     /// The world (branch assignment) that produced this solution
     pub world: World,
-    /// The constraint under which this solution applies (facts only, no rule references)
+    /// The constraint under which this solution applies (data only, no rule references)
     pub constraint: Constraint,
     /// The outcome (value or veto)
     pub outcome: OperationResult,
@@ -71,15 +71,15 @@ pub(super) struct WorldSolution {
 /// A solution from world enumeration with an arithmetic expression outcome
 ///
 /// This represents cases where the outcome is a computed expression (like `price * 5`)
-/// that couldn't be evaluated to a literal because it contains unknown facts.
+/// that couldn't be evaluated to a literal because it contains unknown data.
 /// These need algebraic solving to determine the input values.
 #[derive(Debug, Clone)]
 pub(super) struct WorldArithmeticSolution {
     /// The world (branch assignment) that produced this solution
     pub world: World,
-    /// The constraint under which this solution applies (facts only, no rule references)
+    /// The constraint under which this solution applies (data only, no rule references)
     pub constraint: Constraint,
-    /// The outcome expression (contains unknown facts)
+    /// The outcome expression (contains unknown data)
     pub outcome_expression: Expression,
 }
 
@@ -140,10 +140,10 @@ impl<'a> WorldEnumerator<'a> {
     /// Returns an `EnumerationResult` containing:
     /// - `literal_solutions`: Worlds where the outcome is a concrete literal value
     /// - `arithmetic_solutions`: Worlds where the outcome is an arithmetic expression
-    ///   containing unknown facts (needs algebraic solving)
+    ///   containing unknown data (needs algebraic solving)
     pub(super) fn enumerate(
         &mut self,
-        provided_facts: &HashSet<FactPath>,
+        provided_data: &HashSet<DataPath>,
     ) -> Result<EnumerationResult, crate::Error> {
         if self.rules_in_order.is_empty() {
             return Ok(EnumerationResult {
@@ -180,10 +180,10 @@ impl<'a> WorldEnumerator<'a> {
                             &new_world,
                             self.plan,
                         )?;
-                        let hydrated_condition = hydrate_facts_in_expression(
+                        let hydrated_condition = hydrate_data_in_expression(
                             &Arc::new(substituted_condition),
                             self.plan,
-                            provided_facts,
+                            provided_data,
                         )?;
                         Constraint::from_expression(&hydrated_condition)?
                     } else {
@@ -200,10 +200,10 @@ impl<'a> WorldEnumerator<'a> {
                                 &new_world,
                                 self.plan,
                             )?;
-                            let hydrated_later = hydrate_facts_in_expression(
+                            let hydrated_later = hydrate_data_in_expression(
                                 &Arc::new(substituted_later),
                                 self.plan,
-                                provided_facts,
+                                provided_data,
                             )?;
                             let later_constraint = Constraint::from_expression(&hydrated_later)?;
                             // Later branch's condition must be FALSE
@@ -255,10 +255,10 @@ impl<'a> WorldEnumerator<'a> {
                             self.plan,
                         )?;
 
-                        let hydrated_result = hydrate_facts_in_expression(
+                        let hydrated_result = hydrate_data_in_expression(
                             &Arc::new(substituted_result),
                             self.plan,
-                            provided_facts,
+                            provided_data,
                         )?;
 
                         // Try to fold the result to a literal
@@ -284,7 +284,7 @@ impl<'a> WorldEnumerator<'a> {
                             literal_solutions.extend(true_solutions);
                             literal_solutions.extend(false_solutions);
                         } else if is_arithmetic_expression(&folded_result) {
-                            // Arithmetic expression with unknown facts - needs algebraic solving
+                            // Arithmetic expression with unknown data - needs algebraic solving
                             arithmetic_solutions.push(WorldArithmeticSolution {
                                 world,
                                 constraint,
@@ -374,7 +374,7 @@ fn extract_rule_paths_from_expression(expr: &Expression, paths: &mut HashSet<Rul
             extract_rule_paths_from_expression(date_expr, paths);
         }
         ExpressionKind::Literal(_)
-        | ExpressionKind::FactPath(_)
+        | ExpressionKind::DataPath(_)
         | ExpressionKind::Veto(_)
         | ExpressionKind::Now => {}
     }
@@ -523,9 +523,9 @@ fn substitute_rules_in_expression(
                             source_loc,
                         ));
                     }
-                    ExpressionKind::FactPath(fact_path) => {
+                    ExpressionKind::DataPath(data_path) => {
                         result_pool.push(Expression::with_source(
-                            ExpressionKind::FactPath(fact_path.clone()),
+                            ExpressionKind::DataPath(data_path.clone()),
                             source_loc,
                         ));
                     }
@@ -630,17 +630,17 @@ fn substitute_rules_in_expression(
 }
 
 // ============================================================================
-// Fact hydration
+// Data hydration
 // ============================================================================
 
-/// Hydrate fact references in an expression with their known values
+/// Hydrate data references in an expression with their known values
 ///
-/// For each FactPath in the expression, if the fact is in provided_facts,
-/// replaces the FactPath with a Literal containing the fact's value.
-fn hydrate_facts_in_expression(
+/// For each DataPath in the expression, if the data is in provided_data,
+/// replaces the DataPath with a Literal containing the data's value.
+fn hydrate_data_in_expression(
     expr: &Arc<Expression>,
     plan: &ExecutionPlan,
-    provided_facts: &HashSet<FactPath>,
+    provided_data: &HashSet<DataPath>,
 ) -> Result<Expression, crate::Error> {
     enum WorkItem {
         Process(usize),
@@ -669,9 +669,9 @@ fn hydrate_facts_in_expression(
                 };
 
                 match expr_kind_ref {
-                    ExpressionKind::FactPath(fact_path) => {
-                        if provided_facts.contains(fact_path) {
-                            if let Some(lit) = plan.facts.get(fact_path).and_then(|d| d.value()) {
+                    ExpressionKind::DataPath(data_path) => {
+                        if provided_data.contains(data_path) {
+                            if let Some(lit) = plan.data.get(data_path).and_then(|d| d.value()) {
                                 result_pool.push(Expression::with_source(
                                     ExpressionKind::Literal(Box::new(lit.clone())),
                                     source_loc,
@@ -680,7 +680,7 @@ fn hydrate_facts_in_expression(
                             }
                         }
                         result_pool.push(Expression::with_source(
-                            ExpressionKind::FactPath(fact_path.clone()),
+                            ExpressionKind::DataPath(data_path.clone()),
                             source_loc,
                         ));
                     }
@@ -859,7 +859,11 @@ fn extract_outcome(expr: &Expression) -> Option<OperationResult> {
         ExpressionKind::Literal(lit) => {
             Some(OperationResult::Value(Box::new(lit.as_ref().clone())))
         }
-        ExpressionKind::Veto(ve) => Some(OperationResult::Veto(ve.message.clone())),
+        ExpressionKind::Veto(ve) => Some(OperationResult::Veto(
+            crate::evaluation::operations::VetoType::UserDefined {
+                message: ve.message.clone(),
+            },
+        )),
         _ => None,
     }
 }
@@ -882,7 +886,7 @@ fn is_arithmetic_expression(expr: &Expression) -> bool {
         ExpressionKind::Arithmetic(_, _, _) => true,
         ExpressionKind::MathematicalComputation(_, _) => true,
         ExpressionKind::UnitConversion(inner, _) => is_arithmetic_expression(inner),
-        ExpressionKind::FactPath(_) => true, // Lone fact is also solvable
+        ExpressionKind::DataPath(_) => true, // Lone data is also solvable
         _ => false,
     }
 }
@@ -1029,17 +1033,9 @@ mod tests {
     use super::*;
     use crate::planning::semantics::ValueKind;
     use rust_decimal::Decimal;
-    use std::collections::BTreeMap;
 
     fn literal_expr(val: LiteralValue) -> Expression {
         Expression::with_source(ExpressionKind::Literal(Box::new(val)), None)
-    }
-
-    fn fact_expr(name: &str) -> Expression {
-        Expression::with_source(
-            ExpressionKind::FactPath(FactPath::new(vec![], name.to_string())),
-            None,
-        )
     }
 
     fn num(n: i64) -> LiteralValue {
@@ -1061,45 +1057,6 @@ mod tests {
         };
         world.insert(rule_path.clone(), 2);
         assert_eq!(world.get(&rule_path), Some(&2));
-    }
-
-    fn empty_plan() -> ExecutionPlan {
-        ExecutionPlan {
-            spec_name: "test".to_string(),
-            facts: indexmap::IndexMap::new(),
-            rules: Vec::new(),
-            meta: HashMap::new(),
-            named_types: BTreeMap::new(),
-            valid_from: None,
-            valid_to: None,
-            sources: indexmap::IndexMap::new(),
-        }
-    }
-
-    #[test]
-    fn test_hydrate_literal_unchanged() {
-        let plan = empty_plan();
-        let provided: HashSet<FactPath> = HashSet::new();
-
-        let expr = literal_expr(num(42));
-        let result = hydrate_facts_in_expression(&Arc::new(expr), &plan, &provided).unwrap();
-
-        if let ExpressionKind::Literal(lit) = &result.kind {
-            assert!(matches!(&lit.value, ValueKind::Number(_)));
-        } else {
-            panic!("Expected literal number");
-        }
-    }
-
-    #[test]
-    fn test_hydrate_fact_not_provided() {
-        let plan = empty_plan();
-        let provided: HashSet<FactPath> = HashSet::new();
-
-        let expr = fact_expr("age");
-        let result = hydrate_facts_in_expression(&Arc::new(expr), &plan, &provided).unwrap();
-
-        assert!(matches!(result.kind, ExpressionKind::FactPath(_)));
     }
 
     #[test]

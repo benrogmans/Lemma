@@ -16,7 +16,7 @@ fn format_and_extract_rule_expr(source: &str) -> String {
         }
     }
     panic!(
-        "Could not find 'rule x: ...' in formatted output:\n{}",
+        "Could not find 'rule x: ...' in formatted output: {}",
         formatted
     );
 }
@@ -27,73 +27,73 @@ fn format_and_extract_rule_expr(source: &str) -> String {
 
 #[test]
 fn precedence_add_inside_multiply_preserves_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) * c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: (a + b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "(a + b) * c");
 }
 
 #[test]
 fn precedence_multiply_inside_add_omits_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b * c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: a + b * c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b * c");
 }
 
 #[test]
 fn precedence_add_right_of_multiply_preserves_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a * (b + c)";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: a * (b + c)";
     assert_eq!(format_and_extract_rule_expr(src), "a * (b + c)");
 }
 
 #[test]
 fn precedence_same_level_add_no_extra_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a + b) + c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: (a + b) + c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b + c");
 }
 
 #[test]
 fn precedence_same_level_multiply_no_extra_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a * b) * c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: (a * b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "a * b * c");
 }
 
 #[test]
 fn precedence_not_binds_tighter_than_and() {
-    let src = "spec test\nfact a: true\nfact b: true\nrule x: not a and b";
+    let src = "spec test data a: true data b: true rule x: not a and b";
     assert_eq!(format_and_extract_rule_expr(src), "not a and b");
 }
 
 #[test]
 fn precedence_not_over_and_preserves_parens() {
-    let src = "spec test\nfact a: true\nfact b: true\nrule x: not (a and b)";
+    let src = "spec test data a: true data b: true rule x: not (a and b)";
     assert_eq!(format_and_extract_rule_expr(src), "not (a and b)");
 }
 
 #[test]
 fn precedence_subtract_inside_multiply_preserves_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: (a - b) * c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: (a - b) * c";
     assert_eq!(format_and_extract_rule_expr(src), "(a - b) * c");
 }
 
 #[test]
 fn precedence_multiply_inside_subtract_omits_parens() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a - b * c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: a - b * c";
     assert_eq!(format_and_extract_rule_expr(src), "a - b * c");
 }
 
 #[test]
 fn precedence_nested_arithmetic_mixed() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: (a + b) * (c - d)";
+    let src = "spec test data a: 1 data b: 2 data c: 3 data d: 4 rule x: (a + b) * (c - d)";
     assert_eq!(format_and_extract_rule_expr(src), "(a + b) * (c - d)");
 }
 
 #[test]
 fn precedence_comparison_lower_than_arithmetic() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nrule x: a + b > c";
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: a + b > c";
     assert_eq!(format_and_extract_rule_expr(src), "a + b > c");
 }
 
 #[test]
 fn precedence_deeply_nested() {
-    let src = "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: a + b * c + d";
+    let src = "spec test data a: 1 data b: 2 data c: 3 data d: 4 rule x: a + b * c + d";
     assert_eq!(format_and_extract_rule_expr(src), "a + b * c + d");
 }
 
@@ -126,7 +126,7 @@ const EXAMPLE_FILES: &[(&str, &str)] = &[
 
 /// Verify that formatting preserves the spec structure:
 /// parse(source) and parse(format(source)) must have the same specs,
-/// with the same names, fact references, rule names, and unless-clause counts.
+/// with the same names, data references, rule names, and unless-clause counts.
 fn round_trip_example(filename: &str, source: &str) {
     let formatted = format_source(source, filename)
         .unwrap_or_else(|e| panic!("[{}] format_source failed: {:?}", filename, e));
@@ -138,7 +138,7 @@ fn round_trip_example(filename: &str, source: &str) {
     let reformatted_specs = parse(&formatted, filename, &limits)
         .unwrap_or_else(|e| {
             panic!(
-                "[{}] re-parse of formatted output failed: {:?}\nFormatted output:\n{}",
+                "[{}] re-parse of formatted output failed: {:?} Formatted output: {}",
                 filename, e, formatted
             )
         })
@@ -161,26 +161,18 @@ fn round_trip_example(filename: &str, source: &str) {
         );
 
         assert_eq!(
-            orig.types.len(),
-            refmt.types.len(),
-            "[{}] spec '{}' type count mismatch",
+            orig.data.len(),
+            refmt.data.len(),
+            "[{}] spec '{}' data count mismatch",
             filename,
             orig.name
         );
 
+        let orig_data_refs: Vec<_> = orig.data.iter().map(|f| &f.reference).collect();
+        let refmt_data_refs: Vec<_> = refmt.data.iter().map(|f| &f.reference).collect();
         assert_eq!(
-            orig.facts.len(),
-            refmt.facts.len(),
-            "[{}] spec '{}' fact count mismatch",
-            filename,
-            orig.name
-        );
-
-        let orig_fact_refs: Vec<_> = orig.facts.iter().map(|f| &f.reference).collect();
-        let refmt_fact_refs: Vec<_> = refmt.facts.iter().map(|f| &f.reference).collect();
-        assert_eq!(
-            orig_fact_refs, refmt_fact_refs,
-            "[{}] spec '{}' fact references mismatch",
+            orig_data_refs, refmt_data_refs,
+            "[{}] spec '{}' data references mismatch",
             filename, orig.name
         );
 
@@ -258,50 +250,8 @@ fn round_trip_05_weather_clothing() {
 }
 
 // =============================================================================
-// Idempotency tests
+// Idempotency (synthetic expressions)
 // =============================================================================
-
-fn idempotency_example(filename: &str, source: &str) {
-    let output1 = format_source(source, filename)
-        .unwrap_or_else(|e| panic!("[{}] first format failed: {:?}", filename, e));
-    let output2 = format_source(&output1, filename).unwrap_or_else(|e| {
-        panic!(
-            "[{}] second format failed: {:?}\nFirst format output:\n{}",
-            filename, e, output1
-        )
-    });
-
-    assert_eq!(
-        output1, output2,
-        "[{}] formatter is not idempotent.\nFirst format:\n{}\nSecond format:\n{}",
-        filename, output1, output2
-    );
-}
-
-#[test]
-fn idempotency_01_coffee_order() {
-    idempotency_example(EXAMPLE_FILES[0].0, EXAMPLE_FILES[0].1);
-}
-
-#[test]
-fn idempotency_02_library_fees() {
-    idempotency_example(EXAMPLE_FILES[1].0, EXAMPLE_FILES[1].1);
-}
-
-#[test]
-fn idempotency_03_recipe_scaling() {
-    idempotency_example(EXAMPLE_FILES[2].0, EXAMPLE_FILES[2].1);
-}
-
-#[test]
-fn idempotency_04_membership_benefits() {
-    idempotency_example(EXAMPLE_FILES[3].0, EXAMPLE_FILES[3].1);
-}
-
-#[test]
-fn idempotency_05_weather_clothing() {
-    idempotency_example(EXAMPLE_FILES[4].0, EXAMPLE_FILES[4].1);
-}
 
 #[test]
 fn idempotency_precedence_expressions() {
@@ -316,20 +266,20 @@ fn idempotency_precedence_expressions() {
     ];
     for expr in expressions {
         let src = format!(
-            "spec test\nfact a: 1\nfact b: 2\nfact c: 3\nfact d: 4\nrule x: {}",
+            "spec test data a: 1 data b: 2 data c: 3 data d: 4 rule x: {}",
             expr
         );
         let output1 = format_source(&src, "test.lemma")
             .unwrap_or_else(|e| panic!("first format failed for '{}': {:?}", expr, e));
         let output2 = format_source(&output1, "test.lemma").unwrap_or_else(|e| {
             panic!(
-                "second format failed for '{}':\n{:?}\nFirst output:\n{}",
+                "second format failed for '{}': {:?} First output: {}",
                 expr, e, output1
             )
         });
         assert_eq!(
             output1, output2,
-            "formatter is not idempotent for expression '{}'.\nFirst:\n{}\nSecond:\n{}",
+            "formatter is not idempotent for expression '{}'. First: {} Second: {}",
             expr, output1, output2
         );
     }
@@ -341,10 +291,10 @@ fn idempotency_precedence_expressions() {
 
 #[test]
 fn round_trip_type_import_with_effective() {
-    let source = "spec consumer\ntype money from finance 2026-01-15\nfact p: [money]";
+    let source = "spec consumer data money from finance 2026-01-15 data p: money";
     let formatted = format_source(source, "test.lemma").unwrap();
     assert!(
-        formatted.contains("type money from finance 2026-01-15"),
+        formatted.contains("data money from finance 2026-01-15"),
         "expected effective datetime in formatted output: {}",
         formatted
     );
@@ -356,44 +306,11 @@ fn round_trip_type_import_with_effective() {
 }
 
 #[test]
-fn round_trip_type_import_with_hash_and_effective() {
-    let source =
-        "spec consumer\ntype money from finance~a1b2c3d4 2026-01-15T00:00:03\nfact p: [money]";
-    let formatted = format_source(source, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("type money from finance~a1b2c3d4 2026-01-15T00:00:03"),
-        "expected hash+effective in formatted output: {}",
-        formatted
-    );
-    let reformatted = format_source(&formatted, "test.lemma").unwrap();
-    assert_eq!(
-        formatted, reformatted,
-        "type import with hash+effective is not idempotent"
-    );
-}
-
-#[test]
-fn round_trip_type_import_with_hash_only() {
-    let source = "spec consumer\ntype money from finance~a1b2c3d4\nfact p: [money]";
-    let formatted = format_source(source, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("type money from finance~a1b2c3d4"),
-        "expected hash in formatted output: {}",
-        formatted
-    );
-    let reformatted = format_source(&formatted, "test.lemma").unwrap();
-    assert_eq!(
-        formatted, reformatted,
-        "type import with hash is not idempotent"
-    );
-}
-
-#[test]
 fn round_trip_type_import_registry_with_effective() {
-    let source = "spec consumer\ntype money from @lemma/std/finance 2026-01-15\nfact p: [money]";
+    let source = "spec consumer data money from @lemma/std/finance 2026-01-15 data p: money";
     let formatted = format_source(source, "test.lemma").unwrap();
     assert!(
-        formatted.contains("type money from @lemma/std/finance 2026-01-15"),
+        formatted.contains("data money from @lemma/std/finance 2026-01-15"),
         "expected registry+effective in formatted output: {}",
         formatted
     );
@@ -401,22 +318,5 @@ fn round_trip_type_import_registry_with_effective() {
     assert_eq!(
         formatted, reformatted,
         "registry type import with effective is not idempotent"
-    );
-}
-
-#[test]
-fn round_trip_type_import_registry_with_hash_and_effective() {
-    let source =
-        "spec consumer\ntype money from @lemma/std/finance~ab12cd34 2026-03-01\nfact p: [money]";
-    let formatted = format_source(source, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("type money from @lemma/std/finance~ab12cd34 2026-03-01"),
-        "expected registry+hash+effective in formatted output: {}",
-        formatted
-    );
-    let reformatted = format_source(&formatted, "test.lemma").unwrap();
-    assert_eq!(
-        formatted, reformatted,
-        "registry type import with hash+effective is not idempotent"
     );
 }

@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn span_to_range_single_line() {
-        let text = "spec test\nfact x: 10";
+        let text = "spec test\ndata x: 10";
         let range = span_to_range(text, 9, 20);
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn span_to_range_multiline() {
-        let text = "spec test\nfact x: 10\nrule y: 20";
+        let text = "spec test\ndata x: 10\nrule y: 20";
         let range = span_to_range(text, 9, 32);
         assert_eq!(range.start.line, 1);
         assert_eq!(range.start.character, 0);
@@ -216,7 +216,7 @@ mod tests {
         let error2 =
             Error::resource_limit_exceeded("limit_b", "50", "75", "fix b", None, None, None);
         let diagnostics =
-            errors_to_diagnostics(&[error1, error2], "spec test\nfact x: 10", "test.lemma");
+            errors_to_diagnostics(&[error1, error2], "spec test\ndata x: 10", "test.lemma");
         assert_eq!(diagnostics.len(), 2);
     }
 

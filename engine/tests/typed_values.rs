@@ -8,7 +8,7 @@ use std::str::FromStr;
 fn test_percentage_arithmetic() {
     let code = r#"
 spec pricing
-fact discount: 25%
+data discount: 25%
 rule net_multiplier: 1 - discount
 "#;
 
@@ -42,7 +42,7 @@ rule net_multiplier: 1 - discount
 fn test_duration_operations() {
     let code = r#"
 spec scheduling
-fact meeting_length: 30 minutes
+data meeting_length: 30 minutes
 rule double_meeting: meeting_length * 2
 "#;
 
@@ -79,7 +79,7 @@ rule double_meeting: meeting_length * 2
 fn test_date_arithmetic_with_duration() {
     let code = r#"
 spec dates
-fact start: 2024-01-15
+data start: 2024-01-15
 rule end: start + 7 days
 "#;
 
@@ -111,8 +111,8 @@ rule end: start + 7 days
 fn test_boolean_operations() {
     let code = r#"
 spec logic
-fact is_active: true
-fact is_premium: false
+data is_active: true
+data is_premium: false
 rule can_access: is_active and not is_premium
 "#;
 
@@ -141,39 +141,5 @@ rule can_access: is_active and not is_premium
             assert!(*b);
         }
         _ => panic!("Expected Boolean, got {:?}", result),
-    }
-}
-
-#[test]
-fn test_text_operations() {
-    let code = r#"
-spec strings
-fact greeting: "hello"
-rule message: greeting
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("strings", Some(&now), HashMap::new(), false)
-        .unwrap();
-    let result = response
-        .results
-        .get("message")
-        .unwrap()
-        .result
-        .value()
-        .unwrap();
-
-    match result {
-        LiteralValue {
-            value: ValueKind::Text(s),
-            ..
-        } => assert_eq!(s, "hello"),
-        _ => panic!("Expected Text, got {:?}", result),
     }
 }

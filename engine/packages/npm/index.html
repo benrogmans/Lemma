@@ -121,50 +121,50 @@
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         }
 
-        /* --- Fact input rows --- */
+        /* --- Data input rows --- */
 
-        .facts-grid {
+        .data-grid {
             display: grid;
             grid-template-columns: 1fr;
             gap: 10px;
         }
 
-        .fact-row {
+        .data-row {
             display: grid;
             grid-template-columns: 220px 1fr;
             gap: 10px;
             align-items: center;
         }
 
-        .fact-row .label {
+        .data-row .label {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 13px;
             color: #111;
         }
 
-        .fact-row .label .required {
+        .data-row .label .required {
             color: #dc3545;
             font-weight: 700;
             margin-left: 6px;
         }
 
-        .fact-row .input-group {
+        .data-row .input-group {
             display: flex;
             gap: 8px;
             align-items: center;
         }
 
-        .fact-row select,
-        .fact-row input {
+        .data-row select,
+        .data-row input {
             width: 100%;
         }
 
-        .fact-row input[type="checkbox"] {
+        .data-row input[type="checkbox"] {
             width: auto;
             transform: translateY(1px);
         }
 
-        .fact-help {
+        .data-help {
             grid-column: 2 / 3;
             color: #666;
             font-size: 12px;
@@ -258,11 +258,11 @@
         /* --- Responsive --- */
 
         @media (max-width: 740px) {
-            .fact-row {
+            .data-row {
                 grid-template-columns: 1fr;
             }
 
-            .fact-help {
+            .data-help {
                 grid-column: 1 / 2;
                 margin-top: -2px;
             }
@@ -316,7 +316,7 @@
         const state = {
             specs: [],
             schemas: {},
-            factValues: {},
+            dataValues: {},
             evalResults: {},
         };
 
@@ -363,28 +363,28 @@
             return entry ? entry.name : key;
         }
 
-        function factValuesStorageKey(specName) {
+        function dataValuesStorageKey(specName) {
             return 'lemma_playground:spec:' + specName;
         }
 
-        function persistFactValues(specName) {
+        function persistDataValues(specName) {
             try {
-                localStorage.setItem(factValuesStorageKey(specName), JSON.stringify(state.factValues[specName] || {}));
+                localStorage.setItem(dataValuesStorageKey(specName), JSON.stringify(state.dataValues[specName] || {}));
             } catch (_) { }
         }
 
-        function loadFactValuesFromStorage(specName) {
-            if (state.factValues[specName] && Object.keys(state.factValues[specName]).length > 0) return;
+        function loadDataValuesFromStorage(specName) {
+            if (state.dataValues[specName] && Object.keys(state.dataValues[specName]).length > 0) return;
             try {
-                const raw = localStorage.getItem(factValuesStorageKey(specName));
+                const raw = localStorage.getItem(dataValuesStorageKey(specName));
                 if (raw) {
                     const parsed = JSON.parse(raw);
                     if (parsed && typeof parsed === 'object') {
-                        state.factValues[specName] = parsed;
+                        state.dataValues[specName] = parsed;
                     }
                 }
             } catch (_) { }
-            if (!state.factValues[specName]) state.factValues[specName] = {};
+            if (!state.dataValues[specName]) state.dataValues[specName] = {};
         }
 
         // ---------------------------------------------------------------
@@ -407,61 +407,51 @@
         // ---------------------------------------------------------------
 
         function specKind(schemaType) {
-            const specifications = schemaType && schemaType.specifications;
-            if (!specifications || typeof specifications !== 'object') return null;
-            const keys = Object.keys(specifications);
-            if (keys.length !== 1) return null;
-            return keys[0];
-        }
-
-        function specData(schemaType) {
-            const kind = specKind(schemaType);
-            if (kind === null) return null;
-            return schemaType.specifications[kind] || null;
+            return (schemaType && typeof schemaType.kind === 'string') ? schemaType.kind : null;
         }
 
         function storedFromLiteralValue(lit, kind) {
             if (!lit || typeof lit !== 'object' || !lit.value) return undefined;
             const v = lit.value;
             const display = typeof lit.display_value === 'string' ? lit.display_value : '';
-            if (kind === 'Boolean') return v.boolean === true;
-            if (kind === 'Number') return v.number != null ? String(v.number) : display;
-            if (kind === 'Text') return typeof v.text === 'string' ? v.text : display;
-            if (kind === 'Scale' && Array.isArray(v.scale)) return { amount: String(v.scale[0] ?? ''), unit: String(v.scale[1] ?? '') };
-            if (kind === 'Ratio') {
+            if (kind === 'boolean') return v.boolean === true;
+            if (kind === 'number') return v.number != null ? String(v.number) : display;
+            if (kind === 'text') return typeof v.text === 'string' ? v.text : display;
+            if (kind === 'scale' && Array.isArray(v.scale)) return { amount: String(v.scale[0] ?? ''), unit: String(v.scale[1] ?? '') };
+            if (kind === 'ratio') {
                 if (Array.isArray(v.ratio)) return { amount: String(v.ratio[0] ?? ''), unit: (v.ratio[1] != null ? String(v.ratio[1]) : 'ratio') };
                 return { amount: display, unit: 'ratio' };
             }
-            if (kind === 'Date' || kind === 'Time' || kind === 'Duration') return display;
+            if (kind === 'date' || kind === 'time' || kind === 'duration') return display;
             return display;
         }
 
         // ---------------------------------------------------------------
-        // Fact value serialization (state -> engine JSON)
+        // Data value serialization (state -> engine JSON)
         // ---------------------------------------------------------------
 
-        function serializeFactValues(specName) {
-            const values = state.factValues[specName];
+        function serializeDataValues(specName) {
+            const values = state.dataValues[specName];
             if (!values) return {};
 
             const schema = state.schemas[specName];
-            if (!schema || !Array.isArray(schema.facts)) return {};
+            if (!schema || !Array.isArray(schema.data)) return {};
 
             const result = {};
 
-            for (const fact of schema.facts) {
-                const name = fact.name;
+            for (const data of schema.data) {
+                const name = data.name;
                 const entry = values[name];
                 if (entry === undefined || entry === null) continue;
 
-                const kind = specKind(fact.schemaType);
+                const kind = specKind(data.schemaType);
 
-                if (kind === 'Boolean') {
+                if (kind === 'boolean') {
                     result[name] = entry === true;
                     continue;
                 }
 
-                if (kind === 'Scale') {
+                if (kind === 'scale') {
                     if (typeof entry === 'object' && entry !== null) {
                         const amount = (entry.amount || '').toString().trim();
                         const unit = (entry.unit || '').toString().trim();
@@ -475,7 +465,7 @@
                     continue;
                 }
 
-                if (kind === 'Ratio') {
+                if (kind === 'ratio') {
                     if (typeof entry === 'object' && entry !== null) {
                         const amount = (entry.amount || '').toString().trim();
                         const unit = (entry.unit || '').toString().trim();
@@ -491,7 +481,7 @@
                     continue;
                 }
 
-                if (kind === 'Number') {
+                if (kind === 'number') {
                     const stringValue = entry.toString().trim();
                     if (stringValue === '') continue;
                     result[name] = Number(stringValue);
@@ -508,18 +498,20 @@
         }
 
         // ---------------------------------------------------------------
-        // DOM: Build a fact input row
+        // DOM: Build a data input row
         // ---------------------------------------------------------------
 
-        function buildFactRow(specName, fact) {
-            const name = fact.name;
-            const schemaType = fact.schemaType;
+        function buildDataRow(specName, data) {
+            const name = data.name;
+            const schemaType = data.schemaType;
             const kind = specKind(schemaType);
-            const spec = specData(schemaType);
+            // Kind-specific fields now live directly on the type object
+            // (`minimum`, `maximum`, `units`, `options`, `help`, ...).
+            const spec = schemaType;
 
             const row = document.createElement('div');
-            row.className = 'fact-row';
-            row.dataset.factName = name;
+            row.className = 'data-row';
+            row.dataset.dataName = name;
             row.dataset.typeKind = kind || 'unknown';
 
             const label = document.createElement('div');
@@ -530,35 +522,32 @@
             const inputGroup = document.createElement('div');
             inputGroup.className = 'input-group';
 
-            if (!state.factValues[specName]) {
-                state.factValues[specName] = {};
+            if (!state.dataValues[specName]) {
+                state.dataValues[specName] = {};
             }
-            let currentValue = state.factValues[specName][name];
-            if (currentValue === undefined && fact.defaultValue) {
-                const fromSpec = storedFromLiteralValue(fact.defaultValue, kind);
+            let currentValue = state.dataValues[specName][name];
+            if (currentValue === undefined && data.defaultValue) {
+                const fromSpec = storedFromLiteralValue(data.defaultValue, kind);
                 if (fromSpec !== undefined) {
-                    state.factValues[specName][name] = fromSpec;
+                    state.dataValues[specName][name] = fromSpec;
                     currentValue = fromSpec;
-                    persistFactValues(specName);
+                    persistDataValues(specName);
                 }
             }
 
-            if (kind === 'Boolean') {
+            if (kind === 'boolean') {
                 const checkbox = document.createElement('input');
                 checkbox.type = 'checkbox';
                 if (currentValue === true) {
                     checkbox.checked = true;
-                } else if (currentValue === undefined && spec && typeof spec.default === 'boolean') {
-                    checkbox.checked = spec.default;
-                    state.factValues[specName][name] = spec.default;
                 }
                 checkbox.addEventListener('change', function () {
-                    state.factValues[specName][name] = this.checked;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name] = this.checked;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(checkbox);
 
-            } else if (kind === 'Text') {
+            } else if (kind === 'text') {
                 const options = (spec && Array.isArray(spec.options)) ? spec.options : [];
 
                 if (options.length > 0) {
@@ -575,13 +564,10 @@
                     }
                     if (typeof currentValue === 'string') {
                         select.value = currentValue;
-                    } else if (currentValue === undefined && spec && typeof spec.default === 'string') {
-                        select.value = spec.default;
-                        state.factValues[specName][name] = spec.default;
                     }
                     select.addEventListener('change', function () {
-                        state.factValues[specName][name] = this.value;
-                        persistFactValues(specName);
+                        state.dataValues[specName][name] = this.value;
+                        persistDataValues(specName);
                     });
                     inputGroup.appendChild(select);
                 } else {
@@ -590,37 +576,29 @@
                     input.placeholder = 'text';
                     if (typeof currentValue === 'string') {
                         input.value = currentValue;
-                    } else if (currentValue === undefined && spec && typeof spec.default === 'string') {
-                        input.value = spec.default;
-                        state.factValues[specName][name] = spec.default;
                     }
                     input.addEventListener('input', function () {
-                        state.factValues[specName][name] = this.value;
-                        persistFactValues(specName);
+                        state.dataValues[specName][name] = this.value;
+                        persistDataValues(specName);
                     });
                     inputGroup.appendChild(input);
                 }
 
-            } else if (kind === 'Number') {
+            } else if (kind === 'number') {
                 const input = document.createElement('input');
                 input.type = 'number';
                 input.step = 'any';
                 input.placeholder = 'number';
                 if (currentValue !== undefined && currentValue !== null) {
                     input.value = currentValue.toString();
-                } else if (currentValue === undefined && spec && spec.default !== null && spec.default !== undefined) {
-                    const def = spec.default;
-                    const defStr = typeof def === 'number' ? String(def) : String(def);
-                    input.value = defStr;
-                    state.factValues[specName][name] = defStr;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[specName][name] = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name] = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(input);
 
-            } else if (kind === 'Scale') {
+            } else if (kind === 'scale') {
                 const units = (spec && Array.isArray(spec.units)) ? spec.units : [];
                 const storedEntry = (typeof currentValue === 'object' && currentValue !== null) ? currentValue : {};
 
@@ -632,16 +610,16 @@
                     amountInput.value = storedEntry.amount;
                 }
 
-                if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
-                    state.factValues[specName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || '' };
+                if (!state.dataValues[specName][name] || typeof state.dataValues[specName][name] !== 'object') {
+                    state.dataValues[specName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || '' };
                 }
 
                 amountInput.addEventListener('input', function () {
-                    if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
-                        state.factValues[specName][name] = { amount: '', unit: '' };
+                    if (!state.dataValues[specName][name] || typeof state.dataValues[specName][name] !== 'object') {
+                        state.dataValues[specName][name] = { amount: '', unit: '' };
                     }
-                    state.factValues[specName][name].amount = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name].amount = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(amountInput);
 
@@ -657,15 +635,15 @@
                         ? storedEntry.unit
                         : units[0].name;
                     unitSelect.value = defaultUnit;
-                    state.factValues[specName][name].unit = defaultUnit;
+                    state.dataValues[specName][name].unit = defaultUnit;
                     unitSelect.addEventListener('change', function () {
-                        state.factValues[specName][name].unit = this.value;
-                        persistFactValues(specName);
+                        state.dataValues[specName][name].unit = this.value;
+                        persistDataValues(specName);
                     });
                     inputGroup.appendChild(unitSelect);
                 }
 
-            } else if (kind === 'Ratio') {
+            } else if (kind === 'ratio') {
                 const units = (spec && Array.isArray(spec.units)) ? spec.units : [];
                 const storedEntry = (typeof currentValue === 'object' && currentValue !== null) ? currentValue : {};
 
@@ -677,16 +655,16 @@
                     amountInput.value = storedEntry.amount;
                 }
 
-                if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
-                    state.factValues[specName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || 'ratio' };
+                if (!state.dataValues[specName][name] || typeof state.dataValues[specName][name] !== 'object') {
+                    state.dataValues[specName][name] = { amount: storedEntry.amount || '', unit: storedEntry.unit || 'ratio' };
                 }
 
                 amountInput.addEventListener('input', function () {
-                    if (!state.factValues[specName][name] || typeof state.factValues[specName][name] !== 'object') {
-                        state.factValues[specName][name] = { amount: '', unit: 'ratio' };
+                    if (!state.dataValues[specName][name] || typeof state.dataValues[specName][name] !== 'object') {
+                        state.dataValues[specName][name] = { amount: '', unit: 'ratio' };
                     }
-                    state.factValues[specName][name].amount = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name].amount = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(amountInput);
 
@@ -705,12 +683,12 @@
                     unitSelect.value = storedEntry.unit;
                 }
                 unitSelect.addEventListener('change', function () {
-                    state.factValues[specName][name].unit = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name].unit = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(unitSelect);
 
-            } else if (kind === 'Date') {
+            } else if (kind === 'date') {
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.placeholder = 'YYYY-MM-DD';
@@ -718,12 +696,12 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[specName][name] = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name] = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(input);
 
-            } else if (kind === 'Time') {
+            } else if (kind === 'time') {
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.placeholder = 'HH:MM[:SS]';
@@ -731,12 +709,12 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[specName][name] = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name] = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(input);
 
-            } else if (kind === 'Duration') {
+            } else if (kind === 'duration') {
                 const input = document.createElement('input');
                 input.type = 'text';
                 input.placeholder = 'e.g. 5 days';
@@ -744,8 +722,8 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[specName][name] = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name] = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(input);
 
@@ -757,8 +735,8 @@
                     input.value = currentValue;
                 }
                 input.addEventListener('input', function () {
-                    state.factValues[specName][name] = this.value;
-                    persistFactValues(specName);
+                    state.dataValues[specName][name] = this.value;
+                    persistDataValues(specName);
                 });
                 inputGroup.appendChild(input);
             }
@@ -768,7 +746,7 @@
             const helpText = (spec && typeof spec.help === 'string' && spec.help.trim() !== '') ? spec.help.trim() : null;
             if (helpText !== null) {
                 const helpElement = document.createElement('div');
-                helpElement.className = 'fact-help';
+                helpElement.className = 'data-help';
                 helpElement.textContent = helpText;
                 row.appendChild(helpElement);
             }
@@ -857,9 +835,9 @@
         // ---------------------------------------------------------------
 
         function buildSpecCard(key) {
-            loadFactValuesFromStorage(key);
+            loadDataValuesFromStorage(key);
             const schema = state.schemas[key];
-            const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
+            const data = (schema && Array.isArray(schema.data)) ? schema.data : [];
 
             const card = document.createElement('div');
             card.className = 'spec-card';
@@ -869,12 +847,12 @@
             heading.textContent = 'spec ' + key;
             card.appendChild(heading);
 
-            const factsGrid = document.createElement('div');
-            factsGrid.className = 'facts-grid';
-            for (const fact of facts) {
-                factsGrid.appendChild(buildFactRow(key, fact));
+            const dataGrid = document.createElement('div');
+            dataGrid.className = 'data-grid';
+            for (const data of data) {
+                dataGrid.appendChild(buildDataRow(key, data));
             }
-            card.appendChild(factsGrid);
+            card.appendChild(dataGrid);
 
             const actions = document.createElement('div');
             actions.className = 'spec-actions';
@@ -907,42 +885,42 @@
         // Schema diffing and DOM patching
         // ---------------------------------------------------------------
 
-        function patchFactInputs(specName, card, oldFacts, newFacts) {
-            const factsGrid = card.querySelector('.facts-grid');
-            if (!factsGrid) return;
+        function patchDataInputs(specName, card, oldData, newData) {
+            const dataGrid = card.querySelector('.data-grid');
+            if (!dataGrid) return;
 
             const oldByName = {};
-            for (const fact of oldFacts) {
-                oldByName[fact.name] = fact;
+            for (const data of oldData) {
+                oldByName[data.name] = data;
             }
 
             const newByName = {};
-            for (const fact of newFacts) {
-                newByName[fact.name] = fact;
+            for (const data of newData) {
+                newByName[data.name] = data;
             }
 
-            // Remove facts that no longer exist
+            // Remove data that no longer exist
             for (const oldName of Object.keys(oldByName)) {
                 if (!newByName[oldName]) {
-                    const existingRow = factsGrid.querySelector('[data-fact-name="' + CSS.escape(oldName) + '"]');
+                    const existingRow = dataGrid.querySelector('[data-data-name="' + CSS.escape(oldName) + '"]');
                     if (existingRow) {
-                        factsGrid.removeChild(existingRow);
+                        dataGrid.removeChild(existingRow);
                     }
-                    if (state.factValues[specName]) {
-                        delete state.factValues[specName][oldName];
+                    if (state.dataValues[specName]) {
+                        delete state.dataValues[specName][oldName];
                     }
                 }
             }
 
-            // Add or update facts
-            for (const newFact of newFacts) {
-                const name = newFact.name;
-                const oldFact = oldByName[name];
-                const existingRow = factsGrid.querySelector('[data-fact-name="' + CSS.escape(name) + '"]');
+            // Add or update data
+            for (const newData of newData) {
+                const name = newData.name;
+                const oldData = oldByName[name];
+                const existingRow = dataGrid.querySelector('[data-data-name="' + CSS.escape(name) + '"]');
 
-                if (oldFact && existingRow) {
-                    const oldKind = specKind(oldFact.schemaType);
-                    const newKind = specKind(newFact.schemaType);
+                if (oldData && existingRow) {
+                    const oldKind = specKind(oldData.schemaType);
+                    const newKind = specKind(newData.schemaType);
 
                     if (oldKind === newKind) {
                         // Same type kind: keep the existing input and its state value
@@ -950,23 +928,23 @@
                     }
 
                     // Different type kind: replace input, delete old state value
-                    if (state.factValues[specName]) {
-                        delete state.factValues[specName][name];
+                    if (state.dataValues[specName]) {
+                        delete state.dataValues[specName][name];
                     }
-                    const newRow = buildFactRow(specName, newFact);
-                    factsGrid.replaceChild(newRow, existingRow);
+                    const newRow = buildDataRow(specName, newData);
+                    dataGrid.replaceChild(newRow, existingRow);
                 } else if (!existingRow) {
-                    // New fact: add input
-                    const newRow = buildFactRow(specName, newFact);
-                    factsGrid.appendChild(newRow);
+                    // New data: add input
+                    const newRow = buildDataRow(specName, newData);
+                    dataGrid.appendChild(newRow);
                 }
             }
 
             // Reorder rows to match new schema order
-            for (const newFact of newFacts) {
-                const row = factsGrid.querySelector('[data-fact-name="' + CSS.escape(newFact.name) + '"]');
+            for (const newData of newData) {
+                const row = dataGrid.querySelector('[data-data-name="' + CSS.escape(newData.name) + '"]');
                 if (row) {
-                    factsGrid.appendChild(row);
+                    dataGrid.appendChild(row);
                 }
             }
         }
@@ -1028,19 +1006,18 @@
         }
 
         function normalizeSchema(schema) {
-            const facts = [];
-            if (schema.facts && typeof schema.facts === 'object') {
-                for (const [name, tuple] of Object.entries(schema.facts)) {
-                    const [lemmaType, defaultValue] = Array.isArray(tuple) ? tuple : [tuple, null];
-                    facts.push({
+            const data = [];
+            if (schema.data && typeof schema.data === 'object') {
+                for (const [name, entry] of Object.entries(schema.data)) {
+                    data.push({
                         name: name,
                         required: true,
-                        schemaType: lemmaType,
-                        defaultValue: defaultValue
+                        schemaType: entry.type,
+                        defaultValue: entry.default != null ? entry.default : null
                     });
                 }
             }
-            return { spec: schema.spec, facts: facts, rules: schema.rules };
+            return { spec: schema.spec, data: data, rules: schema.rules };
         }
 
         async function loadCode() {
@@ -1082,7 +1059,7 @@
             for (const oldK of oldKeys) {
                 if (newKeys.indexOf(oldK) === -1) {
                     delete state.schemas[oldK];
-                    delete state.factValues[oldK];
+                    delete state.dataValues[oldK];
                     delete state.evalResults[oldK];
                 }
             }
@@ -1092,9 +1069,7 @@
             for (const entry of specEntries) {
                 const key = specKey(entry);
                 try {
-                    const effective = entry.effective_from ? datetimeValueToString(entry.effective_from) : null;
-                    const schemaObj = engine.schema(entry.name, effective);
-                    state.schemas[key] = normalizeSchema(schemaObj);
+                    state.schemas[key] = normalizeSchema(entry.schema);
                 } catch (e) { console.error('show failed for', key, e); }
             }
 
@@ -1129,10 +1104,10 @@
 
             const name = specName(key);
             const effective = specEffective(key) || '1';
-            const factsObj = serializeFactValues(key);
+            const dataObj = serializeDataValues(key);
 
             try {
-                const response = engine.run(name, [], factsObj, effective);
+                const response = engine.run(name, [], dataObj, effective);
                 state.evalResults[key] = { success: true, response: response };
             } catch (e) {
                 state.evalResults[key] = { success: false, error: e.message || String(e) };
@@ -1173,23 +1148,23 @@
         }
 
         function clearInputs(specName) {
-            state.factValues[specName] = {};
-            persistFactValues(specName);
+            state.dataValues[specName] = {};
+            persistDataValues(specName);
             delete state.evalResults[specName];
 
             const detail = document.getElementById('spec-detail');
             const card = detail.querySelector('.spec-card');
             if (!card) return;
 
-            const factsGrid = card.querySelector('.facts-grid');
-            if (!factsGrid) return;
+            const dataGrid = card.querySelector('.data-grid');
+            if (!dataGrid) return;
 
             const schema = state.schemas[specName];
-            const facts = (schema && Array.isArray(schema.facts)) ? schema.facts : [];
+            const data = (schema && Array.isArray(schema.data)) ? schema.data : [];
 
-            factsGrid.textContent = '';
-            for (const fact of facts) {
-                factsGrid.appendChild(buildFactRow(specName, fact));
+            dataGrid.textContent = '';
+            for (const data of data) {
+                dataGrid.appendChild(buildDataRow(specName, data));
             }
 
             const resultsContainer = card.querySelector('.results-container');
@@ -1254,9 +1229,9 @@
                             -> unit eur 1
                             -> unit usd 1.19
 
-                            fact price     : [money]
-                            fact quantity  : [number -> minimum 0]
-                            fact is_member : false
+                            data price     : [money]
+                            data quantity  : number -> minimum 0]
+                            data is_member : false
 
                             rule discount:
                             0%

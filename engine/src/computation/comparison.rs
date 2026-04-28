@@ -76,8 +76,11 @@ pub fn comparison_operation(
                     )),
                     _ => unreachable!("BUG: scale unit conversion returned non-scale value"),
                 },
-                OperationResult::Veto(msg) => {
-                    unreachable!("BUG: scale unit conversion vetoed unexpectedly: {:?}", msg)
+                OperationResult::Veto(reason) => {
+                    unreachable!(
+                        "BUG: scale unit conversion vetoed unexpectedly: {:?}",
+                        reason
+                    )
                 }
             }
         }

@@ -190,22 +190,22 @@ mod imp {
             let mut tools = vec![
                 serde_json::json!({
                     "name": "evaluate",
-                "description": "Evaluate rules in a Lemma spec. Returns the result and a step-by-step reasoning trace showing which facts were used and which conditions matched. Omit 'rule' to evaluate all rules.",
+                "description": "Evaluate rules in a Lemma spec. Returns the result and a step-by-step reasoning trace showing which data were used and which conditions matched. Omit 'rule' to evaluate all rules.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Spec id: name or name~hash (8 hex) to pin content, e.g. pricing or pricing~a1b2c3d4"
+                                        "description": "Spec name, e.g. pricing"
                             },
                             "rule": {
                                 "type": "string",
                                 "description": "Optional: name of a specific rule to evaluate. Omit to evaluate all rules."
                             },
-                            "facts": {
+                            "data": {
                                 "type": "array",
                                 "items": { "type": "string" },
-                                "description": "Optional fact values as 'name=value' (e.g. ['price=100', 'quantity=5'])",
+                                "description": "Optional data values as 'name=value' (e.g. ['price=100', 'quantity=5'])",
                                 "default": []
                             },
                             "effective": {
@@ -218,7 +218,7 @@ mod imp {
                 }),
                 serde_json::json!({
                     "name": "list_specs",
-                    "description": "List all loaded Lemma specs with their schemas: fact names, types, defaults, and rule names with return types.",
+                    "description": "List all loaded Lemma specs with their schemas: data names, types, defaults, and rule names with return types.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -231,13 +231,13 @@ mod imp {
                 }),
                 serde_json::json!({
                     "name": "get_schema",
-                "description": "Get a spec's schema: its facts (inputs with types, constraints, and defaults) and rules (outputs with types). Optionally scope to a specific rule to see only the facts it needs. Use this before calling evaluate to know which facts to provide.",
+                "description": "Get a spec's schema: its data (inputs with types, constraints, and defaults) and rules (outputs with types). Optionally scope to a specific rule to see only the data it needs. Use this before calling evaluate to know which data to provide.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Spec id: name or name~hash (8 hex), e.g. pricing or pricing~a1b2c3d4"
+                                        "description": "Spec name, e.g. pricing"
                                     },
                                     "rule": {
                                         "type": "string",
@@ -435,17 +435,17 @@ mod imp {
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let spec_id = args["spec"]
+            let spec_set_id = args["spec"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
-            if spec_id.trim().is_empty() {
+            if spec_set_id.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Spec id cannot be empty".to_string(),
+                    "SpecSet id cannot be empty".to_string(),
                 ));
             }
 
-            let (_base_name, _) = lemma::parse_spec_id(spec_id.trim())
+            lemma::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
@@ -453,12 +453,12 @@ mod imp {
                 _ => Vec::new(),
             };
 
-            let facts: Vec<&str> = args["facts"]
+            let data: Vec<&str> = args["data"]
                 .as_array()
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
 
-            let fact_values: std::collections::HashMap<String, String> = facts
+            let data_values: std::collections::HashMap<String, String> = data
                 .iter()
                 .filter_map(|s| {
                     s.split_once('=')
@@ -469,7 +469,7 @@ mod imp {
             let now = resolve_effective(args)?;
             let mut response = self
                 .engine
-                .run(spec_id.trim(), Some(&now), fact_values, false)
+                .run(spec_set_id.trim(), Some(&now), data_values, false)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -478,18 +478,9 @@ mod imp {
                 response.filter_rules(&rule_names);
             }
 
-            let hash = self
-                .engine
-                .get_plan(spec_id.trim(), Some(&now))
-                .map_err(|e| {
-                    McpError::internal_error(format!("BUG: run succeeded but get_plan failed: {e}"))
-                })?
-                .plan_hash();
-
             let mut output = String::new();
-            output.push_str(&format!("spec: {}\n", spec_id.trim()));
+            output.push_str(&format!("spec: {}\n", spec_set_id.trim()));
             output.push_str(&format!("effective: {}\n", now));
-            output.push_str(&format!("hash: {}\n", hash));
             output.push('\n');
 
             for result in response.results.values() {
@@ -498,12 +489,8 @@ mod imp {
                     lemma::OperationResult::Value(value) => {
                         output.push_str(&value.to_string());
                     }
-                    lemma::OperationResult::Veto(msg) => {
-                        if let Some(veto) = msg {
-                            output.push_str(&format!("veto ({})", veto));
-                        } else {
-                            output.push_str("veto");
-                        }
+                    lemma::OperationResult::Veto(reason) => {
+                        output.push_str(&format!("veto ({})", reason));
                     }
                 }
                 output.push('\n');
@@ -520,7 +507,7 @@ mod imp {
 
             info!(
                 "Evaluated spec '{}' with {} results",
-                spec_id.trim(),
+                spec_set_id.trim(),
                 response.results.len()
             );
 
@@ -566,27 +553,27 @@ mod imp {
         }
 
         fn tool_get_schema(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let spec_id = args["spec"]
+            let spec_set_id = args["spec"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
-            if spec_id.trim().is_empty() {
+            if spec_set_id.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Spec id cannot be empty".to_string(),
+                    "SpecSet id cannot be empty".to_string(),
                 ));
             }
 
-            lemma::parse_spec_id(spec_id.trim())
+            lemma::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
             let plan = self
                 .engine
-                .get_plan(spec_id.trim(), Some(&now))
+                .get_plan(spec_set_id.trim(), Some(&now))
                 .map_err(|_| {
                     McpError::invalid_params(format!(
                         "Spec '{}' not found. Use list_specs to see available specs.",
-                        spec_id.trim()
+                        spec_set_id.trim()
                     ))
                 })?;
 
@@ -605,17 +592,17 @@ mod imp {
             };
 
             let scope = if rule_names.is_empty() {
-                format!("{} (all rules)", spec_id.trim())
+                format!("{} (all rules)", spec_set_id.trim())
             } else {
-                format!("{}.{}", spec_id.trim(), rule_names[0])
+                format!("{}.{}", spec_set_id.trim(), rule_names[0])
             };
 
             let output = format!("Schema for {}:\n\n{}", scope, schema);
 
             info!(
-                "Returned schema for '{}' ({} facts, {} rules)",
+                "Returned schema for '{}' ({} data, {} rules)",
                 scope,
-                schema.facts.len(),
+                schema.data.len(),
                 schema.rules.len()
             );
 
@@ -633,12 +620,12 @@ mod imp {
     /// Linearise an explanation tree into plain-English reasoning steps.
     fn format_explanation_steps(explanation: &lemma::explanation::Explanation) -> String {
         let mut steps = Vec::new();
-        let mut seen_facts = std::collections::HashSet::new();
+        let mut seen_data = std::collections::HashSet::new();
         let mut seen_rules = std::collections::HashSet::new();
         walk_explanation_node(
             &explanation.tree,
             &mut steps,
-            &mut seen_facts,
+            &mut seen_data,
             &mut seen_rules,
         );
         steps.join("\n")
@@ -647,7 +634,7 @@ mod imp {
     fn walk_explanation_node(
         node: &lemma::explanation::ExplanationNode,
         steps: &mut Vec<String>,
-        seen_facts: &mut std::collections::HashSet<String>,
+        seen_data: &mut std::collections::HashSet<String>,
         seen_rules: &mut std::collections::HashSet<String>,
     ) {
         use lemma::explanation::{ExplanationNode, ValueSource};
@@ -655,11 +642,11 @@ mod imp {
         match node {
             ExplanationNode::Value {
                 value,
-                source: ValueSource::Fact { fact_ref },
+                source: ValueSource::Data { data_ref },
                 ..
             } => {
-                let key = fact_ref.to_string();
-                if seen_facts.insert(key.clone()) {
+                let key = data_ref.to_string();
+                if seen_data.insert(key.clone()) {
                     steps.push(format!("{}: {}", key, value));
                 }
             }
@@ -676,19 +663,14 @@ mod imp {
                 if !seen_rules.insert(key) {
                     return;
                 }
-                walk_explanation_node(expansion, steps, seen_facts, seen_rules);
+                walk_explanation_node(expansion, steps, seen_data, seen_rules);
                 match result {
                     lemma::OperationResult::Value(v) => {
                         steps.push(format!("{}: {}", rule_path.rule, v));
                     }
-                    lemma::OperationResult::Veto(msg) => match msg {
-                        Some(reason) => {
-                            steps.push(format!("{}: veto ({})", rule_path.rule, reason));
-                        }
-                        None => {
-                            steps.push(format!("{}: veto", rule_path.rule));
-                        }
-                    },
+                    lemma::OperationResult::Veto(reason) => {
+                        steps.push(format!("{}: veto ({})", rule_path.rule, reason));
+                    }
                 }
             }
 
@@ -700,7 +682,7 @@ mod imp {
                 ..
             } => {
                 for op in operands {
-                    walk_explanation_node(op, steps, seen_facts, seen_rules);
+                    walk_explanation_node(op, steps, seen_data, seen_rules);
                 }
                 let expr = if original_expression != expression && !original_expression.is_empty() {
                     original_expression.as_str()
@@ -715,12 +697,12 @@ mod imp {
                 non_matched,
                 ..
             } => {
-                // Collect facts from all branch conditions first
+                // Collect data from all branch conditions first
                 for branch in non_matched {
-                    collect_branch_facts(&branch.condition, steps, seen_facts);
+                    collect_branch_data(&branch.condition, steps, seen_data);
                 }
                 if let Some(cond) = &matched.condition {
-                    collect_branch_facts(cond, steps, seen_facts);
+                    collect_branch_data(cond, steps, seen_data);
                 }
 
                 // Emit non-matched branch decisions
@@ -746,7 +728,7 @@ mod imp {
                 }
 
                 // Walk the matched result
-                walk_explanation_node(&matched.result, steps, seen_facts, seen_rules);
+                walk_explanation_node(&matched.result, steps, seen_data, seen_rules);
             }
 
             ExplanationNode::Condition {
@@ -757,7 +739,7 @@ mod imp {
                 ..
             } => {
                 for op in operands {
-                    walk_explanation_node(op, steps, seen_facts, seen_rules);
+                    walk_explanation_node(op, steps, seen_data, seen_rules);
                 }
                 let expr = if original_expression != expression && !original_expression.is_empty() {
                     original_expression.as_str()
@@ -775,34 +757,34 @@ mod imp {
         }
     }
 
-    /// Walk an explanation node collecting only fact values (no reasoning steps).
-    /// Used to gather facts from branch conditions before emitting branch decisions.
-    fn collect_branch_facts(
+    /// Walk an explanation node collecting only data values (no reasoning steps).
+    /// Used to gather data from branch conditions before emitting branch decisions.
+    fn collect_branch_data(
         node: &lemma::explanation::ExplanationNode,
         steps: &mut Vec<String>,
-        seen_facts: &mut std::collections::HashSet<String>,
+        seen_data: &mut std::collections::HashSet<String>,
     ) {
         use lemma::explanation::{ExplanationNode, ValueSource};
 
         match node {
             ExplanationNode::Value {
                 value,
-                source: ValueSource::Fact { fact_ref },
+                source: ValueSource::Data { data_ref },
                 ..
             } => {
-                let key = fact_ref.to_string();
-                if seen_facts.insert(key.clone()) {
+                let key = data_ref.to_string();
+                if seen_data.insert(key.clone()) {
                     steps.push(format!("{}: {}", key, value));
                 }
             }
             ExplanationNode::Condition { operands, .. }
             | ExplanationNode::Computation { operands, .. } => {
                 for op in operands {
-                    collect_branch_facts(op, steps, seen_facts);
+                    collect_branch_data(op, steps, seen_data);
                 }
             }
             ExplanationNode::RuleReference { expansion, .. } => {
-                collect_branch_facts(expansion, steps, seen_facts);
+                collect_branch_data(expansion, steps, seen_data);
             }
             ExplanationNode::Branches {
                 matched,
@@ -810,12 +792,12 @@ mod imp {
                 ..
             } => {
                 for b in non_matched {
-                    collect_branch_facts(&b.condition, steps, seen_facts);
+                    collect_branch_data(&b.condition, steps, seen_data);
                 }
                 if let Some(c) = &matched.condition {
-                    collect_branch_facts(c, steps, seen_facts);
+                    collect_branch_data(c, steps, seen_data);
                 }
-                collect_branch_facts(&matched.result, steps, seen_facts);
+                collect_branch_data(&matched.result, steps, seen_data);
             }
             _ => {}
         }
@@ -844,9 +826,9 @@ mod imp {
             }
             ExplanationNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
             ExplanationNode::Value {
-                source: ValueSource::Fact { fact_ref },
+                source: ValueSource::Data { data_ref },
                 ..
-            } => fact_ref.to_string(),
+            } => data_ref.to_string(),
             ExplanationNode::Value { value, .. } => value.to_string(),
             ExplanationNode::Branches { .. } => "branch".to_string(),
             ExplanationNode::Veto { message, .. } => {

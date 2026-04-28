@@ -1,5 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Bound, Domain, Engine, Error, FactPath, LiteralValue, Target, ValueKind};
+use lemma::{Bound, DataPath, Domain, Engine, Error, LiteralValue, Target, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 fn invert_unless_linear_addition() {
     let code = r#"
 spec t
-fact x: [number]
+data x: number
 rule r: 0
   unless x + 1 > 10 then veto "too much"
 "#;
@@ -21,14 +21,14 @@ rule r: 0
     let inv = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("too much".to_string())),
             HashMap::new(),
         )
         .unwrap();
 
-    let x = FactPath::local("x".to_string());
+    let x = DataPath::local("x".to_string());
     let nine = LiteralValue::number(Decimal::from(9));
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
@@ -51,7 +51,7 @@ rule r: 0
 fn invert_unless_linear_multiplication() {
     let code = r#"
 spec t
-fact x: [number]
+data x: number
 rule r: 0
   unless 2 * x <= 8 then veto "ok"
 "#;
@@ -65,14 +65,14 @@ rule r: 0
     let inv = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("ok".to_string())),
             HashMap::new(),
         )
         .unwrap();
 
-    let x = FactPath::local("x".to_string());
+    let x = DataPath::local("x".to_string());
     let four = LiteralValue::number(Decimal::from(4));
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
@@ -95,7 +95,7 @@ rule r: 0
 fn invert_unless_negative_coefficient_flips_inequality() {
     let code = r#"
 spec t
-fact x: [number]
+data x: number
 rule r: 0
   unless -2 * x > 4 then veto "neg"
 "#;
@@ -109,14 +109,14 @@ rule r: 0
     let inv = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("neg".to_string())),
             HashMap::new(),
         )
         .unwrap();
 
-    let x = FactPath::local("x".to_string());
+    let x = DataPath::local("x".to_string());
     let minus_two = LiteralValue::number(Decimal::from(-2));
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
@@ -139,8 +139,8 @@ rule r: 0
 fn invert_unless_scale_unit_conversion_wrapper() {
     let code = r#"
 spec t
-type money: scale -> unit eur 1.0 -> unit usd 1.18
-fact price: [money]
+data money: scale -> unit eur 1.0 -> unit usd 1.18
+data price: money
 rule r: 0
   unless (price in eur) > 100 eur then veto "too expensive"
 "#;
@@ -154,14 +154,14 @@ rule r: 0
     let inv = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("too expensive".to_string())),
             HashMap::new(),
         )
         .unwrap();
 
-    let price = FactPath::local("price".to_string());
+    let price = DataPath::local("price".to_string());
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
 
@@ -193,7 +193,7 @@ rule r: 0
 fn invert_unless_duration_unit_conversion_wrapper() {
     let code = r#"
 spec t
-fact d: [duration]
+data d: duration
 rule r: 0
   unless (d in hours) >= 2 hours then veto "long"
 "#;
@@ -207,14 +207,14 @@ rule r: 0
     let inv = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("long".to_string())),
             HashMap::new(),
         )
         .unwrap();
 
-    let d = FactPath::local("d".to_string());
+    let d = DataPath::local("d".to_string());
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
 
@@ -240,8 +240,8 @@ rule r: 0
 fn unsupported_comparison_shapes_return_inversion_error() {
     let code = r#"
 spec t
-fact x: [number]
-fact y: [number]
+data x: number
+data y: number
 rule r: 0
   unless x > y then veto "relational"
 "#;
@@ -255,7 +255,7 @@ rule r: 0
     let err = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("relational".to_string())),
             HashMap::new(),
@@ -269,7 +269,7 @@ rule r: 0
 fn non_linear_comparison_returns_inversion_error() {
     let code = r#"
 spec t
-fact x: [number]
+data x: number
 rule r: 0
   unless x * x > 4 then veto "nonlinear"
 "#;
@@ -283,7 +283,7 @@ rule r: 0
     let err = engine
         .invert(
             "t",
-            &now,
+            Some(&now),
             "r",
             Target::veto(Some("nonlinear".to_string())),
             HashMap::new(),

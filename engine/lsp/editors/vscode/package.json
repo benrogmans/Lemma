@@ -2,12 +2,12 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/benrogmans/lemma"
+    "url": "https://github.com/lemma/lemma"
   },
   "engines": {
     "vscode": "^1.74.0"

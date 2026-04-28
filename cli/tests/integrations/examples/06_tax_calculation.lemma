@@ -6,15 +6,14 @@ A real-world example demonstrating progressive tax brackets.
 This shows how Lemma can encode complex business rules clearly.
 """
 
-type filing_status_type: text
+data country       : "NL"
+data deductions    : number -> minimum 0
+data filing_status : text
   -> option "single"
   -> option "married"
   -> option "head_of_household"
-
-fact country       : "NL"
-fact deductions    : [number -> minimum 0]
-fact filing_status : [filing_status_type -> default "single"]
-fact income        : [number -> minimum 0]
+  -> default "single"
+data income        : number -> minimum 0
 
 rule taxable_income:
   income - deductions

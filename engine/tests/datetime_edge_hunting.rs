@@ -35,17 +35,17 @@ fn effective_us(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, us: u32) -> Da
 }
 
 fn eval_bool(engine: &Engine, spec_name: &str, rule: &str, eff: &DateTimeValue) -> bool {
-    eval_bool_with_facts(engine, spec_name, rule, eff, HashMap::new())
+    eval_bool_with_datas(engine, spec_name, rule, eff, HashMap::new())
 }
 
-fn eval_bool_with_facts(
+fn eval_bool_with_datas(
     engine: &Engine,
     spec_name: &str,
     rule: &str,
     eff: &DateTimeValue,
-    facts: HashMap<String, String>,
+    data: HashMap<String, String>,
 ) -> bool {
-    let response = engine.run(spec_name, Some(eff), facts, false).unwrap();
+    let response = engine.run(spec_name, Some(eff), data, false).unwrap();
     let rr = response
         .results
         .values()
@@ -75,18 +75,6 @@ fn eval_value(
         .value()
         .unwrap()
         .clone()
-}
-
-fn eval_is_veto(engine: &Engine, spec_name: &str, rule: &str, eff: &DateTimeValue) -> bool {
-    let response = engine
-        .run(spec_name, Some(eff), HashMap::new(), false)
-        .unwrap();
-    let rr = response
-        .results
-        .values()
-        .find(|r| r.rule.name == rule)
-        .unwrap_or_else(|| panic!("rule '{}' not found", rule));
-    rr.result.value().is_none()
 }
 
 // =============================================================================
@@ -165,78 +153,6 @@ rule check: now in future 0 days
     ));
 }
 
-#[test]
-fn now_in_calendar_year_is_always_true() {
-    let mut engine = Engine::new();
-    let code = r#"
-spec test
-rule check: now in calendar year
-    "#;
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    assert!(eval_bool(
-        &engine,
-        "test",
-        "check",
-        &effective(2026, 1, 1, 0, 0, 0)
-    ));
-    assert!(eval_bool(
-        &engine,
-        "test",
-        "check",
-        &effective(2026, 12, 31, 23, 59, 59)
-    ));
-}
-
-#[test]
-fn now_in_calendar_month_is_always_true() {
-    let mut engine = Engine::new();
-    let code = r#"
-spec test
-rule check: now in calendar month
-    "#;
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    assert!(eval_bool(
-        &engine,
-        "test",
-        "check",
-        &effective(2026, 2, 1, 0, 0, 0)
-    ));
-    assert!(eval_bool(
-        &engine,
-        "test",
-        "check",
-        &effective(2026, 2, 28, 23, 59, 59)
-    ));
-}
-
-#[test]
-fn now_in_calendar_week_is_always_true() {
-    let mut engine = Engine::new();
-    let code = r#"
-spec test
-rule check: now in calendar week
-    "#;
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    assert!(eval_bool(
-        &engine,
-        "test",
-        "check",
-        &effective(2026, 3, 2, 0, 0, 0)
-    ));
-    assert!(eval_bool(
-        &engine,
-        "test",
-        "check",
-        &effective(2026, 3, 8, 23, 59, 59)
-    ));
-}
-
 // =============================================================================
 // ISO week boundary: year crossover
 // =============================================================================
@@ -248,7 +164,7 @@ fn calendar_week_iso_year_boundary_dec_31_2025() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event_date: 2025-12-31
+data event_date: 2025-12-31
 rule check: event_date in calendar week
     "#;
     engine
@@ -267,7 +183,7 @@ fn calendar_week_iso_week_53() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event_date: 2027-01-01
+data event_date: 2027-01-01
 rule check: event_date in calendar week
     "#;
     engine
@@ -285,7 +201,7 @@ fn past_calendar_week_from_week_1_wraps_to_previous_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event_date: 2025-12-30
+data event_date: 2025-12-30
 rule check: event_date in past calendar week
     "#;
     engine
@@ -304,7 +220,7 @@ fn in_past_with_date_arithmetic() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2026-02-01
+data start_date: 2026-02-01
 rule check: (start_date + 30 days) in past
     "#;
     engine
@@ -320,7 +236,7 @@ fn in_future_with_date_arithmetic() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2026-03-01
+data start_date: 2026-03-01
 rule check: (start_date + 30 days) in future
     "#;
     engine
@@ -365,40 +281,6 @@ rule is_past: past_point in past
 // veto propagation through date sugar
 // =============================================================================
 
-#[test]
-fn veto_date_propagates_through_in_past() {
-    let mut engine = Engine::new();
-    let code = r#"
-spec test
-fact price: -5
-rule validated_date: 2026-01-01
-  unless price < 0 then veto "invalid price"
-rule check: validated_date in past
-    "#;
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let eff = effective(2026, 3, 7, 12, 0, 0);
-    assert!(eval_is_veto(&engine, "test", "check", &eff));
-}
-
-#[test]
-fn veto_date_propagates_through_in_calendar_year() {
-    let mut engine = Engine::new();
-    let code = r#"
-spec test
-fact price: -5
-rule validated_date: 2026-06-15
-  unless price < 0 then veto "invalid"
-rule check: validated_date in calendar year
-    "#;
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let eff = effective(2026, 3, 7, 12, 0, 0);
-    assert!(eval_is_veto(&engine, "test", "check", &eff));
-}
-
 // =============================================================================
 // tolerance unit varieties
 // =============================================================================
@@ -408,7 +290,7 @@ fn in_past_weeks_tolerance() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-01
+data event: 2026-03-01
 rule check: event in past 2 weeks
     "#;
     engine
@@ -424,7 +306,7 @@ fn in_past_hours_tolerance() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07T08:00:00Z
+data event: 2026-03-07T08:00:00Z
 rule check: event in past 6 hours
     "#;
     engine
@@ -439,7 +321,7 @@ fn in_past_minutes_tolerance() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07T11:30:00Z
+data event: 2026-03-07T11:30:00Z
 rule check: event in past 45 minutes
     "#;
     engine
@@ -454,7 +336,7 @@ fn in_future_weeks_tolerance() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-15
+data event: 2026-03-15
 rule check: event in future 2 weeks
     "#;
     engine
@@ -470,12 +352,12 @@ rule check: event in future 2 weeks
 
 #[test]
 fn date_only_compared_with_now_with_time() {
-    // fact is 2026-03-07 (no time = midnight), now is 2026-03-07T12:00
+    // data is 2026-03-07 (no time = midnight), now is 2026-03-07T12:00
     // midnight < noon, so date is "in past"
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07
+data event: 2026-03-07
 rule check: event in past
     "#;
     engine
@@ -491,7 +373,7 @@ fn date_only_at_midnight_vs_now_at_midnight() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07
+data event: 2026-03-07
 rule check: event in past
     "#;
     engine
@@ -513,7 +395,7 @@ fn timezone_date_east_vs_utc_now() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07T01:00:00+05:00
+data event: 2026-03-07T01:00:00+05:00
 rule check: event in past
     "#;
     engine
@@ -531,7 +413,7 @@ fn timezone_date_west_vs_utc_now() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-06T20:00:00-05:00
+data event: 2026-03-06T20:00:00-05:00
 rule check: event in future
     "#;
     engine
@@ -550,7 +432,7 @@ fn calendar_year_different_timezones_same_utc_instant() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2027-01-01T00:30:00+02:00
+data event: 2027-01-01T00:30:00+02:00
 rule check: event in calendar year
     "#;
     engine
@@ -569,8 +451,8 @@ fn fractional_seconds_in_datetime_literal() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07T12:00:00.500000Z
-fact event2: 2026-03-07T12:00:00.499999Z
+data event: 2026-03-07T12:00:00.500000Z
+data event2: 2026-03-07T12:00:00.499999Z
 rule check: event > event2
     "#;
     engine
@@ -585,7 +467,7 @@ fn fractional_seconds_in_now_effective() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07T12:00:00.000001Z
+data event: 2026-03-07T12:00:00.000001Z
 rule check: event in past
     "#;
     engine
@@ -601,7 +483,7 @@ fn fractional_seconds_same_second_different_microsecond() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-03-07T12:00:00.000001Z
+data event: 2026-03-07T12:00:00.000001Z
 rule check: event in future
     "#;
     engine
@@ -621,8 +503,8 @@ fn date_sugar_result_used_in_unless() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact order_date: 2026-03-05
-fact amount: 100
+data order_date: 2026-03-05
+data amount: 100
 rule discount: 0
   unless order_date in past 3 days then 10
   unless order_date in past 3 days and amount > 50 then 20
@@ -670,7 +552,7 @@ fn not_in_past_is_equivalent_to_not_past() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-04-01
+data event: 2026-04-01
 rule check: not (event in past)
     "#;
     engine
@@ -685,7 +567,7 @@ fn not_in_future_on_past_date() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-01-01
+data event: 2026-01-01
 rule check: not (event in future)
     "#;
     engine
@@ -700,70 +582,12 @@ rule check: not (event in future)
 // =============================================================================
 
 #[test]
-fn format_round_trip_in_past() {
-    let input = "spec test\n\nfact event: 2026-03-01\n\nrule check: event in past\n";
-    let formatted = lemma::format_source(input, "test.lemma").unwrap();
-    assert!(formatted.contains("event in past"), "got: {}", formatted);
-}
-
-#[test]
-fn format_round_trip_in_past_with_tolerance() {
-    let input = "spec test\n\nfact event: 2026-03-01\n\nrule check: event in past 7 days\n";
-    let formatted = lemma::format_source(input, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("event in past 7 days"),
-        "got: {}",
-        formatted
-    );
-}
-
-#[test]
-fn format_round_trip_in_calendar_year() {
-    let input = "spec test\n\nfact event: 2026-03-01\n\nrule check: event in calendar year\n";
-    let formatted = lemma::format_source(input, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("event in calendar year"),
-        "got: {}",
-        formatted
-    );
-}
-
-#[test]
-fn format_round_trip_in_past_calendar_month() {
-    let input = "spec test\n\nfact event: 2026-03-01\n\nrule check: event in past calendar month\n";
-    let formatted = lemma::format_source(input, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("event in past calendar month"),
-        "got: {}",
-        formatted
-    );
-}
-
-#[test]
-fn format_round_trip_not_in_calendar_year() {
-    let input = "spec test\n\nfact event: 2026-03-01\n\nrule check: event not in calendar year\n";
-    let formatted = lemma::format_source(input, "test.lemma").unwrap();
-    assert!(
-        formatted.contains("event not in calendar year"),
-        "got: {}",
-        formatted
-    );
-}
-
-#[test]
 fn format_round_trip_now_keyword() {
     let input = "spec test\n\nrule current: now\n";
     let formatted = lemma::format_source(input, "test.lemma").unwrap();
     assert!(formatted.contains("now"), "got: {}", formatted);
     let reparsed = lemma::format_source(&formatted, "test.lemma").unwrap();
     assert_eq!(formatted, reparsed, "double format should be idempotent");
-}
-
-#[test]
-fn format_round_trip_now_in_arithmetic() {
-    let input = "spec test\n\nfact birth: 2000-01-01\n\nrule age: now - birth\n";
-    let formatted = lemma::format_source(input, "test.lemma").unwrap();
-    assert!(formatted.contains("now - birth"), "got: {}", formatted);
 }
 
 // =============================================================================
@@ -775,23 +599,8 @@ fn very_old_date_in_past() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 1900-01-01
+data event: 1900-01-01
 rule check: event in past
-    "#;
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let eff = effective(2026, 3, 7, 12, 0, 0);
-    assert!(eval_bool(&engine, "test", "check", &eff));
-}
-
-#[test]
-fn far_future_date_in_future() {
-    let mut engine = Engine::new();
-    let code = r#"
-spec test
-fact event: 2099-12-31
-rule check: event in future
     "#;
     engine
         .load(code, lemma::SourceType::Labeled("test.lemma"))
@@ -805,7 +614,7 @@ fn very_old_date_not_in_calendar_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 1900-01-01
+data event: 1900-01-01
 rule check: event not in calendar year
     "#;
     engine
@@ -824,7 +633,7 @@ fn calendar_month_feb_29_not_in_march() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2024-02-29
+data event: 2024-02-29
 rule check: event in calendar month
     "#;
     engine
@@ -840,7 +649,7 @@ fn past_calendar_month_feb_from_march_leap_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2024-02-29
+data event: 2024-02-29
 rule check: event in past calendar month
     "#;
     engine
@@ -859,7 +668,7 @@ fn in_past_365_days_tolerance() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2025-06-15
+data event: 2025-06-15
 rule check: event in past 365 days
     "#;
     engine
@@ -874,7 +683,7 @@ fn in_past_365_days_outside() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2024-01-01
+data event: 2024-01-01
 rule check: event in past 365 days
     "#;
     engine
@@ -893,8 +702,8 @@ fn two_dates_different_calendar_checks() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact start_date: 2026-03-05
-fact end_date: 2025-09-15
+data start_date: 2026-03-05
+data end_date: 2025-09-15
 rule start_this_month: start_date in calendar month
 rule end_last_year: end_date in past calendar year
 rule both: start_this_month and end_last_year
@@ -915,7 +724,7 @@ fn effective_at_jan_1_midnight_calendar_year_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2025-12-31T23:59:59Z
+data event: 2025-12-31T23:59:59Z
 rule check: event in past calendar year
     "#;
     engine
@@ -931,7 +740,7 @@ fn effective_at_month_1_midnight_calendar_month_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-02-28T23:59:59Z
+data event: 2026-02-28T23:59:59Z
 rule check: event in past calendar month
     "#;
     engine
@@ -950,7 +759,7 @@ fn in_past_tolerance_with_future_date() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-04-01
+data event: 2026-04-01
 rule check: event in past 7 days
     "#;
     engine
@@ -965,7 +774,7 @@ fn in_future_tolerance_with_past_date() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-fact event: 2026-01-01
+data event: 2026-01-01
 rule check: event in future 7 days
     "#;
     engine

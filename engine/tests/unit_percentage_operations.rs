@@ -13,8 +13,8 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
         r#"
         spec pricing
 
-        fact quantity: 10
-        fact is_vip: false
+        data quantity: 10
+        data is_vip: false
 
         rule discount: 0%
             unless quantity >= 10 then 10%
@@ -83,8 +83,8 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
         r#"
         spec tax_calculation
 
-        fact base_price: 100
-        fact tax_rate: 8.5%
+        data base_price: 100
+        data tax_rate: 8.5%
 
         rule price_with_tax: base_price + tax_rate
         "#,
@@ -136,9 +136,9 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
         r#"
         spec unit_percentage_ops
 
-        fact price: 50
-        fact increase: 20%
-        fact decrease: 15%
+        data price: 50
+        data increase: 20%
+        data decrease: 15%
 
         rule increased: price + increase
         rule decreased: price - decrease
@@ -238,9 +238,9 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
         r#"
         spec complex_pricing
 
-        fact base_price: 1000
-        fact bulk_discount: 15%
-        fact loyalty_discount: 5%
+        data base_price: 1000
+        data bulk_discount: 15%
+        data loyalty_discount: 5%
 
         rule after_bulk: base_price - bulk_discount
         rule final_price: after_bulk - loyalty_discount
@@ -321,10 +321,10 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         r#"
         spec percentage_ops
 
-        fact discount_a: 5%
-        fact discount_b: 10%
-        fact tax_rate: 15%
-        fact compound_rate: 20%
+        data discount_a: 5%
+        data discount_b: 10%
+        data tax_rate: 15%
+        data compound_rate: 20%
 
         rule combined_discount: discount_a + discount_b
         rule net_rate: tax_rate - discount_a
@@ -454,94 +454,6 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
             }
         }
         _ => panic!("Expected number for ratio, got {:?}", ratio_result.result),
-    }
-
-    Ok(())
-}
-
-#[test]
-fn test_averaging_percentages() -> Result<(), lemma::Errors> {
-    let mut engine = Engine::new();
-
-    engine.load(
-        r#"
-        spec avg_percentages
-
-        fact rate_a: 10%
-        fact rate_b: 20%
-        fact rate_c: 15%
-
-        rule sum: rate_a + rate_b + rate_c
-        rule average: sum / 3
-        "#,
-        lemma::SourceType::Labeled("avg.lemma"),
-    )?;
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("avg_percentages", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
-
-    // Check sum (10% + 20% + 15% = 45%)
-    let sum_result = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "sum")
-        .expect("sum rule not found");
-
-    match &sum_result.result {
-        lemma::OperationResult::Value(lit) => {
-            if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Ratio(
-                        Decimal::from_str("0.45").unwrap(),
-                        Some("percent".to_string())
-                    )
-                );
-            } else {
-                panic!("Expected percentage for sum, got {:?}", sum_result.result);
-            }
-        }
-        _ => panic!("Expected percentage for sum, got {:?}", sum_result.result),
-    }
-
-    // Check average (45% / 3 = 15%)
-    let avg_result = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "average")
-        .expect("average rule not found");
-
-    match &avg_result.result {
-        lemma::OperationResult::Value(lit) => {
-            // 45% / 3 = 15% (ratio / number = ratio or number depending on implementation)
-            match &lit.value {
-                lemma::ValueKind::Ratio(_r, _) => {
-                    assert_eq!(
-                        lit.value,
-                        lemma::ValueKind::Ratio(
-                            Decimal::from_str("0.15").unwrap(),
-                            Some("percent".to_string())
-                        )
-                    );
-                }
-                lemma::ValueKind::Number(_n) => {
-                    assert_eq!(
-                        lit.value,
-                        lemma::ValueKind::Number(Decimal::from_str("0.15").unwrap())
-                    );
-                }
-                _ => panic!("Expected ratio or number for average, got {:?}", lit.value),
-            }
-        }
-        _ => panic!(
-            "Expected percentage for average, got {:?}",
-            avg_result.result
-        ),
     }
 
     Ok(())

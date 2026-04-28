@@ -91,7 +91,7 @@ jobs:
             Or use WebAssembly in your browser:
 
             ```bash
-            npm install @benrogmans/lemma-engine@${{ needs.detect-version-changes.outputs.version }}
+            npm install @lemmabase/lemma-engine@${{ needs.detect-version-changes.outputs.version }}
             ```
 
             Or use the Elixir package:

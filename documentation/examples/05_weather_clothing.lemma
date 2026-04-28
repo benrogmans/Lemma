@@ -6,26 +6,25 @@ Shows how rules can make decisions based on conditions.
 Simple logic that's easy to understand.
 """
 
-type temperature: scale
+data temperature: scale
   -> unit celsius 1.0
   -> minimum -70 celsius
   -> maximum 70 celsius
 
-type clothing_style: text
+data clothing_style: text
   -> option "none"
   -> option "light"
   -> option "warm"
   -> option "very_warm"
 
-type comfort: text
+data comfort: text
   -> option "comfortable"
   -> option "cold"
   -> option "hot"
   -> option "uncomfortable"
 
-fact is_raining  : [boolean]
-fact temperature : [temperature]
-fact wind_speed  : [number -> minimum 0]
+data is_raining  : boolean
+data wind_speed  : number -> minimum 0
 
 rule clothing_layer:
   "light"

@@ -58,6 +58,9 @@ struct Parser {
     depth_tracker: DepthTracker,
     expression_count: usize,
     max_expression_count: usize,
+    max_spec_name_length: usize,
+    max_data_name_length: usize,
+    max_rule_name_length: usize,
 }
 
 impl Parser {
@@ -67,6 +70,9 @@ impl Parser {
             depth_tracker: DepthTracker::with_max_depth(limits.max_expression_depth),
             expression_count: 0,
             max_expression_count: limits.max_expression_count,
+            max_spec_name_length: crate::limits::MAX_SPEC_NAME_LENGTH,
+            max_data_name_length: crate::limits::MAX_DATA_NAME_LENGTH,
+            max_rule_name_length: crate::limits::MAX_RULE_NAME_LENGTH,
         }
     }
 
@@ -121,27 +127,15 @@ impl Parser {
         )
     }
 
-    /// Parse `~ HASH` where HASH is 8 alphanumeric chars. Optional — returns
-    /// `Ok(None)` when the next token is not `~`. Uses raw scanning after the
-    /// tilde to bypass tokenization (avoids scientific-notation mis-lexing of
-    /// hashes like `7e20848b`).
-    fn try_parse_hash_pin(&mut self) -> Result<Option<String>, Error> {
-        if !self.at(&TokenKind::Tilde)? {
-            return Ok(None);
+    fn parse_spec_ref_trailing_effective(&mut self) -> Result<Option<DateTimeValue>, Error> {
+        let mut effective = None;
+        if self.at(&TokenKind::NumberLit)? {
+            let peeked = self.peek()?;
+            if peeked.text.len() == 4 && peeked.text.chars().all(|c| c.is_ascii_digit()) {
+                effective = self.try_parse_effective_from()?;
+            }
         }
-        let tilde_span = self.next()?.span;
-        let hash = self.lexer.scan_raw_alphanumeric()?;
-        if hash.len() != 8 {
-            return Err(Error::parsing(
-                format!(
-                    "Expected an 8-character alphanumeric plan hash after '~', found '{}'",
-                    hash
-                ),
-                self.make_source(tilde_span),
-                None::<String>,
-            ));
-        }
-        Ok(Some(hash))
+        Ok(effective)
     }
 
     fn make_source(&self, span: Span) -> Source {
@@ -199,7 +193,13 @@ impl Parser {
         let spec_token = self.expect(&TokenKind::Spec)?;
         let start_line = spec_token.span.line;
 
-        let (name, _name_span) = self.parse_spec_name()?;
+        let (name, name_span) = self.parse_spec_name()?;
+        crate::limits::check_max_length(
+            &name,
+            self.max_spec_name_length,
+            "spec",
+            Some(Source::new(self.lexer.attribute(), name_span)),
+        )?;
 
         let effective_from = self.try_parse_effective_from()?;
 
@@ -209,7 +209,7 @@ impl Parser {
         let mut spec = LemmaSpec::new(name.clone())
             .with_attribute(attribute)
             .with_start_line(start_line);
-        spec.effective_from = effective_from;
+        spec.effective_from = crate::parsing::ast::EffectiveDate::from_option(effective_from);
 
         if let Some(commentary_text) = commentary {
             spec = spec.set_commentary(commentary_text);
@@ -218,29 +218,36 @@ impl Parser {
         // First pass: collect type definitions
         // We need to peek and handle type definitions first, but since we consume tokens
         // linearly, we'll collect all items in one pass.
-        let mut facts = Vec::new();
+        let mut data = Vec::new();
         let mut rules = Vec::new();
-        let mut types = Vec::new();
         let mut meta_fields = Vec::new();
 
         loop {
             let peek_kind = self.peek()?.kind.clone();
             match peek_kind {
-                TokenKind::Fact => {
-                    let fact = self.parse_fact()?;
-                    facts.push(fact);
+                TokenKind::Data => {
+                    let datum = self.parse_data()?;
+                    data.push(datum);
                 }
                 TokenKind::Rule => {
                     let rule = self.parse_rule()?;
                     rules.push(rule);
                 }
                 TokenKind::Type => {
-                    let type_def = self.parse_type_def()?;
-                    types.push(type_def);
+                    let token = self.next()?;
+                    return Err(self.error_at_token_with_suggestion(
+                        &token,
+                        "'type' has been removed. Types are now declared as data",
+                        "Use 'data' instead of 'type', e.g. 'data age: number -> minimum 0'",
+                    ));
                 }
                 TokenKind::Meta => {
                     let meta = self.parse_meta()?;
                     meta_fields.push(meta);
+                }
+                TokenKind::With => {
+                    let with_datas = self.parse_with_statement()?;
+                    data.extend(with_datas);
                 }
                 TokenKind::Spec | TokenKind::Eof => break,
                 _ => {
@@ -248,7 +255,7 @@ impl Parser {
                     return Err(self.error_at_token_with_suggestion(
                         &token,
                         format!(
-                            "Expected 'fact', 'rule', 'type', 'meta', or a new 'spec', found '{}'",
+                            "Expected 'data', 'rule', 'meta', 'with', or a new 'spec', found '{}'",
                             token.text
                         ),
                         "Check the spelling or add the appropriate keyword",
@@ -257,11 +264,8 @@ impl Parser {
             }
         }
 
-        for type_def in types {
-            spec = spec.add_type(type_def);
-        }
-        for fact in facts {
-            spec = spec.add_fact(fact);
+        for data in data {
+            spec = spec.add_data(data);
         }
         for rule in rules {
             spec = spec.add_rule(rule);
@@ -447,32 +451,78 @@ impl Parser {
     }
 
     // ========================================================================
-    // Fact parsing
+    // Data parsing
     // ========================================================================
 
-    fn parse_fact(&mut self) -> Result<LemmaFact, Error> {
-        let fact_token = self.expect(&TokenKind::Fact)?;
-        let start_span = fact_token.span.clone();
+    fn parse_data(&mut self) -> Result<LemmaData, Error> {
+        let data_token = self.expect(&TokenKind::Data)?;
+        let start_span = data_token.span.clone();
 
-        // Parse fact reference (single segment = definition, multi-segment = binding)
         let reference = self.parse_reference()?;
+        for segment in reference
+            .segments
+            .iter()
+            .chain(std::iter::once(&reference.name))
+        {
+            crate::limits::check_max_length(
+                segment,
+                self.max_data_name_length,
+                "data",
+                Some(Source::new(self.lexer.attribute(), start_span.clone())),
+            )?;
+        }
+
+        // `data X from <spec>` -- type import (replaces old `type X from <spec>`)
+        if self.at(&TokenKind::From)? {
+            self.next()?; // consume `from`
+            let (from_name, _from_span) = self.parse_spec_name()?;
+            let from_registry = from_name.starts_with('@');
+            let effective = self.parse_spec_ref_trailing_effective()?;
+            let from = SpecRef {
+                name: from_name,
+                from_registry,
+                effective,
+            };
+            let constraints = if self.at(&TokenKind::Arrow)? {
+                let (_, _, constraints) = self.parse_remaining_arrow_chain()?;
+                constraints
+            } else {
+                None
+            };
+            let end_span = self.peek()?.span.clone();
+            let span = self.span_covering(&start_span, &end_span);
+            let source = self.make_source(span);
+            let base = ParentType::Custom {
+                name: reference.name.clone(),
+            };
+            return Ok(LemmaData::new(
+                reference,
+                DataValue::TypeDeclaration {
+                    base,
+                    constraints,
+                    from: Some(from),
+                },
+                source,
+            ));
+        }
 
         self.expect(&TokenKind::Colon)?;
 
-        let value = self.parse_fact_value()?;
+        let is_binding = !reference.segments.is_empty();
+        let value = self.parse_data_value(is_binding)?;
 
         let end_span = self.peek()?.span.clone();
         let span = self.span_covering(&start_span, &end_span);
         let source = self.make_source(span);
 
-        Ok(LemmaFact::new(reference, value, source))
+        Ok(LemmaData::new(reference, value, source))
     }
 
     fn parse_reference(&mut self) -> Result<Reference, Error> {
         let mut segments = Vec::new();
 
         let first = self.next()?;
-        // Structural keywords (spec, fact, rule, unless, ...) cannot be names.
+        // Structural keywords (spec, data, rule, unless, ...) cannot be names.
         // Type keywords (duration, number, date, ...) CAN be names per the grammar.
         if is_structural_keyword(&first.kind) {
             return Err(self.error_at_token_with_suggestion(
@@ -510,61 +560,262 @@ impl Parser {
         Ok(Reference::from_path(segments))
     }
 
-    fn parse_fact_value(&mut self) -> Result<FactValue, Error> {
-        // Check for type declaration: [type_name] or [type_arrow_chain]
-        if self.at(&TokenKind::LBracket)? {
-            return self.parse_type_declaration_or_inline();
+    fn parse_data_value(&mut self, is_binding: bool) -> Result<DataValue, Error> {
+        if self.at(&TokenKind::Spec)? {
+            let token = self.next()?;
+            return Err(self.error_at_token_with_suggestion(
+                &token,
+                "'data ... : spec ...' syntax has been removed",
+                "Use 'with <spec_name>' or 'with <alias>: <spec_name>' instead",
+            ));
         }
 
-        // Check for spec reference: spec <name>
-        if self.at(&TokenKind::Spec)? {
-            return self.parse_fact_spec_reference();
+        let peek_kind = self.peek()?.kind.clone();
+
+        // Reference RHS (value-copy reference) is recognized in two cases:
+        // 1. Any dotted path (e.g. `data x: foo.bar`), which can never be a typedef
+        //    name and therefore unambiguously means "copy value from this data or rule".
+        // 2. A non-dotted identifier when the LHS is a binding path (e.g.
+        //    `data x.y: myrule`). Local data like `data x: myrule` keep the existing
+        //    typedef-reference semantics and are NOT parsed as Reference here.
+        // Type keywords (`number`, `text`, ...) are excluded from reference heads
+        // because they are primitive type names, never data/rule names.
+        if can_be_label(&peek_kind) {
+            let next_is_dot = self.lexer.peek_second()?.kind == TokenKind::Dot;
+            if next_is_dot || is_binding {
+                let target = self.parse_reference()?;
+                let (_, _, constraints) = self.parse_remaining_arrow_chain()?;
+                return Ok(DataValue::Reference {
+                    target,
+                    constraints,
+                });
+            }
+        }
+
+        // Type keyword (number, text, boolean, ...) or label (custom type name) => type declaration
+        if token_kind_to_primitive(&peek_kind).is_some() || can_be_label(&peek_kind) {
+            let (base, from_spec, constraints) = self.parse_type_arrow_chain()?;
+            if self.at(&TokenKind::Dot)? {
+                let dot_tok = self.peek()?.clone();
+                return Err(self.error_at_token_with_suggestion(
+                    &dot_tok,
+                    "Unexpected dot after type declaration",
+                    "Typedef references must be a single identifier. To reference another data or rule by value, use a dotted path like 'other_spec.name'",
+                ));
+            }
+            return Ok(DataValue::TypeDeclaration {
+                base,
+                constraints,
+                from: from_spec,
+            });
         }
 
         // Otherwise, it's a literal value
         let value = self.parse_literal_value()?;
-        Ok(FactValue::Literal(value))
+        Ok(DataValue::Literal(value))
     }
 
-    fn parse_type_declaration_or_inline(&mut self) -> Result<FactValue, Error> {
-        self.expect(&TokenKind::LBracket)?;
-
-        // Parse the type name (could be a standard type or custom type)
-        let (base, from_spec, constraints) = self.parse_type_arrow_chain()?;
-
-        self.expect(&TokenKind::RBracket)?;
-
-        Ok(FactValue::TypeDeclaration {
-            base,
-            constraints,
-            from: from_spec,
-        })
+    fn parse_with_spec_name(&mut self) -> Result<(String, String), Error> {
+        if self.at(&TokenKind::At)? {
+            let (name, _) = self.parse_spec_name()?;
+            let alias = name.rsplit('/').next().unwrap_or(&name).to_string();
+            return Ok((name, alias));
+        }
+        let first = self.next()?;
+        if !can_be_reference_segment(&first.kind) {
+            return Err(self.error_at_token(
+                &first,
+                format!("Expected a spec name after 'with', found {}", first.kind),
+            ));
+        }
+        let mut name = first.text.clone();
+        while self.at(&TokenKind::Slash)? {
+            self.next()?;
+            name.push('/');
+            let seg = self.next()?;
+            if !seg.kind.is_identifier_like() {
+                return Err(self.error_at_token(
+                    &seg,
+                    format!(
+                        "Expected identifier after '/' in spec name, found {}",
+                        seg.kind
+                    ),
+                ));
+            }
+            name.push_str(&seg.text);
+        }
+        while self.at(&TokenKind::Minus)? {
+            self.next()?;
+            let seg = self.next()?;
+            if !seg.kind.is_identifier_like() {
+                return Err(self.error_at_token(
+                    &seg,
+                    format!(
+                        "Expected identifier after '-' in spec name, found {}",
+                        seg.kind
+                    ),
+                ));
+            }
+            name.push('-');
+            name.push_str(&seg.text);
+            while self.at(&TokenKind::Slash)? {
+                self.next()?;
+                name.push('/');
+                let seg2 = self.next()?;
+                if !seg2.kind.is_identifier_like() {
+                    return Err(self.error_at_token(
+                        &seg2,
+                        format!(
+                            "Expected identifier after '/' in spec name, found {}",
+                            seg2.kind
+                        ),
+                    ));
+                }
+                name.push_str(&seg2.text);
+            }
+        }
+        let alias = name.rsplit('/').next().unwrap_or(&name).to_string();
+        Ok((name, alias))
     }
 
-    fn parse_fact_spec_reference(&mut self) -> Result<FactValue, Error> {
-        self.expect(&TokenKind::Spec)?;
+    fn make_with_data(
+        &self,
+        spec_name: String,
+        alias: String,
+        effective: Option<DateTimeValue>,
+        span: &Span,
+    ) -> LemmaData {
+        let from_registry = spec_name.starts_with('@');
+        let source = self.make_source(span.clone());
+        LemmaData::new(
+            Reference::local(alias),
+            DataValue::SpecReference(SpecRef {
+                name: spec_name,
+                from_registry,
+                effective,
+            }),
+            source,
+        )
+    }
 
-        let (name, _name_span) = self.parse_spec_name()?;
-        let from_registry = name.starts_with('@');
+    fn parse_with_statement(&mut self) -> Result<Vec<LemmaData>, Error> {
+        let with_token = self.expect(&TokenKind::With)?;
+        let start_span = with_token.span.clone();
 
-        let hash_pin = self.try_parse_hash_pin()?;
+        // Check if first token (non-@) is followed by `:` — alias mode, single item
+        if !self.at(&TokenKind::At)? {
+            let first = self.peek()?;
+            if can_be_reference_segment(&first.kind) {
+                let first_text = first.text.clone();
+                // Peek ahead: is the token after the identifier a colon?
+                // We need to consume the identifier to check, then branch.
+                let first_tok = self.next()?;
+                if self.at(&TokenKind::Colon)? {
+                    self.next()?; // consume `:`
+                    let (spec_name, _) = self.parse_spec_name()?;
+                    let effective = self.parse_spec_ref_trailing_effective()?;
+                    let end_span = self.peek()?.span.clone();
+                    let span = self.span_covering(&start_span, &end_span);
+                    return Ok(vec![
+                        self.make_with_data(spec_name, first_text, effective, &span)
+                    ]);
+                }
+                // Not alias mode — re-assemble as spec name. The identifier was consumed,
+                // continue parsing the rest of the spec name from here.
+                let mut name = first_tok.text.clone();
+                while self.at(&TokenKind::Slash)? {
+                    self.next()?;
+                    name.push('/');
+                    let seg = self.next()?;
+                    if !seg.kind.is_identifier_like() {
+                        return Err(self.error_at_token(
+                            &seg,
+                            format!(
+                                "Expected identifier after '/' in spec name, found {}",
+                                seg.kind
+                            ),
+                        ));
+                    }
+                    name.push_str(&seg.text);
+                }
+                while self.at(&TokenKind::Minus)? {
+                    self.next()?;
+                    let seg = self.next()?;
+                    if !seg.kind.is_identifier_like() {
+                        return Err(self.error_at_token(
+                            &seg,
+                            format!(
+                                "Expected identifier after '-' in spec name, found {}",
+                                seg.kind
+                            ),
+                        ));
+                    }
+                    name.push('-');
+                    name.push_str(&seg.text);
+                    while self.at(&TokenKind::Slash)? {
+                        self.next()?;
+                        name.push('/');
+                        let seg2 = self.next()?;
+                        if !seg2.kind.is_identifier_like() {
+                            return Err(self.error_at_token(
+                                &seg2,
+                                format!(
+                                    "Expected identifier after '/' in spec name, found {}",
+                                    seg2.kind
+                                ),
+                            ));
+                        }
+                        name.push_str(&seg2.text);
+                    }
+                }
+                let alias = name.rsplit('/').next().unwrap_or(&name).to_string();
 
-        let mut effective = None;
-        // Check for effective datetime after spec reference
-        if self.at(&TokenKind::NumberLit)? {
-            let peeked = self.peek()?;
-            if peeked.text.len() == 4 && peeked.text.chars().all(|c| c.is_ascii_digit()) {
-                // Could be a datetime effective
-                effective = self.try_parse_effective_from()?;
+                // Comma continuation for bare form
+                if self.at(&TokenKind::Comma)? {
+                    let mut results = Vec::new();
+                    let end_span = self.peek()?.span.clone();
+                    let span = self.span_covering(&start_span, &end_span);
+                    results.push(self.make_with_data(name, alias, None, &span));
+                    while self.at(&TokenKind::Comma)? {
+                        self.next()?; // consume `,`
+                        let (next_name, next_alias) = self.parse_with_spec_name()?;
+                        let end_span = self.peek()?.span.clone();
+                        let span = self.span_covering(&start_span, &end_span);
+                        results.push(self.make_with_data(next_name, next_alias, None, &span));
+                    }
+                    return Ok(results);
+                }
+
+                // Single bare item — may have temporal pin
+                let effective = self.parse_spec_ref_trailing_effective()?;
+                let end_span = self.peek()?.span.clone();
+                let span = self.span_covering(&start_span, &end_span);
+                return Ok(vec![self.make_with_data(name, alias, effective, &span)]);
             }
         }
 
-        Ok(FactValue::SpecReference(SpecRef {
-            name,
-            from_registry,
-            hash_pin,
-            effective,
-        }))
+        // Starts with `@` — bare registry ref, supports comma continuation
+        let (spec_name, alias) = self.parse_with_spec_name()?;
+
+        if self.at(&TokenKind::Comma)? {
+            let mut results = Vec::new();
+            let end_span = self.peek()?.span.clone();
+            let span = self.span_covering(&start_span, &end_span);
+            results.push(self.make_with_data(spec_name, alias, None, &span));
+            while self.at(&TokenKind::Comma)? {
+                self.next()?;
+                let (next_name, next_alias) = self.parse_with_spec_name()?;
+                let end_span = self.peek()?.span.clone();
+                let span = self.span_covering(&start_span, &end_span);
+                results.push(self.make_with_data(next_name, next_alias, None, &span));
+            }
+            return Ok(results);
+        }
+
+        let effective = self.parse_spec_ref_trailing_effective()?;
+        let end_span = self.peek()?.span.clone();
+        let span = self.span_covering(&start_span, &end_span);
+        Ok(vec![self.make_with_data(spec_name, alias, effective, &span)])
     }
 
     // ========================================================================
@@ -593,6 +844,12 @@ impl Parser {
             ));
         }
         let rule_name = name_tok.text.clone();
+        crate::limits::check_max_length(
+            &rule_name,
+            self.max_rule_name_length,
+            "rule",
+            Some(Source::new(self.lexer.attribute(), name_tok.span.clone())),
+        )?;
 
         self.expect(&TokenKind::Colon)?;
 
@@ -673,95 +930,6 @@ impl Parser {
         })
     }
 
-    // ========================================================================
-    // Type definitions
-    // ========================================================================
-
-    fn parse_type_def(&mut self) -> Result<TypeDef, Error> {
-        let type_tok = self.expect(&TokenKind::Type)?;
-        let start_span = type_tok.span.clone();
-
-        // Parse type name
-        let name_tok = self.next()?;
-        let type_name = name_tok.text.clone();
-
-        // Check if this is a type import (type X from Y) or a type definition (type X: Y)
-        if self.at(&TokenKind::From)? {
-            return self.parse_type_import(type_name, start_span);
-        }
-
-        // Regular type definition: type X: Y -> ...
-        if self.at(&TokenKind::Colon)? {
-            self.next()?; // consume :
-        } else {
-            // Could also be an import without us seeing 'from' yet if there are two type names
-            // e.g. "type money from other_spec"
-            let peek = self.peek()?.clone();
-            return Err(self.error_at_token(
-                &peek,
-                format!(
-                    "Expected ':' or 'from' after type name '{}', found {}",
-                    type_name, peek.kind
-                ),
-            ));
-        }
-
-        let (parent, _from, constraints) = self.parse_type_arrow_chain()?;
-
-        let end_span = self.peek()?.span.clone();
-        let span = self.span_covering(&start_span, &end_span);
-        Ok(TypeDef::Regular {
-            source_location: self.make_source(span),
-            name: type_name,
-            parent,
-            constraints,
-        })
-    }
-
-    fn parse_type_import(&mut self, type_name: String, start_span: Span) -> Result<TypeDef, Error> {
-        self.expect(&TokenKind::From)?;
-
-        let (from_name, _from_span) = self.parse_spec_name()?;
-        let from_registry = from_name.starts_with('@');
-        let hash_pin = self.try_parse_hash_pin()?;
-
-        let mut effective = None;
-        if self.at(&TokenKind::NumberLit)? {
-            let peeked = self.peek()?;
-            if peeked.text.len() == 4 && peeked.text.chars().all(|c| c.is_ascii_digit()) {
-                effective = self.try_parse_effective_from()?;
-            }
-        }
-
-        let from = SpecRef {
-            name: from_name,
-            from_registry,
-            hash_pin,
-            effective,
-        };
-
-        // Check for arrow chain constraints after import
-        let constraints = if self.at(&TokenKind::Arrow)? {
-            let (_, _, constraints) = self.parse_remaining_arrow_chain()?;
-            constraints
-        } else {
-            None
-        };
-
-        let end_span = self.peek()?.span.clone();
-        let span = self.span_covering(&start_span, &end_span);
-
-        let source_type = type_name.clone();
-
-        Ok(TypeDef::Import {
-            source_location: self.make_source(span),
-            name: type_name,
-            source_type,
-            from,
-            constraints,
-        })
-    }
-
     /// Parse a type arrow chain: type_name (-> command)* or type_name from spec (-> command)*
     fn parse_type_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
         let name_tok = self.next()?;
@@ -783,18 +951,10 @@ impl Parser {
             self.next()?; // consume from
             let (from_name, _) = self.parse_spec_name()?;
             let from_registry = from_name.starts_with('@');
-            let hash_pin = self.try_parse_hash_pin()?;
-            let mut effective = None;
-            if self.at(&TokenKind::NumberLit)? {
-                let peeked = self.peek()?;
-                if peeked.text.len() == 4 && peeked.text.chars().all(|c| c.is_ascii_digit()) {
-                    effective = self.try_parse_effective_from()?;
-                }
-            }
+            let effective = self.parse_spec_ref_trailing_effective()?;
             Some(SpecRef {
                 name: from_name,
                 from_registry,
-                hash_pin,
                 effective,
             })
         } else {
@@ -859,10 +1019,7 @@ impl Parser {
 
         let mut args = Vec::new();
         loop {
-            // Command args: number, boolean, text, or label
-            // Stop at: ->, ], newlines (next keyword), EOF
             if self.at(&TokenKind::Arrow)?
-                || self.at(&TokenKind::RBracket)?
                 || self.at(&TokenKind::Eof)?
                 || is_spec_body_keyword(&self.peek()?.kind)
                 || self.at(&TokenKind::Spec)?
@@ -872,29 +1029,16 @@ impl Parser {
 
             let peek_kind = self.peek()?.kind.clone();
             match peek_kind {
-                TokenKind::NumberLit => {
-                    let tok = self.next()?;
-                    args.push(CommandArg::Number(tok.text));
-                }
-                TokenKind::Minus | TokenKind::Plus => {
-                    let second = self.lexer.peek_second()?.kind.clone();
-                    if second == TokenKind::NumberLit {
-                        let sign = self.next()?;
-                        let num = self.next()?;
-                        let text = format!("{}{}", sign.text, num.text);
-                        args.push(CommandArg::Number(text));
-                    } else {
-                        break;
-                    }
-                }
-                TokenKind::StringLit => {
-                    let tok = self.next()?;
-                    let content = unquote_string(&tok.text);
-                    args.push(CommandArg::Text(content));
+                TokenKind::NumberLit
+                | TokenKind::Minus
+                | TokenKind::Plus
+                | TokenKind::StringLit => {
+                    let value = self.parse_literal_value()?;
+                    args.push(CommandArg::Literal(value));
                 }
                 ref k if is_boolean_keyword(k) => {
-                    let tok = self.next()?;
-                    args.push(CommandArg::Boolean(token_kind_to_boolean_value(&tok.kind)));
+                    let value = self.parse_literal_value()?;
+                    args.push(CommandArg::Literal(value));
                 }
                 ref k if can_be_label(k) || is_type_keyword(k) => {
                     let tok = self.next()?;
@@ -1074,7 +1218,7 @@ impl Parser {
             && num_text.chars().all(|c| c.is_ascii_digit())
             && peeked.kind == TokenKind::Colon
         {
-            // Only if we're in a fact value context... this is ambiguous.
+            // Only if we're in a data value context... this is ambiguous.
             // Time literals look like: 14:30:00 or 14:30
             // But we might also have "rule x: expr" where : is assignment.
             // The grammar handles this at the grammar level. For us,

@@ -1,5 +1,5 @@
 /**
- * @benrogmans/lemma-engine — public entry.
+ * @lemmabase/lemma-engine — public entry.
  * Glue: lemma.bindings.js (wasm-pack output, renamed by build).
  */
 import initWasm, * as bindings from './lemma.bindings.js';

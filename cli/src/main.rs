@@ -63,33 +63,29 @@ enum Commands {
             default_value = "table"
         )]
         output: OutputFormat,
-        /// Include facts and explanation trees (table) or explanation objects (json)
+        /// Include data and explanation trees (table) or explanation objects (json)
         #[arg(short = 'x', long)]
         explain: bool,
-        /// Enable interactive mode for spec/rule/fact selection
+        /// Enable interactive mode for spec/rule/data selection
         #[arg(short = 'i', long)]
         interactive: bool,
         /// Effective datetime for evaluation (e.g. 2026, 2026-03, 2026-03-04, 2026-03-04T10:30:00Z)
         #[arg(long)]
         effective: Option<String>,
     },
-    /// Spec schema (facts and rules)
+    /// Spec schema (data and rules)
     ///
     /// Examples:
     ///   lemma schema tax.lemma
     ///   lemma schema calculator
-    ///   lemma schema calculator --hash
     Schema {
         /// [source] [spec] — source is a .lemma file or directory
         args: Vec<String>,
         /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
-        /// Output only the plan hash
-        #[arg(long)]
-        hash: bool,
     },
-    /// List all specs with facts and rules counts
+    /// List all specs with data and rules counts
     List {
         /// Workspace directory or .lemma file
         #[arg(default_value = ".")]
@@ -101,8 +97,8 @@ enum Commands {
     /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
     ///
     /// Routes:
-    ///   GET  /{spec}              — evaluate all rules (facts as query params)
-    ///   POST /{spec}              — evaluate all rules (facts as JSON body)
+    ///   GET  /{spec}              — evaluate all rules (data as query params)
+    ///   POST /{spec}              — evaluate all rules (data as JSON body)
     ///   GET  /{spec}/{rules}      — evaluate specific rules (comma-separated)
     ///   POST /{spec}/{rules}      — evaluate specific rules (JSON body)
     ///   GET  /                   — list all specs
@@ -162,15 +158,15 @@ enum Commands {
 struct ParsedTarget {
     source: PathBuf,
     spec: Option<String>,
-    facts: Vec<String>,
+    data: Vec<String>,
 }
 
 fn parse_target(args: &[String]) -> Result<ParsedTarget> {
-    let mut facts = Vec::new();
+    let mut data = Vec::new();
     let mut positionals = Vec::new();
     for arg in args {
         if arg.contains('=') {
-            facts.push(arg.clone());
+            data.push(arg.clone());
         } else {
             if arg == "-" {
                 anyhow::bail!(
@@ -197,11 +193,7 @@ fn parse_target(args: &[String]) -> Result<ParsedTarget> {
             }
         }
     };
-    Ok(ParsedTarget {
-        source,
-        spec,
-        facts,
-    })
+    Ok(ParsedTarget { source, spec, data })
 }
 
 /// Resolve spec name: use explicit name, auto-select for single-spec sources,
@@ -222,7 +214,7 @@ fn resolve_spec_str(engine: &Engine, spec: Option<&str>, interactive: bool) -> R
         _ => {
             let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
             anyhow::bail!(
-                "Source contains multiple specs: {}\n\nUsage: lemma run <source> <spec> [facts...]",
+                "Source contains multiple specs: {}\n\nUsage: lemma run <source> <spec> [data...]",
                 names.join(", ")
             );
         }
@@ -255,9 +247,9 @@ fn main() {
             let parsed = parse_target(args)?;
             run_command(RunOptions {
                 source: &parsed.source,
-                spec_id: parsed.spec.as_ref(),
+                spec_name: parsed.spec.as_ref(),
                 rules: rules.as_ref(),
-                facts: &parsed.facts,
+                data: &parsed.data,
                 target: target.as_ref(),
                 output: *output,
                 explain: *explain,
@@ -265,18 +257,9 @@ fn main() {
                 effective_raw: effective.as_ref(),
             })
         }
-        Commands::Schema {
-            args,
-            effective,
-            hash,
-        } => {
+        Commands::Schema { args, effective } => {
             let parsed = parse_target(args)?;
-            schema_command(
-                &parsed.source,
-                parsed.spec.as_deref(),
-                effective.as_ref(),
-                *hash,
-            )
+            schema_command(&parsed.source, parsed.spec.as_deref(), effective.as_ref())
         }
         Commands::List { source, effective } => list_command(source, effective.as_ref()),
         Commands::Server {
@@ -309,9 +292,9 @@ fn main() {
 
 struct RunOptions<'a> {
     source: &'a Path,
-    spec_id: Option<&'a String>,
+    spec_name: Option<&'a String>,
     rules: Option<&'a String>,
-    facts: &'a [String],
+    data: &'a [String],
     target: Option<&'a String>,
     output: OutputFormat,
     explain: bool,
@@ -324,41 +307,41 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
     let mut engine = Engine::new();
     load_workspace(&mut engine, opts.source)?;
 
-    let resolved_spec = resolve_spec(&engine, opts.spec_id, opts.interactive)?;
+    let resolved_spec = resolve_spec(&engine, opts.spec_name, opts.interactive)?;
 
-    let (spec_id, rules, final_facts, target) = if opts.interactive {
+    let (name, rules, final_data, target) = if opts.interactive {
         let (parsed_spec, parsed_rules) = if resolved_spec.is_empty() {
             (None, None)
         } else {
             let (name, _) =
-                lemma::parse_spec_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
+                lemma::parse_spec_set_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
             (Some(name), opts.rules.map(|r| parse_rule_names(r.as_str())))
         };
 
-        let cli_facts: std::collections::HashMap<String, String> = parse_fact_strings(opts.facts);
+        let cli_data: std::collections::HashMap<String, String> = parse_data_strings(opts.data);
 
-        let (s, r, interactive_facts, interactive_target) = interactive::run_interactive(
+        let (s, r, interactive_data, interactive_target) = interactive::run_interactive(
             &engine,
             parsed_spec,
             parsed_rules,
-            &cli_facts,
+            &cli_data,
             opts.target,
             &now,
         )?;
 
         println!();
 
-        let mut all_facts = cli_facts;
-        all_facts.extend(interactive_facts);
-        (s, r.unwrap_or_default(), all_facts, interactive_target)
+        let mut all_data = cli_data;
+        all_data.extend(interactive_data);
+        (s, r.unwrap_or_default(), all_data, interactive_target)
     } else {
-        lemma::parse_spec_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
+        lemma::parse_spec_set_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
         let rules = opts
             .rules
             .map(|r| parse_rule_names(r.as_str()))
             .unwrap_or_default();
-        let fact_values = parse_fact_strings(opts.facts);
-        (resolved_spec, rules, fact_values, None)
+        let data_values = parse_data_strings(opts.data);
+        (resolved_spec, rules, data_values, None)
     };
 
     if target.is_some() {
@@ -366,24 +349,19 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
     }
 
     let mut response = engine
-        .run(&spec_id, Some(&now), final_facts, false)
+        .run(&name, Some(&now), final_data, false)
         .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
     if !rules.is_empty() {
         response.filter_rules(&rules);
     }
-    let hash = engine
-        .get_plan(&spec_id, Some(&now))
-        .expect("BUG: run succeeded but get_plan failed")
-        .plan_hash();
     let formatter = Formatter;
 
     match opts.output {
         OutputFormat::Table => {
             print!("{}", formatter.format_response(&response, opts.explain));
-            println!("Hash: {}", hash);
         }
         OutputFormat::Json => {
-            let json = format_response_json(&response, opts.explain, &now, &hash);
+            let json = format_response_json(&response, opts.explain, &now);
             let json_str = serde_json::to_string_pretty(&json)
                 .expect("BUG: failed to serialize response JSON");
             println!("{}", json_str);
@@ -397,9 +375,8 @@ fn run_command(opts: RunOptions<'_>) -> Result<()> {
 struct RunOutputJson {
     spec_name: String,
     effective: String,
-    hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    facts: Option<Vec<lemma::Facts>>,
+    data: Option<Vec<lemma::DataGroup>>,
     result: indexmap::IndexMap<String, response::RuleResultJson>,
 }
 
@@ -407,14 +384,12 @@ fn format_response_json(
     response: &lemma::Response,
     explain: bool,
     effective: &DateTimeValue,
-    hash: &str,
 ) -> RunOutputJson {
     RunOutputJson {
         spec_name: response.spec_name.clone(),
         effective: effective.to_string(),
-        hash: hash.to_string(),
-        facts: if explain {
-            Some(response.facts.clone())
+        data: if explain {
+            Some(response.data.clone())
         } else {
             None
         },
@@ -422,10 +397,9 @@ fn format_response_json(
     }
 }
 
-/// Parse fact value strings in "key=value" format into a HashMap
-fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
-    facts
-        .iter()
+/// Parse data value strings in "key=value" format into a HashMap
+fn parse_data_strings(data: &[String]) -> HashMap<String, String> {
+    data.iter()
         .filter_map(|s| {
             s.split_once('=')
                 .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -433,27 +407,17 @@ fn parse_fact_strings(facts: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn schema_command(
-    source: &Path,
-    spec: Option<&str>,
-    effective_raw: Option<&String>,
-    hash_only: bool,
-) -> Result<()> {
+fn schema_command(source: &Path, spec: Option<&str>, effective_raw: Option<&String>) -> Result<()> {
     let now = resolve_effective(effective_raw)?;
     let mut engine = Engine::new();
     load_workspace(&mut engine, source)?;
 
-    let spec_id = resolve_spec_str(&engine, spec, false)?;
+    let spec_name = resolve_spec_str(&engine, spec, false)?;
     let plan = engine
-        .get_plan(&spec_id, Some(&now))
+        .get_plan(&spec_name, Some(&now))
         .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
-    let hash = plan.plan_hash();
-    if hash_only {
-        println!("{}", hash);
-    } else {
-        let formatter = Formatter;
-        print!("{}", formatter.format_spec_inspection(plan, &hash));
-    }
+    let formatter = Formatter;
+    print!("{}", formatter.format_spec_inspection(plan));
     Ok(())
 }
 
@@ -539,34 +503,34 @@ fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_command(source: &Path, spec_id: Option<&str>, force: bool) -> Result<()> {
+fn get_command(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(get_command_async(source, spec_id, force))
+    rt.block_on(get_command_async(source, spec_name, force))
 }
 
-async fn get_command_async(source: &Path, spec_id: Option<&str>, force: bool) -> Result<()> {
+async fn get_command_async(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
     let registry = make_fetch_registry();
 
-    match spec_id {
-        Some(spec_id) => get_single_spec(source, spec_id, &*registry, force).await,
+    match spec_name {
+        Some(id) => get_single_spec(source, id, &*registry, force).await,
         None => get_all_workspace_deps(source, &*registry, force).await,
     }
 }
 
 async fn get_single_spec(
     workdir: &Path,
-    spec_id: &str,
+    spec_name: &str,
     registry: &dyn lemma::Registry,
     force: bool,
 ) -> Result<()> {
-    if spec_id.is_empty() {
+    if spec_name.is_empty() {
         anyhow::bail!("Empty spec identifier. Usage: lemma get @user/repo/spec");
     }
 
     let bundle = registry
-        .get(spec_id)
+        .get(spec_name)
         .await
-        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", spec_id, e.message))?;
+        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", spec_name, e.message))?;
 
     let attribute = &bundle.attribute;
     let source_text = &bundle.lemma_source;
@@ -588,7 +552,7 @@ async fn get_single_spec(
             let path = entry.path();
             let existing_content = fs::read_to_string(path)?;
             if existing_content == *source_text {
-                eprintln!("Already up to date: {}.", spec_id);
+                eprintln!("Already up to date: {}.", spec_name);
                 return Ok(());
             }
             let existing_specs =
@@ -616,8 +580,7 @@ async fn get_single_spec(
         }
     }
 
-    let (_parsed_name, hash_pin) =
-        lemma::parse_spec_id(spec_id).map_err(|e| anyhow::anyhow!("{}", e))?;
+    lemma::parse_spec_set_id(spec_name).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
@@ -634,28 +597,8 @@ async fn get_single_spec(
         })?;
 
     let now = DateTimeValue::now();
-    let first_spec_name = new_specs
-        .first()
-        .map(|s| s.name.as_str())
-        .expect("BUG: parsed specs was non-empty above");
-    let hash = engine
-        .get_plan_hash(first_spec_name, &now)
-        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?
-        .expect("BUG: spec loaded+planned but has no hash");
 
-    if let Some(pin) = &hash_pin {
-        if !pin.eq_ignore_ascii_case(&hash) {
-            anyhow::bail!(
-                "Plan hash mismatch for '{}': requested ~{}, computed {}. \
-                 The registry may have served different content.",
-                spec_id,
-                pin,
-                hash
-            );
-        }
-    }
-
-    let dep_path = dep_file_path(attribute, &hash);
+    let dep_path = dep_file_path(attribute);
     let dest = deps_dir.join(&dep_path);
 
     if let Some(parent) = dest.parent() {
@@ -796,17 +739,7 @@ async fn get_all_workspace_deps(
             }
         }
 
-        let first_spec_name = new_specs
-            .first()
-            .map(|s| s.name.as_str())
-            .expect("BUG: parsed specs was non-empty");
-        let hash_suffix = engine
-            .get_plan_hash(first_spec_name, &now)
-            .map_err(|e| {
-                anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources()))
-            })?
-            .expect("BUG: spec loaded+planned but has no hash");
-        let dep_path = dep_file_path(attribute, &hash_suffix);
+        let dep_path = dep_file_path(attribute);
         let dest = deps_dir.join(&dep_path);
 
         if let Some(parent) = dest.parent() {
@@ -840,14 +773,13 @@ pub(crate) fn lemma_deps_dir(workdir: &Path) -> PathBuf {
 
 /// Build the relative cache path for a fetched registry spec.
 /// Preserves the `@` prefix and `/` directory structure from the attribute.
-/// e.g. `@org/project/helper` with hash `a1b2c3d4` → `@org/project/helper~a1b2c3d4.lemma`
-fn dep_file_path(attribute: &str, hash: &str) -> PathBuf {
+fn dep_file_path(attribute: &str) -> PathBuf {
     let last_slash = attribute.rfind('/');
     let (dir_part, name_part) = match last_slash {
         Some(pos) => (&attribute[..pos], &attribute[pos + 1..]),
         None => ("", attribute),
     };
-    let filename = format!("{}~{}.lemma", name_part, hash);
+    let filename = format!("{}.lemma", name_part);
     if dir_part.is_empty() {
         PathBuf::from(filename)
     } else {

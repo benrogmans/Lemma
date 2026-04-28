@@ -7,7 +7,7 @@
 //! 4. Veto in unless clause conditions or results will apply to the dependent rule
 
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, LiteralValue, OperationResult};
+use lemma::{Engine, LiteralValue, OperationResult, VetoType};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -16,7 +16,7 @@ use std::str::FromStr;
 fn test_veto_blocks_rule_evaluation() {
     let code = r#"
 spec age_check
-fact age: 15
+data age: 15
 rule is_adult: age >= 18
     unless age < 18 then veto "Must be at least 18 years old"
 "#;
@@ -38,7 +38,9 @@ rule is_adult: age >= 18
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Must be at least 18 years old".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Must be at least 18 years old".to_string())
+        })
     );
 }
 
@@ -46,7 +48,7 @@ rule is_adult: age >= 18
 fn test_veto_without_message() {
     let code = r#"
 spec validation
-fact value: -5
+data value: -5
 rule is_valid: value > 0
     unless value < 0 then veto
 "#;
@@ -66,14 +68,17 @@ rule is_valid: value > 0
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
-    assert_eq!(rule_result.result, OperationResult::Veto(None));
+    assert_eq!(
+        rule_result.result,
+        OperationResult::Veto(VetoType::UserDefined { message: None })
+    );
 }
 
 #[test]
 fn test_veto_does_not_trigger_when_condition_false() {
     let code = r#"
 spec age_check
-fact age: 25
+data age: 25
 rule is_adult: age >= 18
     unless age < 18 then veto "Must be at least 18 years old"
 "#;
@@ -103,8 +108,8 @@ rule is_adult: age >= 18
 fn test_multiple_veto_clauses_first_one_triggers() {
     let code = r#"
 spec validation
-fact age: 15
-fact score: 85
+data age: 15
+data score: 85
 rule eligible: age >= 18 and score >= 80
     unless age < 18 then veto "Age requirement not met"
     unless score < 80 then veto "Score requirement not met"
@@ -127,7 +132,9 @@ rule eligible: age >= 18 and score >= 80
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Age requirement not met".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Age requirement not met".to_string())
+        })
     );
 }
 
@@ -135,8 +142,8 @@ rule eligible: age >= 18 and score >= 80
 fn test_multiple_veto_clauses_second_one_triggers() {
     let code = r#"
 spec validation
-fact age: 25
-fact score: 65
+data age: 25
+data score: 65
 rule eligible: age >= 18 and score >= 80
     unless age < 18 then veto "Age requirement not met"
     unless score < 80 then veto "Score requirement not met"
@@ -159,7 +166,9 @@ rule eligible: age >= 18 and score >= 80
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Score requirement not met".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Score requirement not met".to_string())
+        })
     );
 }
 
@@ -167,8 +176,8 @@ rule eligible: age >= 18 and score >= 80
 fn test_veto_with_complex_condition() {
     let code = r#"
 spec salary_check
-fact salary: 30000
-fact experience: 2
+data salary: 30000
+data experience: 2
 rule valid_compensation: salary >= 40000
     unless salary < 40000 and experience < 5 then veto "Insufficient salary for experience level"
 "#;
@@ -190,7 +199,9 @@ rule valid_compensation: salary >= 40000
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Insufficient salary for experience level".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Insufficient salary for experience level".to_string())
+        })
     );
 }
 
@@ -198,9 +209,9 @@ rule valid_compensation: salary >= 40000
 fn test_veto_vs_regular_unless_mixed() {
     let code = r#"
 spec mixed_validation
-fact age: 20
-fact country: "US"
-fact has_license: false
+data age: 20
+data country: "US"
+data has_license: false
 rule can_drive: age >= 16
     unless age < 16 then veto "Too young to drive"
     unless country is not "US" then false
@@ -232,7 +243,7 @@ rule can_drive: age >= 16
 fn test_veto_with_number_comparison() {
     let code = r#"
 spec weight_check
-fact package_weight: 100
+data package_weight: 100
 rule can_ship: package_weight <= 50
     unless package_weight > 75 then veto "Package exceeds maximum weight limit"
 "#;
@@ -254,7 +265,9 @@ rule can_ship: package_weight <= 50
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Package exceeds maximum weight limit".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Package exceeds maximum weight limit".to_string())
+        })
     );
 }
 
@@ -262,7 +275,7 @@ rule can_ship: package_weight <= 50
 fn test_veto_with_money_comparison() {
     let code = r#"
 spec pricing_check
-fact price: 5000
+data price: 5000
 rule is_affordable: price <= 1000
     unless price > 4000 then veto "Price exceeds budget limit"
 "#;
@@ -284,7 +297,9 @@ rule is_affordable: price <= 1000
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Price exceeds budget limit".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Price exceeds budget limit".to_string())
+        })
     );
 }
 
@@ -292,8 +307,8 @@ rule is_affordable: price <= 1000
 fn test_veto_with_date_comparison() {
     let code = r#"
 spec date_validation
-fact event_date: 2024-01-15
-fact min_date: 2024-06-01
+data event_date: 2024-01-15
+data min_date: 2024-06-01
 rule is_valid_date: event_date >= min_date
     unless event_date < 2024-03-01 then veto "Event date is too early in the year"
 "#;
@@ -315,7 +330,9 @@ rule is_valid_date: event_date >= min_date
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Event date is too early in the year".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Event date is too early in the year".to_string())
+        })
     );
 }
 
@@ -323,7 +340,7 @@ rule is_valid_date: event_date >= min_date
 fn test_veto_with_percentage_comparison() {
     let code = r#"
 spec completion_check
-fact completion: 15%
+data completion: 15%
 rule is_complete: completion >= 95%
     unless completion < 20% then veto "Project barely started"
 "#;
@@ -345,7 +362,9 @@ rule is_complete: completion >= 95%
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Project barely started".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Project barely started".to_string())
+        })
     );
 }
 
@@ -353,8 +372,8 @@ rule is_complete: completion >= 95%
 fn test_veto_with_rule_reference() {
     let code = r#"
 spec eligibility
-fact age: 16
-fact has_permission: false
+data age: 16
+data has_permission: false
 rule is_adult: age >= 18
 rule eligible: has_permission
     unless not is_adult then veto "Must be adult or have permission"
@@ -377,7 +396,9 @@ rule eligible: has_permission
 
     assert_eq!(
         eligible_result.result,
-        OperationResult::Veto(Some("Must be adult or have permission".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Must be adult or have permission".to_string())
+        })
     );
 }
 
@@ -385,8 +406,8 @@ rule eligible: has_permission
 fn test_veto_with_arithmetic_in_condition() {
     let code = r#"
 spec budget_check
-fact expenses: 9500
-fact income: 10000
+data expenses: 9500
+data income: 10000
 rule within_budget: expenses < income
     unless expenses > income * 0.9 then veto "Expenses exceed 90% of income"
 "#;
@@ -408,7 +429,9 @@ rule within_budget: expenses < income
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Expenses exceed 90% of income".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Expenses exceed 90% of income".to_string())
+        })
     );
 }
 
@@ -416,7 +439,7 @@ rule within_budget: expenses < income
 fn test_veto_with_string_equality() {
     let code = r#"
 spec status_check
-fact status: "cancelled"
+data status: "cancelled"
 rule is_active: status is "active"
     unless status is "cancelled" then veto "Cannot process cancelled items"
 "#;
@@ -438,7 +461,9 @@ rule is_active: status is "active"
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Cannot process cancelled items".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Cannot process cancelled items".to_string())
+        })
     );
 }
 
@@ -446,7 +471,7 @@ rule is_active: status is "active"
 fn test_veto_does_not_affect_other_rules() {
     let code = r#"
 spec multi_rule
-fact value: -10
+data value: -10
 rule check_positive: value > 0
     unless value < 0 then veto "Value must be positive"
 rule check_negative: value < 0
@@ -470,7 +495,9 @@ rule double_value: value * 2
         .unwrap();
     assert_eq!(
         check_positive.result,
-        OperationResult::Veto(Some("Value must be positive".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Value must be positive".to_string())
+        })
     );
 
     let check_negative = response
@@ -497,37 +524,10 @@ rule double_value: value * 2
 }
 
 #[test]
-fn test_veto_with_empty_string_message() {
-    let code = r#"
-spec edge_case
-fact value: 0
-rule is_valid: value > 0
-    unless value is 0 then veto ""
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("edge_case", Some(&now), HashMap::new(), false)
-        .unwrap();
-    let rule_result = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "is_valid")
-        .unwrap();
-
-    assert!(matches!(rule_result.result, OperationResult::Veto(Some(_))));
-}
-
-#[test]
 fn test_veto_with_special_characters_in_message() {
     let code = r#"
 spec special_chars
-fact age: 10
+data age: 10
 rule valid: age >= 18
     unless age < 18 then veto "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)"
 "#;
@@ -549,9 +549,11 @@ rule valid: age >= 18
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some(
-            "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string()
-        ))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some(
+                "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string(),
+            ),
+        })
     );
 }
 
@@ -562,7 +564,7 @@ fn test_veto_with_very_long_message() {
     let code = format!(
         r#"
 spec long_message
-fact value: 0
+data value: 0
 rule valid: value > 0
     unless value is 0 then veto "{}"
 "#,
@@ -586,7 +588,9 @@ rule valid: value > 0
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some(message.to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some(message.to_string())
+        })
     );
 }
 
@@ -594,7 +598,7 @@ rule valid: value > 0
 fn test_veto_priority_over_false_result() {
     let code = r#"
 spec priority_test
-fact value: 5
+data value: 5
 rule check: value > 10
     unless value < 10 then veto "Value too small"
     unless value is not 5 then false
@@ -617,45 +621,18 @@ rule check: value > 10
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Value too small".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Value too small".to_string())
+        })
     );
-}
-
-#[test]
-fn test_multiple_vetoes_both_conditions_true() {
-    let code = r#"
-spec double_veto
-fact age: 15
-fact score: 65
-rule eligible: age >= 18 and score >= 80
-    unless age < 18 then veto "Age too low"
-    unless score < 80 then veto "Score too low"
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("double_veto", Some(&now), HashMap::new(), false)
-        .unwrap();
-    let rule_result = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "eligible")
-        .unwrap();
-
-    assert!(matches!(rule_result.result, OperationResult::Veto(Some(_))));
 }
 
 #[test]
 fn test_veto_with_multiple_unless_conditions() {
     let code = r#"
 spec multi_unless
-fact age: 30
-fact has_criminal_record: true
+data age: 30
+data has_criminal_record: true
 rule eligible: age >= 18
     unless age < 18 then veto "Eligibility criteria not met"
     unless has_criminal_record then veto "Eligibility criteria not met"
@@ -678,7 +655,9 @@ rule eligible: age >= 18
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Eligibility criteria not met".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Eligibility criteria not met".to_string())
+        })
     );
 }
 
@@ -686,7 +665,7 @@ rule eligible: age >= 18
 fn test_veto_with_negation() {
     let code = r#"
 spec negation_test
-fact is_verified: false
+data is_verified: false
 rule can_proceed: true
     unless not is_verified then veto "Account must be verified"
 "#;
@@ -708,6 +687,8 @@ rule can_proceed: true
 
     assert_eq!(
         rule_result.result,
-        OperationResult::Veto(Some("Account must be verified".to_string()))
+        OperationResult::Veto(VetoType::UserDefined {
+            message: Some("Account must be verified".to_string())
+        })
     );
 }

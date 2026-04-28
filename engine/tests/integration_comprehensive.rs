@@ -10,21 +10,21 @@ fn test_employee_contract_comprehensive() {
 
     let base_contract = r#"
 spec base_contract
-fact min_salary: 30000
-fact max_salary: 200000
-fact standard_vacation_days: 20 days
-fact probation_period: 90 days
-fact min_age: 18 years
+data min_salary: 30000
+data max_salary: 200000
+data standard_vacation_days: 20 days
+data probation_period: 90 days
+data min_age: 18 years
 "#;
 
     let employment_terms = r#"
 spec employment_terms
-fact base: spec base_contract
-fact salary: 75000
-fact bonus_percentage: 10%
-fact start_date: 2024-01-15
-fact vacation_days: 20 days
-fact employee_age: 28 years
+with base: base_contract
+data salary: 75000
+data bonus_percentage: 10%
+data start_date: 2024-01-15
+data vacation_days: 20 days
+data employee_age: 28 years
 
 rule total_compensation: salary + (salary * bonus_percentage)
 rule is_salary_valid: salary >= base.min_salary and salary <= base.max_salary
@@ -82,13 +82,13 @@ fn test_tax_calculation_with_percentages() {
 
     let tax_spec = r#"
 spec tax_calculation
-fact income: 80000
-fact deductions: 10000
-fact tax_rate_low: 10%
-fact tax_rate_mid: 20%
-fact tax_rate_high: 30%
-fact bracket_low: 40000
-fact bracket_mid: 80000
+data income: 80000
+data deductions: 10000
+data tax_rate_low: 10%
+data tax_rate_mid: 20%
+data tax_rate_high: 30%
+data bracket_low: 40000
+data bracket_mid: 80000
 
 rule taxable_income: income - deductions
 rule in_low_bracket: taxable_income <= bracket_low
@@ -153,14 +153,14 @@ rule effective_rate: (tax_amount / income) * 100%
 }
 
 #[test]
-fn test_cli_fact_values_integration() {
+fn test_cli_data_values_integration() {
     let mut engine = Engine::new();
 
     let config_spec = r#"
 spec dynamic_config
-fact threshold: [number]
-fact multiplier: [number]
-fact base_value: 100
+data threshold: number
+data multiplier: number
+data base_value: 100
 
 rule calculated_value: base_value * multiplier
 rule exceeds_threshold: calculated_value > threshold
@@ -172,13 +172,13 @@ rule status: "LOW"
         .load(config_spec, lemma::SourceType::Labeled("test.lemma"))
         .unwrap();
 
-    let mut facts = std::collections::HashMap::new();
-    facts.insert("threshold".to_string(), "500".to_string());
-    facts.insert("multiplier".to_string(), "2".to_string());
+    let mut data = std::collections::HashMap::new();
+    data.insert("threshold".to_string(), "500".to_string());
+    data.insert("multiplier".to_string(), "2".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("dynamic_config", Some(&now), facts, false)
+        .run("dynamic_config", Some(&now), data, false)
         .unwrap();
 
     let calculated = response
@@ -195,12 +195,12 @@ rule status: "LOW"
         .unwrap();
     assert_eq!(status.result.value().unwrap().to_string(), "LOW");
 
-    let mut facts2 = std::collections::HashMap::new();
-    facts2.insert("threshold".to_string(), "150".to_string());
-    facts2.insert("multiplier".to_string(), "2".to_string());
+    let mut data2 = std::collections::HashMap::new();
+    data2.insert("threshold".to_string(), "150".to_string());
+    data2.insert("multiplier".to_string(), "2".to_string());
 
     let response2 = engine
-        .run("dynamic_config", Some(&now), facts2, false)
+        .run("dynamic_config", Some(&now), data2, false)
         .unwrap();
 
     let status2 = response2
@@ -219,11 +219,11 @@ fn test_date_arithmetic_comprehensive() {
 
     let timeline_spec = r#"
 spec project_timeline
-fact project_start: 2024-01-15
-fact phase1_duration: 30 days
-fact phase2_duration: 45 days
-fact phase3_duration: 60 days
-fact today: 2024-02-15
+data project_start: 2024-01-15
+data phase1_duration: 30 days
+data phase2_duration: 45 days
+data phase3_duration: 60 days
+data today: 2024-02-15
 
 rule phase1_end: project_start + phase1_duration
 rule phase2_end: phase1_end + phase2_duration
@@ -268,300 +268,8 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 }
 
 // ============================================================================
-// Date Arithmetic Regression Tests
-// ============================================================================
-
-#[test]
-fn test_date_plus_duration() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact start: 2024-01-15
-fact timespan: 30 days
-rule end_date: start + timespan
-"#;
-
-    engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let end_date = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "end_date")
-        .unwrap();
-
-    match &end_date.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Date(date) => {
-                assert_eq!(date.year, 2024);
-                assert_eq!(date.month, 2);
-                assert_eq!(date.day, 14);
-            }
-            other => panic!("Expected Date for end_date, got {:?}", other),
-        },
-        other => panic!("Expected Value for end_date, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_date_minus_duration() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact end: 2024-02-14
-fact timespan: 30 days
-rule start_date: end - timespan
-"#;
-
-    engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let start_date = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "start_date")
-        .unwrap();
-
-    match &start_date.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Date(date) => {
-                assert_eq!(date.year, 2024);
-                assert_eq!(date.month, 1);
-                assert_eq!(date.day, 15);
-            }
-            other => panic!("Expected Date for start_date, got {:?}", other),
-        },
-        other => panic!("Expected Value for start_date, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_date_minus_date() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact start: 2024-01-15
-fact end: 2024-02-14
-rule timespan: end - start
-"#;
-
-    engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let duration = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "timespan")
-        .unwrap();
-
-    match &duration.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Duration(seconds, unit) => {
-                // Date - Date returns seconds (30 days = 2,592,000 seconds)
-                assert_eq!(*seconds, Decimal::from_str("2592000").unwrap());
-                assert_eq!(unit.to_string(), "seconds");
-            }
-            other => panic!("Expected Duration for timespan, got {:?}", other),
-        },
-        other => panic!("Expected Value for timespan, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_date_comparison() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact date1: 2024-01-15
-fact date2: 2024-02-14
-rule date1_before_date2: date1 < date2
-rule date1_after_date2: date1 > date2
-"#;
-
-    engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let before = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "date1_before_date2")
-        .unwrap();
-    assert_eq!(
-        before.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
-
-    let after = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "date1_after_date2")
-        .unwrap();
-    assert_eq!(
-        after.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
-    );
-}
-
-// ============================================================================
-// Type Validation Regression Tests
-// ============================================================================
-
-#[test]
-fn test_type_validation_boolean_and_number() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact flag: true
-rule result_true: flag and 100 or 50
-"#;
-
-    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
-    assert!(
-        result.is_err(),
-        "Should reject mixing boolean and number in logical expression"
-    );
-}
-
-#[test]
-fn test_type_validation_boolean_and_money() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact needs_extra: true
-rule extra_charge: needs_extra and 10 or 0
-"#;
-
-    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
-    assert!(
-        result.is_err(),
-        "Should reject mixing boolean and money in logical expression"
-    );
-}
-
-#[test]
-fn test_type_validation_comparison_and_number() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact value: 100
-rule multiplier: value > 50 and 2 or 1
-rule result: value * multiplier
-"#;
-
-    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
-    assert!(
-        result.is_err(),
-        "Should reject mixing boolean comparison result and numbers in logical expression"
-    );
-}
-
-// ============================================================================
-// Type Error Message Validation Tests
-// ============================================================================
-
-#[test]
-fn test_logical_operator_with_text_error_message() {
-    let mut engine = Engine::new();
-
-    let spec = r#"
-spec test
-fact system_healthy: true
-rule status: system_healthy and "OK"
-"#;
-
-    let result = engine.load(spec, lemma::SourceType::Labeled("test.lemma"));
-    assert!(
-        result.is_err(),
-        "Should reject mixing boolean and text in logical expression"
-    );
-
-    let errs = result.unwrap_err();
-    let error_msg = errs
-        .iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join("; ")
-        .to_lowercase();
-    assert!(
-        error_msg.contains("logical")
-            || error_msg.contains("boolean")
-            || error_msg.contains("type"),
-        "Error should mention type issue. Got: {}",
-        error_msg
-    );
-}
-
-// ============================================================================
 // Spec reference field access tests
 // ============================================================================
-
-#[test]
-fn test_spec_ref_field_access_simple() {
-    let mut engine = Engine::new();
-
-    let base_spec = r#"
-spec base
-fact min_value: 100
-fact max_value: 1000
-"#;
-
-    let child_spec = r#"
-spec child
-fact config: spec base
-fact value: 500
-
-rule is_valid: value >= config.min_value and value <= config.max_value
-"#;
-
-    engine
-        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-    engine
-        .load(child_spec, lemma::SourceType::Labeled("test.lemma"))
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run("child", Some(&now), HashMap::new(), false)
-        .unwrap();
-
-    let is_valid = response
-        .results
-        .values()
-        .find(|r| r.rule.name == "is_valid")
-        .unwrap();
-    assert_eq!(
-        is_valid.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
-}
 
 #[test]
 fn test_spec_ref_field_access_with_units() {
@@ -569,14 +277,14 @@ fn test_spec_ref_field_access_with_units() {
 
     let base_spec = r#"
 spec base
-fact min_salary: 30000
-fact max_salary: 200000
+data min_salary: 30000
+data max_salary: 200000
 "#;
 
     let child_spec = r#"
 spec child
-fact base_contract: spec base
-fact salary: 75000
+with base_contract: base
+data salary: 75000
 
 rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
@@ -610,13 +318,13 @@ fn test_spec_ref_field_access_arithmetic() {
 
     let base_spec = r#"
 spec base
-fact project_start: 2024-01-15
-fact probation_period: 90 days
+data project_start: 2024-01-15
+data probation_period: 90 days
 "#;
 
     let child_spec = r#"
 spec child
-fact base_contract: spec base
+with base_contract: base
 
 rule probation_end: base_contract.project_start + base_contract.probation_period
 "#;

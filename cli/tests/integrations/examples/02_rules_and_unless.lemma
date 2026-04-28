@@ -1,9 +1,9 @@
 spec rules_and_unless
 
-fact is_premium   : yes
-fact base_price   : [number -> minimum 0]
-fact customer_age : [number -> minimum 0 -> maximum 120]
-fact quantity     : [number -> minimum 0]
+data is_premium   : yes
+data base_price   : number -> minimum 0
+data customer_age : number -> minimum 0 -> maximum 120
+data quantity     : number -> minimum 0
 
 rule total_before_discount:
   base_price * quantity

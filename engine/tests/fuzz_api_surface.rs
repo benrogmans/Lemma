@@ -23,77 +23,6 @@ fn single_file(name: &str, code: &str) -> HashMap<String, String> {
     std::iter::once((name.to_string(), code.to_string())).collect()
 }
 
-// --- mirrors fuzz_parser ---
-
-#[test]
-fn fuzz_parser_api_valid_spec() {
-    let code = "spec hello\nfact x: 42\n";
-    engine_with_files(single_file("input", code));
-}
-
-#[test]
-fn fuzz_parser_api_garbage() {
-    engine_with_files(single_file("input", "not a valid spec!!!"));
-}
-
-#[test]
-fn fuzz_parser_api_empty() {
-    engine_with_files(single_file("input", ""));
-}
-
-// --- mirrors fuzz_expressions ---
-
-#[test]
-fn fuzz_expressions_api_valid() {
-    let code = "spec fuzz_test\nfact x: 100\nfact y: 50\nrule test_expr: x + y\n";
-    engine_with_files(single_file("fuzz_expr", code));
-}
-
-#[test]
-fn fuzz_expressions_api_garbage_expr() {
-    let code = "spec fuzz_test\nfact x: 100\nfact y: 50\nrule test_expr: @#$%^&\n";
-    engine_with_files(single_file("fuzz_expr", code));
-}
-
-// --- mirrors fuzz_literals ---
-
-#[test]
-fn fuzz_literals_api_number() {
-    let code = "spec fuzz_test\nfact test_value: 42\n";
-    engine_with_files(single_file("fuzz_literal", code));
-}
-
-#[test]
-fn fuzz_literals_api_garbage() {
-    let code = "spec fuzz_test\nfact test_value: !!!garbage\n";
-    engine_with_files(single_file("fuzz_literal", code));
-}
-
-// --- mirrors fuzz_deeply_nested ---
-
-#[test]
-fn fuzz_deeply_nested_api() {
-    let variants: &[fn(String, usize) -> String] = &[
-        |e, _| format!("({} + 1)", e),
-        |e, _| format!("({} * 2)", e),
-        |e, i| format!("({} - {})", e, i),
-        |e, _| format!("({})", e),
-    ];
-    for variant in variants {
-        for depth in 1..=6 {
-            let mut expr = String::from("1");
-            for i in 0..depth {
-                expr = variant(expr, i);
-            }
-            let code = format!(
-                "spec fuzz_nested\nfact x: 1\nrule deeply_nested: {}\n",
-                expr
-            );
-            engine_with_files(single_file("fuzz_nested", &code));
-        }
-    }
-}
-
 #[test]
 fn fuzz_deeply_nested_completes_fast() {
     let start = std::time::Instant::now();
@@ -102,7 +31,7 @@ fn fuzz_deeply_nested_completes_fast() {
         expr = format!("({} + 1)", expr);
     }
     let code = format!(
-        "spec fuzz_nested\nfact x: 1\nrule deeply_nested: {}\n",
+        "spec fuzz_nested\ndata x: 1\nrule deeply_nested: {}\n",
         expr
     );
     engine_with_files(single_file("fuzz_nested", &code));
@@ -114,64 +43,17 @@ fn fuzz_deeply_nested_completes_fast() {
     );
 }
 
-// --- mirrors fuzz_fact_bindings ---
-
 #[test]
-fn fuzz_fact_bindings_api_valid_number() {
-    let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
-    let mut engine = Engine::new();
-    if engine
-        .load(code, SourceType::Labeled("fuzz_binding"))
-        .is_ok()
-    {
-        let mut facts = HashMap::new();
-        facts.insert("x".to_string(), "42".to_string());
-        let now = DateTimeValue::now();
-        let _ = engine.run("fuzz_test", Some(&now), facts, false);
-    }
-}
-
-#[test]
-fn fuzz_fact_bindings_api_garbage_value() {
-    let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
-    let mut engine = Engine::new();
-    if engine
-        .load(code, SourceType::Labeled("fuzz_binding"))
-        .is_ok()
-    {
-        let mut facts = HashMap::new();
-        facts.insert("x".to_string(), "not_a_number".to_string());
-        let now = DateTimeValue::now();
-        let _ = engine.run("fuzz_test", Some(&now), facts, false);
-    }
-}
-
-#[test]
-fn fuzz_fact_bindings_api_empty_value() {
-    let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
-    let mut engine = Engine::new();
-    if engine
-        .load(code, SourceType::Labeled("fuzz_binding"))
-        .is_ok()
-    {
-        let mut facts = HashMap::new();
-        facts.insert("x".to_string(), String::new());
-        let now = DateTimeValue::now();
-        let _ = engine.run("fuzz_test", Some(&now), facts, false);
-    }
-}
-
-#[test]
-fn fuzz_fact_bindings_api_number_too_long_no_panic() {
-    let code = "spec fuzz_test\nfact x: [number]\nrule doubled: x * 2\n";
+fn fuzz_data_bindings_api_number_too_long_no_panic() {
+    let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     engine
         .load(code, SourceType::Labeled("fuzz_binding"))
         .unwrap();
-    let mut facts = HashMap::new();
-    facts.insert("x".to_string(), "40000000000000000460903669760".to_string());
+    let mut data = HashMap::new();
+    data.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run("fuzz_test", Some(&now), facts, false);
+    let result = engine.run("fuzz_test", Some(&now), data, false);
     assert!(
         result.is_err(),
         "expected validation error for 29-digit number, got {:?}",

@@ -33,7 +33,7 @@ defmodule Lemma do
   - `max_total_expression_count` - max expression nodes
   - `max_expression_depth` - max nesting depth
   - `max_expression_count` - max expressions per file
-  - `max_fact_value_bytes` - max fact value size
+  - `max_data_value_bytes` - max data value size
 
   ## Examples
 
@@ -64,15 +64,36 @@ defmodule Lemma do
   end
 
   @doc """
-  Lists all loaded specs. Each item is a map with `:name` and `:effective_from`.
+  Lists all loaded specs. Each item is a map with `:name`, `:effective_from`,
+  `:effective_to`, and `:schema`.
+
+  Temporal versions form a half-open `[effective_from, effective_to)` range:
+
+  - `:effective_from` is `nil` when the spec has no declared start date (the
+    first version is unbounded at the start).
+  - `:effective_to` is `nil` when the spec has no later version (this row is
+    the latest and stays valid forward indefinitely).
+  - Otherwise `:effective_to` equals the next version's `:effective_from`
+    (exclusive end of this row's validity).
+
+  `:schema` is the decoded [`Lemma.schema/3`] envelope for this version so
+  callers never need a second round-trip.
   """
   @spec list(engine()) :: {:ok, [map()]} | {:error, term()}
   def list(engine) do
-    Lemma.Native.lemma_list(engine)
+    case Lemma.Native.lemma_list(engine) do
+      {:ok, items} ->
+        {:ok, Enum.map(items, fn item -> Map.update!(item, :schema, &Jason.decode!/1) end)}
+
+      err ->
+        err
+    end
   end
 
   @doc """
-  Returns the schema for a spec. Accepts spec name or "name~hash". Options: `:effective` (datetime string or nil).
+  Returns the schema for a spec.
+
+  Options: `:effective` (datetime string or nil).
   """
   @spec schema(engine(), spec_name(), keyword()) :: {:ok, map()} | {:error, term()}
   def schema(engine, spec, opts \\ []) do
@@ -85,7 +106,9 @@ defmodule Lemma do
   end
 
   @doc """
-  Returns the serialized execution plan for a spec as a map. Options: `:effective` (datetime string or nil).
+  Returns the serialized execution plan for a spec as a map.
+
+  Options: `:effective` (datetime string or nil).
   """
   @spec execution_plan(engine(), spec_name(), keyword()) :: {:ok, map()} | {:error, term()}
   def execution_plan(engine, spec, opts \\ []) do
@@ -98,15 +121,16 @@ defmodule Lemma do
   end
 
   @doc """
-  Runs a spec. Options: `:effective` (datetime string), `:facts` (map of string keys/values).
+  Runs a spec. Options: `:effective` (datetime string or nil), `:data` (map).
+
   Returns decoded JSON response.
   """
   @spec run(engine(), spec_name(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(engine, spec, opts \\ []) do
     effective = Keyword.get(opts, :effective)
-    facts = Keyword.get(opts, :facts, %{})
+    data = Keyword.get(opts, :data, %{})
 
-    case Lemma.Native.lemma_run(engine, spec, effective, facts) do
+    case Lemma.Native.lemma_run(engine, spec, effective, data) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
     end
@@ -115,13 +139,22 @@ defmodule Lemma do
   @doc """
   Inverts a rule to find input domains that produce a desired outcome.
 
+  `effective` is a datetime string or nil.
+
   Target is a map with `:outcome` ("value" | "veto" | "any_value" | "any_veto"),
   optionally `:op` ("eq" | "neq" | "lt" | etc.), and for "value"/"veto": `:value` or `:message`.
   """
-  @spec invert(engine(), spec_name(), String.t(), String.t(), map(), map()) ::
+  @spec invert(engine(), spec_name(), String.t() | nil, String.t(), map(), map()) ::
           {:ok, map()} | {:error, term()}
   def invert(engine, spec_name, effective, rule_name, target, values \\ %{}) do
-    case Lemma.Native.lemma_invert(engine, spec_name, effective, rule_name, target, values) do
+    case Lemma.Native.lemma_invert(
+           engine,
+           spec_name,
+           effective,
+           rule_name,
+           target,
+           values
+         ) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
     end
@@ -133,6 +166,36 @@ defmodule Lemma do
   @spec remove_spec(engine(), spec_name(), String.t()) :: :ok | {:error, term()}
   def remove_spec(engine, spec_name, effective) do
     Lemma.Native.lemma_remove_spec(engine, spec_name, effective)
+  end
+
+  @doc """
+  Temporal version options for API docs (same boundaries as `lemma serve` / Scalar).
+
+  Returns a list of maps with string keys `"title"` and `"slug"`. Slug `"now"` means the
+  latest interface at request time; other slugs match `effective` strings for `generate_openapi/2`.
+  """
+  @spec temporal_api_sources(engine()) :: {:ok, [map()]} | {:error, term()}
+  def temporal_api_sources(engine) do
+    case Lemma.Native.lemma_temporal_api_sources(engine) do
+      {:ok, binary} -> {:ok, Jason.decode!(binary)}
+      err -> err
+    end
+  end
+
+  @doc """
+  Generates an OpenAPI 3.1 JSON document for the loaded specs (Lemma HTTP API shape).
+
+  Options: `:explanations` (boolean, default false), `:effective` (datetime string or nil for "now").
+  """
+  @spec generate_openapi(engine(), keyword()) :: {:ok, map()} | {:error, term()}
+  def generate_openapi(engine, opts \\ []) do
+    explanations = Keyword.get(opts, :explanations, false)
+    effective = Keyword.get(opts, :effective)
+
+    case Lemma.Native.lemma_generate_openapi(engine, explanations, effective) do
+      {:ok, binary} -> {:ok, Jason.decode!(binary)}
+      err -> err
+    end
   end
 
   @doc """

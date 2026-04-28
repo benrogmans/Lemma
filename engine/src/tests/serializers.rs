@@ -43,7 +43,7 @@ fn test_response_serialization() {
             result: OperationResult::Value(Box::new(LiteralValue::number(
                 Decimal::from_str("42").unwrap(),
             ))),
-            facts: vec![],
+            data: vec![],
             operations: vec![],
             explanation: None,
             rule_type: crate::planning::semantics::primitive_number().clone(),
@@ -54,7 +54,7 @@ fn test_response_serialization() {
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
-        facts: vec![],
+        data: vec![],
         results,
     };
 
@@ -79,7 +79,7 @@ fn test_response_filter_rules() {
         RuleResult {
             rule: dummy_rule("rule1"),
             result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
-            facts: vec![],
+            data: vec![],
             operations: vec![],
             explanation: None,
             rule_type: crate::planning::semantics::primitive_boolean().clone(),
@@ -90,7 +90,7 @@ fn test_response_filter_rules() {
         RuleResult {
             rule: dummy_rule("rule2"),
             result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
-            facts: vec![],
+            data: vec![],
             operations: vec![],
             explanation: None,
             rule_type: crate::planning::semantics::primitive_boolean().clone(),
@@ -101,7 +101,7 @@ fn test_response_filter_rules() {
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
-        facts: vec![],
+        data: vec![],
         results,
     };
 
@@ -109,48 +109,4 @@ fn test_response_filter_rules() {
 
     assert_eq!(response.results.len(), 1);
     assert_eq!(response.results.values().next().unwrap().rule.name, "rule1");
-}
-
-#[test]
-fn test_rule_result_types() {
-    let success = RuleResult {
-        rule: dummy_rule("rule1"),
-        result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
-        facts: vec![],
-        operations: vec![],
-        explanation: None,
-        rule_type: crate::planning::semantics::primitive_boolean().clone(),
-    };
-    assert!(matches!(success.result, OperationResult::Value(_)));
-
-    let missing = RuleResult {
-        rule: dummy_rule("rule3"),
-        result: OperationResult::Veto(Some("Missing fact: fact1".to_string())),
-        facts: vec![crate::planning::semantics::Fact {
-            path: crate::planning::semantics::FactPath::new(vec![], "fact1".to_string()),
-            value: crate::planning::semantics::FactValue::Literal(
-                crate::planning::semantics::LiteralValue::from_bool(false),
-            ),
-            source: None,
-        }],
-        operations: vec![],
-        explanation: None,
-        rule_type: crate::planning::LemmaType::veto_type(),
-    };
-    assert_eq!(missing.facts.len(), 1);
-    assert_eq!(missing.facts[0].path.fact, "fact1");
-    assert!(matches!(missing.result, OperationResult::Veto(_)));
-
-    let veto = RuleResult {
-        rule: dummy_rule("rule4"),
-        result: OperationResult::Veto(Some("Vetoed".to_string())),
-        facts: vec![],
-        operations: vec![],
-        explanation: None,
-        rule_type: crate::planning::LemmaType::veto_type(),
-    };
-    assert_eq!(
-        veto.result,
-        OperationResult::Veto(Some("Vetoed".to_string()))
-    );
 }

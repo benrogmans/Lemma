@@ -1,18 +1,22 @@
-use crate::parsing::ast::FactValue;
+use crate::parsing::ast::DataValue;
 use crate::parsing::parse;
 
 #[test]
-fn test_parse_simple_spec_reference() {
+fn test_parse_with_spec_reference() {
     let input = r#"spec person
-fact name: "John"
-fact contract: spec employment_contract"#;
+data name: "John"
+with contract: employment_contract"#;
     let result = parse(input, "test.lemma", &crate::ResourceLimits::default())
         .unwrap()
         .specs;
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].facts.len(), 2);
+    assert_eq!(result[0].data.len(), 2);
 
-    if let FactValue::SpecReference(spec_ref) = &result[0].facts[1].value {
+    assert_eq!(
+        result[0].data[1].reference,
+        crate::parsing::ast::Reference::local("contract".to_string())
+    );
+    if let DataValue::SpecReference(spec_ref) = &result[0].data[1].value {
         assert_eq!(spec_ref.name, "employment_contract");
         assert!(!spec_ref.from_registry);
     } else {
@@ -21,25 +25,24 @@ fact contract: spec employment_contract"#;
 }
 
 #[test]
-fn test_parse_fact_bindings() {
+fn test_parse_with_and_data_bindings() {
     let input = r#"spec person
-fact contract: spec employment_contract
-fact contract.start_date: 2024-02-01
-fact contract.end_date: [date]
-fact contract.employment_type: "contractor"
-fact contract.base: spec base_contract
-fact contract.base.rate: 100"#;
+with contract: employment_contract
+data contract.start_date: 2024-02-01
+data contract.end_date: date
+data contract.employment_type: "contractor"
+with base: base_contract"#;
     let result = parse(input, "test.lemma", &crate::ResourceLimits::default())
         .unwrap()
         .specs;
     assert_eq!(result.len(), 1);
-    assert_eq!(result[0].facts.len(), 6);
+    assert_eq!(result[0].data.len(), 5);
 
     assert_eq!(
-        result[0].facts[0].reference,
-        crate::parsing::ast::Reference::from_path(vec!["contract".to_string()])
+        result[0].data[0].reference,
+        crate::parsing::ast::Reference::local("contract".to_string())
     );
-    if let FactValue::SpecReference(spec_ref) = &result[0].facts[0].value {
+    if let DataValue::SpecReference(spec_ref) = &result[0].data[0].value {
         assert_eq!(spec_ref.name, "employment_contract");
         assert!(!spec_ref.from_registry);
     } else {
@@ -47,14 +50,14 @@ fact contract.base.rate: 100"#;
     }
 
     assert_eq!(
-        result[0].facts[1].reference,
+        result[0].data[1].reference,
         crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "start_date".to_string()
         ])
     );
-    match &result[0].facts[1].value {
-        FactValue::Literal(lit) => {
+    match &result[0].data[1].value {
+        DataValue::Literal(lit) => {
             assert!(
                 matches!(lit, crate::parsing::ast::Value::Date(_)),
                 "Expected Date literal"
@@ -64,60 +67,53 @@ fact contract.base.rate: 100"#;
     }
 
     assert_eq!(
-        result[0].facts[2].reference,
+        result[0].data[2].reference,
         crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "end_date".to_string()
         ])
     );
     assert!(
-        matches!(&result[0].facts[2].value, FactValue::TypeDeclaration { .. }),
+        matches!(&result[0].data[2].value, DataValue::TypeDeclaration { .. }),
         "Expected TypeDeclaration"
     );
 
     assert_eq!(
-        result[0].facts[3].reference,
+        result[0].data[3].reference,
         crate::parsing::ast::Reference::from_path(vec![
             "contract".to_string(),
             "employment_type".to_string()
         ])
     );
-    if let FactValue::Literal(lit) = &result[0].facts[3].value {
+    if let DataValue::Literal(lit) = &result[0].data[3].value {
         if let crate::parsing::ast::Value::Text(s) = lit {
             assert_eq!(s, "contractor");
         } else {
             panic!("Expected Text literal");
         }
     } else {
-        panic!("Expected Literal fact");
+        panic!("Expected Literal data");
     }
 
     assert_eq!(
-        result[0].facts[4].reference,
-        crate::parsing::ast::Reference::from_path(vec!["contract".to_string(), "base".to_string()])
+        result[0].data[4].reference,
+        crate::parsing::ast::Reference::local("base".to_string())
     );
-    if let FactValue::SpecReference(spec_ref) = &result[0].facts[4].value {
+    if let DataValue::SpecReference(spec_ref) = &result[0].data[4].value {
         assert_eq!(spec_ref.name, "base_contract");
         assert!(!spec_ref.from_registry);
     } else {
         panic!("Expected SpecReference");
     }
+}
 
-    assert_eq!(
-        result[0].facts[5].reference,
-        crate::parsing::ast::Reference::from_path(vec![
-            "contract".to_string(),
-            "base".to_string(),
-            "rate".to_string()
-        ])
+#[test]
+fn test_data_spec_syntax_is_rejected() {
+    let input = r#"spec person
+data contract: spec employment_contract"#;
+    let result = parse(input, "test.lemma", &crate::ResourceLimits::default());
+    assert!(
+        result.is_err(),
+        "'data ... : spec ...' syntax should be rejected"
     );
-    if let FactValue::Literal(lit) = &result[0].facts[5].value {
-        if let crate::parsing::ast::Value::Number(n) = lit {
-            assert_eq!(n, &rust_decimal::Decimal::new(100, 0));
-        } else {
-            panic!("Expected Number literal");
-        }
-    } else {
-        panic!("Expected Literal fact");
-    }
 }

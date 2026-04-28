@@ -9,26 +9,26 @@ IMPORTANT: Unless clauses use "last matching wins" semantics.
 More specific conditions should come after more general ones.
 """
 
-type country: text
+data country: text
   -> option "NL"
   -> option "BE"
   -> option "DE"
   -> option "FR"
 
-type customer_tier_type: text
+data customer_tier_type: text
   -> option "standard"
   -> option "silver"
   -> option "gold"
   -> option "platinum"
 
-fact destination_region  : "North Holland"
-fact is_expedited        : [boolean]
-fact is_hazardous        : [boolean]
-fact is_po_box           : [boolean]
-fact customer_tier       : [customer_tier_type -> default "gold"]
-fact destination_country : [country -> default "NL"]
-fact item_weight         : [number -> minimum 0]
-fact order_total         : [number -> minimum 0]
+data destination_region  : "North Holland"
+data is_expedited        : boolean
+data is_hazardous        : boolean
+data is_po_box           : boolean
+data customer_tier       : customer_tier_type -> default "gold"
+data destination_country : country -> default "NL"
+data item_weight         : number -> minimum 0
+data order_total         : number -> minimum 0
 
 rule base_shipping_rate:
   35

@@ -1,4 +1,4 @@
-# @benrogmans/lemma-engine
+# @lemmabase/lemma-engine
 
 Embeddable Lemma engine (WebAssembly).
 
@@ -7,13 +7,13 @@ npm `description` / `keywords` / `homepage`: edit **`NPM_BRANDING`** in `build.j
 ## Install
 
 ```bash
-npm install @benrogmans/lemma-engine
+npm install @lemmabase/lemma-engine
 ```
 
 ## Browser / bundler
 
 ```javascript
-import { Lemma } from '@benrogmans/lemma-engine';
+import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
 ```
@@ -23,7 +23,7 @@ const engine = await Lemma();
 If your bundler outputs IIFE (or otherwise breaks `import.meta.url`), use:
 
 ```javascript
-import { Lemma } from '@benrogmans/lemma-engine/iife';
+import { Lemma } from '@lemmabase/lemma-engine/iife';
 
 const engine = await Lemma();
 ```
@@ -35,13 +35,13 @@ This entry embeds WASM bytes and avoids external wasm URL handling.
 If you use esbuild JS API, plugin rewrites root import to `/iife` automatically:
 
 ```javascript
-import { lemmaEngineEsbuildPlugin } from '@benrogmans/lemma-engine/esbuild';
+import { lemmaEngineEsbuildPlugin } from '@lemmabase/lemma-engine/esbuild';
 ```
 
 ## Node
 
 ```javascript
-import { Lemma } from '@benrogmans/lemma-engine';
+import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
 ```
@@ -53,8 +53,8 @@ Or with a preloaded buffer (e.g. no async fetch): `initSync({ module })` then `n
 Call `init()` first. Use `LspClient`; `start()` uses the bundled LSP (no need to pass `serve`/`ServerConfig`). Optional: `start(serve, ServerConfig)` to override.
 
 ```javascript
-import { init } from '@benrogmans/lemma-engine';
-import { LspClient } from '@benrogmans/lemma-engine/lsp-client';
+import { init } from '@lemmabase/lemma-engine';
+import { LspClient } from '@lemmabase/lemma-engine/lsp-client';
 
 await init();
 const client = new LspClient(monaco);
@@ -71,7 +71,7 @@ client.didOpen(uri, 'lemma', 1, documentText);
 | `load(code, attribute)` | Promise; reject → `string[]` |
 | `list()` | Spec entries |
 | `schema(spec, effective?)` | `SpecSchema` |
-| `run(spec, rules, facts, effective?)` | `Response` |
+| `run(spec, rules, data, effective?)` | `Response` |
 | `format(code, attribute?)` | string or throw |
 
 ## Build (maintainers)

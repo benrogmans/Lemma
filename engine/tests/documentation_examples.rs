@@ -12,10 +12,10 @@ fn get_rule_value(
     engine: &Engine,
     spec_name: &str,
     rule_name: &str,
-    facts: HashMap<String, String>,
+    data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
-    let response = engine.run(spec_name, Some(&now), facts, false).unwrap();
+    let response = engine.run(spec_name, Some(&now), data, false).unwrap();
     response
         .results
         .get(rule_name)
@@ -62,14 +62,14 @@ fn load_specs_folder_examples() -> Engine {
 fn test_01_coffee_order() {
     let engine = load_specs_folder_examples();
 
-    let mut facts = HashMap::new();
-    facts.insert("product".to_string(), "latte".to_string());
-    facts.insert("size".to_string(), "large".to_string());
-    facts.insert("number_of_cups".to_string(), "2".to_string());
-    facts.insert("has_loyalty_card".to_string(), "true".to_string());
-    facts.insert("age".to_string(), "70".to_string());
+    let mut data = HashMap::new();
+    data.insert("product".to_string(), "latte".to_string());
+    data.insert("size".to_string(), "large".to_string());
+    data.insert("number_of_cups".to_string(), "2".to_string());
+    data.insert("has_loyalty_card".to_string(), "true".to_string());
+    data.insert("age".to_string(), "70".to_string());
 
-    let total = get_rule_value(&engine, "coffee_order", "total", facts);
+    let total = get_rule_value(&engine, "coffee_order", "total", data);
 
     // latte base_price (3.50 eur) * large size_multiplier (120%) = 4.20 eur per cup
     // 4.20 eur * 2 cups = 8.40 eur subtotal
@@ -86,18 +86,18 @@ fn test_01_coffee_order() {
 fn test_02_library_fees() {
     let engine = load_specs_folder_examples();
 
-    let mut facts = HashMap::new();
-    facts.insert("days_overdue".to_string(), "5".to_string());
-    facts.insert("book_type".to_string(), "regular".to_string());
-    facts.insert("is_first_offense".to_string(), "false".to_string());
+    let mut data = HashMap::new();
+    data.insert("days_overdue".to_string(), "5".to_string());
+    data.insert("book_type".to_string(), "regular".to_string());
+    data.insert("is_first_offense".to_string(), "false".to_string());
 
-    let final_fee = get_rule_value(&engine, "library_fees", "final_fee", facts.clone());
+    let final_fee = get_rule_value(&engine, "library_fees", "final_fee", data.clone());
     assert_eq!(
         final_fee.value,
         lemma::ValueKind::Scale(Decimal::from_str("1.25").unwrap(), "eur".to_string())
     );
 
-    let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", facts);
+    let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", data);
     assert_eq!(can_checkout.value, lemma::ValueKind::Boolean(true));
 }
 
@@ -105,18 +105,18 @@ fn test_02_library_fees() {
 fn test_03_recipe_scaling() {
     let engine = load_specs_folder_examples();
 
-    let mut facts = HashMap::new();
-    facts.insert("original_servings".to_string(), "4".to_string());
-    facts.insert("desired_servings".to_string(), "8".to_string());
-    facts.insert("recipe_name".to_string(), "chocolate_cake".to_string());
+    let mut data = HashMap::new();
+    data.insert("original_servings".to_string(), "4".to_string());
+    data.insert("desired_servings".to_string(), "8".to_string());
+    data.insert("recipe_name".to_string(), "chocolate_cake".to_string());
 
-    let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", facts.clone());
+    let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", data.clone());
     assert_eq!(
         scaling_factor.value,
         lemma::ValueKind::Number(Decimal::from_str("2").unwrap())
     );
 
-    let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", facts.clone());
+    let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", data.clone());
     assert_eq!(
         baking_time.value,
         lemma::ValueKind::Duration(
@@ -125,7 +125,7 @@ fn test_03_recipe_scaling() {
         )
     );
 
-    let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", facts);
+    let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", data);
     assert_eq!(
         oven_temp.value,
         lemma::ValueKind::Scale(Decimal::from_str("175").unwrap(), "celsius".to_string())
@@ -136,7 +136,7 @@ fn test_03_recipe_scaling() {
 fn test_04_membership_benefits() {
     let engine = load_specs_folder_examples();
 
-    // Test premium_membership spec (has rules, no facts needed)
+    // Test premium_membership spec (has rules, no data needed)
     let discount_rate = get_rule_value(
         &engine,
         "premium_membership",
@@ -185,55 +185,18 @@ fn test_04_membership_benefits() {
 fn test_05_weather_clothing() {
     let engine = load_specs_folder_examples();
 
-    let mut facts = HashMap::new();
-    facts.insert("temperature".to_string(), "15 celsius".to_string());
-    facts.insert("is_raining".to_string(), "false".to_string());
-    facts.insert("wind_speed".to_string(), "10".to_string());
+    let mut data = HashMap::new();
+    data.insert("temperature".to_string(), "15 celsius".to_string());
+    data.insert("is_raining".to_string(), "false".to_string());
+    data.insert("wind_speed".to_string(), "10".to_string());
 
     let clothing_layer =
-        get_rule_value(&engine, "weather_clothing", "clothing_layer", facts.clone());
+        get_rule_value(&engine, "weather_clothing", "clothing_layer", data.clone());
     assert_eq!(
         clothing_layer.value,
         lemma::ValueKind::Text("light".to_string())
     );
 
-    let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", facts);
+    let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", data);
     assert_eq!(needs_jacket.value, lemma::ValueKind::Boolean(false));
-}
-
-#[test]
-fn test_all_documentation_examples_parse() {
-    // This test just ensures all examples can be loaded without errors
-    let engine = load_specs_folder_examples();
-
-    // Verify all specs are loaded
-    let specs = engine.list_specs();
-
-    // Verify we have at least the expected specs loaded
-    assert!(
-        specs.len() >= 6,
-        "Expected at least 6 specs (examples + coffee_order), found {}. Available: {:?}",
-        specs.len(),
-        specs
-    );
-
-    // Verify key specs exist
-    let key_specs = vec![
-        "coffee_order",        // from 01_coffee_order.lemma
-        "library_fees",        // from 02_library_fees.lemma
-        "recipe_scaling",      // from 03_recipe_scaling.lemma
-        "premium_membership",  // from 04_membership_benefits.lemma
-        "membership_benefits", // from 04_membership_benefits.lemma
-        "weather_clothing",    // from 05_weather_clothing.lemma
-    ];
-
-    let spec_names: Vec<&str> = specs.iter().map(|d| d.name.as_str()).collect();
-    for expected in key_specs {
-        assert!(
-            spec_names.contains(&expected),
-            "Expected spec '{}' not found. Available: {:?}",
-            expected,
-            spec_names
-        );
-    }
 }

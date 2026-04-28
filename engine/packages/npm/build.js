@@ -30,11 +30,11 @@ const WASM_FILE = 'lemma_bg.wasm';
 const IIFE_ENTRY_JS = 'lemma.iife.js';
 
 /**
- * @benrogmans/lemma-engine — npm-only (not workspace.description / not lsp crate).
+ * @lemmabase/lemma-engine — npm-only (not workspace.description / not lsp crate).
  */
 const NPM_BRANDING = {
   description: 'A language that means business. Also in the browser.',
-  homepage: 'https://github.com/benrogmans/lemma',
+  homepage: 'https://github.com/lemma/lemma',
   keywords: [
     'lemma',
     'rules-engine',
@@ -129,7 +129,7 @@ function parseWorkspacePublishMeta() {
     license: extractField(workspaceSection, 'license') || 'Apache-2.0',
     repository:
       extractField(workspaceSection, 'repository') ||
-      'https://github.com/benrogmans/lemma',
+      'https://github.com/lemma/lemma',
     author,
   };
 }
@@ -197,7 +197,7 @@ export function build() {
 
   const meta = parseWorkspacePublishMeta();
   const packageJson = {
-    name: '@benrogmans/lemma-engine',
+    name: '@lemmabase/lemma-engine',
     version: meta.version,
     description: NPM_BRANDING.description,
     type: 'module',

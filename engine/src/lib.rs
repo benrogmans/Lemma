@@ -2,7 +2,7 @@
 //!
 //! **Rules for man and machine**
 //!
-//! Lemma is a declarative programming language for expressing rules, facts, and business logic
+//! Lemma is a declarative programming language for expressing rules, data, and business logic
 //! in a way that is both human-readable and machine-executable.
 //!
 //! ## Quick Start
@@ -16,12 +16,12 @@
 //! // Load Lemma code
 //! engine.load(r#"
 //!     spec example
-//!     fact price: 100
-//!     fact quantity: 5
+//!     data price: 100
+//!     data quantity: 5
 //!     rule total: price * quantity
 //! "#, SourceType::Labeled("example.lemma")).expect("failed to load");
 //!
-//! // Evaluate the spec (all rules, no fact values)
+//! // Evaluate the spec (all rules, no data values)
 //! let now = lemma::DateTimeValue::now();
 //! let response = engine.run("example", Some(&now), HashMap::new(), false).unwrap();
 //! ```
@@ -29,15 +29,15 @@
 //! ## Core Concepts
 //!
 //! ### Specs
-//! A spec is a collection of facts and rules. Specs can reference
+//! A spec is a collection of data and rules. Specs can reference
 //! other specs to build composable logic.
 //!
-//! ### Facts
-//! Facts are named values: numbers, text, dates, booleans, or typed units
+//! ### Data
+//! Data are named values: numbers, text, dates, booleans, or typed units
 //! like `50 kilograms` or `100`.
 //!
 //! ### Rules
-//! Rules compute values based on facts and other rules. They support
+//! Rules compute values based on data and other rules. They support
 //! conditional logic through "unless" clauses.
 //!
 //! ### Types
@@ -59,36 +59,38 @@ pub mod parsing;
 pub mod planning;
 pub mod registry;
 pub mod serialization;
-pub mod spec_id;
+pub mod spec_set_id;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
 pub use engine::{Context, Engine, Errors, SourceType};
-pub use error::{Error, RequestErrorKind};
+pub use error::{Error, ErrorKind, RequestErrorKind};
 pub use evaluation::explanation;
 pub use evaluation::operations::{
-    ComputationKind, OperationKind, OperationRecord, OperationResult,
+    ComputationKind, OperationKind, OperationRecord, OperationResult, VetoType,
 };
-pub use evaluation::response::{Facts, Response, RuleResult};
+pub use evaluation::response::{DataGroup, Response, RuleResult};
 pub use formatting::{format_source, format_specs};
 pub use inversion::{Bound, Domain, InversionResponse, Solution, Target, TargetOp};
 pub use limits::ResourceLimits;
 pub use parsing::ast::{
-    DateTimeValue, DepthTracker, LemmaFact, LemmaRule, LemmaSpec, MetaField, MetaValue, Span,
-    TypeDef,
+    DateTimeValue, DepthTracker, LemmaData, LemmaRule, LemmaSpec, MetaField, MetaValue, Span,
 };
 pub use parsing::parse;
 pub use parsing::ParseResult;
 pub use parsing::Source;
 pub use planning::semantics::{
-    is_same_spec, FactPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit,
+    is_same_spec, DataPath, LemmaType, LiteralValue, RatioUnit, RatioUnits, RulePath, ScaleUnit,
     ScaleUnits, SemanticDurationUnit, TypeDefiningSpec, TypeSpecification, ValueKind,
 };
-pub use planning::{ExecutionPlan, PlanningResult, SpecPlanningResult, SpecSchema};
+pub use planning::{
+    ExecutionPlan, ExecutionPlanSet, LemmaSpecSet, PlanningResult, SpecPlanningResult, SpecSchema,
+    SpecSetPlanningResult,
+};
 #[cfg(feature = "registry")]
 pub use registry::LemmaBase;
 pub use registry::{
     resolve_registry_references, Registry, RegistryBundle, RegistryError, RegistryErrorKind,
 };
-pub use spec_id::parse_spec_id;
+pub use spec_set_id::parse_spec_set_id;

@@ -1,6 +1,6 @@
 # Lemma
 
-[![CI](https://github.com/benrogmans/lemma/workflows/CI/badge.svg)](https://github.com/benrogmans/lemma/actions/workflows/quality.yml)
+[![CI](https://github.com/lemma/lemma/workflows/CI/badge.svg)](https://github.com/lemma/lemma/actions/workflows/quality.yml)
 [![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -9,13 +9,13 @@
 
 Lemma is a declarative language for business rules. It flows like natural language and encodes pricing rules, tax calculations, eligibility criteria, contracts, policies and law. Stakeholders can read them, systems can evaluate them.
 
-Rules in Lemma are transparent, deterministic, logically consistent, temporally bound and explainable. So with the same facts for the same spec and the same effective point in time, you will get the same result. Lemma can also tell you why you got that result. Audits and tracing become trivial, even as time passes and rules change.
+Rules in Lemma are transparent, deterministic, logically consistent, temporally bound and explainable. So with the same data for the same spec and the same effective point in time, you will get the same result. Lemma can also tell you why you got that result. Audits and tracing become trivial, even as time passes and rules change.
 
 ```lemma
 spec pricing 2026-01-01
 
-fact quantity : [number]
-fact is_vip   : false
+data quantity : number
+data is_vip   : false
 
 rule discount:
   0%
@@ -39,7 +39,7 @@ This allows you to implement policy changes rapidly without compromising complia
 
 ### Direction
 
-Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, **semantic hash pinning** for integrity, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what would satisfy this outcome?” queries), **tables** as a first-class data type for data-driven rules, and **performance** competitive with high performance programming languages.
+Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what would satisfy this outcome?” queries), **tables** as a first-class data type for data-driven rules, and **performance** competitive with high performance programming languages.
 
 ### What about AI?
 
@@ -62,18 +62,18 @@ Create `shipping.lemma`:
 ```lemma
 spec shipping
 
-type money: scale
+data money: scale
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
   -> minimum 0
 
-type weight: scale
+data weight: scale
   -> unit kilogram 1
   -> unit gram 0.001
 
-fact is_express     : true
-fact package_weight : 2.5 kilogram
+data is_express     : true
+data package_weight : 2.5 kilogram
 
 rule express_fee:
   0 eur
@@ -102,7 +102,7 @@ $ lemma run shipping
 Hash: 1d2e8f6d
 ```
 
-Override facts from the command line:
+Override data from the command line:
 
 ```bash
 lemma run shipping is_express=false package_weight=6.0
@@ -117,17 +117,17 @@ Define custom types with units, constraints, and automatic conversion:
 ```lemma
 spec type_examples
 
-type money: scale
+data money: scale
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
   -> minimum 0
 
-type status: text
+data status: text
   -> option "active"
   -> option "inactive"
 
-type discount: ratio
+data discount: ratio
   -> minimum 0
   -> maximum 1
 ```
@@ -136,26 +136,26 @@ type discount: ratio
 
 ### Spec composition
 
-Reference facts and rules across specs:
+Reference data and rules across specs:
 
 ```lemma
 spec employee
 
-fact years_service : 8
+data years_service : 8
 
 
 spec leave_policy
 
-fact senior_threshold : 5
-fact base_leave_days  : 25
-fact bonus_leave_days : 5
+data senior_threshold : 5
+data base_leave_days  : 25
+data bonus_leave_days : 5
 
 
 spec leave_entitlement
 
-fact employee : spec employee
+with employee
 
-fact leave_policy : spec leave_policy
+with leave_policy
 
 rule is_senior:
   employee.years_service >= leave_policy.senior_threshold
@@ -173,8 +173,8 @@ Multiple versions of a spec can coexist. The engine resolves the correct one bas
 ```lemma
 spec pricing
 
-fact base_price : 20
-fact quantity   : [number]
+data base_price : 20
+data quantity   : number
 
 rule total:
   base_price * quantity
@@ -182,8 +182,8 @@ rule total:
 
 spec pricing 2025-01-01
 
-fact base_price : 25
-fact quantity   : [number]
+data base_price : 25
+data quantity   : number
 
 rule total:
   base_price * quantity
@@ -201,9 +201,9 @@ When type constraints are not enough, `veto` blocks a rule entirely:
 ```lemma
 spec performance_review
 
-fact start_date        : [date]
-fact review_date       : [date]
-fact performance_score : [number -> minimum 0 -> maximum 100]
+data start_date        : [date]
+data review_date       : [date]
+data performance_score : number -> minimum 0 -> maximum 100]
 
 rule bonus_percentage:
   0%
@@ -222,10 +222,10 @@ Reference shared specs from a registry with `@`:
 ```lemma
 spec invoicing
 
-type currency from @lemma/std/finance
+data currency from @lemma/std/finance
 
-fact subtotal : 250 eur
-fact tax_rate : 21%
+data subtotal : 250 eur
+data tax_rate : 21%
 
 rule tax:
   subtotal * tax_rate
@@ -244,16 +244,14 @@ lemma get -f        # force re-fetch if content changed
 ```bash
 lemma run pricing                         # evaluate all rules
 lemma run pricing --rules=total,tax       # specific rules only
-lemma run pricing quantity=10 is_vip=true # override facts
+lemma run pricing quantity=10 is_vip=true # override data
 lemma run --interactive                   # interactive mode
 
 lemma run pricing --effective 2025-01-01  # temporal query
-lemma run spec~a1b2c3d4                   # pin to plan hash (use lemma schema for hash)
-
 lemma run pricing -o json                 # JSON output
 lemma run pricing -x                      # show reasoning
 
-lemma schema pricing                      # spec schema (includes hash)
+lemma schema pricing                      # spec schema
 lemma list                                # list all specs
 lemma format                               # format .lemma files
 lemma get                                 # fetch registry dependencies
@@ -296,11 +294,11 @@ lemma mcp --admin     # enable spec creation
 ### WebAssembly
 
 ```bash
-npm install @benrogmans/lemma-engine
+npm install @lemmabase/lemma-engine
 ```
 
 ```javascript
-import { Lemma } from '@benrogmans/lemma-engine';
+import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 ```
 
@@ -309,13 +307,13 @@ const engine = await Lemma();
 ### Docker
 
 ```bash
-docker pull ghcr.io/benrogmans/lemma:latest
+docker pull ghcr.io/lemma/lemma:latest
 
 # Run a spec
-docker run --rm -v "$(pwd):/specs" ghcr.io/benrogmans/lemma run shipping
+docker run --rm -v "$(pwd):/specs" ghcr.io/lemma/lemma run shipping
 
 # Deploy as HTTP API
-docker run -d -p 8012:8012 -v "$(pwd):/specs" ghcr.io/benrogmans/lemma \
+docker run -d -p 8012:8012 -v "$(pwd):/specs" ghcr.io/lemma/lemma \
   server --host 0.0.0.0 --port 8012
 ```
 
@@ -323,7 +321,7 @@ Supports `linux/amd64` and `linux/arm64`.
 
 ## Documentation
 
-- **[Language Guide](documentation/index.md)** -- specs, facts, rules, types
+- **[Language Guide](documentation/index.md)** -- specs, data, rules, types
 - **[Reference](documentation/reference.md)** -- operators, literals, syntax
 - **[Veto Semantics](documentation/veto_semantics.md)** -- when rules produce no value
 - **[Examples](documentation/examples/)** -- example `.lemma` files
@@ -346,4 +344,4 @@ Apache 2.0 -- see LICENSE for details.
 
 ---
 
-**[GitHub](https://github.com/benrogmans/lemma)** -- **[Issues](https://github.com/benrogmans/lemma/issues)** -- **[Documentation](documentation/index.md)** -- **[WASM](documentation/wasm.md)**
+**[GitHub](https://github.com/lemma/lemma)** -- **[Issues](https://github.com/lemma/lemma/issues)** -- **[Documentation](documentation/index.md)** -- **[WASM](documentation/wasm.md)**

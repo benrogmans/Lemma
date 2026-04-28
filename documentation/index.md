@@ -7,7 +7,7 @@ title: Lemma Documentation
 
 **A language that means business.**
 
-Lemma is a declarative language for expressing rules, facts, and business logic that both humans and computers can understand.
+Lemma is a declarative language for expressing rules, data, and business logic that both humans and computers can understand.
 
 ## Quick Links
 
@@ -26,9 +26,9 @@ Lemma is whitespace-insensitive. Use formatting that makes your rules readable:
 ```lemma
 spec pricing
 
-fact quantity: [number]
-fact base_price: 100
-fact is_member: false
+data quantity: number
+data base_price: 100
+data is_member: false
 
 rule price_with_vat: base_price + 21%
 
@@ -46,7 +46,7 @@ rule price_with_discount: base_price - discount
 
 ### Specs
 
-Every Lemma file contains specs -- namespaces for facts and rules:
+Every Lemma file contains specs -- namespaces for data and rules:
 
 ```lemma
 spec employee/contract
@@ -57,43 +57,43 @@ Optional description in triple quotes.
 
 Specs support hierarchical naming: `contract/employment`, `company/policies/vacation`.
 
-### Facts
+### Data
 
 Named values with rich types:
 
 ```lemma
-fact name: "Alice"
-fact age: 35
-fact start_date: 2024-01-15
-fact salary: 75000
-fact tax_rate: 15%
-fact is_manager: true
-fact workweek: 40 hours
+data name: "Alice"
+data age: 35
+data start_date: 2024-01-15
+data salary: 75000
+data tax_rate: 15%
+data is_manager: true
+data workweek: 40 hours
 ```
 
 **Type annotations** -- declare expected types without values:
 
 ```lemma
-type length: scale
+data length: scale
   -> unit meter 1.0
   -> unit kilometer 1000.0
 
-fact birth_date: [date]
-fact distance: [length]
+data birth_date: date
+data distance: length
 ```
 
-Or inline:
+Or with inline type constraints:
 
 ```lemma
-fact age: [number -> minimum 0 -> maximum 120]
-fact price: [scale -> unit eur 1.00 -> unit usd 1.10]
+data age: number -> minimum 0 -> maximum 120
+data price: scale -> unit eur 1.00 -> unit usd 1.10
 ```
 
 See: [reference.md -- Type Annotations](reference.md#type-annotations)
 
 ### Rules
 
-Compute values based on facts and other rules:
+Compute values based on data and other rules:
 
 ```lemma
 rule annual_salary: monthly_salary * 12
@@ -156,7 +156,7 @@ See: [veto_semantics.md](veto_semantics.md)
 
 ### Rule references
 
-Reference other rules by name (the engine resolves whether a name is a fact or a rule):
+Reference other rules by name (the engine resolves whether a name is a data or a rule):
 
 ```lemma
 rule is_adult: age >= 18
@@ -169,24 +169,24 @@ rule can_drive: is_adult and has_license
 
 ### Spec composition
 
-Reference facts and rules across specs:
+Reference data and rules across specs:
 
 ```lemma
 spec base_employee
-fact name: "John Doe"
-fact salary: 5000
+data name: "John Doe"
+data salary: 5000
 
 spec manager
-fact employee: spec base_employee
-fact employee.name: "Alice Smith"
-fact employee.salary: 8000
+with employee: base_employee
+data employee.name: "Alice Smith"
+data employee.salary: 8000
 
 rule manager_bonus: employee.salary * 0.15
 ```
 
 Spec names may include a `.version_tag` suffix (e.g. `spec pricing.v1`). An unversioned reference resolves to the latest loaded temporal version by natural sort.
 
-See: [reference.md -- Spec References](reference.md#spec-references)
+See: [reference.md -- Spec References](reference.md#spec-references-with)
 
 ## Expressions
 
@@ -229,27 +229,29 @@ Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `ex
 
 ## User-Defined Types
 
+Data define custom types using the `data` keyword with type commands:
+
 ```lemma
-type money: scale
+data money: scale
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-type mass: scale
+data mass: scale
   -> unit kilogram 1.0
   -> unit gram 0.001
   -> unit pound 0.453592
 
-fact price: 100 eur
-fact weight: 75 kilogram
+data price: 100 eur
+data weight: 75 kilogram
 ```
 
-**Type imports** -- reuse types across specs:
+**Data imports** -- reuse types across specs:
 
 ```lemma
-type currency from base_types
-type discount_rate from pricing -> maximum 0.5
+data currency from base_types
+data discount_rate from pricing -> maximum 0.5
 ```
 
 See: [reference.md -- User-Defined Types](reference.md#user-defined-types)
@@ -259,18 +261,18 @@ See: [reference.md -- User-Defined Types](reference.md#user-defined-types)
 Conversions work within the same type definition:
 
 ```lemma
-type money: scale
+data money: scale
   -> unit eur 1.00
   -> unit usd 1.10
 
-fact price: 100 eur
+data price: 100 eur
 rule price_usd: price in usd
 ```
 
 Duration units are built-in:
 
 ```lemma
-fact workweek: 40 hours
+data workweek: 40 hours
 rule workweek_days: workweek in days
 ```
 
@@ -295,9 +297,9 @@ rule as_percent: 0.25 in percent
 ## Date and Time
 
 ```lemma
-fact today: 2024-09-30
-fact deadline: 2024-12-31
-fact meeting_time: 2024-09-30T14:30:00Z
+data today: 2024-09-30
+data deadline: 2024-12-31
+data meeting_time: 2024-09-30T14:30:00Z
 
 rule days_until_deadline: deadline - today
 rule is_overdue: today > deadline
@@ -307,7 +309,7 @@ rule is_overdue: today > deadline
 
 Browse [examples/](examples/) or [cli/tests/integrations/examples/](../cli/tests/integrations/examples/):
 
-1. **[01_simple_facts](../cli/tests/integrations/examples/01_simple_facts.lemma)** -- all fact types and literals
+1. **[01_simple_data](../cli/tests/integrations/examples/01_simple_data.lemma)** -- all data types and literals
 2. **[02_rules_and_unless](../cli/tests/integrations/examples/02_rules_and_unless.lemma)** -- conditional logic, veto
 3. **[03_spec_references](../cli/tests/integrations/examples/03_spec_references.lemma)** -- spec composition
 4. **[04_unit_conversions](../cli/tests/integrations/examples/04_unit_conversions.lemma)** -- typed units
