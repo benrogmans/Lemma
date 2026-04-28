@@ -2,6 +2,19 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.12] - 2026-04-28
+
+Release-pipeline fixes only. No engine, CLI, or language changes.
+
+### Fixed
+
+- **Hex publish**: the standalone `Cargo.toml` rewrite for the published Hex tarball now also rewrites `lemma-openapi` from a workspace path dep to the matching registry version, mirroring the existing `lemma-engine` rewrite. Without this, end users compiling from the Hex tarball (or `mix hex.publish`'s own verification compile) saw two distinct `lemma-engine` instances — one pulled from crates.io via `lemma_hex`, one from the local path via `lemma-openapi` — producing type mismatches on shared types like `Engine` and `DateTimeValue`.
+
+### Changed
+
+- **npm release workflow**: `publish-npm` now uses npm Trusted Publishing (OIDC) via `npm/publish@v1.0.1` with `id-token: write`, eliminating the long-lived `NPM_TOKEN` secret and the `EOTP` 2FA failure mode for automation.
+- **npm package metadata**: `engine/packages/npm/build.js` emits `repository.url` as `git+https://github.com/lemma/lemma.git`, silencing npm's autocorrect warning on publish.
+
 ## [0.8.11] - 2026-04-28
 
 ### Added

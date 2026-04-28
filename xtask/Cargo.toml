@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 semver = "1"
 serde_json.workspace = true
+toml_edit = "0.22"
 
 [[bin]]
 name = "xtask"

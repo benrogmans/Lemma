@@ -1,7 +1,7 @@
 defmodule Lemma.MixProject do
   use Mix.Project
 
-  @version "0.8.11"
+  @version "0.8.12"
   @source_url "https://github.com/lemma/lemma"
 
   def project do

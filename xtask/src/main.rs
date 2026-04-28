@@ -1,3 +1,4 @@
+mod hex_standalone;
 mod versions;
 mod versions_diff;
 
@@ -118,7 +119,7 @@ fn precommit() {
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]"
+        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo run -p xtask -- hex-standalone"
     );
 }
 
@@ -147,6 +148,18 @@ fn main() {
                 std::process::exit(1);
             }
             eprintln!("versions-bump: set to {new_v}");
+        }
+        Some("hex-standalone") => {
+            if args.next().is_some() {
+                eprintln!("hex-standalone: takes no arguments");
+                usage();
+                std::process::exit(1);
+            }
+            let root = versions::workspace_root();
+            if let Err(e) = hex_standalone::run(&root) {
+                eprintln!("hex-standalone: {e}");
+                std::process::exit(1);
+            }
         }
         Some("versions-diff") => {
             let ver = args.next();

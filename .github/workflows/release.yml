@@ -388,20 +388,10 @@ jobs:
           elixir-version: '1.19.5'
 
       - name: Rewrite NIF Cargo.toml for standalone build
-        working-directory: engine/packages/hex
-        run: |
-          VERSION="${{ needs.detect-version-changes.outputs.version }}"
-          cd native/lemma_hex
-          sed -i 's|^version\.workspace = true|version = "'"${VERSION}"'"|' Cargo.toml
-          sed -i 's|^edition\.workspace = true|edition = "2021"|' Cargo.toml
-          sed -i '/^authors\.workspace/d' Cargo.toml
-          sed -i '/^license\.workspace/d' Cargo.toml
-          sed -i '/^repository\.workspace/d' Cargo.toml
-          sed -i 's|^lemma-engine = { path = "../../../../" }|lemma-engine = "='"${VERSION}"'"|' Cargo.toml
-          sed -i 's|^lemma-openapi = { path = "../../../../../openapi" }|lemma-openapi = "='"${VERSION}"'"|' Cargo.toml
-          sed -i 's|^serde_json\.workspace = true|serde_json = "1.0"|' Cargo.toml
-          echo "--- Cargo.toml after rewrite ---"
-          cat Cargo.toml
+        run: cargo run -p xtask -- hex-standalone
+
+      - name: Show rewritten NIF Cargo.toml
+        run: cat engine/packages/hex/native/lemma_hex/Cargo.toml
 
       - name: Install mix deps
         working-directory: engine/packages/hex
