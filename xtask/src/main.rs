@@ -1,4 +1,5 @@
 mod hex_standalone;
+mod lsp;
 mod versions;
 mod versions_diff;
 
@@ -48,7 +49,6 @@ fn git_has_changes_under(repo_root: &Path, pathspec: &str) -> bool {
 }
 
 const HEX_PACKAGE_DIR: &str = "engine/packages/hex";
-const VSCODE_EXTENSION_DIR: &str = "engine/lsp/editors/vscode";
 
 fn run_mix_precommit() {
     let root = versions::workspace_root();
@@ -69,11 +69,14 @@ fn run_mix_precommit() {
 
 fn run_vscode_precommit() {
     let root = versions::workspace_root();
-    if !git_has_changes_under(&root, VSCODE_EXTENSION_DIR) {
-        eprintln!("xtask: vscode npm precommit (skipped, no changes under {VSCODE_EXTENSION_DIR})");
+    if !git_has_changes_under(&root, lsp::VSCODE_EXTENSION_REL) {
+        eprintln!(
+            "xtask: vscode npm precommit (skipped, no changes under {})",
+            lsp::VSCODE_EXTENSION_REL
+        );
         return;
     }
-    let dir = root.join(VSCODE_EXTENSION_DIR);
+    let dir = root.join(lsp::VSCODE_EXTENSION_REL);
     let status = Command::new("npm")
         .current_dir(&dir)
         .args(["run", "precommit"])
@@ -119,7 +122,7 @@ fn precommit() {
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo run -p xtask -- hex-standalone"
+        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone"
     );
 }
 
@@ -171,6 +174,14 @@ fn main() {
             let root = versions::workspace_root();
             if let Err(e) = versions_diff::run_versions_diff(&root, ver.as_deref()) {
                 eprintln!("versions-diff: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("lsp") => {
+            let root = versions::workspace_root();
+            let rest: Vec<String> = args.collect();
+            if let Err(e) = lsp::run(&root, &rest) {
+                eprintln!("lsp: {e}");
                 std::process::exit(1);
             }
         }

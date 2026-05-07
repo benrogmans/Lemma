@@ -34,8 +34,10 @@ lemma run --interactive
 # Show spec structure
 lemma schema pricing
 
-# List available specs
-lemma list ./documentation/examples
+# List workspace entry-point specs (+ loaded repos); from cwd, drill into a repo:
+lemma list
+lemma list '@lemma/std'
+lemma list ./my_project spec_composition
 
 # Start the HTTP server
 lemma server --port 8012 --dir ./documentation/examples

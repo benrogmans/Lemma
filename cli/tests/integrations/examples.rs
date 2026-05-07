@@ -29,6 +29,7 @@ fn test_example_07_shipping_policy() {
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("shipping_policy")
         .arg("order_total=75.00")
@@ -65,8 +66,9 @@ fn test_example_13_temporal_versioning() {
     let output_2024 = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
         .args([
             "run",
+            "--prefix",
             dir,
-            "ind/kennismigrant/aanvraag",
+            "kennismigrant_aanvraag",
             "--effective",
             "2024-06",
             "applicant_age=28",
@@ -92,8 +94,9 @@ fn test_example_13_temporal_versioning() {
     let output_2025 = std::process::Command::new(env!("CARGO_BIN_EXE_lemma"))
         .args([
             "run",
+            "--prefix",
             dir,
-            "ind/kennismigrant/aanvraag",
+            "kennismigrant_aanvraag",
             "--effective",
             "2025-06",
             "applicant_age=31",

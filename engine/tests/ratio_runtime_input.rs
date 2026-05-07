@@ -1,6 +1,6 @@
 //! Strict runtime-input grammar for Ratio-typed data overrides.
 //!
-//! Covers `engine.run(spec, ..., data: HashMap<String, String>, ...)` where each
+//! Covers `engine.run(None, spec, ..., data: HashMap<String, String>, ...)` where each
 //! string flows through `parse_value_from_string` → `parse_number_unit::Ratio` →
 //! `RatioLiteral::parse`. Pins exact `ValueKind::Ratio(decimal, optional_unit)`,
 //! not substrings of `Display`, so a 100x off value cannot pass.
@@ -19,7 +19,12 @@ use std::str::FromStr;
 
 fn load(engine: &mut Engine, code: &str) {
     engine
-        .load(code, lemma::SourceType::Labeled("ratio_in.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "ratio_in.lemma",
+            ))),
+        )
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -35,7 +40,7 @@ fn run_ratio(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<String>
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(spec, Some(&now), data, false)
+        .run(None, spec, Some(&now), data, false)
         .unwrap_or_else(|e| panic!("run failed for input '{raw}': {e}"));
     let rr = resp
         .results
@@ -56,7 +61,7 @@ fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     engine
-        .run(spec, Some(&now), data, false)
+        .run(None, spec, Some(&now), data, false)
         .err()
         .unwrap_or_else(|| panic!("expected '{raw}' to be rejected, but run succeeded"))
         .to_string()
@@ -369,7 +374,7 @@ rule out: r
     data.insert("r".to_string(), "5%".to_string());
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("'5%' must not parse as a Scale value");
     let msg = err.to_string();
     assert!(
@@ -397,7 +402,7 @@ rule out: r
     data.insert("r".to_string(), "5%%".to_string());
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("'5%%' must not parse as a Scale value");
     let msg = err.to_string();
     assert!(

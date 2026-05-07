@@ -5,14 +5,14 @@ use std::{collections::HashMap, str::FromStr};
 
 fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Labeled("test.lemma"))?;
+    engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    )?;
     let now = DateTimeValue::now();
     let mut resp = engine
-        .run("test", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
+        .run(None, "test", Some(&now), HashMap::new(), false)
+        .expect("run should succeed after load");
     resp.filter_rules(&[rule.to_string()]);
     let v = resp
         .results

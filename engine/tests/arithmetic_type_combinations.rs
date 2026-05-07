@@ -17,11 +17,14 @@ fn eval_rule(
 ) -> String {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(spec_name, Some(&now), data, false)
+        .run(None, spec_name, Some(&now), data, false)
         .expect("Should evaluate");
     let result = response
         .results

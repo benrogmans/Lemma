@@ -27,18 +27,18 @@ defmodule Lemma do
 
   ## Options (limits map keys)
 
-  - `max_files` - max .lemma files per load_from_paths
+  - `max_sources` - max sources per load_from_paths (after expanding paths)
   - `max_loaded_bytes` - max total bytes to load
-  - `max_file_size_bytes` - max single file size
+  - `max_source_size_bytes` - max single source text size in bytes
   - `max_total_expression_count` - max expression nodes
   - `max_expression_depth` - max nesting depth
-  - `max_expression_count` - max expressions per file
+  - `max_expression_count` - max expressions per source (parser)
   - `max_data_value_bytes` - max data value size
 
   ## Examples
 
       {:ok, engine} = Lemma.new()
-      {:ok, engine} = Lemma.new(%{max_files: 100})
+      {:ok, engine} = Lemma.new(%{max_sources: 100})
   """
   @spec new(limits_map) :: {:ok, engine()} | {:error, term()}
   def new(limits \\ nil) do
@@ -64,8 +64,28 @@ defmodule Lemma do
   end
 
   @doc """
-  Lists all loaded specs. Each item is a map with `:name`, `:effective_from`,
-  `:effective_to`, and `:schema`.
+  Loads multiple Lemma sources in one planning pass.
+
+  `sources` is a map of path label (for errors) to source text. Use `""` as key for volatile/inline.
+
+  `dependency` is optional; when non-empty, repositories in this batch are tagged with that dependency id (same as the Rust `Engine.load_batch/2` second argument).
+  """
+  @spec load_batch(engine(), %{String.t() => String.t()}, String.t() | nil) ::
+          :ok | {:error, [map()]}
+  def load_batch(engine, sources, dependency \\ nil) do
+    Lemma.Native.lemma_load_batch(engine, sources, dependency)
+  end
+
+  @doc """
+  Lists loaded specs grouped by repository (same order as the engine:
+  workspace first, then dependencies).
+
+  Each element is `%{repository: %{name: ..., dependency: ..., start_line: ..., attribute: ...}, specs: [...]}`
+  where `:name` / `:dependency` are strings or `nil` (workspace has `:name` nil),
+  `:start_line` is a non-negative integer, and `:attribute` is the load-source label string
+  or `nil` (same display as `SourceType` in Rust — path, `volatile`, …).
+  Each entry in `:specs` has `:name`, `:effective_from`, `:effective_to`, `:start_line`,
+  `:attribute`, and `:schema` (decoded JSON object).
 
   Temporal versions form a half-open `[effective_from, effective_to)` range:
 
@@ -78,12 +98,22 @@ defmodule Lemma do
 
   `:schema` is the decoded [`Lemma.schema/3`] envelope for this version so
   callers never need a second round-trip.
+
+  Returns `{:ok, []}` when nothing is loaded.
   """
   @spec list(engine()) :: {:ok, [map()]} | {:error, term()}
   def list(engine) do
     case Lemma.Native.lemma_list(engine) do
-      {:ok, items} ->
-        {:ok, Enum.map(items, fn item -> Map.update!(item, :schema, &Jason.decode!/1) end)}
+      {:ok, groups} ->
+        {:ok,
+         Enum.map(groups, fn group ->
+           specs =
+             Enum.map(group.specs, fn item ->
+               Map.update!(item, :schema, &Jason.decode!/1)
+             end)
+
+           %{repository: group.repository, specs: specs}
+         end)}
 
       err ->
         err
@@ -169,30 +199,11 @@ defmodule Lemma do
   end
 
   @doc """
-  Temporal version options for API docs (same boundaries as `lemma serve` / Scalar).
-
-  Returns a list of maps with string keys `"title"` and `"slug"`. Slug `"now"` means the
-  latest interface at request time; other slugs match `effective` strings for `generate_openapi/2`.
+  Loaded repositories (workspace and dependencies). Each map has string keys `"name"` and `"dependency"`.
   """
-  @spec temporal_api_sources(engine()) :: {:ok, [map()]} | {:error, term()}
-  def temporal_api_sources(engine) do
-    case Lemma.Native.lemma_temporal_api_sources(engine) do
-      {:ok, binary} -> {:ok, Jason.decode!(binary)}
-      err -> err
-    end
-  end
-
-  @doc """
-  Generates an OpenAPI 3.1 JSON document for the loaded specs (Lemma HTTP API shape).
-
-  Options: `:explanations` (boolean, default false), `:effective` (datetime string or nil for "now").
-  """
-  @spec generate_openapi(engine(), keyword()) :: {:ok, map()} | {:error, term()}
-  def generate_openapi(engine, opts \\ []) do
-    explanations = Keyword.get(opts, :explanations, false)
-    effective = Keyword.get(opts, :effective)
-
-    case Lemma.Native.lemma_generate_openapi(engine, explanations, effective) do
+  @spec repositories(engine()) :: {:ok, [map()]} | {:error, term()}
+  def repositories(engine) do
+    case Lemma.Native.lemma_repositories(engine) do
       {:ok, binary} -> {:ok, Jason.decode!(binary)}
       err -> err
     end

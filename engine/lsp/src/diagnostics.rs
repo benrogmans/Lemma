@@ -32,11 +32,9 @@ fn byte_offset_to_position(text: &str, byte_offset: usize) -> Position {
     Position { line, character }
 }
 
-/// Convert a Lemma Span (byte offsets) to an LSP Range using the editor buffer text.
-///
-/// This is the reliable approach: building the Range from byte offsets against the
-/// current editor buffer text so offsets match what the user is seeing.
-fn span_to_range(text: &str, start_byte: usize, end_byte: usize) -> Range {
+/// Convert a Lemma `Span` (byte offsets) to an LSP `Range` using the editor buffer text.
+#[must_use]
+pub fn span_to_range(text: &str, start_byte: usize, end_byte: usize) -> Range {
     let start_position = byte_offset_to_position(text, start_byte);
     let end_position = byte_offset_to_position(text, end_byte);
     Range {
@@ -111,7 +109,7 @@ pub fn errors_to_diagnostics(
 
     for error in errors {
         let belongs_to_file = match error.location() {
-            Some(source) => source.attribute == file_attribute,
+            Some(source) => source.source_type.to_string() == file_attribute,
             None => true,
         };
 
@@ -222,12 +220,14 @@ mod tests {
 
     #[test]
     fn errors_to_diagnostics_filters_by_file_attribute() {
-        use lemma::Span;
+        use lemma::parsing::ast::Span;
 
         let error_in_file = Error::parsing(
             "bad syntax",
-            lemma::Source::new(
-                "file_a.lemma",
+            lemma::parsing::source::Source::new(
+                lemma::parsing::source::SourceType::Path(std::sync::Arc::new(
+                    std::path::PathBuf::from("file_a.lemma"),
+                )),
                 Span {
                     start: 0,
                     end: 8,
@@ -239,8 +239,10 @@ mod tests {
         );
         let error_in_other_file = Error::parsing(
             "also bad",
-            lemma::Source::new(
-                "file_b.lemma",
+            lemma::parsing::source::Source::new(
+                lemma::parsing::source::SourceType::Path(std::sync::Arc::new(
+                    std::path::PathBuf::from("file_b.lemma"),
+                )),
                 Span {
                     start: 0,
                     end: 5,

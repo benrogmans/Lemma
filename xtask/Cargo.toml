@@ -3,7 +3,7 @@ name = "xtask"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Workspace automation (precommit, version bump/verify)"
+description = "Workspace automation (precommit, version bump/verify, LSP build)"
 license.workspace = true
 
 [dependencies]

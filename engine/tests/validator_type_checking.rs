@@ -8,7 +8,10 @@ rule result: 5 and true
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
     assert!(result.is_err(), "Should reject non-boolean in 'and'");
     let errs = result.unwrap_err();
     assert!(errs.iter().any(|e| e.to_string().contains("boolean")));
@@ -24,7 +27,10 @@ rule value: "default"
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
     assert!(
         result.is_err(),
         "Should reject mixing text and number types"
@@ -52,7 +58,10 @@ rule result: time1 and time2
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
     assert!(
         result.is_err(),
         "Should reject time values in logical operators"
@@ -71,7 +80,10 @@ rule bad: sqrt price
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
     assert!(
         result.is_err(),
         "sqrt(scale) should be rejected at planning"

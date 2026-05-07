@@ -12,7 +12,10 @@ data base: 100
 rule usage: nonexistent + 1
 "#;
 
-    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        lemma_code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
     assert!(
         result.is_err(),
         "Reference to non-existent name should fail"
@@ -43,7 +46,10 @@ rule ambiguous: 20
 rule usage: ambiguous + 1
 "#;
 
-    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        lemma_code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
     assert!(
         result.is_err(),
         "Reference that is both data and rule should fail"

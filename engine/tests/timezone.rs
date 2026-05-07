@@ -6,7 +6,7 @@ use std::collections::HashMap;
 fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .run(spec_name, Some(&now), HashMap::new(), false)
+        .run(None, spec_name, Some(&now), HashMap::new(), false)
         .unwrap();
     response
         .results
@@ -30,7 +30,10 @@ rule are_equal: time_nyc is time_london
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -55,7 +58,10 @@ rule nyc_is_later: time_nyc > time_tokyo
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -79,7 +85,10 @@ rule later: start_time + 2 hours
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -114,7 +123,10 @@ rule later: west_coast + 3 hours
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -144,7 +156,10 @@ rule next_day: evening + 2 hours
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -179,7 +194,10 @@ rule hours_diff: time2 - time1
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -206,7 +224,10 @@ rule preserved: nepal_time
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -239,7 +260,10 @@ rule later: hawaii + 1 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -268,7 +292,10 @@ rule earlier: kiribati - 1 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {

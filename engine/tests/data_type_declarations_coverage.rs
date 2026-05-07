@@ -1,4 +1,4 @@
-//! QA coverage for `DataValue::TypeDeclaration`.
+//! QA coverage for parse-time `DataValue::Definition` (schema / constraints / `from` / literals).
 //!
 //! Matrix: every primitive keyword x applicable-vs-incompatible constraint.
 //! Named-typedef references: happy + unknown + name-collision with rule.
@@ -15,7 +15,10 @@ use std::collections::HashMap;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(code, lemma::SourceType::Labeled("types.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
+        )
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -28,7 +31,10 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(code, lemma::SourceType::Labeled("types.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
+        )
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -53,7 +59,7 @@ fn run(
     data: HashMap<String, String>,
 ) -> Result<lemma::evaluation::Response, lemma::Error> {
     let now = DateTimeValue::now();
-    engine.run(spec, Some(&now), data, false)
+    engine.run(None, spec, Some(&now), data, false)
 }
 
 // ─── Type-only data + missing at runtime → MissingData veto ──────────
@@ -399,7 +405,10 @@ data n: number -> minimum 5 -> minimum 10
 rule r: n
 "#;
     let mut engine = Engine::new();
-    match engine.load(code, lemma::SourceType::Labeled("types.lemma")) {
+    match engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
+    ) {
         Ok(()) => {
             let mut data = HashMap::new();
             data.insert("n".to_string(), "7".to_string());
@@ -474,13 +483,13 @@ rule r: x
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.contains("Unknown type") && joined.contains("nonexistent_type"),
+        joined.contains("Unknown parent") && joined.contains("nonexistent_type"),
         "unknown typedef must be reported with exact name, got: {joined}"
     );
 }
 
 /// UX LANDMINE: `data x: myrule` where `myrule` is a local rule currently
-/// surfaces as "Unknown type". Users likely meant a value-copy reference.
+/// surfaces as "Unknown parent … for data definition". Users likely meant a value-copy reference.
 /// The error should mention the rule or suggest `x.something: myrule`
 /// binding form. This test pins the friendlier-error intent; it is expected
 /// to fail until the planner suggests the rule alternative.
@@ -495,8 +504,7 @@ data x: myrule
     let joined = load_err_joined(&mut engine, code);
     assert!(
         joined.to_lowercase().contains("rule"),
-        "error for `data x: <rule-name>` should mention rules/references, not only 'Unknown type'; \
-         got: {joined}"
+        "error for `data x: <rule-name>` should mention rules/references; got: {joined}"
     );
 }
 
@@ -520,16 +528,17 @@ rule r: small_number
     );
 }
 
-// ─── `from <spec>` RHS type import ──────────────────────────────────
+// ─── Cross-spec value-copy reference (replacement for legacy `from <spec>` data imports)
 
 #[test]
-fn from_spec_type_import_resolves() {
+fn cross_spec_value_copy_reference_resolves() {
     let code = r#"
 spec lib
 data money: scale -> unit eur 1 -> unit usd 1.19
 
 spec app
-data price: money from lib
+uses lib
+data price: lib.money
 rule r: price
 "#;
     let mut engine = Engine::new();
@@ -542,34 +551,36 @@ rule r: price
 }
 
 #[test]
-fn from_spec_with_unknown_typedef_is_rejected() {
+fn cross_spec_value_copy_unknown_data_is_rejected() {
     let code = r#"
 spec lib
 data money: scale -> unit eur 1
 
 spec app
-data price: nonexistent from lib
+uses lib
+data price: lib.nonexistent
 rule r: price
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        !joined.is_empty() && (joined.contains("nonexistent") || joined.contains("Unknown")),
-        "unknown typedef in `from lib` must be rejected, got: {joined}"
+        !joined.is_empty() && (joined.contains("nonexistent") || joined.contains("not found")),
+        "unknown data in cross-spec value-copy reference must be rejected, got: {joined}"
     );
 }
 
 #[test]
-fn from_unknown_spec_is_rejected() {
+fn cross_spec_value_copy_to_unknown_spec_is_rejected() {
     let code = r#"
 spec app
-data price: money from nonexistent_spec
+uses nonexistent_spec
+data price: nonexistent_spec.money
 rule r: price
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
         !joined.is_empty(),
-        "unknown spec in `from` must be rejected"
+        "unknown spec in `uses` must be rejected"
     );
 }

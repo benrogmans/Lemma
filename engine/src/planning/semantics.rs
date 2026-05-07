@@ -444,16 +444,18 @@ impl TypeSpecification {
                             );
                         }
                     };
-                    if units.iter().any(|u| u.name == unit_name) {
-                        return Err(format!(
-                            "Unit '{}' is already defined in this scale type.",
-                            unit_name
-                        ));
+                    if let Some(u) = units
+                        .0
+                        .iter_mut()
+                        .find(|u| u.name.eq_ignore_ascii_case(&unit_name))
+                    {
+                        u.value = value;
+                    } else {
+                        units.0.push(ScaleUnit {
+                            name: unit_name,
+                            value,
+                        });
                     }
-                    units.0.push(ScaleUnit {
-                        name: unit_name,
-                        value,
-                    });
                 }
                 TypeConstraintCommand::Minimum => {
                     *minimum = Some(require_scale_literal(args, units, "minimum")?);
@@ -554,16 +556,18 @@ impl TypeSpecification {
                             );
                         }
                     };
-                    if units.iter().any(|u| u.name == unit_name) {
-                        return Err(format!(
-                            "Unit '{}' is already defined in this ratio type.",
-                            unit_name
-                        ));
+                    if let Some(u) = units
+                        .0
+                        .iter_mut()
+                        .find(|u| u.name.eq_ignore_ascii_case(&unit_name))
+                    {
+                        u.value = value;
+                    } else {
+                        units.0.push(RatioUnit {
+                            name: unit_name,
+                            value,
+                        });
                     }
-                    units.0.push(RatioUnit {
-                        name: unit_name,
-                        value,
-                    });
                 }
                 TypeConstraintCommand::Minimum => {
                     *minimum = Some(require_ratio_literal(args, "minimum")?);
@@ -1048,8 +1052,8 @@ impl fmt::Display for ValueKind {
 
 /// A single segment in a resolved path traversal
 ///
-/// Used in both DataPath and RulePath to represent spec traversal.
-/// Each segment contains a data name that points to a spec.
+/// Used in both DataPath and RulePath for cross-spec traversal.
+/// Each segment contains a data name that resolves to another spec.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct PathSegment {
     /// The data name in this segment
@@ -1060,11 +1064,10 @@ pub struct PathSegment {
 
 /// Resolved path to a data (created during planning from AST DataReference)
 ///
-/// Represents a fully resolved path through specs to reach a data.
-/// All spec references are resolved during planning.
+/// Represents a fully resolved path through specs to reach a datum.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct DataPath {
-    /// Path segments (each is a spec traversal)
+    /// Path segments (each is a cross-spec step)
     pub segments: Vec<PathSegment>,
     /// Final data name
     pub data: String,
@@ -1076,7 +1079,7 @@ impl DataPath {
         Self { segments, data }
     }
 
-    /// Create a local data path (no spec traversal)
+    /// Create a local data path (no cross-spec steps)
     pub fn local(data: String) -> Self {
         Self {
             segments: vec![],
@@ -1102,7 +1105,7 @@ impl DataPath {
 /// Represents a fully resolved path through specs to reach a rule.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct RulePath {
-    /// Path segments (each is a spec traversal)
+    /// Path segments (each is a cross-spec step)
     pub segments: Vec<PathSegment>,
     /// Final rule name
     pub rule: String,
@@ -1215,14 +1218,6 @@ impl ExpressionKind {
 // Resolved types and values
 // -----------------------------------------------------------------------------
 
-/// Whether two resolved specs are the same temporal slice (same `name` and `effective_from` as [`LemmaSpec`]'s `PartialEq`).
-/// Not `Arc` pointer identity: [`Arc`] equality uses the inner value.
-#[inline]
-#[must_use]
-pub fn is_same_spec(left: &LemmaSpec, right: &LemmaSpec) -> bool {
-    left == right
-}
-
 /// Where the custom extension chain is rooted: same spec as this type, or imported from another resolved spec.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1240,7 +1235,7 @@ pub enum TypeExtends {
     /// Extends a primitive built-in type (number, boolean, text, etc.)
     Primitive,
     /// Extends a custom type: parent is the immediate parent type name; family is the root of the extension chain (topmost custom type name).
-    /// `defining_spec` records whether the parent chain is local or imported from another spec; see [`TypeDefiningSpec`].
+    /// `defining_spec` records whether the parent chain is local or imported from another spec.
     Custom {
         parent: String,
         family: String,
@@ -1271,7 +1266,7 @@ impl PartialEq for TypeExtends {
                         (
                             TypeDefiningSpec::Import { spec: left },
                             TypeDefiningSpec::Import { spec: right },
-                        ) => is_same_spec(left, right),
+                        ) => Arc::ptr_eq(left, right),
                         _ => false,
                     }
             }
@@ -1705,13 +1700,26 @@ impl LiteralValue {
     }
 }
 
-/// Data value: literal, type declaration (resolved type only), or spec reference.
+/// Response/UI row for spec data: [`LemmaType`] plus optional bound literal (mirrors parse-time `Definition`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataValue {
-    Literal(LiteralValue),
-    TypeDeclaration { resolved_type: LemmaType },
-    SpecReference(String),
+    Definition {
+        schema_type: LemmaType,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bound_value: Option<LiteralValue>,
+    },
+}
+
+impl DataValue {
+    #[must_use]
+    pub fn from_bound_literal(value: LiteralValue) -> Self {
+        let schema_type = value.get_type().clone();
+        Self::Definition {
+            schema_type,
+            bound_value: Some(value),
+        }
+    }
 }
 
 /// Data: path, value, and source location.
@@ -1732,7 +1740,7 @@ pub enum ReferenceTarget {
 }
 
 /// Resolved data value for the execution plan: aligned with [`DataValue`] but with source per variant.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataDefinition {
     /// Value-holding data: current value (literal or default); type is on the value.
@@ -1746,8 +1754,8 @@ pub enum DataDefinition {
         declared_default: Option<ValueKind>,
         source: Source,
     },
-    /// Spec reference data: holds the resolved spec.
-    SpecRef {
+    /// Import (`uses`): resolved target lemma for this alias.
+    Import {
         spec: Arc<crate::parsing::ast::LemmaSpec>,
         source: Source,
     },
@@ -1768,12 +1776,13 @@ pub enum DataDefinition {
     ///
     /// `local_default` carries any `default <value>` constraint from the
     /// reference's `-> ...` tail. The reference-merge pass extracts it from the
-    /// constraint list during type resolution; the evaluator falls back to it
-    /// when the target value/rule is missing or vetoes for missing data so the
-    /// downstream sees the declared default instead of a missing-data veto.
+    /// constraint list during type resolution. It is materialized into a
+    /// concrete value by [`crate::planning::ExecutionPlan::with_defaults`]
+    /// before evaluation (or remains a schema suggestion when callers use
+    /// [`Engine::run_plan_without_defaults`]).
     ///
     /// The reference itself is evaluated by copying the target's value (data path)
-    /// or the target rule's result in topological order; `with_data_values`
+    /// or the target rule's result in topological order; `set_data_values`
     /// entries for a referenced path override the reference with a literal.
     Reference {
         target: ReferenceTarget,
@@ -1785,13 +1794,13 @@ pub enum DataDefinition {
 }
 
 impl DataDefinition {
-    /// Returns the schema type for value, type-declaration, and reference data; `None` for spec references.
+    /// Schema type for value, type-declaration, and reference data; `None` for imports.
     pub fn schema_type(&self) -> Option<&LemmaType> {
         match self {
             DataDefinition::Value { value, .. } => Some(&value.lemma_type),
             DataDefinition::TypeDeclaration { resolved_type, .. } => Some(resolved_type),
             DataDefinition::Reference { resolved_type, .. } => Some(resolved_type),
-            DataDefinition::SpecRef { .. } => None,
+            DataDefinition::Import { .. } => None,
         }
     }
 
@@ -1802,25 +1811,25 @@ impl DataDefinition {
         match self {
             DataDefinition::Value { value, .. } => Some(value),
             DataDefinition::TypeDeclaration { .. }
-            | DataDefinition::SpecRef { .. }
+            | DataDefinition::Import { .. }
             | DataDefinition::Reference { .. } => None,
         }
     }
 
-    /// Schema-level default for this data: the value to surface in
-    /// [`SpecSchema::data`]'s `default` field.
-    ///
-    /// Differs from [`Self::value`]: `Value` data already carries the literal
-    /// (a default that planning promoted to a value), so both return the
-    /// same thing for that variant. For `Reference` and `TypeDeclaration` the
-    /// schema-level default lives separately from the runtime value (the
-    /// reference's copied target value, or the type-only data's user-supplied
-    /// value); we synthesize the `LiteralValue` from the declared default and
-    /// the `resolved_type` here so callers don't have to. `SpecRef` has no
-    /// schema default.
-    pub fn schema_default(&self) -> Option<LiteralValue> {
+    /// Literal explicitly bound in the spec (`data x: literal`) or substituted
+    /// by the caller via `set_data_values` as [`DataDefinition::Value`].
+    /// Not a suggestion; see [`Self::default_suggestion`].
+    #[inline]
+    pub fn bound_value(&self) -> Option<&LiteralValue> {
+        self.value()
+    }
+
+    /// Suggestion from `-> default ...` on a type declaration or reference.
+    /// Surfaces in [`crate::planning::execution_plan::DataEntry::default`] for
+    /// prefill/UI; omitted from [`Self::bound_value`] until applied via
+    /// [`crate::planning::ExecutionPlan::with_defaults`].
+    pub fn default_suggestion(&self) -> Option<LiteralValue> {
         match self {
-            DataDefinition::Value { value, .. } => Some(value.clone()),
             DataDefinition::TypeDeclaration {
                 resolved_type,
                 declared_default: Some(dv),
@@ -1837,9 +1846,10 @@ impl DataDefinition {
                 value: dv.clone(),
                 lemma_type: resolved_type.clone(),
             }),
-            DataDefinition::TypeDeclaration { .. }
+            DataDefinition::Value { .. }
+            | DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Reference { .. }
-            | DataDefinition::SpecRef { .. } => None,
+            | DataDefinition::Import { .. } => None,
         }
     }
 
@@ -1848,28 +1858,8 @@ impl DataDefinition {
         match self {
             DataDefinition::Value { source, .. } => source,
             DataDefinition::TypeDeclaration { source, .. } => source,
-            DataDefinition::SpecRef { source, .. } => source,
+            DataDefinition::Import { source, .. } => source,
             DataDefinition::Reference { source, .. } => source,
-        }
-    }
-
-    /// Returns the referenced spec Arc for spec reference data; `None` otherwise.
-    pub fn spec_arc(&self) -> Option<&Arc<crate::parsing::ast::LemmaSpec>> {
-        match self {
-            DataDefinition::Value { .. }
-            | DataDefinition::TypeDeclaration { .. }
-            | DataDefinition::Reference { .. } => None,
-            DataDefinition::SpecRef { spec: spec_arc, .. } => Some(spec_arc),
-        }
-    }
-
-    /// Returns the referenced spec name for spec reference data; `None` otherwise.
-    pub fn spec_ref(&self) -> Option<&str> {
-        match self {
-            DataDefinition::Value { .. }
-            | DataDefinition::TypeDeclaration { .. }
-            | DataDefinition::Reference { .. } => None,
-            DataDefinition::SpecRef { spec, .. } => Some(&spec.name),
         }
     }
 
@@ -2474,10 +2464,42 @@ mod tests {
     }
 
     #[test]
-    fn test_lemma_type_equality_import_same_resolved_spec_semantics() {
+    fn test_lemma_type_equality_import_same_arc_pointer_identity() {
+        // TypeDefiningSpec equality is by Arc pointer identity (Arc::ptr_eq).
+        // Two types are equal iff they hold the same interned Arc, matching
+        // the Context::insert_spec invariant.
+        let shared_spec = Arc::new(LemmaSpec::new("dep".to_string()));
+        let scale_spec = TypeSpecification::scale();
+        let left = LemmaType::new(
+            "t".to_string(),
+            scale_spec.clone(),
+            TypeExtends::Custom {
+                parent: "money".to_string(),
+                family: "money".to_string(),
+                defining_spec: TypeDefiningSpec::Import {
+                    spec: Arc::clone(&shared_spec),
+                },
+            },
+        );
+        let right = LemmaType::new(
+            "t".to_string(),
+            scale_spec,
+            TypeExtends::Custom {
+                parent: "money".to_string(),
+                family: "money".to_string(),
+                defining_spec: TypeDefiningSpec::Import {
+                    spec: Arc::clone(&shared_spec),
+                },
+            },
+        );
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn test_lemma_type_inequality_import_different_arc_pointer() {
+        // Two distinct Arc<LemmaSpec> (even with identical content) are not equal.
         let spec_a = Arc::new(LemmaSpec::new("dep".to_string()));
         let spec_b = Arc::new(LemmaSpec::new("dep".to_string()));
-        assert!(is_same_spec(spec_a.as_ref(), spec_b.as_ref()));
         let scale_spec = TypeSpecification::scale();
         let left = LemmaType::new(
             "t".to_string(),
@@ -2499,6 +2521,6 @@ mod tests {
                 defining_spec: TypeDefiningSpec::Import { spec: spec_b },
             },
         );
-        assert_eq!(left, right);
+        assert_ne!(left, right);
     }
 }

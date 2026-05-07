@@ -32,7 +32,7 @@ fn get_explanation_node_required(
         .unwrap_or_else(|| {
             unreachable!(
                 "BUG: {} was evaluated but has no explanation node ({}:{}:{})",
-                operand_name, loc.attribute, loc.span.line, loc.span.col
+                operand_name, loc.source_type, loc.span.line, loc.span.col
             )
         })
 }
@@ -54,7 +54,7 @@ fn get_operand_result(
     results.get(&expr_ptr(expr)).cloned().unwrap_or_else(|| {
         unreachable!(
             "BUG: {} operand was marked ready but result is missing ({}:{}:{})",
-            operand_name, loc.attribute, loc.span.line, loc.span.col
+            operand_name, loc.source_type, loc.span.line, loc.span.col
         )
     })
 }
@@ -73,7 +73,7 @@ fn unwrap_value_after_veto_check<'a>(
             .expect("BUG: expression missing source in evaluation");
         unreachable!(
             "BUG: {} passed Veto check but has no value ({}:{}:{})",
-            operand_name, loc.attribute, loc.span.line, loc.span.col
+            operand_name, loc.source_type, loc.span.line, loc.span.col
         )
     })
 }
@@ -363,7 +363,7 @@ fn evaluate_expression(
             .expect("BUG: expression missing source in evaluation");
         unreachable!(
             "BUG: expression was processed but has no result ({}:{}:{})",
-            loc.attribute, loc.span.start, loc.span.end
+            loc.source_type, loc.span.start, loc.span.end
         )
     })
 }
@@ -389,7 +389,7 @@ fn evaluate_single_expression(
         }
 
         ExpressionKind::DataPath(data_path) => {
-            // Data lookup: a data can legitimately be missing (TypeDeclaration without a
+            // Data lookup: a data can legitimately be missing (schema-only declaration without a
             // provided value at runtime). Returning None → Veto("Missing data: ...") is
             // correct domain behavior.
             //
@@ -465,7 +465,7 @@ fn evaluate_single_expression(
             let r = context.rule_results.get(rule_path).cloned().unwrap_or_else(|| {
                 unreachable!(
                     "BUG: Rule '{}' not found in results during topological-order evaluation ({}:{}:{})",
-                    rule_path.rule, loc.attribute, loc.span.line, loc.span.col
+                    rule_path.rule, loc.source_type, loc.span.line, loc.span.col
                 )
             });
 

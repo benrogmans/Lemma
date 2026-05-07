@@ -40,19 +40,19 @@ pub fn check_max_length(
 /// for all legitimate use cases.
 #[derive(Debug, Clone)]
 pub struct ResourceLimits {
-    /// Maximum file size in bytes
+    /// Maximum size of one loaded source text in bytes.
     /// Real usage: ~5KB, Limit: 5MB (1000x)
-    pub max_file_size_bytes: usize,
+    pub max_source_size_bytes: usize,
 
     /// Maximum expression nesting depth
     /// Real usage: ~3 levels, Limit: 7. Deeper logic via rule composition.
     pub max_expression_depth: usize,
 
-    /// Maximum expression nodes per file (parser-level)
-    /// Quick-reject for pathological single files.
+    /// Maximum expression nodes per source (parser-level)
+    /// Quick-reject for pathological single sources.
     pub max_expression_count: usize,
 
-    /// Maximum total expression nodes across all files (engine-level)
+    /// Maximum total expression nodes across all sources (engine-level)
     /// The real capacity ceiling. pi (~3.1M) — generous for national-scale
     /// regulatory systems while bounding total engine workload.
     pub max_total_expression_count: usize,
@@ -62,23 +62,23 @@ pub struct ResourceLimits {
     /// Enables server pre-allocation for zero-allocation evaluation
     pub max_data_value_bytes: usize,
 
-    /// Maximum total bytes to read in a single load_from_paths call (and/or in-memory size of loaded specs)
+    /// Maximum total bytes to load in one batch (and/or in-memory size of loaded specs)
     pub max_loaded_bytes: usize,
 
-    /// Maximum number of .lemma files to load in a single load_from_paths call
-    pub max_files: usize,
+    /// Maximum number of sources in one load batch (e.g. after expanding paths on disk)
+    pub max_sources: usize,
 }
 
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            max_file_size_bytes: 5 * 1024 * 1024, // 5 MB
+            max_source_size_bytes: 5 * 1024 * 1024, // 5 MB
             max_expression_depth: 7,
             max_expression_count: 4096,
             max_total_expression_count: 3_141_592,
             max_data_value_bytes: 1024,         // 1 KB
             max_loaded_bytes: 50 * 1024 * 1024, // 50 MB
-            max_files: 4096,
+            max_sources: 4096,
         }
     }
 }

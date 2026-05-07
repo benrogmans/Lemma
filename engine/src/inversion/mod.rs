@@ -525,7 +525,12 @@ rule another: base
 
         let mut engine = Engine::new();
         engine
-            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .load(
+                code,
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
+            )
             .unwrap();
         let now = DateTimeValue::now();
 
@@ -570,7 +575,12 @@ rule another: base
 
         let mut engine = Engine::new();
         engine
-            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .load(
+                code,
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
+            )
             .unwrap();
         let now = DateTimeValue::now();
 
@@ -605,7 +615,12 @@ rule another: base
 
         let mut engine = Engine::new();
         engine
-            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .load(
+                code,
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
+            )
             .unwrap();
         let now = DateTimeValue::now();
 
@@ -679,7 +694,12 @@ rule another: base
 
         let mut engine = Engine::new();
         engine
-            .load(code, crate::SourceType::Labeled("test.lemma"))
+            .load(
+                code,
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
+            )
             .unwrap();
 
         let now = DateTimeValue::now();

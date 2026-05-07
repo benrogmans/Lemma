@@ -20,28 +20,31 @@ rule final_total: total_before_discount
 
     // Main spec that references the other spec
     let main_spec = r#"
-spec examples/rules_and_unless
-with rules: private_rules
+spec rules_and_unless
+uses rules: private_rules
 data rules.base_price: 500
 rule total: rules.final_total
 "#;
 
     engine
-        .load(private_spec, lemma::SourceType::Labeled("private.lemma"))
+        .load(
+            private_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "private.lemma",
+            ))),
+        )
         .unwrap();
     engine
-        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .load(
+            main_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     // Evaluate with missing quantity data
     let response = engine
-        .run(
-            "examples/rules_and_unless",
-            Some(&now),
-            HashMap::new(),
-            false,
-        )
+        .run(None, "rules_and_unless", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let total_rule = response
@@ -83,14 +86,19 @@ rule message: "Order processed"
 "#;
 
     engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let mut data = std::collections::HashMap::new();
     data.insert("price".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
-    let response = engine.run("test_spec", Some(&now), data, false).unwrap();
+    let response = engine
+        .run(None, "test_spec", Some(&now), data, false)
+        .unwrap();
 
     // subtotal should fail due to missing quantity
     let subtotal_rule = response
@@ -134,18 +142,23 @@ spec inner
 data slot: number
 
 spec outer
-with i: inner
+uses i: inner
 data here: i.slot
 rule r: here
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("missing.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "missing.lemma",
+            ))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run("outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
 
     let rr = resp.results.get("r").expect("rule 'r'");
@@ -175,18 +188,23 @@ data denom: number -> default 0
 rule divided: 10 / denom
 
 spec top
-with i: inner
+uses i: inner
 data x: i.divided
 rule out: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("missing.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "missing.lemma",
+            ))),
+        )
         .expect("rule-target reference must be accepted at plan time");
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = resp.results.get("out").expect("rule 'out'");

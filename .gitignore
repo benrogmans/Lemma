@@ -23,3 +23,6 @@ coverage/
 *.swo
 *~
 .DS_Store
+
+# Common testing artifacts
+.deps

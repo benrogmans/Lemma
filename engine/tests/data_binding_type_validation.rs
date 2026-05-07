@@ -1,10 +1,10 @@
+use lemma::error::ErrorKind;
 use lemma::parsing::ast::DateTimeValue;
 /// Comprehensive tests for data binding type validation
 ///
 /// These tests ensure that the engine correctly validates that data bindings
 /// match the expected types declared in the spec, preventing type confusion bugs.
 use lemma::Engine;
-use lemma::ErrorKind;
 use std::collections::HashMap;
 
 #[test]
@@ -17,14 +17,17 @@ rule doubled: age * 2
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
     data.insert("age".to_string(), "twenty".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run("test", Some(&now), data, false);
+    let result = engine.run(None, "test", Some(&now), data, false);
 
     assert!(result.is_err(), "Expected error but got: {:?}", result);
     let error = result.unwrap_err().to_string();
@@ -47,7 +50,10 @@ rule total: price * quantity
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -56,7 +62,7 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run("test", Some(&now), data, false);
+    let result = engine.run(None, "test", Some(&now), data, false);
     assert!(result.is_err(), "Expected type mismatch error");
     assert!(result
         .unwrap_err()
@@ -69,7 +75,7 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let err = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect_err("quantity must reject non-number");
     assert!(err.to_string().contains("Failed to parse data 'quantity'"));
 
@@ -79,7 +85,7 @@ rule total: price * quantity
     data.insert("active".to_string(), "maybe".to_string());
 
     let err = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect_err("active must reject non-boolean");
     assert!(err.to_string().contains("Failed to parse data 'active'"));
 
@@ -89,7 +95,7 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("valid data must evaluate");
     let total = response
         .results
@@ -111,7 +117,10 @@ rule total: base_price * 1.2
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -119,7 +128,7 @@ rule total: base_price * 1.2
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect_err("base_price must reject non-number");
     assert!(err
         .to_string()
@@ -129,7 +138,7 @@ rule total: base_price * 1.2
     data.insert("base_price".to_string(), "60".to_string());
 
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("valid base_price must evaluate");
     let total = response
         .results
@@ -155,7 +164,10 @@ rule total: price * 1.1
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -163,7 +175,7 @@ rule total: price * 1.1
     data.insert("unknown_data".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run("test", Some(&now), data, false);
+    let result = engine.run(None, "test", Some(&now), data, false);
     assert!(result.is_err(), "Expected error for unknown data binding");
     assert!(result.unwrap_err().to_string().contains("unknown_data"));
 }
@@ -185,7 +197,10 @@ rule r: p
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("m.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -193,7 +208,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("5% < 10%");
     let s = err.to_string();
     assert!(
@@ -220,7 +235,10 @@ rule r: p
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("m.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -228,7 +246,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect("'5%' must parse on a percent type without constraints");
     let rr = resp.results.get("r").expect("rule 'r' not found");
     let lit = match &rr.result {
@@ -253,7 +271,10 @@ rule r: p
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("m.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -261,7 +282,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("90% > 50%");
     let s = err.to_string();
     assert!(
@@ -278,7 +299,10 @@ data d: duration -> minimum 1 day
 rule r: d
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(code, lemma::SourceType::Labeled("m.lemma"));
+    let load_result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+    );
     if let Err(errors) = &load_result {
         // If `minimum` with duration literal RHS is not supported, that
         // itself is a landmine — durations can definitely have minimums.
@@ -297,7 +321,7 @@ rule r: d
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("12 hours < 1 day");
     let s = err.to_string();
     assert!(
@@ -314,7 +338,10 @@ data when: date -> minimum 2024-01-01
 rule r: when
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(code, lemma::SourceType::Labeled("m.lemma"));
+    let load_result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+    );
     if let Err(errors) = &load_result {
         panic!(
             "date minimum must be supported; load failed with: {}",
@@ -331,7 +358,7 @@ rule r: when
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("date before minimum");
     let s = err.to_string();
     assert!(
@@ -352,14 +379,17 @@ rule r: n
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("m.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
     data.insert("n".to_string(), "3.14159".to_string());
 
     let now = DateTimeValue::now();
-    match engine.run("s", Some(&now), data, false) {
+    match engine.run(None, "s", Some(&now), data, false) {
         Ok(resp) => {
             let rr = resp.results.get("r").expect("rule 'r'");
             match &rr.result {
@@ -392,7 +422,10 @@ rule r: msg
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("m.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -400,7 +433,7 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect("5-char string must be accepted");
     let rr = resp.results.get("r").expect("rule 'r'");
     match &rr.result {
@@ -419,7 +452,10 @@ rule r: price
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("m.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -428,7 +464,7 @@ rule r: price
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("wrong scale unit must fail");
     let s = err.to_string();
     assert!(
@@ -447,7 +483,12 @@ rule span: bridge_height
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("workspace.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "workspace.lemma",
+            ))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -455,7 +496,7 @@ rule span: bridge_height
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("bridge", Some(&now), data, false)
+        .run(None, "bridge", Some(&now), data, false)
         .expect_err("bad scale unit must error");
 
     assert_eq!(err.related_data(), Some("bridge_height"));

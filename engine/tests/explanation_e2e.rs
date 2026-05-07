@@ -16,11 +16,14 @@ rule doubled: base_value * 2
 "#;
 
     engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_explanation", Some(&now), HashMap::new(), false)
+        .run(None, "test_explanation", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let doubled_result = response
@@ -29,10 +32,10 @@ rule doubled: base_value * 2
         .find(|r| r.rule.name == "doubled")
         .expect("doubled rule should exist");
 
-    // Verify result
+    // Verify result (literal carries resolved LemmaType; compare rendered value)
     assert_eq!(
-        doubled_result.result,
-        OperationResult::Value(Box::new(LiteralValue::number(200.into())))
+        doubled_result.result.value().unwrap().to_string(),
+        LiteralValue::number(200.into()).to_string(),
     );
 
     // Verify explanation was built
@@ -43,8 +46,8 @@ rule doubled: base_value * 2
 
     assert_eq!(explanation.rule_path.rule, "doubled");
     assert_eq!(
-        explanation.result,
-        OperationResult::Value(Box::new(LiteralValue::number(200.into())))
+        explanation.result.value().unwrap().to_string(),
+        LiteralValue::number(200.into()).to_string(),
     );
 
     // Verify explanation tree structure exists
@@ -70,11 +73,20 @@ rule quadruple: doubled * 2
 "#;
 
     engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_explanation_ref", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_explanation_ref",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let quadruple_result = response
@@ -83,10 +95,9 @@ rule quadruple: doubled * 2
         .find(|r| r.rule.name == "quadruple")
         .expect("quadruple rule should exist");
 
-    // Verify result
     assert_eq!(
-        quadruple_result.result,
-        OperationResult::Value(Box::new(LiteralValue::number(200.into())))
+        quadruple_result.result.value().unwrap().to_string(),
+        LiteralValue::number(200.into()).to_string(),
     );
 
     // Verify explanation exists
@@ -100,7 +111,10 @@ rule quadruple: doubled * 2
         lemma::explanation::ExplanationNode::Computation {
             operands, result, ..
         } => {
-            assert_eq!(*result, LiteralValue::number(200.into()));
+            assert_eq!(
+                result.to_string(),
+                LiteralValue::number(200.into()).to_string()
+            );
 
             // First operand should be a rule reference to doubled
             match &operands[0] {
@@ -114,7 +128,10 @@ rule quadruple: doubled * 2
                     // Expansion should contain the explanation for doubled
                     match expansion.as_ref() {
                         lemma::explanation::ExplanationNode::Computation { result, .. } => {
-                            assert_eq!(*result, LiteralValue::number(100.into()));
+                            assert_eq!(
+                                result.to_string(),
+                                LiteralValue::number(100.into()).to_string()
+                            );
                         }
                         other => panic!("Expected Computation in expansion, got {:?}", other),
                     }
@@ -143,11 +160,14 @@ rule discount_percentage: 0%
 "#;
 
     engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_unless", Some(&now), HashMap::new(), false)
+        .run(None, "test_unless", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let discount_result = response
@@ -213,11 +233,14 @@ rule age_validation: accept
 "#;
 
     engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_veto", Some(&now), HashMap::new(), false)
+        .run(None, "test_veto", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let validation_result = response
@@ -261,20 +284,26 @@ rule doubled: value * 2
 
     let main_spec = r#"
 spec main
-with base_ref: base
+uses base_ref: base
 rule result: base_ref.doubled + 50
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("base.lemma"))),
+        )
         .unwrap();
     engine
-        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .load(
+            main_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("main", Some(&now), HashMap::new(), false)
+        .run(None, "main", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let result = response
@@ -283,10 +312,9 @@ rule result: base_ref.doubled + 50
         .find(|r| r.rule.name == "result")
         .expect("result rule should exist");
 
-    // Verify result
     assert_eq!(
-        result.result,
-        OperationResult::Value(Box::new(LiteralValue::number(250.into())))
+        result.result.value().unwrap().to_string(),
+        LiteralValue::number(250.into()).to_string(),
     );
 
     // Verify explanation exists
@@ -344,20 +372,26 @@ rule doubled: value * 2
 
     let main_spec = r#"
 spec main
-with base_ref: base
+uses base_ref: base
 rule use_cross_spec: base_ref.doubled + 1
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("base.lemma"))),
+        )
         .unwrap();
     engine
-        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .load(
+            main_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("main", Some(&now), HashMap::new(), false)
+        .run(None, "main", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let main_rule = response
@@ -419,20 +453,26 @@ rule doubled: value * 2
 
     let main_spec = r#"
 spec main
-with base_ref: base
+uses base_ref: base
 rule use_doubled: base_ref.doubled + 10
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("base.lemma"))),
+        )
         .unwrap();
     engine
-        .load(main_spec, lemma::SourceType::Labeled("main.lemma"))
+        .load(
+            main_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("main", Some(&now), HashMap::new(), false)
+        .run(None, "main", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let main_rule = response
@@ -545,11 +585,14 @@ rule out: true
 "#;
 
     engine
-        .load(spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let result = response

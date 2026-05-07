@@ -1,4 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
+use lemma::planning::semantics::SemanticDurationUnit;
 use lemma::{Bound, DataPath, Domain, Engine, Error, LiteralValue, Target, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -14,7 +15,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
@@ -58,7 +62,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
@@ -102,7 +109,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
@@ -147,7 +157,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
@@ -200,7 +213,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
@@ -227,7 +243,7 @@ rule r: 0
         } = dom
         {
             if let ValueKind::Duration(n, unit) = &v.value {
-                if *n == Decimal::from(2) && *unit == lemma::SemanticDurationUnit::Hour {
+                if *n == Decimal::from(2) && *unit == SemanticDurationUnit::Hour {
                     saw_expected = true;
                 }
             }
@@ -248,7 +264,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
@@ -276,7 +295,10 @@ rule r: 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 

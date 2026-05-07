@@ -4,14 +4,12 @@ use crate::parsing::source::Source;
 use crate::serialization::data_values_from_map;
 use crate::{Engine, Error, SourceType};
 use serde::Serialize;
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen(js_name = Engine)]
 pub struct WasmEngine {
-    engine: Rc<RefCell<Engine>>,
+    engine: Engine,
 }
 
 #[wasm_bindgen]
@@ -20,45 +18,131 @@ impl WasmEngine {
     pub fn new() -> Self {
         console_error_panic_hook::set_once();
         WasmEngine {
-            engine: Rc::new(RefCell::new(Engine::new())),
+            engine: Engine::new(),
         }
     }
 
-    /// Load Lemma source. Resolves with `undefined` on success; rejects with an array of
-    /// serialized errors (same shape as `EngineError` in `engine/packages/npm/lemma.d.ts`).
-    ///
-    /// Breaking: previously rejected with an array of strings.
+    /// Load Lemma source. Throws with an array of serialized errors
+    /// (same shape as `EngineError` in `engine/packages/npm/lemma.d.ts`).
     #[wasm_bindgen(js_name = load)]
-    pub fn load_wasm(&self, code: &str, attribute: &str) -> js_sys::Promise {
-        let code = code.to_string();
-        let label = if attribute.trim().is_empty() {
-            None
+    pub fn load_wasm(&mut self, code: &str, attribute: &str) -> Result<(), JsValue> {
+        let source = if attribute.trim().is_empty() {
+            SourceType::Volatile
         } else {
-            Some(attribute.to_string())
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(attribute)))
         };
-        let engine = self.engine.clone();
-        wasm_bindgen_futures::future_to_promise(async move {
-            let source = match &label {
-                None => SourceType::Inline,
-                Some(s) => SourceType::Labeled(s.as_str()),
-            };
-            let result = engine.borrow_mut().load(&code, source);
-            match result {
-                Ok(()) => Ok(JsValue::UNDEFINED),
-                Err(load_err) => {
-                    let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
-                    Err(errors
-                        .serialize(&js_error_serializer())
-                        .expect("BUG: serialize JsError array"))
-                }
-            }
+        self.engine.load(code, source).map_err(|load_err| {
+            let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
+            errors
+                .serialize(&js_error_serializer())
+                .expect("BUG: serialize JsError array")
         })
     }
 
+    /// Load multiple Lemma sources in one planning pass (same as [`Engine::load_batch`]).
+    ///
+    /// `sources` is a plain object mapping path labels to source text. Labels become
+    /// [`SourceType::Path`]; use `""` as a key for [`SourceType::Volatile`].
+    ///
+    /// `dependency`: when non-empty after trim, sources are tagged as that dependency id.
+    ///
+    /// Throws with an array of `JsError` on failure.
+    #[wasm_bindgen(js_name = load_batch)]
+    pub fn load_batch_wasm(
+        &mut self,
+        sources: JsValue,
+        dependency: Option<String>,
+    ) -> Result<(), JsValue> {
+        let map: HashMap<String, String> = if sources.is_undefined() || sources.is_null() {
+            HashMap::new()
+        } else {
+            serde_wasm_bindgen::from_value(sources).map_err(|e| {
+                let err = Error::request(
+                    format!(
+                        "load_batch: sources must be a plain object with string keys and string values: {e}"
+                    ),
+                    None::<String>,
+                );
+                let errors = vec![JsError::from(&err)];
+                errors
+                    .serialize(&js_error_serializer())
+                    .expect("BUG: serialize JsError array")
+            })?
+        };
+        let mut batch: HashMap<SourceType, String> = HashMap::with_capacity(map.len());
+        for (key, code) in map {
+            let source = if key.trim().is_empty() {
+                SourceType::Volatile
+            } else {
+                SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(key)))
+            };
+            batch.insert(source, code);
+        }
+        let owned_dep = dependency.and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        });
+        self.engine
+            .load_batch(batch, owned_dep.as_deref())
+            .map_err(|load_err| {
+                let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
+                errors
+                    .serialize(&js_error_serializer())
+                    .expect("BUG: serialize JsError array")
+            })
+    }
+
+    /// Download Lemma source for a registry identifier via [`crate::registry::LemmaBase`]. Returns `{ source, id }`.
+    /// Does not load this [`WasmEngine`]; call [`Self::load_batch`], etc., yourself.
+    #[wasm_bindgen(js_name = fetch)]
+    pub fn fetch_wasm(&self, name: &str) -> js_sys::Promise {
+        let _ = self;
+        match crate::spec_set_id::parse_spec_set_id(name) {
+            Err(e) => {
+                let js_err_array = {
+                    let errors = vec![JsError::from(&e)];
+                    errors
+                        .serialize(&js_error_serializer())
+                        .expect("BUG: serialize JsError array")
+                };
+                wasm_bindgen_futures::future_to_promise(async move { Err(js_err_array) })
+            }
+            Ok(normalized) => {
+                #[cfg(not(feature = "registry"))]
+                {
+                    let _: String = normalized;
+                    let err = Error::request(
+                        "fetch requires the lemma-engine crate to be built with the `registry` feature",
+                        None::<String>,
+                    );
+                    let js_err_array = {
+                        let errors = vec![JsError::from(&err)];
+                        errors
+                            .serialize(&js_error_serializer())
+                            .expect("BUG: serialize JsError array")
+                    };
+                    wasm_bindgen_futures::future_to_promise(async move { Err(js_err_array) })
+                }
+                #[cfg(feature = "registry")]
+                {
+                    wasm_registry_fetch_only_promise(normalized)
+                }
+            }
+        }
+    }
+
     /// Evaluate spec. Returns [`crate::evaluation::Response`] as a JS object. Throws on planning/runtime error.
+    ///
+    /// `repository`: repository qualifier (`@org/pkg`), or `null`/empty for workspace (same as
+    /// [`Engine::run`] `repo: None`).
     #[wasm_bindgen(js_name = run)]
     pub fn run(
         &self,
+        repository: Option<String>,
         spec: &str,
         rule_names: JsValue,
         data_values: JsValue,
@@ -73,9 +157,14 @@ impl WasmEngine {
         let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
         let data = parse_data_values(&data_values).map_err(js_err)?;
 
-        let engine = self.engine.borrow();
-        let mut response = engine
-            .run(spec, Some(&effective_dt), data, false)
+        let repo = repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        let mut response = self
+            .engine
+            .run(repo, spec, Some(&effective_dt), data, false)
             .map_err(|e| error_to_js(&e))?;
 
         if !rule_names.is_empty() {
@@ -85,47 +174,36 @@ impl WasmEngine {
         serialize_engine_json(&response)
     }
 
-    /// Loaded specs, each paired with its planning schema.
-    ///
-    /// Each entry has `{ name, effective_from, effective_to, schema }`. The
-    /// pair describes a half-open `[effective_from, effective_to)` validity
-    /// range; `effective_from` is `null` when the first version has no
-    /// declared start, and `effective_to` is `null` for the latest version of
-    /// a name (no successor). Order matches [`Engine::list_specs_with_ranges`].
-    ///
-    /// `schema` is the same envelope returned by [`WasmEngine::schema`] for
-    /// `(name, effective_from)`; shipping it inline saves the N+1 round-trip
-    /// every consumer (playground, dashboards, docs) was doing.
+    /// Same data as [`Engine::list`]: grouped [`ResolvedRepository`] JSON without planning.
     #[wasm_bindgen(js_name = list)]
-    pub fn list(&self) -> Result<JsValue, JsValue> {
-        let engine = self.engine.borrow();
-        let mut entries: Vec<SpecListEntry> = Vec::new();
-        for (spec, effective_from, effective_to) in engine.list_specs_with_ranges() {
-            let plan = engine
-                .get_plan(&spec.name, effective_from.as_ref())
-                .map_err(|e| error_to_js(&e))?;
-            entries.push(SpecListEntry {
-                name: spec.name.clone(),
-                effective_from: effective_from.map(|d| d.to_string()),
-                effective_to: effective_to.map(|d| d.to_string()),
-                schema: plan.schema(),
-            });
-        }
-        serialize_engine_json(&entries)
+    pub fn list_wasm(&self) -> Result<JsValue, JsValue> {
+        serialize_engine_json(&self.engine.list())
     }
 
     /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
+    ///
+    /// `repository`: qualifier string or `null`/empty for workspace ([`Engine::schema`]).
     #[wasm_bindgen(js_name = schema)]
-    pub fn schema(&self, spec: &str, effective: Option<String>) -> Result<JsValue, JsValue> {
+    pub fn schema(
+        &self,
+        repository: Option<String>,
+        spec: &str,
+        effective: Option<String>,
+    ) -> Result<JsValue, JsValue> {
         let effective_dt = effective
             .as_ref()
             .filter(|s| !s.trim().is_empty())
             .and_then(|s| s.parse::<DateTimeValue>().ok())
             .unwrap_or_else(DateTimeValue::now);
 
-        let engine = self.engine.borrow();
-        let plan = engine
-            .get_plan(spec, Some(&effective_dt))
+        let repo = repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+
+        let plan = self
+            .engine
+            .get_plan(repo, spec, Some(&effective_dt))
             .map_err(|e| error_to_js(&e))?;
         let schema = plan.schema();
 
@@ -152,27 +230,99 @@ impl WasmEngine {
             .filter(|s| !s.is_empty())
         {
             Some(s) => s,
-            None => SourceType::INLINE_KEY,
+            None => "inline source (no path)",
         };
-        match crate::format_source(code, attr) {
+        match crate::format_source(
+            code,
+            crate::parsing::source::SourceType::Path(std::sync::Arc::new(
+                std::path::PathBuf::from(attr),
+            )),
+        ) {
             Ok(formatted) => Ok(JsValue::from_str(&formatted)),
             Err(e) => Err(error_to_js(&e)),
         }
     }
+
+    /// Loaded repositories (workspace and dependencies): `{ name, dependency }`.
+    #[wasm_bindgen(js_name = repositories)]
+    pub fn repositories(&self) -> Result<JsValue, JsValue> {
+        let rows: Vec<serde_json::Value> = self
+            .engine
+            .list()
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "name": r.repository.name,
+                    "dependency": r.repository.dependency,
+                })
+            })
+            .collect();
+        serialize_engine_json(&rows)
+    }
 }
 
-/// Per-version record exposed to JS by [`WasmEngine::list`].
-///
-/// The half-open range is `[effective_from, effective_to)`; both bounds are
-/// `null` in JS when their corresponding bound is unbounded (`None`). The
-/// planning `schema` is included inline so consumers never need an N+1
-/// `engine.schema(name, effective_from)` call.
 #[derive(Serialize)]
-struct SpecListEntry {
-    name: String,
-    effective_from: Option<String>,
-    effective_to: Option<String>,
-    schema: crate::planning::execution_plan::SpecSchema,
+struct RegistryFetchPayload {
+    source: String,
+    id: String,
+}
+
+#[cfg(feature = "registry")]
+fn wasm_registry_fetch_only_promise(name: String) -> js_sys::Promise {
+    wasm_bindgen_futures::future_to_promise(async move {
+        use crate::registry::{LemmaBase, Registry, RegistryErrorKind};
+
+        let registry = LemmaBase::new();
+        let bundle = match registry.get(&name).await {
+            Ok(b) => b,
+            Err(registry_error) => {
+                let suggestion = match &registry_error.kind {
+                    RegistryErrorKind::NotFound => Some(
+                        "Check that the repository qualifier is spelled correctly and that the repository exists on the registry.".to_string(),
+                    ),
+                    RegistryErrorKind::Unauthorized => Some(
+                        "Check your authentication credentials or permissions for this registry."
+                            .to_string(),
+                    ),
+                    RegistryErrorKind::NetworkError => Some(
+                        "Check your network connection.".to_string(),
+                    ),
+                    RegistryErrorKind::ServerError => Some(
+                        "The registry server returned an internal error. Try again later.".to_string(),
+                    ),
+                    RegistryErrorKind::Other => None,
+                };
+                let source = Source::new(
+                    SourceType::Volatile,
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 1,
+                    },
+                );
+                let err = Error::registry(
+                    registry_error.message,
+                    source,
+                    name.clone(),
+                    registry_error.kind,
+                    suggestion,
+                    None,
+                    None,
+                );
+                let errors = vec![JsError::from(&err)];
+                return Err(errors
+                    .serialize(&js_error_serializer())
+                    .expect("BUG: serialize JsError array"));
+            }
+        };
+
+        let payload = RegistryFetchPayload {
+            source: bundle.lemma_source,
+            id: name,
+        };
+        serialize_engine_json(&payload)
+    })
 }
 
 /// Same JSON as CLI/HTTP. `serde_wasm_bindgen::to_value(serde_json::Value)` drops
@@ -194,17 +344,17 @@ fn js_err(msg: impl Into<String>) -> JsValue {
 
 /// Source slice serialized for JS (`EngineError.source` in TS).
 #[derive(Serialize)]
-struct JsSource<'a> {
-    attribute: &'a str,
+struct JsSource {
+    attribute: String,
     line: usize,
     column: usize,
     length: usize,
 }
 
-impl<'a> From<&'a Source> for JsSource<'a> {
+impl<'a> From<&'a Source> for JsSource {
     fn from(s: &'a Source) -> Self {
         JsSource {
-            attribute: &s.attribute,
+            attribute: s.source_type.to_string(),
             line: s.span.line,
             column: s.span.col,
             length: s.span.end.saturating_sub(s.span.start),
@@ -221,8 +371,10 @@ struct JsError<'a> {
     related_data: Option<&'a str>,
     spec: Option<&'a str>,
     related_spec: Option<&'a str>,
-    source: Option<JsSource<'a>>,
+    source: Option<JsSource>,
     suggestion: Option<&'a str>,
+    /// Set for [`Error::MissingRepository`] and [`Error::Registry`] (registry `@` id).
+    repository: Option<&'a str>,
 }
 
 impl<'a> From<&'a Error> for JsError<'a> {
@@ -231,10 +383,11 @@ impl<'a> From<&'a Error> for JsError<'a> {
             kind: e.kind(),
             message: e.message(),
             related_data: e.related_data(),
-            spec: e.spec(),
+            spec: e.spec_context_name(),
             related_spec: e.related_spec(),
             source: e.source_location().map(JsSource::from),
             suggestion: e.suggestion(),
+            repository: e.repository(),
         }
     }
 }

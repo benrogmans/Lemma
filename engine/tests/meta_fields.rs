@@ -14,7 +14,12 @@ data x: 1
 "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("meta_test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "meta_test.lemma",
+            ))),
+        )
         .expect("Failed to parse meta_test");
 
     let effective = DateTimeValue {
@@ -28,7 +33,7 @@ data x: 1
         timezone: None,
     };
     let plan = engine
-        .get_plan("meta_test", Some(&effective))
+        .get_plan(None, "meta_test", Some(&effective))
         .expect("Plan not found");
 
     assert_eq!(
@@ -55,7 +60,12 @@ meta title: 123
 "#;
 
     let errs = engine
-        .load(code, lemma::SourceType::Labeled("meta_error.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "meta_error.lemma",
+            ))),
+        )
         .expect_err("meta title must reject non-text");
     let err_msg = errs
         .iter()
@@ -76,7 +86,12 @@ meta title: "Second"
 "#;
 
     let errs = engine
-        .load(code, lemma::SourceType::Labeled("meta_dup.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "meta_dup.lemma",
+            ))),
+        )
         .expect_err("duplicate meta key must fail");
     let err_msg = errs
         .iter()

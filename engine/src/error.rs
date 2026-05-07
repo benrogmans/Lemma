@@ -20,13 +20,14 @@ pub struct ErrorDetails {
 }
 
 /// Classification of an [`Error`]. Serialized as the `kind` field on the flat object returned to JavaScript from WASM (`engine/src/wasm.rs`, `JsError`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     Parsing,
     Validation,
     Inversion,
     Registry,
+    MissingRepository,
     Request,
     ResourceLimit,
 }
@@ -54,6 +55,16 @@ pub enum Error {
         identifier: String,
         /// The category of failure.
         kind: RegistryErrorKind,
+    },
+
+    /// A referenced repository is not present in the context (not loaded / not fetched).
+    ///
+    /// Produced during planning when a `uses @repo ...` or `data x: … from @repo …`
+    /// refers to a repository name that has not been added to the workspace.
+    MissingRepository {
+        details: Box<ErrorDetails>,
+        /// Full repository qualifier as written (e.g. `"@lemma/std"`).
+        repository: String,
     },
 
     /// Resource limit exceeded
@@ -285,6 +296,27 @@ impl Error {
         }
     }
 
+    /// Repository referenced in source is not loaded in the context.
+    pub fn missing_repository(
+        message: impl Into<String>,
+        source: Option<Source>,
+        repository: impl Into<String>,
+        suggestion: Option<impl Into<String>>,
+        spec_context: Option<Arc<LemmaSpec>>,
+    ) -> Self {
+        Self::MissingRepository {
+            details: Box::new(ErrorDetails {
+                message: message.into(),
+                source,
+                suggestion: suggestion.map(Into::into),
+                spec_context,
+                related_spec: None,
+                related_data: None,
+            }),
+            repository: repository.into(),
+        }
+    }
+
     /// Attach spec context for display grouping. Returns a new Error with context set.
     pub fn with_spec_context(self, spec: Arc<LemmaSpec>) -> Self {
         self.map_details(|d| d.spec_context = Some(spec))
@@ -327,6 +359,17 @@ impl Error {
                     details: Box::new(d),
                     identifier,
                     kind,
+                }
+            }
+            Error::MissingRepository {
+                details,
+                repository,
+            } => {
+                let mut d = *details;
+                f(&mut d);
+                Error::MissingRepository {
+                    details: Box::new(d),
+                    repository,
                 }
             }
             Error::ResourceLimitExceeded {
@@ -372,7 +415,7 @@ fn write_source_location(f: &mut fmt::Formatter<'_>, source: &Option<Source>) ->
         write!(
             f,
             " at {}:{}:{}",
-            src.attribute, src.span.line, src.span.col
+            src.source_type, src.span.line, src.span.col
         )
     } else {
         Ok(())
@@ -449,6 +492,20 @@ impl fmt::Display for Error {
                 write_related_spec(f, details)?;
                 write_source_location(f, &details.source)
             }
+            Error::MissingRepository {
+                details,
+                repository,
+            } => {
+                if let Some(ref spec) = details.spec_context {
+                    write_spec_context(f, spec)?;
+                }
+                write!(f, "Missing repository: {}: {}", repository, details.message)?;
+                if let Some(suggestion) = &details.suggestion {
+                    write!(f, " (suggestion: {suggestion})")?;
+                }
+                write_related_spec(f, details)?;
+                write_source_location(f, &details.source)
+            }
             Error::ResourceLimitExceeded {
                 details,
                 limit_name,
@@ -499,6 +556,7 @@ impl Error {
             Error::Validation(_) => ErrorKind::Validation,
             Error::Inversion(_) => ErrorKind::Inversion,
             Error::Registry { .. } => ErrorKind::Registry,
+            Error::MissingRepository { .. } => ErrorKind::MissingRepository,
             Error::Request { .. } => ErrorKind::Request,
             Error::ResourceLimitExceeded { .. } => ErrorKind::ResourceLimit,
         }
@@ -509,8 +567,21 @@ impl Error {
         match self {
             Error::Parsing(d) | Error::Inversion(d) | Error::Validation(d) => d,
             Error::Registry { details, .. }
+            | Error::MissingRepository { details, .. }
             | Error::ResourceLimitExceeded { details, .. }
             | Error::Request { details, .. } => details,
+        }
+    }
+
+    /// Repository identifier when the error is about a missing repository or a registry fetch target.
+    ///
+    /// Populated for [`Error::MissingRepository`] and [`Error::Registry`] (`identifier`).
+    #[must_use]
+    pub fn repository(&self) -> Option<&str> {
+        match self {
+            Error::MissingRepository { repository, .. } => Some(repository.as_str()),
+            Error::Registry { identifier, .. } => Some(identifier.as_str()),
+            _ => None,
         }
     }
 
@@ -532,7 +603,7 @@ impl Error {
     /// Resolve source text from the sources map (for display). Source no longer stores text.
     pub fn source_text(
         &self,
-        sources: &std::collections::HashMap<String, String>,
+        sources: &std::collections::HashMap<crate::parsing::source::SourceType, String>,
     ) -> Option<String> {
         self.location()
             .and_then(|s| s.text_from(sources).map(|c| c.into_owned()))
@@ -548,8 +619,8 @@ impl Error {
         self.details().related_data.as_deref()
     }
 
-    /// Name of the spec being planned when the error occurred.
-    pub fn spec(&self) -> Option<&str> {
+    /// Spec name when the error is attributed to a planning/eval context.
+    pub fn spec_context_name(&self) -> Option<&str> {
         self.details()
             .spec_context
             .as_ref()
@@ -572,7 +643,9 @@ mod tests {
 
     fn test_source() -> Source {
         Source::new(
-            "test.lemma",
+            crate::parsing::source::SourceType::Path(std::sync::Arc::new(
+                std::path::PathBuf::from("test.lemma"),
+            )),
             Span {
                 start: 14,
                 end: 21,
@@ -590,7 +663,7 @@ mod tests {
         assert!(parse_error_display.contains("test.lemma:1:15"));
 
         let suggestion_source = Source::new(
-            "suggestion.lemma",
+            crate::parsing::source::SourceType::Volatile,
             Span {
                 start: 5,
                 end: 10,
@@ -643,6 +716,39 @@ mod tests {
     }
 
     #[test]
+    fn test_missing_repository_kind_display_and_repository() {
+        let err = Error::missing_repository(
+            "'main' references 'x' from '@org/pkg', but repository '@org/pkg' is not loaded",
+            Some(test_source()),
+            "@org/pkg",
+            Some("Run `lemma fetch @org/pkg` to download the repository.".to_string()),
+            None,
+        );
+        assert_eq!(err.kind(), ErrorKind::MissingRepository);
+        assert_eq!(err.repository(), Some("@org/pkg"));
+        let display = format!("{err}");
+        assert!(
+            display.contains("Missing repository: @org/pkg:"),
+            "unexpected display: {display}"
+        );
+    }
+
+    #[test]
+    fn test_registry_repository_accessor() {
+        let err = Error::registry(
+            "HTTP 404",
+            test_source(),
+            "@x/y",
+            crate::registry::RegistryErrorKind::NotFound,
+            None::<String>,
+            None,
+            None,
+        );
+        assert_eq!(err.kind(), ErrorKind::Registry);
+        assert_eq!(err.repository(), Some("@x/y"));
+    }
+
+    #[test]
     fn test_related_data_attribution_and_display() {
         let err = Error::validation(
             "Unknown unit 'mete' for this scale type",
@@ -674,7 +780,7 @@ mod tests {
     fn test_related_data_none_by_default() {
         let err = Error::validation("x", None, None::<String>);
         assert!(err.related_data().is_none());
-        assert!(err.spec().is_none());
+        assert!(err.spec_context_name().is_none());
         assert!(err.related_spec().is_none());
     }
 

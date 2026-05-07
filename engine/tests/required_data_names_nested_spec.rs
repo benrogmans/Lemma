@@ -10,7 +10,7 @@ data money: scale
   -> unit usd 1.19
 
 spec pricing
-data money from money
+data money: money from money
 data quantity: 10
 data is_member: false
 data price: money
@@ -22,17 +22,20 @@ rule total: price - discount
   unless price < 50 eur then price
 
 spec cashier
-with calc: pricing
+uses calc: pricing
 rule total: calc.total
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("cashier", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "cashier", Some(&now)).unwrap();
 
     // Schema for all rules: cashier.total depends on pricing.total (via calc.total),
     // so cashier's schema must include nested data like calc.price.
@@ -73,12 +76,12 @@ fn schema_errors_on_unknown_rule() {
     engine
         .load(
             "spec test\ndata x: 1\nrule y: x",
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("test", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
     let result = plan.schema_for_rules(&["nonexistent".to_string()]);
     assert!(result.is_err(), "Expected error for unknown rule");
     assert!(

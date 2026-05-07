@@ -26,12 +26,15 @@ rule is_above_30: savings_ratio > 30%
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("savings", Some(&now), HashMap::new(), false)
+        .run(None, "savings", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let ratio_result = response
@@ -78,12 +81,15 @@ rule tier: "low"
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("summary", Some(&now), HashMap::new(), false)
+        .run(None, "summary", Some(&now), HashMap::new(), false)
         .unwrap();
     let tier = response.results.get("tier").expect("tier");
     match &tier.result {
@@ -106,12 +112,15 @@ rule above_20_permille: as_permille > 20 permille
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("permille_spec", Some(&now), HashMap::new(), false)
+        .run(None, "permille_spec", Some(&now), HashMap::new(), false)
         .unwrap();
     let as_permille = response.results.get("as_permille").expect("as_permille");
     match &as_permille.result {
@@ -143,7 +152,10 @@ rule bad_conv: x in not_a_unit
 
     let mut engine = Engine::new();
     let err = engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap_err();
 
     let msg = format!("{:?}", err);
@@ -165,12 +177,16 @@ rule price: 100 - discount
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "pricing",
             Some(&now),
             HashMap::from([("discount".to_string(), "20 percent".to_string())]),
@@ -227,12 +243,15 @@ rule compared: plus_five > 25%
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("chained", Some(&now), HashMap::new(), false)
+        .run(None, "chained", Some(&now), HashMap::new(), false)
         .unwrap();
     let pct = response.results.get("pct").expect("pct");
     let plus_five = response.results.get("plus_five").expect("plus_five");
@@ -277,12 +296,15 @@ rule share_above_20: share_pct > 20%
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("mixed", Some(&now), HashMap::new(), false)
+        .run(None, "mixed", Some(&now), HashMap::new(), false)
         .unwrap();
     let as_eur = response.results.get("as_eur").expect("as_eur");
     let share_pct = response.results.get("share_pct").expect("share_pct");

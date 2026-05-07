@@ -153,9 +153,9 @@ data bonus_leave_days : 5
 
 spec leave_entitlement
 
-with employee
+uses employee
 
-with leave_policy
+uses leave_policy
 
 rule is_senior:
   employee.years_service >= leave_policy.senior_threshold
@@ -235,8 +235,8 @@ rule total:
 ```
 
 ```bash
-lemma get           # fetch all @... dependencies
-lemma get -f        # force re-fetch if content changed
+lemma fetch --all           # fetch all @... dependencies
+lemma fetch -f        # force re-fetch if content changed
 ```
 
 ## CLI
@@ -254,7 +254,7 @@ lemma run pricing -x                      # show reasoning
 lemma schema pricing                      # spec schema
 lemma list                                # list all specs
 lemma format                               # format .lemma files
-lemma get                                 # fetch registry dependencies
+lemma fetch                                 # fetch registry dependencies
 ```
 
 ### HTTP Server

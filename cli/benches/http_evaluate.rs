@@ -33,7 +33,7 @@ fn start_server() -> ServerGuard {
         .join("documentation/examples");
 
     let child = Command::new(env!("CARGO_BIN_EXE_lemma"))
-        .args(["server", "--dir"])
+        .arg("server")
         .arg(&examples_dir)
         .args(["--port", &PORT.to_string()])
         .stdout(Stdio::null())
@@ -60,7 +60,7 @@ fn bench_evaluate(c: &mut Criterion) {
             let resp = client
                 .post(format!("{BASE}/coffee_order"))
                 .header("Content-Type", "application/x-www-form-urlencoded")
-                .body("product=latte&size=large&number_of_cups=3&has_loyalty_card=true&age=30&price=3.50 eur")
+                .body("product=latte&size=large&number_of_cups=3&has_loyalty_card=true&age=30")
                 .send()
                 .expect("POST coffee_order");
             assert!(resp.status().is_success());
@@ -88,7 +88,7 @@ fn bench_evaluate(c: &mut Criterion) {
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body("gross_salary=5000 eur&pay_period=month&income_source=employment&pension_contribution=150 eur&payroll_tax_credit=true")
                 .send()
-                .expect("POST nl/tax/net_salary");
+                .expect("POST net_salary");
             assert!(resp.status().is_success());
         });
     });
@@ -103,7 +103,7 @@ fn bench_evaluate(c: &mut Criterion) {
             let resp = client
                 .get(format!("{BASE}/nl/tax/net_salary"))
                 .send()
-                .expect("GET nl/tax/net_salary");
+                .expect("GET net_salary");
             assert!(resp.status().is_success());
         });
     });

@@ -22,32 +22,39 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.12"
+lemma-engine = "0.8.13"
 ```
 
 ### Minimal example
 
 ```rust
-use lemma::Engine;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, SourceType};
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.load(r#"
+engine.load(
+    r#"
     spec compensation
     data base_salary: 60000
     data bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
     rule total: base_salary + bonus
-"#, Some("example.lemma"))?;
+"#,
+    SourceType::Labeled("example.lemma"),
+)?;
 
 let now = DateTimeValue::now();
-let response = engine.run("compensation", Some(&now), HashMap::new())?;
+let response = engine.run("compensation",
+    Some(&now),
+    HashMap::new(),
+    false,
+)?;
 
-for result in response.results {
-    if let Some(value) = result.result {
-        println!("{}: {}", result.rule_name, value);
+for (rule_name, rule_result) in &response.results {
+    if let Some(value) = rule_result.result.value() {
+        println!("{rule_name}: {value}");
     }
 }
 ```
@@ -55,13 +62,14 @@ for result in response.results {
 ### Providing values at runtime
 
 ```rust
-use lemma::Engine;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::{Engine, SourceType};
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
 
-engine.load(r#"
+engine.load(
+    r#"
     spec shipping
 
     data weight: 5 kilogram
@@ -74,21 +82,23 @@ engine.load(r#"
     rule valid: weight <= 30 kilogram
       unless veto "Package too heavy for shipping"
 
-"#, Some("example.lemma"))?;
+"#,
+    SourceType::Labeled("example.lemma"),
+)?;
 
 let mut values = HashMap::new();
 values.insert("weight".to_string(), "12 kilogram".to_string());
 values.insert("destination".to_string(), "international".to_string());
 
 let now = DateTimeValue::now();
-let response = engine.run("shipping", Some(&now), values)?;
+let response = engine.run("shipping", Some(&now), values, false)?;
 ```
 
 ## Features
 
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
-- **Spec composition** – extend specs, bind data, and reuse rules across modules
+- **Page composition** – extend specs, bind data, and reuse rules across modules
 - **Audit trail** – every evaluation returns the operations that led to each result
 - **WebAssembly build** – `npm install @lemmabase/lemma-engine` to run Lemma in browsers and at the edge
 

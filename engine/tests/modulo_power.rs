@@ -15,13 +15,13 @@ data a: 10
 data b: 3
 rule remainder: a % b
 "#,
-            lemma::SourceType::Labeled("test"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response.results.get("remainder").unwrap();
 
@@ -48,13 +48,13 @@ data base: 2
 data exponent: 3
 rule result: base ^ exponent
 "#,
-            lemma::SourceType::Labeled("test"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response.results.get("result").unwrap();
 
@@ -81,13 +81,13 @@ data value: 17
 rule is_even: (value % 2) is 0
 rule is_odd: (value % 2) is 1
 "#,
-            lemma::SourceType::Labeled("test"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let is_even = response.results.get("is_even").unwrap();
@@ -113,13 +113,13 @@ spec test
 data base: 4
 rule square_root: base ^ 0.5
 "#,
-            lemma::SourceType::Labeled("test"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response.results.get("square_root").unwrap();
 
@@ -146,13 +146,13 @@ data x: 10
 data y: 3
 rule calculation: (x % y) + (2 ^ 3)
 "#,
-            lemma::SourceType::Labeled("test"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response.results.get("calculation").unwrap();
 

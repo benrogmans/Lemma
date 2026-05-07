@@ -43,7 +43,7 @@ cargo +nightly fuzz run fuzz_parser -- -max_total_time=3600
 4. **fuzz_deeply_nested** - Nested expressions to test stack limits
 5. **fuzz_data_bindings** - Data binding parsing and evaluation
 
-### Running Specific Targets
+### Running Pageific Targets
 
 ```bash
 cargo +nightly fuzz run fuzz_expressions -- -max_total_time=60

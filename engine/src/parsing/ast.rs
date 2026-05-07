@@ -133,16 +133,137 @@ impl fmt::Display for EffectiveDate {
     }
 }
 
+/// A Lemma repository header. Identity carrier; never owns specs.
+///
+/// `name` includes the `@` prefix when present (e.g. `Some("@jack/finance")`).
+/// `None` for the workspace-global anonymous grouping. Identity (used by
+/// `PartialEq`, `Eq`, `Hash`, and `Ord` for `BTreeMap` keying) is just `name`.
+/// `dependency`, `start_line` and `source_type` are metadata excluded from identity.
+///
+/// `dependency` is the provenance guard: `None` for workspace-loaded repos,
+/// `Some(id)` for repos introduced by a dependency. All specs in a repo must
+/// share the same `dependency` value — the engine rejects mismatches at load time.
+///
+/// The parser fills [`LemmaRepository`] for each `repo` section before grouping specs in
+/// [`ParseResult`]; loaders set `dependency` when inserting dependency bundles.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LemmaRepository {
+    /// Repository name, including `@` when present. `None` for anonymous repositories.
+    pub name: Option<String>,
+    /// Dependency provenance: `None` for workspace repos, `Some(id)` for dependency repos.
+    /// Not part of identity — used as an isolation guard at load time.
+    pub dependency: Option<String>,
+    pub start_line: usize,
+    pub source_type: Option<crate::parsing::source::SourceType>,
+}
+
+impl LemmaRepository {
+    #[must_use]
+    pub fn new(name: Option<String>) -> Self {
+        Self {
+            name,
+            dependency: None,
+            start_line: 1,
+            source_type: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_start_line(mut self, start_line: usize) -> Self {
+        self.start_line = start_line;
+        self
+    }
+
+    #[must_use]
+    pub fn with_source_type(mut self, source_type: crate::parsing::source::SourceType) -> Self {
+        self.source_type = Some(source_type);
+        self
+    }
+
+    #[must_use]
+    pub fn with_dependency(mut self, dependency_id: impl Into<String>) -> Self {
+        self.dependency = Some(dependency_id.into());
+        self
+    }
+
+    /// Identity used for interning, equality, and hashing. Just the name.
+    /// `dependency`, `start_line` and `source_type` are excluded so the same
+    /// repository declared in multiple places is treated as one.
+    #[must_use]
+    pub fn identity(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+}
+
+impl PartialEq for LemmaRepository {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for LemmaRepository {}
+
+impl PartialOrd for LemmaRepository {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LemmaRepository {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name.cmp(&other.name)
+    }
+}
+
+impl Hash for LemmaRepository {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
+}
+
+/// Qualifier in references (`uses …`, `from …`, spec targets).
+/// `name` includes the `@` prefix when present. The planner resolves
+/// a `RepositoryQualifier` to an `Arc<LemmaRepository>` against the active context.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct RepositoryQualifier {
+    pub name: String,
+}
+
+impl RepositoryQualifier {
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
+    }
+
+    /// Whether this repository qualifier refers to a registry (e.g., starts with `@`).
+    #[must_use]
+    pub fn is_registry(&self) -> bool {
+        self.name.starts_with('@')
+    }
+}
+
+impl fmt::Display for RepositoryQualifier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
 /// A Lemma spec containing data and rules.
-/// Ordered and compared by (name, effective_from) for use in BTreeSet; Origin < DateTimeValue(_).
+///
+/// `name` is always the bare spec set name (no `@`, no dots, no slashes). The
+/// owning repository — and, transitively, whether the spec is loaded from a registry
+/// bundle — is preserved through the structural relationship in
+/// [`crate::engine::Context`], not via fields on this structure.
+///
+/// `LemmaSpec` has **no global identity**. There is no `PartialEq`, `Eq`, `Ord`,
+/// or `Hash` implementation. Consumers must either:
+/// - compare `Arc<LemmaSpec>` by pointer with `Arc::ptr_eq` (valid within a single `Context`), or
+/// - key by the explicit composite `(Arc<LemmaRepository>, name, EffectiveDate)` triple.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LemmaSpec {
-    /// Base spec name. Includes `@` for registry specs.
     pub name: String,
-    /// `true` when the spec was declared with the `@` qualifier (registry spec).
-    pub from_registry: bool,
     pub effective_from: EffectiveDate,
-    pub attribute: Option<String>,
+    pub source_type: Option<crate::parsing::source::SourceType>,
     pub start_line: usize,
     pub commentary: Option<String>,
     pub data: Vec<LemmaData>,
@@ -469,22 +590,35 @@ pub enum MathematicalComputation {
     Round,
 }
 
-/// A reference to a spec, with optional effective datetime.
-/// For registry references the `name` includes the leading `@` (e.g. `@org/repo/spec`);
-/// for local references it is a plain base name. `from_registry` mirrors whether
-/// the source used the `@` qualifier.
+/// A spec reference written in source.
+///
+/// `name` is the bare spec name (no `@`, no dots, no slashes).
+/// [`SpecRef::repository`] is `None` when no `from <qualifier>` clause was written
+/// (same-repository reference) or `Some(RepositoryQualifier)` carrying the textual
+/// qualifier the parser observed.
+/// `effective` carries an optional explicit pin written next to the spec name.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpecRef {
-    /// Spec name as written in source. Includes `@` for registry references.
+    /// Optional explicit `from <repository_qualifier>` clause. `None` means the
+    /// reference resolves against the consumer spec's own repository.
+    pub repository: Option<RepositoryQualifier>,
+    /// The spec name.
     pub name: String,
-    /// `true` when the source used the `@` qualifier (registry reference).
-    pub from_registry: bool,
-    /// Optional effective datetime for temporal resolution.
+    /// Optional explicit effective datetime pin written in source.
     pub effective: Option<DateTimeValue>,
+    /// Source span of the repository qualifier (when `repository` is present).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository_span: Option<Span>,
+    /// Source span of `name` and optional `effective`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_span: Option<Span>,
 }
 
 impl std::fmt::Display for SpecRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(qualifier) = &self.repository {
+            write!(f, "{} ", qualifier)?;
+        }
         write!(f, "{}", self.name)?;
         if let Some(d) = &self.effective {
             write!(f, " {}", d)?;
@@ -494,26 +628,26 @@ impl std::fmt::Display for SpecRef {
 }
 
 impl SpecRef {
-    /// Create a local (non-registry) spec reference.
-    pub fn local(name: impl Into<String>) -> Self {
+    /// Same-repository reference (no `from` clause): resolution uses the consumer's repository.
+    pub fn same_repository(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            from_registry: false,
+            repository: None,
             effective: None,
+            repository_span: None,
+            target_span: None,
         }
     }
 
-    /// Create a registry spec reference.
-    pub fn registry(name: impl Into<String>) -> Self {
+    /// Cross-repository reference with an explicit `from` qualifier.
+    pub fn cross_repository(name: impl Into<String>, qualifier: RepositoryQualifier) -> Self {
         Self {
             name: name.into(),
-            from_registry: true,
+            repository: Some(qualifier),
             effective: None,
+            repository_span: None,
+            target_span: None,
         }
-    }
-
-    pub fn resolution_key(&self) -> String {
-        self.name.clone()
     }
 
     /// Resolve the effective instant for this reference given the planning slice's `effective`.
@@ -616,16 +750,24 @@ pub type Constraint = (TypeConstraintCommand, Vec<CommandArg>);
 #[serde(rename_all = "snake_case")]
 /// Parse-time data value (before type resolution)
 pub enum DataValue {
-    /// A literal value (parse-time; type will be resolved during planning)
-    Literal(Value),
-    /// A reference to another spec
-    SpecReference(SpecRef),
-    /// A type declaration: `data x: number -> minimum 5` or `data y: x -> minimum 5`
-    TypeDeclaration {
-        base: ParentType,
+    /// Declares data: optional explicit parent type, optional constraints (`-> ...`),
+    /// optional `from <spec>` repository qualifier, and optional literal value.
+    ///
+    /// Examples:
+    /// - `data x: 3.14` → `base: None`, `value: Some(Number)`
+    /// - `data x: number -> minimum 0` → `base: Some(Number)`, `constraints: Some(...)`
+    /// - `data x: money from @lemma/std finance` → `base: Some(Custom("money"))`, `from: Some(...)`
+    Definition {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<ParentType>,
         constraints: Option<Vec<Constraint>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<SpecRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<Value>,
     },
+    /// Import from another spec (surface syntax is `uses`; alias is [`LemmaData::reference`]).
+    Import(SpecRef),
     /// A value-copy reference to another data or rule, with optional additional constraints.
     ///
     /// Two surface forms produce this variant:
@@ -637,19 +779,56 @@ pub enum DataValue {
     ///    is read as a value-copy reference to a name in the enclosing spec,
     ///    not as a typedef.
     ///
-    /// `data x: someident` (LHS without segments, RHS without dots) is the one
-    /// case that stays a `TypeDeclaration` — `someident` is treated as a typedef
-    /// name. See parser `parse_data_value` for the discriminator.
+    /// `data x: someident` (LHS without segments, RHS without dots) uses [`DataValue::Definition`]
+    /// with `someident` as the parent type name. See parser [`crate::parsing::parser::Parser::parse_data_value`].
     ///
-    /// The target is resolved during planning to either a `DataPath` or a `RulePath`.
+    /// The target is resolved during planning to either a [`DataPath`] or a [`RulePath`].
     Reference {
         target: Reference,
         constraints: Option<Vec<Constraint>>,
     },
 }
 
+impl DataValue {
+    /// Whether this is only a literal RHS (`data x: 3.14`), valid as a binding value.
+    #[must_use]
+    pub fn is_definition_literal_only(&self) -> bool {
+        matches!(
+            self,
+            DataValue::Definition {
+                base: None,
+                constraints: None,
+                from: None,
+                value: Some(_),
+            }
+        )
+    }
+
+    /// Whether planning must resolve this [`LemmaData`] row through the type resolver / named types.
+    #[must_use]
+    pub fn definition_needs_type_resolution(&self) -> bool {
+        match self {
+            DataValue::Definition { base: Some(_), .. }
+            | DataValue::Definition { from: Some(_), .. }
+            | DataValue::Definition {
+                constraints: Some(_),
+                ..
+            } => true,
+            DataValue::Definition {
+                base: None,
+                constraints: None,
+                from: None,
+                value: Some(v),
+            } => !matches!(v, Value::Scale(_, _) | Value::Ratio(_, _)),
+            DataValue::Import(_) | DataValue::Reference { .. } | DataValue::Definition { .. } => {
+                false
+            }
+        }
+    }
+}
+
 /// Render a chain of `-> command args ...` constraints for display purposes.
-/// Shared between `DataValue::TypeDeclaration` and `DataValue::Reference`.
+/// Shared between [`DataValue::Definition`] and [`DataValue::Reference`].
 fn format_constraint_chain(constraints: &[Constraint]) -> String {
     constraints
         .iter()
@@ -669,37 +848,53 @@ fn format_constraint_chain(constraints: &[Constraint]) -> String {
 impl fmt::Display for DataValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DataValue::Literal(v) => write!(f, "{}", v),
-            DataValue::SpecReference(spec_ref) => {
-                write!(f, "with {}", spec_ref)
-            }
-            DataValue::TypeDeclaration {
+            DataValue::Definition {
                 base,
                 constraints,
                 from,
+                value,
             } => {
-                let base_str = if let Some(from_spec) = from {
-                    format!("{} from {}", base, from_spec)
-                } else {
-                    format!("{}", base)
+                if base.is_none() && from.is_none() && constraints.is_none() {
+                    return match value {
+                        Some(v) => write!(f, "{}", v),
+                        None => Ok(()),
+                    };
+                }
+                let base_str = match (base.as_ref(), from.as_ref()) {
+                    (Some(b), Some(spec)) => format!("{b} from {spec}"),
+                    (Some(b), None) => format!("{b}"),
+                    (None, Some(spec)) => format!("<type> from {spec}"),
+                    (None, None) => match value {
+                        Some(v) => {
+                            if let Some(ref constraints_vec) = constraints {
+                                let constraint_str = format_constraint_chain(constraints_vec);
+                                return write!(f, "{v} -> {constraint_str}");
+                            }
+                            return write!(f, "{v}");
+                        }
+                        None => String::new(),
+                    },
                 };
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = format_constraint_chain(constraints_vec);
-                    write!(f, "{} -> {}", base_str, constraint_str)
+                    write!(f, "{base_str} -> {constraint_str}")
                 } else {
-                    write!(f, "{}", base_str)
+                    write!(f, "{base_str}")
                 }
+            }
+            DataValue::Import(spec_ref) => {
+                write!(f, "with {}", spec_ref)
             }
             DataValue::Reference {
                 target,
                 constraints,
             } => {
+                write!(f, "{}", target)?;
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = format_constraint_chain(constraints_vec);
-                    write!(f, "{} -> {}", target, constraint_str)
-                } else {
-                    write!(f, "{}", target)
+                    write!(f, " -> {}", constraint_str)?;
                 }
+                Ok(())
             }
         }
     }
@@ -719,12 +914,10 @@ impl LemmaData {
 impl LemmaSpec {
     #[must_use]
     pub fn new(name: String) -> Self {
-        let from_registry = name.starts_with('@');
         Self {
             name,
-            from_registry,
             effective_from: EffectiveDate::Origin,
-            attribute: None,
+            source_type: None,
             start_line: 1,
             commentary: None,
             data: Vec::new(),
@@ -739,8 +932,8 @@ impl LemmaSpec {
     }
 
     #[must_use]
-    pub fn with_attribute(mut self, attribute: String) -> Self {
-        self.attribute = Some(attribute);
+    pub fn with_source_type(mut self, source_type: crate::parsing::source::SourceType) -> Self {
+        self.source_type = Some(source_type);
         self
     }
 
@@ -772,37 +965,6 @@ impl LemmaSpec {
     pub fn add_meta_field(mut self, meta: MetaField) -> Self {
         self.meta_fields.push(meta);
         self
-    }
-}
-
-impl PartialEq for LemmaSpec {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.effective_from() == other.effective_from()
-    }
-}
-
-impl Eq for LemmaSpec {}
-
-impl PartialOrd for LemmaSpec {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for LemmaSpec {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (self.name.as_str(), self.effective_from())
-            .cmp(&(other.name.as_str(), other.effective_from()))
-    }
-}
-
-impl Hash for LemmaSpec {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-        match self.effective_from() {
-            Some(d) => d.hash(state),
-            None => 0u8.hash(state),
-        }
     }
 }
 
@@ -1162,7 +1324,10 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
 }
 
 /// Format a single constraint command and its args as valid Lemma source.
-fn format_constraint_as_source(cmd: &TypeConstraintCommand, args: &[CommandArg]) -> String {
+pub(crate) fn format_constraint_as_source(
+    cmd: &TypeConstraintCommand,
+    args: &[CommandArg],
+) -> String {
     if args.is_empty() {
         cmd.to_string()
     } else {
@@ -1248,19 +1413,32 @@ impl<'a> fmt::Display for AsLemmaSource<'a, MetaValue> {
 impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
-            DataValue::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-            DataValue::SpecReference(spec_ref) => {
-                write!(f, "with {}", spec_ref)
-            }
-            DataValue::TypeDeclaration {
+            DataValue::Definition {
                 base,
                 constraints,
                 from,
+                value,
             } => {
-                let base_str = if let Some(from_spec) = from {
-                    format!("{} from {}", base, from_spec)
-                } else {
-                    format!("{}", base)
+                if base.is_none() && from.is_none() && constraints.is_none() {
+                    if let Some(v) = value {
+                        return write!(f, "{}", AsLemmaSource(v));
+                    }
+                }
+                let base_str = match (base.as_ref(), from.as_ref()) {
+                    (Some(b), Some(spec)) => format!("{} from {}", b, spec),
+                    (Some(b), None) => format!("{}", b),
+                    (None, Some(spec)) => format!("<type> from {}", spec),
+                    (None, None) => match value {
+                        Some(v) => {
+                            if let Some(ref constraints_vec) = constraints {
+                                let constraint_str =
+                                    format_constraints_as_source(constraints_vec, " -> ");
+                                return write!(f, "{} -> {}", AsLemmaSource(v), constraint_str);
+                            }
+                            return write!(f, "{}", AsLemmaSource(v));
+                        }
+                        None => String::new(),
+                    },
                 };
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
@@ -1269,16 +1447,19 @@ impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
                     write!(f, "{}", base_str)
                 }
             }
+            DataValue::Import(spec_ref) => {
+                write!(f, "with {}", spec_ref)
+            }
             DataValue::Reference {
                 target,
                 constraints,
             } => {
+                write!(f, "{}", target)?;
                 if let Some(ref constraints_vec) = constraints {
                     let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
-                    write!(f, "{} -> {}", target, constraint_str)
-                } else {
-                    write!(f, "{}", target)
+                    write!(f, " -> {}", constraint_str)?;
                 }
+                Ok(())
             }
         }
     }
@@ -1459,15 +1640,16 @@ mod tests {
 
     #[test]
     fn as_lemma_source_text_default_is_quoted() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![text_arg("single")],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
@@ -1477,30 +1659,32 @@ mod tests {
 
     #[test]
     fn as_lemma_source_number_default_not_quoted() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Number,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![number_arg("10")],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(format!("{}", AsLemmaSource(&fv)), "number -> default 10");
     }
 
     #[test]
     fn as_lemma_source_help_always_quoted() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Number,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
                 vec![text_arg("Enter a quantity")],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
@@ -1510,15 +1694,16 @@ mod tests {
 
     #[test]
     fn as_lemma_source_text_option_quoted() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
-            },
+            }),
             constraints: Some(vec![
                 (TypeConstraintCommand::Option, vec![text_arg("active")]),
                 (TypeConstraintCommand::Option, vec![text_arg("inactive")]),
             ]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
@@ -1528,10 +1713,10 @@ mod tests {
 
     #[test]
     fn as_lemma_source_scale_unit_not_quoted() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Scale,
-            },
+            }),
             constraints: Some(vec![
                 (
                     TypeConstraintCommand::Unit,
@@ -1543,6 +1728,7 @@ mod tests {
                 ),
             ]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
@@ -1552,45 +1738,48 @@ mod tests {
 
     #[test]
     fn as_lemma_source_scale_minimum_with_unit() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Scale,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Minimum,
                 vec![scale_arg("0", "eur")],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(format!("{}", AsLemmaSource(&fv)), "scale -> minimum 0 eur");
     }
 
     #[test]
     fn as_lemma_source_boolean_default() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Boolean,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![boolean_arg(BooleanValue::True)],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(format!("{}", AsLemmaSource(&fv)), "boolean -> default true");
     }
 
     #[test]
     fn as_lemma_source_duration_default() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Duration,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![duration_arg("40", DurationUnit::Hour)],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
@@ -1602,15 +1791,16 @@ mod tests {
     fn as_lemma_source_named_type_default_quoted() {
         // Named types (user-defined): the parser produces a typed Text literal for
         // quoted default values like `default "single"`.
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Custom {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Custom {
                 name: "filing_status_type".to_string(),
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
                 vec![text_arg("single")],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
@@ -1620,15 +1810,16 @@ mod tests {
 
     #[test]
     fn as_lemma_source_help_escapes_quotes() {
-        let fv = DataValue::TypeDeclaration {
-            base: ParentType::Primitive {
+        let fv = DataValue::Definition {
+            base: Some(ParentType::Primitive {
                 primitive: PrimitiveKind::Text,
-            },
+            }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
                 vec![text_arg("say \"hello\"")],
             )]),
             from: None,
+            value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),

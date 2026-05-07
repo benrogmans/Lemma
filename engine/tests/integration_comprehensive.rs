@@ -19,7 +19,7 @@ data min_age: 18 years
 
     let employment_terms = r#"
 spec employment_terms
-with base: base_contract
+uses base: base_contract
 data salary: 75000
 data bonus_percentage: 10%
 data start_date: 2024-01-15
@@ -37,15 +37,21 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 "#;
 
     engine
-        .load(base_contract, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            base_contract,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(employment_terms, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            employment_terms,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("employment_terms", Some(&now), HashMap::new(), false)
+        .run(None, "employment_terms", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let total_comp = response
@@ -105,12 +111,15 @@ rule effective_rate: (tax_amount / income) * 100%
 "#;
 
     engine
-        .load(tax_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            tax_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("tax_calculation", Some(&now), HashMap::new(), false)
+        .run(None, "tax_calculation", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let taxable = response
@@ -169,7 +178,10 @@ rule status: "LOW"
 "#;
 
     engine
-        .load(config_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            config_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let mut data = std::collections::HashMap::new();
@@ -178,7 +190,7 @@ rule status: "LOW"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("dynamic_config", Some(&now), data, false)
+        .run(None, "dynamic_config", Some(&now), data, false)
         .unwrap();
 
     let calculated = response
@@ -200,7 +212,7 @@ rule status: "LOW"
     data2.insert("multiplier".to_string(), "2".to_string());
 
     let response2 = engine
-        .run("dynamic_config", Some(&now), data2, false)
+        .run(None, "dynamic_config", Some(&now), data2, false)
         .unwrap();
 
     let status2 = response2
@@ -239,12 +251,15 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 "#;
 
     engine
-        .load(timeline_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            timeline_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("project_timeline", Some(&now), HashMap::new(), false)
+        .run(None, "project_timeline", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let phase1_complete = response
@@ -283,22 +298,28 @@ data max_salary: 200000
 
     let child_spec = r#"
 spec child
-with base_contract: base
+uses base_contract: base
 data salary: 75000
 
 rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(child_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            child_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("child", Some(&now), HashMap::new(), false)
+        .run(None, "child", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let is_valid = response
@@ -324,21 +345,27 @@ data probation_period: 90 days
 
     let child_spec = r#"
 spec child
-with base_contract: base
+uses base_contract: base
 
 rule probation_end: base_contract.project_start + base_contract.probation_period
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(child_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            child_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("child", Some(&now), HashMap::new(), false)
+        .run(None, "child", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let probation_end = response

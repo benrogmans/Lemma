@@ -33,7 +33,7 @@ Membership levels have different benefits.
 
 data monthly_spend : number -> minimum 0 -> default 150
 
-with membership: premium_membership
+uses membership: premium_membership
 
 rule discount:
   monthly_spend * membership.discount_rate

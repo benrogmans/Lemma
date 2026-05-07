@@ -155,6 +155,15 @@ export class LspClient {
     }
 
     /**
+     * Notify the server that a file was closed.
+     */
+    didClose(uri) {
+        this.sendNotification('textDocument/didClose', {
+            textDocument: { uri: uri },
+        });
+    }
+
+    /**
      * Request textDocument/formatting from the server.
      * Returns an array of TextEdit.
      */

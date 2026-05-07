@@ -100,7 +100,7 @@
             text-overflow: ellipsis;
         }
 
-        /* --- Spec cards --- */
+        /* --- Page cards --- */
 
         .spec-card {
             background: white;
@@ -321,7 +321,9 @@
         };
 
         function datetimeValueToString(dt) {
-            if (!dt || typeof dt !== 'object') return '';
+            if (!dt) return '';
+            if (typeof dt === 'string') return dt;
+            if (typeof dt !== 'object') return '';
             var s = String(dt.year);
             if (dt.month) {
                 s += '-' + String(dt.month).padStart(2, '0');
@@ -347,20 +349,31 @@
             return s;
         }
 
+        function effectiveFromToSchemaParam(effective_from) {
+            if (!effective_from || typeof effective_from !== 'object') return null;
+            if (Object.prototype.hasOwnProperty.call(effective_from, 'Origin')) return null;
+            if (effective_from.DateTimeValue) {
+                return datetimeValueToString(effective_from.DateTimeValue);
+            }
+            return null;
+        }
+
         function specKey(entry) {
-            if (entry.effective_from) return entry.name + ' ' + datetimeValueToString(entry.effective_from);
-            return entry.name;
+            var repo = entry.repository && entry.repository.name ? entry.repository.name : '';
+            var base = repo ? repo + '::' + entry.name : entry.name;
+            var ef = entry.effective_from;
+            if (!ef || typeof ef !== 'object') return base;
+            if (Object.prototype.hasOwnProperty.call(ef, 'Origin')) return base;
+            if (ef.DateTimeValue) {
+                return base + ' ' + datetimeValueToString(ef.DateTimeValue);
+            }
+            return base;
         }
 
         function specEffective(key) {
             var entry = state.specs.find(function (d) { return specKey(d) === key; });
-            if (entry && entry.effective_from) return datetimeValueToString(entry.effective_from);
-            return null;
-        }
-
-        function specName(key) {
-            var entry = state.specs.find(function (d) { return specKey(d) === key; });
-            return entry ? entry.name : key;
+            if (!entry) return null;
+            return effectiveFromToSchemaParam(entry.effective_from);
         }
 
         function dataValuesStorageKey(specName) {
@@ -527,10 +540,10 @@
             }
             let currentValue = state.dataValues[specName][name];
             if (currentValue === undefined && data.defaultValue) {
-                const fromSpec = storedFromLiteralValue(data.defaultValue, kind);
-                if (fromSpec !== undefined) {
-                    state.dataValues[specName][name] = fromSpec;
-                    currentValue = fromSpec;
+                const fromPage = storedFromLiteralValue(data.defaultValue, kind);
+                if (fromPage !== undefined) {
+                    state.dataValues[specName][name] = fromPage;
+                    currentValue = fromPage;
                     persistDataValues(specName);
                 }
             }
@@ -834,7 +847,7 @@
         // DOM: Build a spec card
         // ---------------------------------------------------------------
 
-        function buildSpecCard(key) {
+        function buildPageCard(key) {
             loadDataValuesFromStorage(key);
             const schema = state.schemas[key];
             const data = (schema && Array.isArray(schema.data)) ? schema.data : [];
@@ -860,7 +873,7 @@
             const runButton = document.createElement('button');
             runButton.textContent = 'Run';
             runButton.addEventListener('click', function () {
-                runSpec(key);
+                runPage(key);
             });
             actions.appendChild(runButton);
 
@@ -949,7 +962,7 @@
             }
         }
 
-        function patchSpecCards() {
+        function patchPageCards() {
             const select = document.getElementById('spec-select');
             const keys = state.specs.map(specKey);
             const prevSelected = select.value;
@@ -973,10 +986,10 @@
                 select.value = keys.indexOf(prevSelected) !== -1 ? prevSelected : keys[0];
             }
 
-            renderSelectedSpec();
+            renderSelectedPage();
         }
 
-        function renderSelectedSpec() {
+        function renderSelectedPage() {
             const select = document.getElementById('spec-select');
             const detail = document.getElementById('spec-detail');
             const key = select.value;
@@ -984,7 +997,7 @@
 
             if (!key || !state.schemas[key]) return;
 
-            const card = buildSpecCard(key);
+            const card = buildPageCard(key);
             detail.appendChild(card);
         }
 
@@ -994,10 +1007,13 @@
 
         function fetchSchema(key) {
             if (!engine) return null;
-            var name = specName(key);
+            var entry = state.specs.find(function (d) { return specKey(d) === key; });
+            if (!entry) return null;
+            var repo = entry.repository && entry.repository.name ? entry.repository.name : null;
+            var name = entry.name;
             var effectiveStr = specEffective(key);
             try {
-                var schema = engine.schema(name, effectiveStr);
+                var schema = engine.schema(repo, name, effectiveStr);
                 return normalizeSchema(schema);
             } catch (e) {
                 console.error('fetchSchema exception for', key, e);
@@ -1011,9 +1027,15 @@
                 for (const [name, entry] of Object.entries(schema.data)) {
                     data.push({
                         name: name,
-                        required: true,
+                        required:
+                            !(entry.bound_value != null || entry.default != null),
                         schemaType: entry.type,
-                        defaultValue: entry.default != null ? entry.default : null
+                        defaultValue:
+                            entry.bound_value != null
+                                ? entry.bound_value
+                                : entry.default != null
+                                  ? entry.default
+                                  : null
                     });
                 }
             }
@@ -1033,25 +1055,37 @@
                 var loadMsg = Array.isArray(errs) ? errs.join('\n') : String(errs);
                 setStatus('err', 'Load failed', loadMsg);
                 state.specs = [];
-                patchSpecCards();
+                patchPageCards();
                 return;
             }
 
-            let specEntries;
+            let specGroups;
             try {
-                specEntries = engine.list();
+                specGroups = engine.list();
             } catch (e) {
                 setStatus('err', 'Exception listing specs', e.message || String(e));
                 state.specs = [];
-                patchSpecCards();
+                patchPageCards();
                 return;
             }
 
-            if (!Array.isArray(specEntries)) {
-                console.error('list failed:', specEntries);
+            if (!Array.isArray(specGroups)) {
+                console.error('list failed:', specGroups);
                 state.specs = [];
-                patchSpecCards();
+                patchPageCards();
                 return;
+            }
+            var specEntries = [];
+            for (var gi = 0; gi < specGroups.length; gi++) {
+                var g = specGroups[gi];
+                var repository = g.repository;
+                for (var si = 0; si < g.specs.length; si++) {
+                    var specSet = g.specs[si];
+                    for (var vi = 0; vi < specSet.specs.length; vi++) {
+                        var lemmaSpec = specSet.specs[vi];
+                        specEntries.push(Object.assign({}, lemmaSpec, { repository: repository }));
+                    }
+                }
             }
             const newKeys = specEntries.map(specKey);
             const oldKeys = state.specs.map(specKey);
@@ -1069,11 +1103,13 @@
             for (const entry of specEntries) {
                 const key = specKey(entry);
                 try {
-                    state.schemas[key] = normalizeSchema(entry.schema);
+                    const repo = entry.repository && entry.repository.name ? entry.repository.name : null;
+                    const rawSchema = engine.schema(repo, entry.name, entry.effective_from);
+                    state.schemas[key] = normalizeSchema(rawSchema);
                 } catch (e) { console.error('show failed for', key, e); }
             }
 
-            patchSpecCards();
+            patchPageCards();
         }
 
         function scheduleLoad(immediate) {
@@ -1093,7 +1129,7 @@
         // Evaluate and clear
         // ---------------------------------------------------------------
 
-        async function runSpec(key) {
+        async function runPage(key) {
             if (loadTimer !== null) {
                 clearTimeout(loadTimer);
                 loadTimer = null;
@@ -1102,22 +1138,25 @@
 
             if (!engine) return;
 
-            const name = specName(key);
-            const effective = specEffective(key) || '1';
+            const entry = state.specs.find(function (d) { return specKey(d) === key; });
+            if (!entry) return;
+            const name = entry.name;
+            const repo = entry.repository && entry.repository.name ? entry.repository.name : null;
+            const effective = specEffective(key);
             const dataObj = serializeDataValues(key);
 
             try {
-                const response = engine.run(name, [], dataObj, effective);
+                const response = engine.run(repo, name, [], dataObj, effective);
                 state.evalResults[key] = { success: true, response: response };
             } catch (e) {
                 state.evalResults[key] = { success: false, error: e.message || String(e) };
-                renderResultsForSpec(key);
+                renderResultsForPage(key);
                 return;
             }
-            renderResultsForSpec(key);
+            renderResultsForPage(key);
         }
 
-        function renderResultsForSpec(specName) {
+        function renderResultsForPage(specName) {
             const detail = document.getElementById('spec-detail');
             const card = detail.querySelector('.spec-card');
             if (!card) return;
@@ -1207,7 +1246,7 @@
             if (editorPollId) { clearInterval(editorPollId); editorPollId = null; }
         }
 
-        async function formatSpec(e = null) {
+        async function formatPage(e = null) {
             if (e) e.preventDefault();
             if (!monacoEditor) return;
             await monacoEditor.getAction('editor.action.formatDocument').run();
@@ -1262,9 +1301,9 @@
                     }
                 });
 
-                document.getElementById('spec-select').addEventListener('change', renderSelectedSpec);
+                document.getElementById('spec-select').addEventListener('change', renderSelectedPage);
 
-                document.getElementById('format-btn').addEventListener('click', formatSpec);
+                document.getElementById('format-btn').addEventListener('click', formatPage);
 
 
                 editorReady = true;
@@ -1297,7 +1336,7 @@
                 }
 
                 setStatus('ok', 'Ready');
-                formatSpec();
+                formatPage();
                 scheduleLoad(true);
             } catch (err) {
                 showError('Editor failed', err);

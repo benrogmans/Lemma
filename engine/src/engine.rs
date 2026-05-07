@@ -1,9 +1,11 @@
 use crate::evaluation::Evaluator;
-use crate::parsing::ast::{DateTimeValue, LemmaSpec};
+use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
+use crate::parsing::source::SourceType;
 use crate::parsing::EffectiveDate;
 use crate::planning::{LemmaSpecSet, SpecSchema};
 use crate::{parse, Error, ResourceLimits, Response};
-use std::collections::{BTreeMap, HashMap};
+use indexmap::IndexMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -11,11 +13,11 @@ use std::collections::HashSet;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
-/// Load failure: errors plus the source files we attempted to load.
+/// Load failure: errors plus the source texts we attempted to load.
 #[derive(Debug, Clone)]
 pub struct Errors {
     pub errors: Vec<Error>,
-    pub sources: HashMap<String, String>,
+    pub sources: HashMap<SourceType, String>,
 }
 
 impl Errors {
@@ -25,94 +27,231 @@ impl Errors {
     }
 }
 
+/// Collect `.lemma` source texts from filesystem paths (paths and one-level directories).
+/// Does not touch an [`Engine`]; pair with [`Engine::load`] / [`Engine::load_batch`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn collect_lemma_sources<P: AsRef<Path>>(
+    paths: &[P],
+) -> Result<HashMap<SourceType, String>, Errors> {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let mut sources = HashMap::new();
+    let mut seen = HashSet::<PathBuf>::new();
+
+    for path in paths {
+        let path = path.as_ref();
+        if path.is_file() {
+            if path.extension().is_none_or(|e| e != "lemma") {
+                continue;
+            }
+            let p = path.to_path_buf();
+            if seen.contains(&p) {
+                continue;
+            }
+            seen.insert(p.clone());
+            let content = fs::read_to_string(path).map_err(|e| Errors {
+                errors: vec![Error::request(
+                    format!("Cannot read '{}': {}", path.display(), e),
+                    None::<String>,
+                )],
+                sources: HashMap::new(),
+            })?;
+            sources.insert(SourceType::Path(Arc::new(p)), content);
+        } else if path.is_dir() {
+            let read_dir = fs::read_dir(path).map_err(|e| Errors {
+                errors: vec![Error::request(
+                    format!("Cannot read directory '{}': {}", path.display(), e),
+                    None::<String>,
+                )],
+                sources: HashMap::new(),
+            })?;
+            for entry_result in read_dir {
+                let entry = entry_result.map_err(|e| Errors {
+                    errors: vec![Error::request(
+                        format!("Cannot read directory entry in '{}': {}", path.display(), e),
+                        None::<String>,
+                    )],
+                    sources: HashMap::new(),
+                })?;
+                let p = entry.path();
+                if !p.is_file() || p.extension().is_none_or(|e| e != "lemma") {
+                    continue;
+                }
+                if seen.contains(&p) {
+                    continue;
+                }
+                seen.insert(p.clone());
+                let content = fs::read_to_string(&p).map_err(|e| Errors {
+                    errors: vec![Error::request(
+                        format!("Cannot read '{}': {}", p.display(), e),
+                        None::<String>,
+                    )],
+                    sources: HashMap::new(),
+                })?;
+                sources.insert(SourceType::Path(Arc::new(p)), content);
+            }
+        }
+    }
+
+    Ok(sources)
+}
+
+/// A loaded repository with all its spec sets.
+///
+/// Provenance: [`LemmaRepository::start_line`], [`LemmaRepository::source_type`], and each
+/// temporal [`LemmaSpec`] in the spec sets carries [`LemmaSpec::start_line`] and
+/// [`LemmaSpec::source_type`] from the parse of the `repo` / `spec` headers.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ResolvedRepository {
+    pub repository: Arc<LemmaRepository>,
+    pub specs: Vec<LemmaSpecSet>,
+}
+
 // ─── Spec store with temporal resolution ──────────────────────────────
 
-/// Ordered set of specs grouped into `LemmaSpecSet`s by name.
+/// Ordered store of specs keyed by `(repository, name)` and grouped into
+/// [`LemmaSpecSet`]s.
 ///
-/// Specs with the same name are ordered by effective_from.
-/// A spec's temporal end is derived from the next spec's effective_from, or +inf.
-#[derive(Debug, Default)]
+/// Specs with the same `(repository, name)` identity are ordered by `effective_from`.
+/// A spec version's temporal end is derived from the successor spec's `effective_from`, or
+/// `+∞`. The repository identity is preserved as `Arc<LemmaRepository>` — never via string
+/// prefixes on the spec name. Repository names include the `@` prefix when present
+/// (e.g. `"@org/repo"`). Dependency isolation is enforced at `insert_spec`: all specs
+/// in a repository must share the same `dependency` provenance ID.
+#[derive(Debug)]
 pub struct Context {
-    spec_sets: BTreeMap<String, LemmaSpecSet>,
+    repositories: IndexMap<Arc<LemmaRepository>, IndexMap<String, LemmaSpecSet>>,
+    workspace: Arc<LemmaRepository>,
+}
+
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Context {
     pub fn new() -> Self {
+        let workspace = Arc::new(LemmaRepository::new(None));
+        let mut repositories = IndexMap::new();
+        repositories.insert(Arc::clone(&workspace), IndexMap::new());
         Self {
-            spec_sets: BTreeMap::new(),
+            repositories,
+            workspace,
         }
     }
 
-    /// All spec sets (name → specs keyed by effective_from), ordered by spec name.
+    /// Workspace-global grouping for every locally loaded spec. The single
+    /// namespace runtime APIs operate on (entry-point specs live here).
+    /// Stable identity across calls; `name = None`, `dependency = None`.
     #[must_use]
-    pub fn spec_sets(&self) -> &BTreeMap<String, LemmaSpecSet> {
-        &self.spec_sets
+    pub fn workspace(&self) -> Arc<LemmaRepository> {
+        Arc::clone(&self.workspace)
+    }
+
+    /// Look up a repository by name without creating a new one.
+    #[must_use]
+    pub fn find_repository(&self, name: &str) -> Option<Arc<LemmaRepository>> {
+        let probe = Arc::new(LemmaRepository::new(Some(name.to_string())));
+        self.repositories
+            .get_key_value(&probe)
+            .map(|(k, _)| Arc::clone(k))
+    }
+
+    /// All spec sets, keyed by `(repository, name)`. Iteration order: repository first
+    /// (insertion order), then spec name ascending.
+    #[must_use]
+    pub fn repositories(&self) -> &IndexMap<Arc<LemmaRepository>, IndexMap<String, LemmaSpecSet>> {
+        &self.repositories
     }
 
     pub fn iter(&self) -> impl Iterator<Item = Arc<LemmaSpec>> + '_ {
-        self.spec_sets.values().flat_map(|ss| ss.iter_specs())
+        self.repositories
+            .values()
+            .flat_map(|m| m.values())
+            .flat_map(|ss| ss.iter_specs())
     }
 
     /// Every loaded spec paired with its half-open
-    /// `[effective_from, effective_to)` validity range.
-    ///
-    /// Iteration order: spec name ascending, then by `effective_from` ascending
-    /// within the same name — identical to [`Self::iter`]. Each tuple is
-    /// `(spec, effective_from, effective_to)`; see
-    /// [`crate::planning::LemmaSpecSet::iter_with_ranges`] for the range
-    /// semantics (the last row of each name has `effective_to = None`).
+    /// `[effective_from, effective_to)` validity range. Iteration order
+    /// matches [`Self::iter`].
     pub fn iter_with_ranges(
         &self,
     ) -> impl Iterator<Item = (Arc<LemmaSpec>, Option<DateTimeValue>, Option<DateTimeValue>)> + '_
     {
-        self.spec_sets
+        self.repositories
             .values()
-            .flat_map(|spec_set| spec_set.iter_with_ranges())
+            .flat_map(|m| m.values())
+            .flat_map(|ss| ss.iter_with_ranges())
     }
 
-    /// Insert a spec. Set `from_registry` to `true` for pre-fetched registry
-    /// specs; `false` rejects `@`-prefixed spec definitions.
-    ///
-    /// When `from_registry` is true, only `@`-prefixed specs are accepted —
-    /// registry bundles must not introduce bare-named specs into the local namespace.
-    pub fn insert_spec(&mut self, spec: Arc<LemmaSpec>, from_registry: bool) -> Result<(), Error> {
-        if spec.from_registry && !from_registry {
-            return Err(Error::validation_with_context(
-                format!(
-                    "Spec '{}' uses '@' registry prefix, which is reserved for dependencies",
-                    spec.name
-                ),
-                None,
-                Some("Remove the '@' prefix, or load this file as a dependency."),
-                Some(Arc::clone(&spec)),
-                None,
-            ));
+    /// Look up a spec set by `(repository, name)`. Returns `None` if no such spec set
+    /// is loaded.
+    #[must_use]
+    pub fn spec_set(&self, repository: &Arc<LemmaRepository>, name: &str) -> Option<&LemmaSpecSet> {
+        self.repositories.get(repository).and_then(|m| m.get(name))
+    }
+
+    /// All spec sets belonging to a repository. Panics if the repository is not in the map
+    /// (caller must ensure it was returned by this Context).
+    #[must_use]
+    pub(crate) fn spec_sets_for(&self, repository: &Arc<LemmaRepository>) -> Vec<LemmaSpecSet> {
+        self.repositories
+            .get(repository)
+            .expect("BUG: repository not in context")
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    /// Insert a spec under repository`. Validates that an identical
+    /// `(repository, name, effective_from)` triple is not already loaded.
+    /// Insert a spec under `repository`. Enforces two invariants:
+    /// 1. Dependency isolation: all specs in a repo must share the same `dependency`
+    ///    provenance. A workspace repo cannot be merged with a dependency repo, and
+    ///    two different dependencies cannot contribute to the same repo name.
+    /// 2. No duplicate `(repository, name, effective_from)` triples.
+    pub fn insert_spec(
+        &mut self,
+        repository: Arc<LemmaRepository>,
+        spec: Arc<LemmaSpec>,
+    ) -> Result<(), Error> {
+        if let Some((existing_repo, _)) = self.repositories.get_key_value(&repository) {
+            if existing_repo.dependency != repository.dependency {
+                let repo_display = repository.name.as_deref().unwrap_or("(main)");
+                let existing_owner = match &existing_repo.dependency {
+                    None => "the workspace".to_string(),
+                    Some(id) => format!("dependency '{id}'"),
+                };
+                let new_owner = match &repository.dependency {
+                    None => "the workspace".to_string(),
+                    Some(id) => format!("dependency '{id}'"),
+                };
+                return Err(Error::validation_with_context(
+                    format!(
+                        "Repository '{repo_display}' was introduced by {existing_owner} but {new_owner} also declares it"
+                    ),
+                    None,
+                    Some("Each dependency's repositories must be unique across all loaded sources"),
+                    Some(Arc::clone(&spec)),
+                    None,
+                ));
+            }
         }
 
-        if from_registry && !spec.from_registry {
-            return Err(Error::validation_with_context(
-                format!(
-                    "Registry bundle contains spec '{}' without '@' prefix; \
-                     all specs in a registry bundle must use '@'-prefixed names \
-                     to avoid conflicts with local specs",
-                    spec.name
-                ),
-                None,
-                Some("Prefix the spec name with '@' (e.g. spec @org/project/name)."),
-                Some(Arc::clone(&spec)),
-                None,
-            ));
-        }
-
-        let name = spec.name.clone();
-        if self
-            .spec_sets
-            .get(&name)
+        let entry = self
+            .repositories
+            .entry(Arc::clone(&repository))
+            .or_default();
+        if entry
+            .get(&spec.name)
             .is_some_and(|ss| ss.get_exact(spec.effective_from()).is_some())
         {
             return Err(Error::validation_with_context(
                 format!(
-                    "Duplicate spec '{}' (same name and effective_from already in context)",
+                    "Duplicate spec '{}' (same repository, name and effective_from already in context)",
                     spec.name
                 ),
                 None,
@@ -122,68 +261,46 @@ impl Context {
             ));
         }
 
-        let inserted = self
-            .spec_sets
+        let name = spec.name.clone();
+        let inserted = entry
             .entry(name.clone())
-            .or_insert_with(|| LemmaSpecSet::new(name))
+            .or_insert_with(|| LemmaSpecSet::new(repository, name))
             .insert(spec);
         debug_assert!(inserted);
         Ok(())
     }
 
-    pub fn remove_spec(&mut self, spec: &Arc<LemmaSpec>) -> bool {
-        let key = spec.effective_from().cloned();
-        let Some(ss) = self.spec_sets.get_mut(&spec.name) else {
+    pub fn remove_spec(
+        &mut self,
+        repository: &Arc<LemmaRepository>,
+        spec: &Arc<LemmaSpec>,
+    ) -> bool {
+        let Some(inner) = self.repositories.get_mut(repository) else {
             return false;
         };
-        if !ss.remove(key.as_ref()) {
+        let Some(ss) = inner.get_mut(&spec.name) else {
+            return false;
+        };
+        if !ss.remove(spec.effective_from()) {
             return false;
         }
         if ss.is_empty() {
-            self.spec_sets.remove(&spec.name);
+            inner.shift_remove(&spec.name);
         }
         true
     }
 
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.spec_sets.values().map(LemmaSpecSet::len).sum()
+        self.repositories
+            .values()
+            .flat_map(|m| m.values())
+            .map(LemmaSpecSet::len)
+            .sum()
     }
 }
 
 // ─── Engine ──────────────────────────────────────────────────────────
-
-/// How a single buffer is identified in parse/plan diagnostics and the engine source map.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceType<'a> {
-    /// Path, URI, test name, or any non-empty stable id.
-    Labeled(&'a str),
-    /// No stable path (pasted string, REPL). Stored under [`SourceType::INLINE_KEY`].
-    Inline,
-    // Pre-resolved registry bundle
-    Dependency(&'a str),
-}
-
-impl SourceType<'_> {
-    /// Source map key and span attribute for [`SourceType::Inline`].
-    pub const INLINE_KEY: &'static str = "inline source (no path)";
-
-    fn storage_key(self) -> Result<String, Vec<Error>> {
-        match self {
-            SourceType::Labeled(s) => {
-                if s.trim().is_empty() {
-                    return Err(vec![Error::request(
-                        "source label must be non-empty, or use SourceType::Inline",
-                        None::<String>,
-                    )]);
-                }
-                Ok(s.to_string())
-            }
-            SourceType::Inline => Ok(Self::INLINE_KEY.to_string()),
-            SourceType::Dependency(s) => Ok(s.to_string()),
-        }
-    }
-}
 
 /// Engine for evaluating Lemma rules.
 ///
@@ -191,14 +308,16 @@ impl SourceType<'_> {
 /// Uses pre-built execution plans that are self-contained and ready for evaluation.
 ///
 /// The engine never performs network calls. External `@...` references must be
-/// pre-resolved before loading — either by including dep files
-/// in the file map or by calling `resolve_registry_references` separately
+/// pre-resolved before loading — either by including dependency sources
+/// in the source map or by calling `resolve_registry_references` separately
 /// (e.g. in a `lemma fetch` command).
 pub struct Engine {
-    /// Spec name → resolved plans (ordered by `effective`; slice end from next plan).
-    plan_sets: HashMap<String, crate::planning::ExecutionPlanSet>,
+    /// Repository → spec name → resolved plans (ordered by `effective`; slice end from next plan).
+    plan_sets: HashMap<
+        Arc<crate::parsing::ast::LemmaRepository>,
+        HashMap<String, crate::planning::ExecutionPlanSet>,
+    >,
     specs: Context,
-    sources: HashMap<String, String>,
     evaluator: Evaluator,
     limits: ResourceLimits,
     total_expression_count: usize,
@@ -209,7 +328,6 @@ impl Default for Engine {
         Self {
             plan_sets: HashMap::new(),
             specs: Context::new(),
-            sources: HashMap::new(),
             evaluator: Evaluator,
             limits: ResourceLimits::default(),
             total_expression_count: 0,
@@ -222,17 +340,10 @@ impl Engine {
         Self::default()
     }
 
-    /// Source code map (attribute -> content). Used for error display.
-    pub fn sources(&self) -> &HashMap<String, String> {
-        &self.sources
-    }
-
-    /// Create an engine with custom resource limits.
     pub fn with_limits(limits: ResourceLimits) -> Self {
         Self {
             plan_sets: HashMap::new(),
             specs: Context::new(),
-            sources: HashMap::new(),
             evaluator: Evaluator,
             limits,
             total_expression_count: 0,
@@ -243,142 +354,116 @@ impl Engine {
         self.plan_sets.clear();
         for r in &pr.results {
             self.plan_sets
+                .entry(Arc::clone(&r.repository))
+                .or_default()
                 .insert(r.name.clone(), r.execution_plan_set());
         }
     }
 
-    /// Load a single spec from source code.
-    /// When `source` is [`SourceType::Dependency`], content is treated as from a registry bundle (`from_registry: true`).
-    pub fn load(&mut self, code: &str, source: SourceType<'_>) -> Result<(), Errors> {
-        let from_registry = matches!(source, SourceType::Dependency(_));
-        let mut files = HashMap::new();
-        let key = source.storage_key().map_err(|errs| Errors {
-            errors: errs,
-            sources: HashMap::new(),
-        })?;
-        files.insert(key, code.to_string());
-        self.add_files_inner(files, from_registry)
+    /// Load one Lemma source (workspace; not a tagged dependency).
+    pub fn load(&mut self, code: impl Into<String>, source: SourceType) -> Result<(), Errors> {
+        self.load_batch(HashMap::from([(source, code.into())]), None)
     }
 
-    /// Load .lemma files from paths (files and/or directories). Directories are expanded one level only (direct child .lemma files). Resource limits `max_files`, `max_loaded_bytes`, `max_file_size_bytes` are enforced in [`add_files_inner`].
+    /// Load many sources in one planning pass. Pairs are `(source_text, source_id)`.
     ///
-    /// Set `from_registry` to `true` for pre-fetched registry bundles (same rules as [`Context::insert_spec`] with `from_registry`). Not available on wasm32 (no filesystem).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn load_from_paths<P: AsRef<Path>>(
+    /// `dependency`: when `Some`, repositories parsed from these sources are tagged with that id
+    /// (same as previous `load(..., Some(id))` for path bundles).
+    pub fn load_batch(
         &mut self,
-        paths: &[P],
-        from_registry: bool,
+        sources: HashMap<SourceType, String>,
+        dependency: Option<&str>,
     ) -> Result<(), Errors> {
-        use std::fs;
+        self.add_sources_inner(sources, dependency)
+    }
 
-        let mut files = HashMap::new();
-        let mut seen = HashSet::<String>::new();
-
-        for path in paths {
-            let path = path.as_ref();
-            if path.is_file() {
-                // Skip non-`.lemma` files (extension missing or wrong).
-                if !path.extension().map(|e| e == "lemma").unwrap_or(false) {
-                    continue;
-                }
-                let key = path.display().to_string();
-                if seen.contains(&key) {
-                    continue;
-                }
-                seen.insert(key.clone());
-                let content = fs::read_to_string(path).map_err(|e| Errors {
+    fn validate_source_for_load(source: &SourceType) -> Result<(), Errors> {
+        match source {
+            SourceType::Path(p) if p.as_os_str().to_string_lossy().trim().is_empty() => {
+                Err(Errors {
                     errors: vec![Error::request(
-                        format!("Cannot read '{}': {}", path.display(), e),
+                        "Source path must be non-empty",
                         None::<String>,
                     )],
                     sources: HashMap::new(),
-                })?;
-                files.insert(key, content);
-            } else if path.is_dir() {
-                let read_dir = fs::read_dir(path).map_err(|e| Errors {
-                    errors: vec![Error::request(
-                        format!("Cannot read directory '{}': {}", path.display(), e),
-                        None::<String>,
-                    )],
-                    sources: HashMap::new(),
-                })?;
-                for entry in read_dir.filter_map(Result::ok) {
-                    let p = entry.path();
-                    if !p.is_file() || !p.extension().map(|e| e == "lemma").unwrap_or(false) {
-                        continue;
-                    }
-                    let key = p.display().to_string();
-                    if seen.contains(&key) {
-                        continue;
-                    }
-                    seen.insert(key.clone());
-                    let Ok(content) = fs::read_to_string(&p) else {
-                        continue;
-                    };
-                    files.insert(key, content);
+                })
+            }
+            SourceType::Registry(repo) => {
+                if repo.name.as_deref().unwrap_or("").is_empty() {
+                    Err(Errors {
+                        errors: vec![Error::request(
+                            "Registry source identifier must be non-empty",
+                            None::<String>,
+                        )],
+                        sources: HashMap::new(),
+                    })
+                } else {
+                    Ok(())
                 }
             }
+            _ => Ok(()),
         }
-
-        self.add_files_inner(files, from_registry)
     }
 
-    fn add_files_inner(
+    fn add_sources_inner(
         &mut self,
-        files: HashMap<String, String>,
-        from_registry: bool,
+        sources: HashMap<SourceType, String>,
+        dependency: Option<&str>,
     ) -> Result<(), Errors> {
+        for st in sources.keys() {
+            Self::validate_source_for_load(st)?;
+        }
         let limits = &self.limits;
-        if files.len() > limits.max_files {
+        if sources.len() > limits.max_sources {
             return Err(Errors {
                 errors: vec![Error::resource_limit_exceeded(
-                    "max_files",
-                    limits.max_files.to_string(),
-                    files.len().to_string(),
-                    "Reduce the number of paths or files",
-                    None::<crate::Source>,
+                    "max_sources",
+                    limits.max_sources.to_string(),
+                    sources.len().to_string(),
+                    "Reduce the number of paths or sources in one load",
+                    None::<crate::parsing::source::Source>,
                     None,
                     None,
                 )],
-                sources: files,
+                sources,
             });
         }
-        let total_loaded_bytes: usize = files.values().map(|s| s.len()).sum();
+        let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
         if total_loaded_bytes > limits.max_loaded_bytes {
             return Err(Errors {
                 errors: vec![Error::resource_limit_exceeded(
                     "max_loaded_bytes",
                     limits.max_loaded_bytes.to_string(),
                     total_loaded_bytes.to_string(),
-                    "Load fewer or smaller files",
-                    None::<crate::Source>,
+                    "Load fewer or smaller sources",
+                    None::<crate::parsing::source::Source>,
                     None,
                     None,
                 )],
-                sources: files,
+                sources,
             });
         }
-        for code in files.values() {
-            if code.len() > limits.max_file_size_bytes {
+        for code in sources.values() {
+            if code.len() > limits.max_source_size_bytes {
                 return Err(Errors {
                     errors: vec![Error::resource_limit_exceeded(
-                        "max_file_size_bytes",
-                        limits.max_file_size_bytes.to_string(),
+                        "max_source_size_bytes",
+                        limits.max_source_size_bytes.to_string(),
                         code.len().to_string(),
-                        "Use a smaller file or increase limit",
-                        None::<crate::Source>,
+                        "Use a smaller source text or increase limit",
+                        None::<crate::parsing::source::Source>,
                         None,
                         None,
                     )],
-                    sources: files,
+                    sources,
                 });
             }
         }
 
         let mut errors: Vec<Error> = Vec::new();
 
-        for (source_id, code) in &files {
-            match parse(code, source_id, &self.limits) {
+        for (source_id, code) in &sources {
+            match parse(code, source_id.clone(), &self.limits) {
                 Ok(result) => {
                     self.total_expression_count += result.expression_count;
                     if self.total_expression_count > self.limits.max_total_expression_count {
@@ -386,70 +471,54 @@ impl Engine {
                             "max_total_expression_count",
                             self.limits.max_total_expression_count.to_string(),
                             self.total_expression_count.to_string(),
-                            "Split logic across fewer files or reduce expression complexity",
-                            None::<crate::Source>,
+                            "Split logic across fewer sources or reduce expression complexity",
+                            None::<crate::parsing::source::Source>,
                             None,
                             None,
                         ));
-                        return Err(Errors {
-                            errors,
-                            sources: files,
-                        });
+                        return Err(Errors { errors, sources });
                     }
-                    let new_specs = result.specs;
-                    for spec in new_specs {
-                        let attribute = spec.attribute.clone().unwrap_or_else(|| spec.name.clone());
-                        let start_line = spec.start_line;
+                    if result.repositories.is_empty() {
+                        continue;
+                    }
 
-                        if from_registry {
-                            let bare_refs =
-                                crate::planning::graph::collect_bare_registry_refs(&spec);
-                            if !bare_refs.is_empty() {
-                                let source = crate::Source::new(
-                                    &attribute,
-                                    crate::parsing::ast::Span {
-                                        start: 0,
-                                        end: 0,
-                                        line: start_line,
-                                        col: 0,
-                                    },
-                                );
-                                errors.push(Error::validation(
-                                    format!(
-                                        "Registry spec '{}' contains references without '@' prefix: {}. \
-                                         The registry must rewrite all references to use '@'-prefixed names",
-                                        spec.name,
-                                        bare_refs.join(", ")
-                                    ),
-                                    Some(source),
-                                    Some(
-                                        "The registry must prefix all spec references with '@' \
-                                         before serving the bundle.",
-                                    ),
-                                ));
-                                continue;
-                            }
-                        }
-
-                        match self.specs.insert_spec(Arc::new(spec), from_registry) {
-                            Ok(()) => {
-                                self.sources.insert(attribute, code.clone());
-                            }
-                            Err(e) => {
-                                let source = crate::Source::new(
-                                    &attribute,
-                                    crate::parsing::ast::Span {
-                                        start: 0,
-                                        end: 0,
-                                        line: start_line,
-                                        col: 0,
-                                    },
-                                );
-                                errors.push(Error::validation(
-                                    e.to_string(),
-                                    Some(source),
-                                    None::<String>,
-                                ));
+                    for (parsed_repo, specs) in &result.repositories {
+                        let repository_arc = if let Some(dep_id) = dependency {
+                            let repo_name = parsed_repo
+                                .name
+                                .clone()
+                                // Use the dependency id as the repository name for the dependency's workspace specs
+                                .or_else(|| Some(dep_id.to_string()));
+                            Arc::new(
+                                LemmaRepository::new(repo_name)
+                                    .with_dependency(dep_id)
+                                    .with_start_line(parsed_repo.start_line),
+                            )
+                        } else {
+                            Arc::clone(parsed_repo)
+                        };
+                        for spec in specs {
+                            match self
+                                .specs
+                                .insert_spec(Arc::clone(&repository_arc), Arc::new(spec.clone()))
+                            {
+                                Ok(()) => {}
+                                Err(e) => {
+                                    let source = crate::parsing::source::Source::new(
+                                        source_id.clone(),
+                                        crate::parsing::ast::Span {
+                                            start: 0,
+                                            end: 0,
+                                            line: spec.start_line,
+                                            col: 0,
+                                        },
+                                    );
+                                    errors.push(Error::validation(
+                                        e.to_string(),
+                                        Some(source),
+                                        None::<String>,
+                                    ));
+                                }
                             }
                         }
                     }
@@ -460,7 +529,7 @@ impl Engine {
 
         let planning_result = crate::planning::plan(&self.specs);
         for set_result in &planning_result.results {
-            for spec_result in &set_result.specs {
+            for spec_result in &set_result.slice_results {
                 let ctx = Arc::clone(&spec_result.spec);
                 for err in &spec_result.errors {
                     errors.push(err.clone().with_spec_context(Arc::clone(&ctx)));
@@ -472,101 +541,113 @@ impl Engine {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(Errors {
-                errors,
-                sources: files,
-            })
+            Err(Errors { errors, sources })
         }
     }
 
-    /// Name-scoped access to all temporal versions of a spec.
+    /// Active [`LemmaSpec`] slice for `name` at the resolved effective instant.
     ///
-    /// Returns the full `LemmaSpecSet` (every row and its `[effective_from, next)` range),
-    /// or `None` when no spec by that name is loaded. This is the primitive for catalog
-    /// and version-inventory queries. Point-in-time resolution goes through
-    /// [`Engine::get_spec`], which delegates here.
-    #[must_use]
-    pub fn get_spec_set(&self, name: &str) -> Option<&LemmaSpecSet> {
-        self.specs.spec_sets().get(name)
-    }
-
+    /// When `effective` is `None`, uses the current time. The name must be unique
+    /// across loaded repositories at that instant (same rule as [`Self::get_plan`] with
+    /// `repo: None`). For repository scope or all temporal rows, use [`Self::get_workspace`]
+    /// or [`Self::get_repository`].
     pub fn get_spec(
         &self,
         name: &str,
         effective: Option<&DateTimeValue>,
     ) -> Result<Arc<LemmaSpec>, Error> {
-        let effective = self.effective_or_now(effective);
-
-        self.get_spec_set(name)
-            .and_then(|spec_set| spec_set.spec_at(&EffectiveDate::DateTimeValue(effective.clone())))
-            .ok_or_else(|| self.spec_not_found_error(name, &effective))
+        let effective_dt = self.effective_or_now(effective);
+        let instant = EffectiveDate::DateTimeValue(effective_dt.clone());
+        let repository = self.specs.workspace();
+        let spec_set = self
+            .specs
+            .spec_set(&repository, name)
+            .ok_or_else(|| self.spec_not_found_error(name, &effective_dt))?;
+        spec_set
+            .spec_at(&instant)
+            .ok_or_else(|| self.spec_not_found_error(name, &effective_dt))
     }
 
-    /// All specs ordered by (name, effective_from).
-    pub fn list_specs(&self) -> Vec<Arc<LemmaSpec>> {
-        self.specs.iter().collect()
-    }
-
-    /// All specs paired with their half-open
-    /// `[effective_from, effective_to)` validity ranges.
+    /// Every loaded repository in insertion order (includes workspace and dependencies).
     ///
-    /// Same order as [`Self::list_specs`]. Each entry is
-    /// `(spec, effective_from, effective_to)`; for every spec name, the last
-    /// row's `effective_to` is `None` (no successor).
-    pub fn list_specs_with_ranges(
-        &self,
-    ) -> Vec<(Arc<LemmaSpec>, Option<DateTimeValue>, Option<DateTimeValue>)> {
-        self.specs.iter_with_ranges().collect()
+    /// Each [`ResolvedRepository::repository`] and every [`LemmaSpec`] under [`ResolvedRepository::specs`]
+    /// includes source metadata (`start_line`, `source_type`) from load.
+    #[must_use]
+    pub fn list(&self) -> Vec<ResolvedRepository> {
+        self.specs
+            .repositories()
+            .iter()
+            .map(|(repo, inner)| ResolvedRepository {
+                repository: Arc::clone(repo),
+                specs: inner.values().cloned().collect(),
+            })
+            .collect()
     }
 
-    /// Specs active at `effective` (one per name).
-    /// Todo: clone the specs instead of returning references
-    /// Consider removing this method: does it make sense to list specs by effective date?
-    pub fn list_specs_effective(&self, effective: &DateTimeValue) -> Vec<Arc<LemmaSpec>> {
-        let mut seen_names = std::collections::HashSet::new();
-        let mut result = Vec::new();
-        for spec in self.specs.iter() {
-            if seen_names.contains(&spec.name) {
-                continue;
-            }
-            if let Some(active) = self
-                .specs
-                .spec_sets()
-                .get(&spec.name)
-                .and_then(|ss| ss.spec_at(&EffectiveDate::DateTimeValue(effective.clone())))
-            {
-                if seen_names.insert(active.name.clone()) {
-                    result.push(active);
-                }
-            }
+    /// Workspace-local repository (`name == None`).
+    #[must_use]
+    pub fn get_workspace(&self) -> ResolvedRepository {
+        let repo = self.specs.workspace();
+        let specs = self.specs.spec_sets_for(&repo);
+        ResolvedRepository {
+            repository: repo,
+            specs,
         }
-        result.sort_by(|a, b| a.name.cmp(&b.name));
-        result
     }
 
-    /// Resolve spec identifier and return the spec schema. Uses `effective` or now when None.
+    /// Resolve a loaded repository by qualifier string. Matches against
+    /// repository names (which include `@` when present).
+    pub fn get_repository(&self, qualifier: &str) -> Result<ResolvedRepository, Error> {
+        let q = qualifier.trim();
+        if q.is_empty() {
+            return Err(Error::request(
+                "Repository qualifier cannot be empty",
+                None::<String>,
+            ));
+        }
+        match self.specs.find_repository(q) {
+            Some(repo) => {
+                let specs = self.specs.spec_sets_for(&repo);
+                Ok(ResolvedRepository {
+                    repository: repo,
+                    specs,
+                })
+            }
+            None => Err(Error::request_not_found(
+                format!("Repository '{qualifier}' not loaded"),
+                Some(format!(
+                    "List repositories with `{}` after loading your workspace",
+                    "lemma list"
+                )),
+            )),
+        }
+    }
+
+    /// Planning schema for `name`. When `repo` is `None`, the spec must be
+    /// unambiguous across all loaded repositories; when `Some`, scoped to that
+    /// repository qualifier (e.g. `"@org/pkg"`).
     pub fn schema(
         &self,
-        name: &str,
+        repo: Option<&str>,
+        spec: &str,
         effective: Option<&DateTimeValue>,
     ) -> Result<SpecSchema, Error> {
-        let effective = self.effective_or_now(effective);
-        Ok(self.get_plan(name, Some(&effective))?.schema())
+        Ok(self.get_plan(repo, spec, effective)?.schema())
     }
 
-    /// Run a spec: resolve by SpecSet id, then [`run_plan`]. Returns all rules; filter via [`Response::filter_rules`] if needed.
-    ///
-    /// When `record_operations` is true, each rule's [`RuleResult::operations`] will
-    /// contain a trace of data used, rules used, computations, and branch evaluations.
+    /// Evaluate a spec. When `repo` is `None`, the spec must be unambiguous
+    /// across loaded repositories; when `Some`, scoped to that repository
+    /// qualifier (e.g. `"@org/pkg"`).
     pub fn run(
         &self,
-        name: &str,
+        repo: Option<&str>,
+        spec: &str,
         effective: Option<&DateTimeValue>,
         data_values: HashMap<String, String>,
         record_operations: bool,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
-        let plan = self.get_plan(name, Some(&effective))?;
+        let plan = self.get_plan(repo, spec, Some(&effective))?;
         self.run_plan(plan, Some(&effective), data_values, record_operations)
     }
 
@@ -581,11 +662,11 @@ impl Engine {
         rule_name: &str,
         target: crate::inversion::Target,
         values: HashMap<String, String>,
-    ) -> Result<crate::InversionResponse, Error> {
+    ) -> Result<crate::inversion::InversionResponse, Error> {
         let effective = self.effective_or_now(effective);
-        let base_plan = self.get_plan(name, Some(&effective))?;
+        let base_plan = self.get_plan(None, name, Some(&effective))?;
 
-        let plan = base_plan.clone().with_data_values(values, &self.limits)?;
+        let plan = base_plan.clone().set_data_values(values, &self.limits)?;
         let provided_data: std::collections::HashSet<_> = plan
             .data
             .iter()
@@ -596,42 +677,53 @@ impl Engine {
         crate::inversion::invert(rule_name, target, &plan, &provided_data)
     }
 
-    /// Resolve spec identifier and return the execution plan. Uses `effective` or now when None.
+    /// Execution plan for `name`. When `repo` is `None`, the spec must be
+    /// unambiguous across all loaded repositories; when `Some`, scoped to that
+    /// repository qualifier (e.g. `"@org/pkg"`).
     pub fn get_plan(
         &self,
+        repo: Option<&str>,
         name: &str,
         effective: Option<&DateTimeValue>,
     ) -> Result<&crate::planning::ExecutionPlan, Error> {
-        let effective = self.effective_or_now(effective);
+        let effective_dt = self.effective_or_now(effective);
+        let instant = EffectiveDate::DateTimeValue(effective_dt.clone());
 
-        if self
-            .specs
-            .spec_sets()
-            .get(name)
-            .and_then(|ss| ss.spec_at(&EffectiveDate::DateTimeValue(effective.clone())))
-            .is_none()
-        {
-            return Err(self.spec_not_found_error(name, &effective));
+        let repository = match repo {
+            Some(q) => self.specs.find_repository(q).ok_or_else(|| {
+                Error::request_not_found(
+                    format!("Repository '{q}' not loaded"),
+                    Some("List repositories with `lemma list` after loading your workspace"),
+                )
+            })?,
+            None => self.specs.workspace(),
+        };
+
+        let Some(spec_set) = self.specs.spec_set(&repository, name) else {
+            return Err(self.spec_not_found_in_repository_error(&repository, name, &effective_dt));
+        };
+
+        if spec_set.spec_at(&instant).is_none() {
+            return Err(self.spec_not_found_in_repository_error(&repository, name, &effective_dt));
         }
 
-        let plan_set = self.plan_sets.get(name).ok_or_else(|| {
-            Error::request_not_found(
-                format!("No execution plans for spec '{}'", name),
-                Some("Ensure sources loaded and planning succeeded"),
-            )
-        })?;
-
-        plan_set
-            .plan_at(&EffectiveDate::DateTimeValue(effective.clone()))
+        let plan_set = self
+            .plan_sets
+            .get(&repository)
+            .and_then(|by_name| by_name.get(name))
             .ok_or_else(|| {
                 Error::request_not_found(
-                    format!(
-                        "No execution plan slice for spec '{}' at effective {}",
-                        name, effective
-                    ),
-                    None::<String>,
+                    format!("No execution plans for spec '{name}'"),
+                    Some("Ensure sources loaded and planning succeeded"),
                 )
-            })
+            })?;
+
+        plan_set.plan_at(&instant).ok_or_else(|| {
+            Error::request_not_found(
+                format!("No execution plan slice for spec '{name}' at effective {effective_dt}"),
+                None::<String>,
+            )
+        })
     }
 
     /// Run a plan from [`get_plan`]: apply data values and evaluate all rules.
@@ -646,14 +738,32 @@ impl Engine {
         record_operations: bool,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
-        let plan = plan.clone().with_data_values(data_values, &self.limits)?;
+        let plan = plan
+            .clone()
+            .with_defaults()
+            .set_data_values(data_values, &self.limits)?;
+        self.evaluate_plan(plan, &effective, record_operations)
+    }
+
+    /// Evaluate after [`ExecutionPlan::set_data_values`] without [`ExecutionPlan::with_defaults`].
+    /// Defaults stay suggestions; interactive and inversion use this path.
+    pub fn run_plan_without_defaults(
+        &self,
+        plan: &crate::planning::ExecutionPlan,
+        effective: Option<&DateTimeValue>,
+        data_values: HashMap<String, String>,
+        record_operations: bool,
+    ) -> Result<Response, Error> {
+        let effective = self.effective_or_now(effective);
+        let plan = plan.clone().set_data_values(data_values, &self.limits)?;
         self.evaluate_plan(plan, &effective, record_operations)
     }
 
     pub fn remove(&mut self, name: &str, effective: Option<&DateTimeValue>) -> Result<(), Error> {
         let effective = self.effective_or_now(effective);
-        let arc = self.get_spec(name, Some(&effective))?;
-        self.specs.remove_spec(&arc);
+        let repository_arc = self.specs.workspace();
+        let spec_arc = self.get_spec(name, Some(&effective))?;
+        self.specs.remove_spec(&repository_arc, &spec_arc);
         let pr = crate::planning::plan(&self.specs);
         let planning_errs: Vec<Error> = pr
             .results
@@ -667,15 +777,14 @@ impl Engine {
         Ok(())
     }
 
-    /// Build a "not found" error listing available specs when the name exists
-    /// but no spec covers the requested effective date.
+    /// Build a "not found" error listing available temporal versions when the name exists
+    /// but no version covers the requested effective date.
     fn spec_not_found_error(&self, spec_name: &str, effective: &DateTimeValue) -> Error {
-        let available = self
-            .specs
-            .spec_sets()
-            .get(spec_name)
-            .map(|ss| ss.iter_specs().collect::<Vec<_>>())
-            .unwrap_or_default();
+        let workspace = self.specs.workspace();
+        let available = match self.specs.spec_set(&workspace, spec_name) {
+            Some(ss) => ss.iter_specs().collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
         let msg = if available.is_empty() {
             format!("Spec '{}' not found", spec_name)
         } else {
@@ -687,13 +796,36 @@ impl Engine {
                 })
                 .collect();
             format!(
-                "Spec '{}' not found for effective {}. Available specs:\n{}",
+                "Spec '{}' not found for effective {}. Available versions:\n{}",
                 spec_name,
                 effective,
                 listing.join("\n")
             )
         };
         Error::request_not_found(msg, None::<String>)
+    }
+
+    #[must_use]
+    pub(crate) fn repository_qualifier_for_message(repository: &LemmaRepository) -> String {
+        match &repository.name {
+            Some(n) => n.clone(),
+            None => "(workspace)".to_string(),
+        }
+    }
+
+    fn spec_not_found_in_repository_error(
+        &self,
+        repository: &LemmaRepository,
+        spec_name: &str,
+        effective: &DateTimeValue,
+    ) -> Error {
+        Error::request_not_found(
+            format!(
+                "Spec '{spec_name}' not found in repository {} at effective {effective}",
+                Self::repository_qualifier_for_message(repository),
+            ),
+            Some("Try `lemma list <repository>`"),
+        )
     }
 
     fn evaluate_plan(
@@ -722,8 +854,6 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
 
     fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         DateTimeValue {
@@ -744,15 +874,18 @@ mod tests {
         spec
     }
 
-    /// list_specs (and Context::iter) return specs in (name, effective_from) ascending order.
-    /// Same-name specs appear in temporal order; definition order in the file is irrelevant.
+    /// Context::iter returns specs in (name, effective_from) ascending order.
+    /// Same-name specs appear in temporal order; definition order in the source is irrelevant.
     #[test]
     fn list_specs_order_is_name_then_effective_from_ascending() {
         let mut ctx = Context::new();
+        let repository = ctx.workspace();
         let s_2026 = Arc::new(make_spec_with_range("mortgage", Some(date(2026, 1, 1))));
         let s_2025 = Arc::new(make_spec_with_range("mortgage", Some(date(2025, 1, 1))));
-        ctx.insert_spec(Arc::clone(&s_2026), false).unwrap();
-        ctx.insert_spec(Arc::clone(&s_2025), false).unwrap();
+        ctx.insert_spec(Arc::clone(&repository), Arc::clone(&s_2026))
+            .unwrap();
+        ctx.insert_spec(Arc::clone(&repository), Arc::clone(&s_2025))
+            .unwrap();
         let listed: Vec<_> = ctx.iter().collect();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].effective_from(), Some(&date(2025, 1, 1)));
@@ -769,7 +902,7 @@ mod tests {
         data x: 1
         rule r: x
     "#,
-                SourceType::Labeled("a.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("a.lemma"))),
             )
             .unwrap();
         engine
@@ -779,7 +912,7 @@ mod tests {
         data x: 2
         rule r: x
     "#,
-                SourceType::Labeled("b.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("b.lemma"))),
             )
             .unwrap();
 
@@ -831,12 +964,12 @@ mod tests {
         assert_eq!(s_jul.effective_from(), Some(&v2));
     }
 
-    /// `get_spec_set` exposes every temporal version of a spec name with its
-    /// half-open `[effective_from, effective_to)` range. The latest row's
+    /// Every temporal row for a workspace spec name exposes half-open
+    /// `[effective_from, effective_to)` via [`LemmaSpecSet::iter_with_ranges`]. The latest row's
     /// `effective_to` is `None` (no successor); earlier rows' `effective_to`
     /// equals the next row's `effective_from`.
     #[test]
-    fn get_spec_set_returns_all_versions_with_half_open_ranges() {
+    fn list_specs_returns_half_open_ranges_per_temporal_version() {
         let mut engine = Engine::new();
         engine
             .load(
@@ -845,7 +978,7 @@ mod tests {
         data x: 1
         rule r: x
     "#,
-                SourceType::Labeled("a.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("a.lemma"))),
             )
             .unwrap();
         engine
@@ -855,44 +988,55 @@ mod tests {
         data x: 2
         rule r: x
     "#,
-                SourceType::Labeled("b.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("b.lemma"))),
             )
             .unwrap();
 
         let january = date(2025, 1, 1);
         let june = date(2025, 6, 1);
 
-        let spec_set = engine
-            .get_spec_set("pricing")
-            .expect("spec set must exist after load");
-
-        let versions: Vec<_> = spec_set
-            .iter_specs()
-            .map(|spec| spec_set.effective_range(&spec))
+        let workspace = engine.get_workspace();
+        let pricing_set = workspace
+            .specs
+            .iter()
+            .find(|ss| ss.name == "pricing")
+            .expect("pricing spec set exists");
+        let mut ranges: Vec<(Option<DateTimeValue>, Option<DateTimeValue>)> = pricing_set
+            .iter_with_ranges()
+            .map(|(_, from, to)| (from, to))
             .collect();
-
-        assert_eq!(versions.len(), 2);
+        ranges.sort_by(|a, b| match (&a.0, &b.0) {
+            (Some(x), Some(y)) => x.cmp(y),
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        assert_eq!(ranges.len(), 2);
         assert_eq!(
-            versions[0],
+            ranges[0],
             (Some(january.clone()), Some(june.clone())),
             "earlier row ends at the next row's effective_from"
         );
         assert_eq!(
-            versions[1],
+            ranges[1],
             (Some(june.clone()), None),
             "latest row has no successor; effective_to is None"
         );
 
-        assert!(engine.get_spec_set("unknown").is_none());
+        assert!(
+            !engine
+                .get_workspace()
+                .specs
+                .iter()
+                .any(|ss| ss.name == "unknown"),
+            "no rows for unknown spec"
+        );
     }
 
-    /// `Engine::list_specs_with_ranges` flattens every spec set into a flat
-    /// list of `(spec, effective_from, effective_to)` triples in the same
-    /// order as [`Engine::list_specs`]. This is the canonical flat surface
-    /// consumed by language bindings (Hex NIF, WASM) so both `effective_from`
-    /// and `effective_to` reach every engine user without a second lookup.
+    /// `Engine::get_workspace()` provides spec sets grouped by name.
+    /// Each spec set exposes half-open `[effective_from, effective_to)` ranges.
     #[test]
-    fn list_specs_with_ranges_flattens_all_spec_sets_with_half_open_ranges() {
+    fn get_workspace_specs_with_half_open_ranges() {
         let mut engine = Engine::new();
         engine
             .load(
@@ -901,7 +1045,7 @@ mod tests {
         data x: 1
         rule r: x
     "#,
-                SourceType::Labeled("pricing_v1.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("pricing_v1.lemma"))),
             )
             .unwrap();
         engine
@@ -911,7 +1055,7 @@ mod tests {
         data x: 2
         rule r: x
     "#,
-                SourceType::Labeled("pricing_v2.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("pricing_v2.lemma"))),
             )
             .unwrap();
         engine
@@ -921,49 +1065,45 @@ mod tests {
         data rate: 0.21
         rule amount: rate
     "#,
-                SourceType::Labeled("taxes.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("taxes.lemma"))),
             )
             .unwrap();
 
-        let entries = engine.list_specs_with_ranges();
-        assert_eq!(
-            entries.len(),
-            3,
-            "one row per loaded spec version across all names"
-        );
+        let workspace = engine.get_workspace();
+        assert_eq!(workspace.specs.len(), 2, "two spec sets: pricing and taxes");
 
-        let names: Vec<&str> = entries
+        let pricing_set = workspace
+            .specs
             .iter()
-            .map(|(spec, _, _)| spec.name.as_str())
-            .collect();
+            .find(|ss| ss.name == "pricing")
+            .expect("pricing spec set exists");
+        let ranges: Vec<_> = pricing_set.iter_with_ranges().collect();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].1, Some(date(2025, 1, 1)));
         assert_eq!(
-            names,
-            vec!["pricing", "pricing", "taxes"],
-            "ordered by spec name ascending, then by effective_from ascending"
-        );
-
-        let (_, pricing_v1_from, pricing_v1_to) = &entries[0];
-        assert_eq!(pricing_v1_from, &Some(date(2025, 1, 1)));
-        assert_eq!(
-            pricing_v1_to,
-            &Some(date(2026, 1, 1)),
+            ranges[0].2,
+            Some(date(2026, 1, 1)),
             "earlier pricing row ends at the next pricing row's effective_from"
         );
-
-        let (_, pricing_v2_from, pricing_v2_to) = &entries[1];
-        assert_eq!(pricing_v2_from, &Some(date(2026, 1, 1)));
+        assert_eq!(ranges[1].1, Some(date(2026, 1, 1)));
         assert_eq!(
-            pricing_v2_to, &None,
+            ranges[1].2, None,
             "latest pricing row has no successor; effective_to is None"
         );
 
-        let (_, taxes_from, taxes_to) = &entries[2];
+        let taxes_set = workspace
+            .specs
+            .iter()
+            .find(|ss| ss.name == "taxes")
+            .expect("taxes spec set exists");
+        let tax_ranges: Vec<_> = taxes_set.iter_with_ranges().collect();
+        assert_eq!(tax_ranges.len(), 1);
         assert_eq!(
-            taxes_from, &None,
+            tax_ranges[0].1, None,
             "unversioned spec has no declared effective_from"
         );
         assert_eq!(
-            taxes_to, &None,
+            tax_ranges[0].2, None,
             "unversioned spec has no successor; effective_to is None"
         );
     }
@@ -980,13 +1120,13 @@ mod tests {
         rule sum: x + y
         rule product: x * y
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(response.results.len(), 2);
 
@@ -995,24 +1135,14 @@ mod tests {
             .values()
             .find(|r| r.rule.name == "sum")
             .unwrap();
-        assert_eq!(
-            sum_result.result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("15").unwrap()
-            )))
-        );
+        assert_eq!(sum_result.result.value().unwrap().to_string(), "15");
 
         let product_result = response
             .results
             .values()
             .find(|r| r.rule.name == "product")
             .unwrap();
-        assert_eq!(
-            product_result.result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("50").unwrap()
-            )))
-        );
+        assert_eq!(product_result.result.value().unwrap().to_string(), "50");
     }
 
     #[test]
@@ -1025,20 +1155,26 @@ mod tests {
         data price: 100
         rule total: price * 2
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(
-            response.results.values().next().unwrap().result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("200").unwrap()
-            )))
+            response
+                .results
+                .values()
+                .next()
+                .unwrap()
+                .result
+                .value()
+                .unwrap()
+                .to_string(),
+            "200"
         );
     }
 
@@ -1052,13 +1188,13 @@ mod tests {
         data age: 25
         rule is_adult: age >= 18
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
@@ -1077,19 +1213,25 @@ mod tests {
         rule discount: 0
           unless quantity >= 10 then 10
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(
-            response.results.values().next().unwrap().result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("10").unwrap()
-            )))
+            response
+                .results
+                .values()
+                .next()
+                .unwrap()
+                .result
+                .value()
+                .unwrap()
+                .to_string(),
+            "10"
         );
     }
 
@@ -1097,7 +1239,7 @@ mod tests {
     fn test_spec_not_found() {
         let engine = Engine::new();
         let now = DateTimeValue::now();
-        let result = engine.run("nonexistent", Some(&now), HashMap::new(), false);
+        let result = engine.run(None, "nonexistent", Some(&now), HashMap::new(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -1112,7 +1254,7 @@ mod tests {
         data x: 10
         rule result: x * 2
     "#,
-                SourceType::Labeled("spec 1.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("spec 1.lemma"))),
             )
             .unwrap();
 
@@ -1123,29 +1265,25 @@ mod tests {
         data y: 5
         rule result: y * 3
     "#,
-                SourceType::Labeled("spec 2.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("spec 2.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
         let response1 = engine
-            .run("spec1", Some(&now), HashMap::new(), false)
+            .run(None, "spec1", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(
-            response1.results[0].result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("20").unwrap()
-            )))
+            response1.results[0].result.value().unwrap().to_string(),
+            "20"
         );
 
         let response2 = engine
-            .run("spec2", Some(&now), HashMap::new(), false)
+            .run(None, "spec2", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(
-            response2.results[0].result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("15").unwrap()
-            )))
+            response2.results[0].result.value().unwrap().to_string(),
+            "15"
         );
     }
 
@@ -1160,12 +1298,12 @@ mod tests {
         data denominator: 0
         rule division: numerator / denominator
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
-        let result = engine.run("test", Some(&now), HashMap::new(), false);
+        let result = engine.run(None, "test", Some(&now), HashMap::new(), false);
         // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
@@ -1202,13 +1340,13 @@ mod tests {
         rule y: a * b
         rule x: a - b
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(response.results.len(), 3);
 
@@ -1257,7 +1395,7 @@ mod tests {
         rule tax: subtotal * 10%
         rule total: subtotal + tax
     "#,
-                SourceType::Labeled("test.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             )
             .unwrap();
 
@@ -1265,7 +1403,7 @@ mod tests {
         let now = DateTimeValue::now();
         let rules = vec!["total".to_string()];
         let mut response = engine
-            .run("test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         response.filter_rules(&rules);
 
@@ -1274,12 +1412,7 @@ mod tests {
 
         // But the value should be correct (dependencies were computed)
         let total = response.results.values().next().unwrap();
-        assert_eq!(
-            total.result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("220").unwrap()
-            )))
-        );
+        assert_eq!(total.result.value().unwrap().to_string(), "220");
     }
 
     // -------------------------------------------------------------------
@@ -1293,36 +1426,63 @@ mod tests {
         let mut engine = Engine::new();
 
         engine
-            .load(
-                "spec @org/project/helper\ndata quantity: 42",
-                SourceType::Dependency("deps/org_project_helper.lemma"),
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @org/project\nspec helper\ndata quantity: 42".to_string(),
+                )]),
+                Some("@org/project"),
             )
             .expect("should load dependency files");
 
         engine
             .load(
                 r#"spec main_spec
-with external: @org/project/helper
+uses external: @org/project helper
 rule value: external.quantity"#,
-                SourceType::Labeled("main.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("main.lemma"))),
             )
             .expect("should succeed with pre-resolved deps");
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("main_spec", Some(&now), HashMap::new(), false)
+            .run(None, "main_spec", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
         let value_result = response
             .results
             .get("value")
             .expect("rule 'value' should exist");
-        assert_eq!(
-            value_result.result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::number(
-                Decimal::from_str("42").unwrap()
-            )))
-        );
+        assert_eq!(value_result.result.value().unwrap().to_string(), "42");
+    }
+
+    #[test]
+    fn schema_with_repo_resolves_registry_spec() {
+        let mut engine = Engine::new();
+        engine
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @org/project\nspec helper\ndata quantity: 42\nrule expose: quantity"
+                        .to_string(),
+                )]),
+                Some("@org/project"),
+            )
+            .expect("registry bundle loads");
+
+        engine
+            .load(
+                r#"spec main_spec
+data x: 1"#,
+                SourceType::Path(Arc::new(std::path::PathBuf::from("main.lemma"))),
+            )
+            .expect("main loads");
+
+        let now = DateTimeValue::now();
+        let schema = engine
+            .schema(Some("@org/project"), "helper", Some(&now))
+            .expect("schema for registry spec");
+        assert!(schema.data.contains_key("quantity"));
     }
 
     #[test]
@@ -1334,13 +1494,13 @@ rule value: external.quantity"#,
                 r#"spec local_only
 data price: 100
 rule doubled: price * 2"#,
-                SourceType::Labeled("local.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("local.lemma"))),
             )
             .expect("should succeed when there are no @... references");
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("local_only", Some(&now), HashMap::new(), false)
+            .run(None, "local_only", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
         let doubled = response
@@ -1359,20 +1519,17 @@ rule doubled: price * 2"#,
 
         let result = engine.load(
             r#"spec main_spec
-with external: @org/project/missing
+uses external: @org/project missing
 rule value: external.quantity"#,
-            SourceType::Labeled("main.lemma"),
+            SourceType::Path(Arc::new(std::path::PathBuf::from("main.lemma"))),
         );
 
-        let errs = result.expect_err("Should fail when @... dep is not in file map");
-        let msg = errs
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
+        let errs = result.expect_err("Should fail when registry dep is not loaded");
         assert!(
-            msg.contains("missing") || msg.contains("not found") || msg.contains("Unknown"),
-            "error should indicate missing dep: {msg}"
+            errs.iter()
+                .any(|e| e.kind() == crate::ErrorKind::MissingRepository),
+            "expected MissingRepository, got: {:?}",
+            errs.iter().map(|e| e.kind()).collect::<Vec<_>>()
         );
     }
 
@@ -1380,46 +1537,42 @@ rule value: external.quantity"#,
     fn pre_resolved_deps_with_spec_and_type_refs() {
         let mut engine = Engine::new();
 
-        let mut deps = HashMap::new();
-        deps.insert(
-            "deps/helper.lemma".to_string(),
-            "spec @org/example/helper\ndata value: 42".to_string(),
-        );
-        deps.insert(
-            "deps/finance.lemma".to_string(),
-            "spec @lemma/std/finance\ndata money: scale\n -> unit eur 1.00\n -> decimals 2"
-                .to_string(),
-        );
         engine
-            .load(
-                "spec @org/example/helper\ndata value: 42",
-                SourceType::Dependency("deps/helper.lemma"),
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @org/example\nspec helper\ndata value: 42".to_string(),
+                )]),
+                Some("@org/example"),
             )
             .expect("should load helper file");
 
         engine
-            .load(
-                "spec @lemma/std/finance\ndata money: scale\n -> unit eur 1.00\n -> decimals 2",
-                SourceType::Dependency("deps/finance.lemma"),
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @lemma/std\nspec finance\ndata money: scale\n -> unit eur 1.00\n -> decimals 2".to_string(),
+                )]),
+                Some("@lemma/std"),
             )
             .expect("should load finance file");
 
         engine
             .load(
                 r#"spec registry_demo
-data money from @lemma/std/finance
+data money: money from @lemma/std finance
 data unit_price: 5 eur
-with @org/example/helper
+uses @org/example helper
 rule helper_value: helper.value
 rule line_total: unit_price * 2
 rule formatted: helper_value + 0"#,
-                SourceType::Labeled("main.lemma"),
+                SourceType::Path(Arc::new(std::path::PathBuf::from("main.lemma"))),
             )
             .expect("should succeed with pre-resolved spec and type deps");
 
         let now = DateTimeValue::now();
         let response = engine
-            .run("registry_demo", Some(&now), HashMap::new(), false)
+            .run(None, "registry_demo", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
         assert_eq!(
@@ -1462,135 +1615,96 @@ rule formatted: helper_value + 0"#,
     fn load_empty_labeled_source_is_error() {
         let mut engine = Engine::new();
         let err = engine
-            .load("spec x\ndata a: 1", SourceType::Labeled("  "))
+            .load(
+                "spec x\ndata a: 1",
+                SourceType::Path(Arc::new(std::path::PathBuf::from("  "))),
+            )
             .unwrap_err();
         assert!(err.errors.iter().any(|e| e.message().contains("non-empty")));
     }
 
     #[test]
-    fn load_rejects_registry_spec_definitions() {
+    fn add_dependency_files_accepts_registry_bundle_specs() {
         let mut engine = Engine::new();
-        let result = engine.load(
-            "spec @org/example/helper\ndata x: 1",
-            SourceType::Labeled("bad.lemma"),
-        );
-        assert!(result.is_err(), "should reject @-prefixed spec in load");
-        let errors = result.unwrap_err();
-        assert!(
-            errors
-                .errors
-                .iter()
-                .any(|e| e.message().contains("registry prefix")),
-            "error should mention registry prefix, got: {:?}",
-            errors
-        );
+        engine
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @org/my\nspec helper\ndata x: 1".to_string(),
+                )]),
+                Some("@org/my"),
+            )
+            .expect("dependency bundle specs should be accepted");
     }
 
     #[test]
-    fn add_dependency_files_accepts_registry_spec_definitions() {
+    fn dependency_cannot_merge_with_workspace_repo() {
         let mut engine = Engine::new();
-        let mut files = HashMap::new();
-        files.insert(
-            "deps/helper.lemma".to_string(),
-            "spec @org/my/helper\ndata x: 1".to_string(),
-        );
         engine
             .load(
-                "spec @org/my/helper\ndata x: 1",
-                SourceType::Dependency("helper.lemma"),
+                "repo billing\nspec local_billing\ndata x: 1",
+                SourceType::Path(Arc::new(std::path::PathBuf::from("local.lemma"))),
             )
-            .expect("add_dependency_files should accept @-prefixed specs");
-    }
+            .expect("workspace load");
 
-    #[test]
-    fn add_dependency_files_rejects_bare_named_spec_in_registry_bundle() {
-        let mut engine = Engine::new();
-        let result = engine.load(
-            "spec local_looking_name\ndata x: 1",
-            SourceType::Dependency("bundle.lemma"),
+        let result = engine.load_batch(
+            HashMap::from([(
+                SourceType::Volatile,
+                "repo billing\nspec dep_billing\ndata y: 2".to_string(),
+            )]),
+            Some("@evil/pkg"),
         );
         assert!(
             result.is_err(),
-            "should reject non-@-prefixed spec in registry bundle"
+            "dependency declaring same repo name as workspace must be rejected"
         );
-        let errors = result.unwrap_err();
+        let msg = result
+            .unwrap_err()
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            errors
-                .errors
-                .iter()
-                .any(|e| e.message().contains("without '@' prefix")),
-            "error should mention missing @ prefix, got: {:?}",
-            errors
+            msg.contains("billing") && msg.contains("workspace"),
+            "error should mention repo name and workspace provenance, got: {msg}"
         );
     }
 
     #[test]
-    fn add_dependency_files_rejects_spec_with_bare_spec_reference() {
+    fn load_rejects_empty_registry_source_identifier() {
         let mut engine = Engine::new();
         let result = engine.load(
-            "spec @org/billing\nwith rates: local_rates",
-            SourceType::Dependency("billing.lemma"),
+            "spec helper\ndata x: 1",
+            SourceType::Registry(Arc::new(LemmaRepository::new(Some("".to_string())))),
         );
         assert!(
             result.is_err(),
-            "should reject registry spec referencing non-@ spec"
-        );
-        let errors = result.unwrap_err();
-        assert!(
-            errors
-                .errors
-                .iter()
-                .any(|e| e.message().contains("local_rates")),
-            "error should mention bare ref name, got: {:?}",
-            errors
+            "empty registry dependency source identifier must be rejected"
         );
     }
 
     #[test]
-    fn add_dependency_files_rejects_spec_with_bare_type_import() {
+    fn load_dependency_accepts_split_bundles() {
         let mut engine = Engine::new();
-        let result = engine.load(
-            "spec @org/billing\ndata money from local_finance",
-            SourceType::Dependency("billing.lemma"),
-        );
-        assert!(
-            result.is_err(),
-            "should reject registry spec importing type from non-@ spec"
-        );
-        let errors = result.unwrap_err();
-        assert!(
-            errors
-                .errors
-                .iter()
-                .any(|e| e.message().contains("local_finance")),
-            "error should mention bare ref name, got: {:?}",
-            errors
-        );
-    }
-
-    #[test]
-    fn add_dependency_files_accepts_fully_qualified_references() {
-        let mut engine = Engine::new();
-        let mut files = HashMap::new();
-        files.insert(
-            "deps/bundle.lemma".to_string(),
-            r#"spec @org/billing
-with @org/rates
-
-spec @org/rates
-data rate: 10"#
-                .to_string(),
-        );
         engine
-            .load(
-                r#"spec @org/billing
-with @org/rates
-
-spec @org/rates
-data rate: 10"#,
-                SourceType::Dependency("bundle.lemma"),
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @org/rates\nspec rates\ndata rate: 10".to_string(),
+                )]),
+                Some("@org/rates"),
             )
-            .expect("fully @-prefixed bundle should be accepted");
+            .expect("rates bundle should load");
+        engine
+            .load_batch(
+                HashMap::from([(
+                    SourceType::Volatile,
+                    "repo @org/billing\nspec billing\nuses @org/rates rates".to_string(),
+                )]),
+                Some("@org/billing"),
+            )
+            .expect("billing bundle should load");
     }
 
     #[test]
@@ -1599,11 +1713,11 @@ data rate: 10"#,
 
         let result = engine.load(
             r#"spec demo
-data money from nonexistent_type_source
-with helper: nonexistent_spec
+data money: nonexistent_type_source.amount
+uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#,
-            SourceType::Labeled("test.lemma"),
+            SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
         );
 
         assert!(result.is_err(), "Should fail with multiple errors");
@@ -1622,7 +1736,7 @@ rule total: helper.value + price"#,
 
         assert!(
             error_message.contains("nonexistent_type_source"),
-            "Should mention type import source spec. Got:\n{}",
+            "Should mention data import source spec. Got:\n{}",
             error_message
         );
         assert!(
@@ -1642,7 +1756,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = engine.load(
             "spec t\ndata x: number -> default \"10 $$\"]\nrule r: x",
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(Arc::new(std::path::PathBuf::from("t.lemma"))),
         );
         assert!(
             result.is_err(),
@@ -1659,7 +1773,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = engine.load(
             "spec t\ndata x: number -> default \"10\"]\nrule r: x",
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(Arc::new(std::path::PathBuf::from("t.lemma"))),
         );
         assert!(
             result.is_err(),
@@ -1672,7 +1786,7 @@ rule total: helper.value + price"#,
         let mut engine = Engine::new();
         let result = engine.load(
             "spec t\ndata x: [boolean -> default \"maybe\"]\nrule r: x",
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(Arc::new(std::path::PathBuf::from("t.lemma"))),
         );
         assert!(
             result.is_err(),
@@ -1684,10 +1798,113 @@ rule total: helper.value + price"#,
     fn planning_rejects_invalid_named_type_default() {
         // Named type: the parser can't validate this, only planning can.
         let mut engine = Engine::new();
-        let result = engine.load("spec t\ndata custom: number -> minimum 0\ndata x: [custom -> default \"abc\"]\nrule r: x", SourceType::Labeled("t.lemma",));
+        let result = engine.load("spec t\ndata custom: number -> minimum 0\ndata x: [custom -> default \"abc\"]\nrule r: x", SourceType::Path(Arc::new(std::path::PathBuf::from("t.lemma"))));
         assert!(
             result.is_err(),
             "must reject non-numeric default on named number type"
         );
+    }
+
+    #[test]
+    fn context_merges_cross_file_repo_identities() {
+        let mut engine = Engine::new();
+
+        // Load two files with the same named repo, but different spec names.
+        engine
+            .load(
+                "repo shared\nspec a\ndata x: 1",
+                SourceType::Path(Arc::new(std::path::PathBuf::from("file1.lemma"))),
+            )
+            .expect("first file should load");
+
+        engine
+            .load(
+                "repo shared\nspec b\ndata y: 2",
+                SourceType::Path(Arc::new(std::path::PathBuf::from("file2.lemma"))),
+            )
+            .expect("second file should load");
+
+        // Both specs should land under the same repo entry.
+        // main_repository is always present, plus the "shared" repo.
+        assert_eq!(
+            engine.specs.repositories().len(),
+            2,
+            "should have main repository and one named repository"
+        );
+
+        let shared_repo = engine
+            .specs
+            .find_repository("shared")
+            .expect("shared repo should exist");
+        let shared_specs = engine.specs.repositories().get(&shared_repo).unwrap();
+        assert_eq!(
+            shared_specs.len(),
+            2,
+            "shared repo should contain both specs"
+        );
+        assert!(shared_specs.contains_key("a"));
+        assert!(shared_specs.contains_key("b"));
+
+        // Loading a dependency with the same repo name should be rejected.
+        let result = engine.load_batch(
+            HashMap::from([(
+                SourceType::Volatile,
+                "repo shared\nspec c\ndata z: 3".to_string(),
+            )]),
+            Some("@some/dep"),
+        );
+        assert!(
+            result.is_err(),
+            "dependency repo with same name as workspace repo must be rejected"
+        );
+    }
+
+    #[test]
+    fn context_rejects_duplicate_spec_in_same_repo_across_files() {
+        let mut engine = Engine::new();
+
+        engine
+            .load(
+                "repo shared\nspec a\ndata x: 1",
+                SourceType::Path(Arc::new(std::path::PathBuf::from("file1.lemma"))),
+            )
+            .expect("first file should load");
+
+        let result = engine.load(
+            "repo shared\nspec a\ndata y: 2",
+            SourceType::Path(Arc::new(std::path::PathBuf::from("file2.lemma"))),
+        );
+
+        assert!(
+            result.is_err(),
+            "should reject duplicate spec name in same repo"
+        );
+        let err_msg = result.unwrap_err().errors[0].to_string();
+        assert!(
+            err_msg.contains("Duplicate spec 'a'"),
+            "error should mention duplicate spec"
+        );
+    }
+
+    #[test]
+    fn test_list_serialization() {
+        let mut engine = Engine::new();
+        engine
+            .load(
+                "repo shared\nspec a\ndata x: 1\nrule r: x",
+                SourceType::Path(Arc::new(std::path::PathBuf::from("file1.lemma"))),
+            )
+            .expect("file should load");
+
+        let repos = engine.list();
+        let json = serde_json::to_string(&repos).expect("should serialize");
+
+        // Should include expected nesting
+        assert!(json.contains("\"repository\""));
+        assert!(json.contains("\"name\":\"shared\""));
+        assert!(json.contains("\"specs\""));
+        assert!(json.contains("\"name\":\"a\""));
+        assert!(json.contains("\"data\""));
+        assert!(json.contains("\"rules\""));
     }
 }

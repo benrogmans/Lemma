@@ -147,7 +147,7 @@ data salary: 50000
 data bonus_rate: 5%
 
 spec manager
-with employee: base_employee
+uses employee: base_employee
 data employee.salary: 80000
 data employee.bonus_rate: 15%
 
@@ -422,7 +422,7 @@ data name: "John Doe"
 data salary: 50000
 
 spec manager
-with employee: base_employee
+uses employee: base_employee
 data employee.salary: 80000
 
 rule manager_bonus: employee.salary * 0.15

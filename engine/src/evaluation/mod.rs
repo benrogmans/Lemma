@@ -28,7 +28,7 @@ pub(crate) struct EvaluationContext {
     data_values: HashMap<DataPath, LiteralValue>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
     rule_explanations: HashMap<RulePath, crate::evaluation::explanation::Explanation>,
-    operations: Option<Vec<crate::OperationRecord>>,
+    operations: Option<Vec<crate::evaluation::operations::OperationRecord>>,
     explanation_nodes: HashMap<usize, crate::evaluation::explanation::ExplanationNode>,
     now: LiteralValue,
     /// Map of rule-target reference data paths to their target rule path.
@@ -83,7 +83,7 @@ impl EvaluationContext {
         // `MissingData` veto, matching the existing missing-data semantics
         // for type-declaration data with no value.
         //
-        // A caller-supplied value (via `with_data_values`) replaces the
+        // A caller-supplied value (via `set_data_values`) replaces the
         // `DataDefinition::Reference` entry with `DataDefinition::Value`
         // before evaluation, so any path that is no longer a `Reference` is
         // skipped here — the user-provided value has already been placed in
@@ -101,10 +101,8 @@ impl EvaluationContext {
                     local_default,
                     ..
                 }) => {
-                    let copied_kind: Option<ValueKind> = data_values
-                        .get(target_path)
-                        .map(|v| v.value.clone())
-                        .or_else(|| local_default.clone());
+                    let copied_kind: Option<ValueKind> =
+                        data_values.get(target_path).map(|v| v.value.clone());
                     if let Some(value_kind) = copied_kind {
                         let value = LiteralValue {
                             value: value_kind,
@@ -124,6 +122,12 @@ impl EvaluationContext {
                                 );
                             }
                         }
+                    } else if let Some(dv) = local_default {
+                        let value = LiteralValue {
+                            value: dv.clone(),
+                            lemma_type: resolved_type.clone(),
+                        };
+                        data_values.insert(reference_path.clone(), value);
                     }
                 }
                 Some(DataDefinition::Reference {
@@ -367,31 +371,28 @@ spec source_spec
 data v: number -> default 5
 
 spec outer
-with i: inner
-with src: source_spec
+uses i: inner
+uses src: source_spec
 data i.slot: src.v
 rule r: i.slot
 "#;
         let mut engine = Engine::new();
         engine
-            .load(code, crate::SourceType::Labeled("ref_invariant.lemma"))
+            .load(
+                code,
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "ref_invariant.lemma",
+                ))),
+            )
             .expect("must load");
 
         let now = DateTimeValue::now();
-        let plan = engine
-            .get_plan("outer", Some(&now))
+        let plan_basis = engine
+            .get_plan(None, "outer", Some(&now))
             .expect("must plan")
             .clone();
 
-        let now_lit = LiteralValue {
-            value: crate::planning::semantics::ValueKind::Date(
-                crate::planning::semantics::date_time_to_semantic(&now),
-            ),
-            lemma_type: crate::planning::semantics::primitive_date().clone(),
-        };
-        let context = EvaluationContext::new(&plan, now_lit, false);
-
-        let reference_path = plan
+        let reference_path = plan_basis
             .data
             .iter()
             .find_map(|(path, def)| match def {
@@ -400,10 +401,20 @@ rule r: i.slot
             })
             .expect("plan must contain the reference for `i.slot`");
 
-        let resolved_type = match plan.data.get(&reference_path).expect("entry exists") {
+        let resolved_type = match plan_basis.data.get(&reference_path).expect("entry exists") {
             DataDefinition::Reference { resolved_type, .. } => resolved_type.clone(),
             _ => unreachable!("filter above kept only Reference entries"),
         };
+
+        let plan = plan_basis.with_defaults();
+
+        let now_lit = LiteralValue {
+            value: crate::planning::semantics::ValueKind::Date(
+                crate::planning::semantics::date_time_to_semantic(&now),
+            ),
+            lemma_type: crate::planning::semantics::primitive_date().clone(),
+        };
+        let context = EvaluationContext::new(&plan, now_lit, false);
 
         let stored = context
             .data_values
@@ -510,7 +521,7 @@ impl Evaluator {
             .filter_map(|path| {
                 used_data.remove(path).map(|value| Data {
                     path: path.clone(),
-                    value: DataValue::Literal(value),
+                    value: DataValue::from_bound_literal(value),
                     source: None,
                 })
             })

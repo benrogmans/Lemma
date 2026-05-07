@@ -18,7 +18,7 @@ defmodule LemmaTest do
     end
 
     test "creates engine with custom limits" do
-      assert {:ok, engine} = Lemma.new(%{"max_files" => 50})
+      assert {:ok, engine} = Lemma.new(%{"max_sources" => 50})
       assert is_reference(engine)
     end
 
@@ -31,7 +31,7 @@ defmodule LemmaTest do
   describe "new/1 error cases" do
     test "rejects non-integer limit value" do
       assert_raise ErlangError, fn ->
-        Lemma.new(%{"max_files" => "not_a_number"})
+        Lemma.new(%{"max_sources" => "not_a_number"})
       end
     end
 
@@ -43,7 +43,7 @@ defmodule LemmaTest do
 
     test "rejects negative limit value" do
       assert_raise ErlangError, fn ->
-        Lemma.new(%{"max_files" => -1})
+        Lemma.new(%{"max_sources" => -1})
       end
     end
   end
@@ -62,6 +62,7 @@ defmodule LemmaTest do
       first = hd(errors)
       assert is_map(first)
       assert Map.has_key?(first, :message)
+      assert first[:kind] == "parsing"
     end
 
     test "uses 'inline' as default source label" do
@@ -70,15 +71,47 @@ defmodule LemmaTest do
     end
   end
 
+  describe "load_batch/3" do
+    test "loads multiple sources in one pass" do
+      {:ok, engine} = Lemma.new()
+
+      sources = %{
+        "a.lemma" => "repo batch_repo\nspec one\ndata x: 1",
+        "b.lemma" => "repo batch_repo\nspec two\ndata y: 2"
+      }
+
+      assert :ok = Lemma.load_batch(engine, sources)
+      assert {:ok, groups} = Lemma.list(engine)
+      batch = Enum.find(groups, fn g -> g.repository[:name] == "batch_repo" end)
+      assert batch != nil
+      names = batch.specs |> Enum.map(& &1[:name]) |> Enum.sort()
+      assert names == ["one", "two"]
+    end
+
+    test "invalid sources map returns error tuple not exception" do
+      {:ok, engine} = Lemma.new()
+      assert {:error, errors} = Lemma.load_batch(engine, :not_a_map)
+      assert is_list(errors)
+      assert hd(errors).kind == "request"
+    end
+  end
+
   describe "list/1" do
     test "lists loaded specs with inline schema" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
-      assert {:ok, specs} = Lemma.list(engine)
-      assert is_list(specs)
-      assert length(specs) == 1
-      spec = hd(specs)
+      assert {:ok, groups} = Lemma.list(engine)
+      assert is_list(groups)
+      assert length(groups) == 1
+      group = hd(groups)
+      assert group[:repository][:name] == nil
+      assert group[:repository][:dependency] == nil
+      assert length(group[:specs]) == 1
+      assert group[:repository][:start_line] == 1
+      spec = hd(group[:specs])
       assert spec[:name] == "pricing"
+      assert spec[:start_line] == 1
+      assert spec[:attribute] == "pricing.lemma"
       assert is_map(spec[:schema])
       assert spec[:schema]["spec"] == "pricing"
       assert is_map(spec[:schema]["data"])
@@ -93,14 +126,16 @@ defmodule LemmaTest do
     test "effective_from is nil when not set" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
-      {:ok, [spec]} = Lemma.list(engine)
+      {:ok, [group]} = Lemma.list(engine)
+      spec = hd(group.specs)
       assert spec[:effective_from] == nil
     end
 
     test "effective_to is nil for an unversioned spec (no successor)" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
-      {:ok, [spec]} = Lemma.list(engine)
+      {:ok, [group]} = Lemma.list(engine)
+      spec = hd(group.specs)
       assert spec[:effective_to] == nil
     end
 
@@ -118,7 +153,9 @@ defmodule LemmaTest do
       """
 
       :ok = Lemma.load(engine, code, "temporal.lemma")
-      {:ok, entries} = Lemma.list(engine)
+      {:ok, groups} = Lemma.list(engine)
+      assert length(groups) == 1
+      entries = hd(groups).specs
       assert length(entries) == 2
 
       [earlier, latest] = entries
@@ -238,13 +275,13 @@ defmodule LemmaTest do
     test "removes a loaded spec" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, "spec removable\ndata x: 1\nrule y: x + 1", "rm.lemma")
-      {:ok, specs} = Lemma.list(engine)
-      assert length(specs) == 1
+      {:ok, groups} = Lemma.list(engine)
+      assert length(hd(groups).specs) == 1
 
       assert :ok = Lemma.remove_spec(engine, "removable", "2025-01-01")
 
       {:ok, specs} = Lemma.list(engine)
-      assert length(specs) == 0
+      assert specs == []
     end
 
     test "returns error for unknown spec" do
@@ -258,10 +295,10 @@ defmodule LemmaTest do
       {:ok, e1} = Lemma.new()
       {:ok, e2} = Lemma.new()
       :ok = Lemma.load(e1, "spec a\ndata x: 1\nrule y: x + 1", "a.lemma")
-      {:ok, specs1} = Lemma.list(e1)
-      {:ok, specs2} = Lemma.list(e2)
-      assert length(specs1) == 1
-      assert length(specs2) == 0
+      {:ok, groups1} = Lemma.list(e1)
+      {:ok, groups2} = Lemma.list(e2)
+      assert Enum.sum(Enum.map(groups1, fn g -> length(g.specs) end)) == 1
+      assert groups2 == []
     end
   end
 
@@ -273,8 +310,8 @@ defmodule LemmaTest do
 
       {:ok, engine} = Lemma.new()
       assert :ok = Lemma.load_from_paths(engine, [path])
-      {:ok, specs} = Lemma.list(engine)
-      names = Enum.map(specs, & &1[:name])
+      {:ok, groups} = Lemma.list(engine)
+      names = Enum.flat_map(groups, fn g -> Enum.map(g.specs, & &1[:name]) end)
       assert "from_file" in names
     after
       File.rm(Path.join(System.tmp_dir!(), "hex_test_spec.lemma"))
@@ -303,6 +340,7 @@ defmodule LemmaTest do
       assert {:error, err} = Lemma.format("not valid lemma at all !!!")
       assert is_map(err)
       assert Map.has_key?(err, :message)
+      assert err[:kind] == "parsing"
     end
 
     test "preserves semantics after formatting" do

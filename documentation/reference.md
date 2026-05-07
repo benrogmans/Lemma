@@ -71,16 +71,16 @@ data workweek: 40 hours
 rule workweek_days: workweek in days
 ```
 
-## Spec References (`with`)
+## Spec References (`uses`)
 
-Reference other specs with the `with` keyword.
+Reference other specs with the `uses` keyword.
 
-- `with spec_name` — alias defaults to the last path segment (base name without version tag).
-- `with alias: spec_name` — explicit alias.
-- `with spec_name 2025-01-01` — temporal pin (ISO datetime or bare year `YYYY` → Jan 1 00:00).
-- `with a, b, c` — comma-separated bare imports (no aliases, no temporal pins).
+- `uses spec_name` — alias defaults to the last path segment (base name without version tag).
+- `uses alias: spec_name` — explicit alias.
+- `uses spec_name 2025-01-01` — temporal pin (ISO datetime or bare year `YYYY` → Jan 1 00:00).
+- `uses a, b, c` — comma-separated bare imports (no aliases, no temporal pins).
 
-Comma-separated form is for quick bare imports only. For aliases or temporal pins, use separate `with` lines.
+Comma-separated form is for quick bare imports only. For aliases or temporal pins, use separate `uses` lines.
 
 A spec name may carry an optional `.version_tag` suffix (spec base names cannot contain a period).
 
@@ -94,7 +94,7 @@ spec pricing.v2
 data base_price: 120 eur
 
 spec order
-with pricing.v1
+uses pricing.v1
 rule total: pricing.base_price
 ```
 
@@ -111,7 +111,7 @@ data, rules, or state.
 
 ### Temporal version resolution
 
-- **Datetime:** `with x: pricing 2025-01-01` or `with x: pricing 2025` (bare year → that year’s Jan 1 00:00, same as datetime literals) picks the temporal version at that instant.
+- **Datetime:** `uses x: pricing 2025-01-01` or `uses x: pricing 2025` (bare year → that year’s Jan 1 00:00, same as datetime literals) picks the temporal version at that instant.
 
 ### Self-reference restriction
 
@@ -120,7 +120,7 @@ semantic error caught during planning:
 
 ```lemma
 spec pricing.v2
-with old: pricing.v1
+uses old: pricing.v1
 ```
 
 ### Version tag syntax
@@ -133,7 +133,7 @@ and `.` — for example `v1`, `v2`, `1.2.3`, `rc.1`, `2024-01`. Document base na
 Registry references use the `@` prefix and also support version tags:
 
 ```lemma
-with @lemma/std/finance.v2
+uses @lemma/std/finance.v2
 data money from @lemma/std/finance.v2
 ```
 
@@ -220,7 +220,7 @@ data currency from base_types
 data discount_rate from pricing -> maximum 0.5
 ```
 
-Data imports support explicit effective datetimes, identical to `with` spec refs:
+Data imports support explicit effective datetimes, identical to `uses` spec refs:
 
 ```lemma
 data money from finance 2026-01-15
@@ -284,7 +284,7 @@ spec law
 data other: number -> default 42
 
 spec license
-with l: law
+uses l: law
 data license2: l.other
 rule check: license2 > 10
 ```
@@ -299,7 +299,7 @@ data base: 100 eur
 rule discounted: base * (1 - 10%)
 
 spec invoice
-with p: pricing
+uses p: pricing
 data line_total: p.discounted
 rule due: line_total
 ```
@@ -338,7 +338,7 @@ spec inner
 data slot: number -> minimum 0 -> maximum 100
 
 spec outer
-with i: inner
+uses i: inner
 data src: 42
 data i.slot: src
 rule r: i.slot

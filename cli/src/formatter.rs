@@ -122,16 +122,26 @@ impl Formatter {
         format!("{}\n", table)
     }
 
-    pub fn format_workspace_summary(&self, file_count: usize, schemas: &[SpecSchema]) -> String {
+    pub fn format_workspace_summary(&self, source_count: usize, schemas: &[SpecSchema]) -> String {
         let mut output = String::new();
         let spec_count = schemas.len();
-        let file_word = if file_count == 1 { "file" } else { "files" };
+        let source_word = if source_count == 1 {
+            "source"
+        } else {
+            "sources"
+        };
         let spec_word = if spec_count == 1 { "spec" } else { "specs" };
         output.push_str(&format!(
             "Found {} {} in {} {}\n",
-            spec_count, spec_word, file_count, file_word
+            spec_count, spec_word, source_count, source_word
         ));
+        output.push_str(&self.format_spec_schema_tables(schemas));
+        output
+    }
 
+    /// Tables only (no preamble). Used when listing a single repository; context is the header above.
+    pub fn format_spec_schema_tables(&self, schemas: &[SpecSchema]) -> String {
+        let mut output = String::new();
         for schema in schemas {
             output.push('\n');
 
@@ -172,13 +182,12 @@ impl Formatter {
                 for (name, entry) in &schema.data {
                     col_name.push(format!("  {}", name));
                     col_type.push(entry.lemma_type.name());
-                    col_default.push(
-                        entry
-                            .default
-                            .as_ref()
-                            .map(|v| v.to_string())
-                            .unwrap_or_default(),
-                    );
+                    col_default.push(match (&entry.bound_value, &entry.default) {
+                        (Some(b), Some(d)) => format!("{}, default {}", b, d),
+                        (Some(b), None) => b.to_string(),
+                        (None, Some(d)) => d.to_string(),
+                        (None, None) => String::new(),
+                    });
                 }
             }
 
@@ -209,6 +218,18 @@ impl Formatter {
         }
 
         output
+    }
+
+    pub fn format_repositories_summary(&self, repos: &[(String, usize)]) -> String {
+        if repos.is_empty() {
+            return String::new();
+        }
+        let mut s = String::from("\nRepositories:\n");
+        for (name, count) in repos {
+            let word = if *count == 1 { "spec" } else { "specs" };
+            s.push_str(&format!("  {} ({} {})\n", name, count, word));
+        }
+        s
     }
 
     fn format_data_tree(&self, data_groups: &[lemma::DataGroup], spec_name: &str) -> String {
@@ -252,9 +273,10 @@ impl Formatter {
 
         for data in &group.data {
             let value_str = match &data.value {
-                DataValue::Literal(lit) => self.format_literal(lit),
-                DataValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
-                DataValue::TypeDeclaration { .. } => String::new(),
+                DataValue::Definition { bound_value, .. } => bound_value
+                    .as_ref()
+                    .map(|lit| self.format_literal(lit))
+                    .unwrap_or_default(),
             };
             name_lines.push(data.path.to_string());
             type_lines.push(Self::data_type_str(&data.value));
@@ -270,9 +292,7 @@ impl Formatter {
 
     fn data_type_str(value: &DataValue) -> String {
         match value {
-            DataValue::Literal(lit) => lit.lemma_type.name(),
-            DataValue::TypeDeclaration { resolved_type } => resolved_type.name(),
-            DataValue::SpecReference(spec_ref) => format!("spec {}", spec_ref),
+            DataValue::Definition { schema_type, .. } => schema_type.name(),
         }
     }
 
@@ -309,10 +329,7 @@ impl Formatter {
         }
 
         let source = &result.rule.source_location;
-        let location = format!(
-            "Source: {}:{}:{}",
-            source.attribute, source.span.line, source.span.col
-        );
+        let location = format!("Source: {}:{}", source.source_type, source.span.line);
         table.add_row(vec![
             Cell::new(self.gray(&location)).set_alignment(CellAlignment::Left)
         ]);
@@ -436,7 +453,7 @@ impl Formatter {
 
     fn render_rule_reference(
         &self,
-        rule_path: &lemma::RulePath,
+        rule_path: &lemma::planning::semantics::RulePath,
         result: &OperationResult,
         expansion: &ExplanationNode,
         connector: Connector,
@@ -465,9 +482,7 @@ impl Formatter {
         operands: &[ExplanationNode],
         ctx: &mut RenderContext,
     ) {
-        ctx.rows.push(format!("{}├─ {}", ctx.indent, expression));
-        ctx.rows
-            .push(format!("{}└─ {}", ctx.indent, original_expression));
+        push_expression_header_lines(ctx.rows, ctx.indent, expression, original_expression);
 
         let child_indent = format!("{}   ", ctx.indent);
         let expandable = Self::collect_expandable_operands(operands);
@@ -561,7 +576,7 @@ impl Formatter {
                         ));
                     }
 
-                    if !matches!(&*branch.result, ExplanationNode::Value { .. }) {
+                    if !matches!(branch.result.as_ref(), ExplanationNode::Value { .. }) {
                         let result_indent = if has_condition {
                             format!("{}   ", ctx.indent)
                         } else {
@@ -635,9 +650,7 @@ impl Formatter {
         operands: &[ExplanationNode],
         ctx: &mut RenderContext,
     ) {
-        ctx.rows.push(format!("{}├─ {}", ctx.indent, expression));
-        ctx.rows
-            .push(format!("{}└─ {}", ctx.indent, original_expression));
+        push_expression_header_lines(ctx.rows, ctx.indent, expression, original_expression);
 
         let child_indent = format!("{}   ", ctx.indent);
         let expandable = Self::collect_expandable_operands(operands);
@@ -768,6 +781,21 @@ impl Formatter {
     }
 }
 
+/// One line when simplified expression equals source; two lines when they differ.
+fn push_expression_header_lines(
+    rows: &mut Vec<String>,
+    indent: &str,
+    expression: &str,
+    original_expression: &str,
+) {
+    if expression == original_expression {
+        rows.push(format!("{}└─ {}", indent, expression));
+    } else {
+        rows.push(format!("{}├─ {}", indent, expression));
+        rows.push(format!("{}└─ {}", indent, original_expression));
+    }
+}
+
 fn format_decimal(d: &rust_decimal::Decimal, decimals: Option<u8>) -> String {
     match decimals {
         Some(decimals) => {
@@ -800,5 +828,24 @@ fn format_decimal(d: &rust_decimal::Decimal, decimals: Option<u8>) -> String {
                 normalized.to_string()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_expression_header_lines;
+
+    #[test]
+    fn expression_header_single_line_when_expression_equals_original() {
+        let mut rows = Vec::new();
+        push_expression_header_lines(&mut rows, "", "3000 * 12", "3000 * 12");
+        assert_eq!(rows, vec!["└─ 3000 * 12"]);
+    }
+
+    #[test]
+    fn expression_header_two_lines_when_simplified_differs_from_source() {
+        let mut rows = Vec::new();
+        push_expression_header_lines(&mut rows, "", "36000", "3000 * 12");
+        assert_eq!(rows, vec!["├─ 36000", "└─ 3000 * 12"]);
     }
 }

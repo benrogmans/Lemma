@@ -2,82 +2,113 @@ use crate::error::Error;
 use crate::limits::ResourceLimits;
 use crate::parsing::ast::{try_parse_type_constraint_command, *};
 use crate::parsing::lexer::{
-    can_be_label, can_be_reference_segment, conversion_target_from_token, is_boolean_keyword,
-    is_calendar_unit_token, is_duration_unit, is_math_function, is_spec_body_keyword,
-    is_structural_keyword, is_type_keyword, token_kind_to_boolean_value,
-    token_kind_to_calendar_unit, token_kind_to_duration_unit, token_kind_to_primitive, Lexer,
-    Token, TokenKind,
+    can_be_label, can_be_reference_segment, can_be_repository_qualifier_segment,
+    conversion_target_from_token, is_boolean_keyword, is_calendar_unit_token, is_duration_unit,
+    is_math_function, is_spec_body_keyword, is_structural_keyword, is_type_keyword,
+    token_kind_to_boolean_value, token_kind_to_calendar_unit, token_kind_to_duration_unit,
+    token_kind_to_primitive, Lexer, Token, TokenKind,
 };
 use crate::parsing::source::Source;
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::sync::Arc;
 
 type TypeArrowChain = (ParentType, Option<SpecRef>, Option<Vec<Constraint>>);
 
+#[derive(Debug)]
 pub struct ParseResult {
-    pub specs: Vec<LemmaSpec>,
+    pub repositories: IndexMap<Arc<LemmaRepository>, Vec<LemmaSpec>>,
     pub expression_count: usize,
+}
+
+impl ParseResult {
+    /// Specs in parse order: repository groups follow declaration order; specs within each group follow source order.
+    #[must_use]
+    pub fn flatten_specs(&self) -> Vec<&LemmaSpec> {
+        self.repositories
+            .values()
+            .flat_map(|specs| specs.iter())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn into_flattened_specs(self) -> Vec<LemmaSpec> {
+        self.repositories.into_values().flatten().collect()
+    }
 }
 
 pub fn parse(
     content: &str,
-    attribute: &str,
+    source_type: crate::parsing::source::SourceType,
     limits: &ResourceLimits,
 ) -> Result<ParseResult, Error> {
-    if content.len() > limits.max_file_size_bytes {
+    if content.len() > limits.max_source_size_bytes {
         return Err(Error::resource_limit_exceeded(
-            "max_file_size_bytes",
+            "max_source_size_bytes",
             format!(
                 "{} bytes ({} MB)",
-                limits.max_file_size_bytes,
-                limits.max_file_size_bytes / (1024 * 1024)
+                limits.max_source_size_bytes,
+                limits.max_source_size_bytes / (1024 * 1024)
             ),
             format!(
                 "{} bytes ({:.2} MB)",
                 content.len(),
                 content.len() as f64 / (1024.0 * 1024.0)
             ),
-            "Reduce file size or split into multiple specs",
+            "Reduce source size or split into multiple specs",
             None,
             None,
             None,
         ));
     }
 
-    let mut parser = Parser::new(content, attribute, limits);
-    let specs = parser.parse_file()?;
+    let mut parser = Parser::new(content, source_type, limits);
+    let repositories = parser.parse_file()?;
     Ok(ParseResult {
-        specs,
+        repositories,
         expression_count: parser.expression_count,
     })
 }
 
 struct Parser {
     lexer: Lexer,
+    source_type: crate::parsing::source::SourceType,
     depth_tracker: DepthTracker,
     expression_count: usize,
     max_expression_count: usize,
     max_spec_name_length: usize,
     max_data_name_length: usize,
     max_rule_name_length: usize,
+    last_span: Span,
 }
 
 impl Parser {
-    fn new(content: &str, attribute: &str, limits: &ResourceLimits) -> Self {
+    fn new(
+        content: &str,
+        source_type: crate::parsing::source::SourceType,
+        limits: &ResourceLimits,
+    ) -> Self {
         Parser {
-            lexer: Lexer::new(content, attribute),
+            lexer: Lexer::new(content, &source_type),
+            source_type,
             depth_tracker: DepthTracker::with_max_depth(limits.max_expression_depth),
             expression_count: 0,
             max_expression_count: limits.max_expression_count,
             max_spec_name_length: crate::limits::MAX_SPEC_NAME_LENGTH,
             max_data_name_length: crate::limits::MAX_DATA_NAME_LENGTH,
             max_rule_name_length: crate::limits::MAX_RULE_NAME_LENGTH,
+            last_span: Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
         }
     }
 
-    fn attribute(&self) -> String {
-        self.lexer.attribute().to_string()
+    fn source_type(&self) -> crate::parsing::source::SourceType {
+        self.source_type.clone()
     }
 
     fn peek(&mut self) -> Result<&Token, Error> {
@@ -85,7 +116,9 @@ impl Parser {
     }
 
     fn next(&mut self) -> Result<Token, Error> {
-        self.lexer.next_token()
+        let token = self.lexer.next_token()?;
+        self.last_span = token.span.clone();
+        Ok(token)
     }
 
     fn at(&mut self, kind: &TokenKind) -> Result<bool, Error> {
@@ -109,7 +142,7 @@ impl Parser {
     fn error_at_token(&self, token: &Token, message: impl Into<String>) -> Error {
         Error::parsing(
             message,
-            Source::new(self.lexer.attribute(), token.span.clone()),
+            Source::new(self.source_type(), token.span.clone()),
             None::<String>,
         )
     }
@@ -122,7 +155,7 @@ impl Parser {
     ) -> Error {
         Error::parsing(
             message,
-            Source::new(self.lexer.attribute(), token.span.clone()),
+            Source::new(self.source_type(), token.span.clone()),
             Some(suggestion),
         )
     }
@@ -139,7 +172,7 @@ impl Parser {
     }
 
     fn make_source(&self, span: Span) -> Source {
-        Source::new(self.lexer.attribute(), span)
+        Source::new(self.source_type(), span)
     }
 
     fn span_from(&self, start: &Span) -> Span {
@@ -166,27 +199,50 @@ impl Parser {
     // Top-level: file and spec
     // ========================================================================
 
-    fn parse_file(&mut self) -> Result<Vec<LemmaSpec>, Error> {
-        let mut specs = Vec::new();
+    fn parse_file(&mut self) -> Result<IndexMap<Arc<LemmaRepository>, Vec<LemmaSpec>>, Error> {
+        let mut map: IndexMap<Arc<LemmaRepository>, Vec<LemmaSpec>> = IndexMap::new();
+        let mut current_repo = Arc::new(LemmaRepository::new(None));
+
         loop {
             if self.at(&TokenKind::Eof)? {
                 break;
             }
-            if self.at(&TokenKind::Spec)? {
-                specs.push(self.parse_spec()?);
-            } else {
-                let token = self.next()?;
-                return Err(self.error_at_token_with_suggestion(
-                    &token,
-                    format!(
-                        "Expected a spec declaration (e.g. 'spec my_spec'), found {}",
-                        token.kind
-                    ),
-                    "A Lemma file must start with 'spec <name>'",
-                ));
+
+            if self.at(&TokenKind::Repo)? {
+                let repo_token = self.expect(&TokenKind::Repo)?;
+                let start_line = repo_token.span.line;
+                let (qualifier, _) = self.parse_repository_qualifier()?;
+                crate::limits::check_max_length(
+                    &qualifier.name,
+                    self.max_spec_name_length,
+                    "repository name",
+                    Some(Source::new(self.source_type(), repo_token.span)),
+                )?;
+                current_repo = Arc::new(
+                    LemmaRepository::new(Some(qualifier.name)).with_start_line(start_line),
+                );
+                map.entry(Arc::clone(&current_repo)).or_default();
+                continue;
             }
+
+            if self.at(&TokenKind::Spec)? {
+                let spec = self.parse_spec()?;
+                map.entry(Arc::clone(&current_repo)).or_default().push(spec);
+                continue;
+            }
+
+            let token = self.next()?;
+            return Err(self.error_at_token_with_suggestion(
+                &token,
+                format!(
+                    "Expected a top-level `repo` or `spec` declaration, found {}",
+                    token.kind
+                ),
+                "Each Lemma file is a sequence of optional `repo <name>` sections followed by `spec <name>` blocks",
+            ));
         }
-        Ok(specs)
+
+        Ok(map)
     }
 
     fn parse_spec(&mut self) -> Result<LemmaSpec, Error> {
@@ -198,16 +254,15 @@ impl Parser {
             &name,
             self.max_spec_name_length,
             "spec",
-            Some(Source::new(self.lexer.attribute(), name_span)),
+            Some(Source::new(self.source_type(), name_span)),
         )?;
 
         let effective_from = self.try_parse_effective_from()?;
 
         let commentary = self.try_parse_commentary()?;
 
-        let attribute = self.attribute();
         let mut spec = LemmaSpec::new(name.clone())
-            .with_attribute(attribute)
+            .with_source_type(self.source_type())
             .with_start_line(start_line);
         spec.effective_from = crate::parsing::ast::EffectiveDate::from_option(effective_from);
 
@@ -245,17 +300,17 @@ impl Parser {
                     let meta = self.parse_meta()?;
                     meta_fields.push(meta);
                 }
-                TokenKind::With => {
-                    let with_datas = self.parse_with_statement()?;
-                    data.extend(with_datas);
+                TokenKind::Uses => {
+                    let uses_data = self.parse_uses_statement()?;
+                    data.extend(uses_data);
                 }
-                TokenKind::Spec | TokenKind::Eof => break,
+                TokenKind::Spec | TokenKind::Repo | TokenKind::Eof => break,
                 _ => {
                     let token = self.next()?;
                     return Err(self.error_at_token_with_suggestion(
                         &token,
                         format!(
-                            "Expected 'data', 'rule', 'meta', 'with', or a new 'spec', found '{}'",
+                            "Expected 'data', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
                             token.text
                         ),
                         "Check the spelling or add the appropriate keyword",
@@ -277,21 +332,23 @@ impl Parser {
         Ok(spec)
     }
 
-    /// Parse a spec name: optional @ prefix, then identifier segments separated by /
-    /// Allows: "myspec", "contracts/employment/jack", "@user/workspace/spec"
+    /// Parse a spec name: identifier segments separated by `/`, `-`, or `.`.
+    ///
+    /// Allows: `my_spec`, `contracts/employment/jack`, `nl.tax.brackets`.
+    /// The `@` prefix is not allowed in spec names — it is valid in
+    /// repository names (`repo @org/name`) and qualifiers (`from @org/name`, `uses @org/name`).
     fn parse_spec_name(&mut self) -> Result<(String, Span), Error> {
-        let mut name = String::new();
-        let start_span;
-
         if self.at(&TokenKind::At)? {
             let at_tok = self.next()?;
-            start_span = at_tok.span.clone();
-            name.push('@');
-        } else {
-            start_span = self.peek()?.span.clone();
+            return Err(Error::parsing(
+                "'@' is not allowed in spec names; it is valid for repository names (`repo @org/name`) and qualifiers (`from @org/name`, `uses @org/name`)",
+                self.make_source(at_tok.span),
+                Some(
+                    "Write `spec my_spec`, then reference registry specs as `uses alias: @org/repo spec_name` or `data x: t from @org/repo source_spec`.",
+                ),
+            ));
         }
 
-        // First segment must be an identifier or a keyword that can serve as name
         let first = self.next()?;
         if !first.kind.is_identifier_like() {
             return Err(self.error_at_token(
@@ -299,58 +356,46 @@ impl Parser {
                 format!("Expected a spec name, found {}", first.kind),
             ));
         }
-        name.push_str(&first.text);
+        let mut name = first.text.clone();
+        let start_span = first.span.clone();
         let mut end_span = first.span.clone();
 
-        // Continue consuming / identifier segments
-        while self.at(&TokenKind::Slash)? {
-            self.next()?; // consume /
-            name.push('/');
-            let seg = self.next()?;
-            if !seg.kind.is_identifier_like() {
-                return Err(self.error_at_token(
-                    &seg,
-                    format!(
-                        "Expected identifier after '/' in spec name, found {}",
-                        seg.kind
-                    ),
-                ));
-            }
-            name.push_str(&seg.text);
-            end_span = seg.span.clone();
-        }
-
-        // Check for hyphen-containing spec names like "my-spec"
-        while self.at(&TokenKind::Minus)? {
-            // Only consume if the next token after minus is an identifier
-            // (hyphenated names like "my-spec")
-            let minus_span = self.peek()?.span.clone();
-            self.next()?; // consume -
-            if let Ok(peeked) = self.peek() {
-                if peeked.kind.is_identifier_like() {
-                    let seg = self.next()?;
-                    name.push('-');
-                    name.push_str(&seg.text);
-                    end_span = seg.span.clone();
-                    // Could be followed by /
-                    while self.at(&TokenKind::Slash)? {
-                        self.next()?; // consume /
-                        name.push('/');
-                        let seg2 = self.next()?;
-                        if !seg2.kind.is_identifier_like() {
-                            return Err(self.error_at_token(
-                                &seg2,
-                                format!(
-                                    "Expected identifier after '/' in spec name, found {}",
-                                    seg2.kind
-                                ),
-                            ));
-                        }
-                        name.push_str(&seg2.text);
-                        end_span = seg2.span.clone();
-                    }
-                } else {
-                    // The minus wasn't part of the name; this is an error
+        loop {
+            if self.at(&TokenKind::Slash)? {
+                self.next()?;
+                let seg = self.next()?;
+                if !seg.kind.is_identifier_like() {
+                    return Err(self.error_at_token(
+                        &seg,
+                        format!(
+                            "Expected identifier after '/' in spec name, found {}",
+                            seg.kind
+                        ),
+                    ));
+                }
+                name.push('/');
+                name.push_str(&seg.text);
+                end_span = seg.span.clone();
+            } else if self.at(&TokenKind::Dot)? {
+                self.next()?;
+                let seg = self.next()?;
+                if !seg.kind.is_identifier_like() {
+                    return Err(self.error_at_token(
+                        &seg,
+                        format!(
+                            "Expected identifier after '.' in spec name, found {}",
+                            seg.kind
+                        ),
+                    ));
+                }
+                name.push('.');
+                name.push_str(&seg.text);
+                end_span = seg.span.clone();
+            } else if self.at(&TokenKind::Minus)? {
+                let minus_span = self.peek()?.span.clone();
+                self.next()?;
+                let peeked = self.peek()?;
+                if !peeked.kind.is_identifier_like() {
                     let span = self.span_covering(&start_span, &minus_span);
                     return Err(Error::parsing(
                         "Trailing '-' after spec name",
@@ -358,11 +403,164 @@ impl Parser {
                         None::<String>,
                     ));
                 }
+                let seg = self.next()?;
+                name.push('-');
+                name.push_str(&seg.text);
+                end_span = seg.span.clone();
+            } else {
+                break;
             }
         }
 
         let full_span = self.span_covering(&start_span, &end_span);
         Ok((name, full_span))
+    }
+
+    /// Parse a repository qualifier: `[@] identifier ((Slash | Dot | Minus) identifier)*`.
+    ///
+    /// The `@` prefix, when present, is included in the name string (e.g. `"@org/repo"`).
+    /// Slashes, dots and minuses between segments are stitched into the name verbatim
+    /// so the qualifier round-trips exactly.
+    ///
+    /// Used in `repo` declarations, registry qualifiers (`from`, `uses`), and data imports from specs.
+    fn parse_repository_qualifier(&mut self) -> Result<(RepositoryQualifier, Span), Error> {
+        let has_at = self.at(&TokenKind::At)?;
+        let start_span = if has_at {
+            let at_tok = self.next()?;
+            at_tok.span.clone()
+        } else {
+            Span {
+                start: 0,
+                end: 0,
+                line: 0,
+                col: 0,
+            }
+        };
+
+        let first = self.next()?;
+        if !can_be_repository_qualifier_segment(&first.kind) {
+            return Err(self.error_at_token(
+                &first,
+                format!(
+                    "Expected a repository qualifier segment, found {}",
+                    first.kind
+                ),
+            ));
+        }
+        if !has_at && is_structural_keyword(&first.kind) {
+            return Err(self.error_at_token(
+                &first,
+                format!(
+                    "'{}' is a reserved keyword and cannot be used as a repository name",
+                    first.text
+                ),
+            ));
+        }
+        let start_span = if has_at {
+            start_span
+        } else {
+            first.span.clone()
+        };
+        let mut name = first.text.clone();
+
+        loop {
+            let next_kind = self.peek()?.kind.clone();
+            match next_kind {
+                TokenKind::Slash => {
+                    self.next()?;
+                    name.push('/');
+                    let seg = self.next()?;
+                    if !can_be_repository_qualifier_segment(&seg.kind) {
+                        return Err(self.error_at_token(
+                            &seg,
+                            format!(
+                                "Expected identifier after '/' in repository qualifier segment, found {}",
+                                seg.kind
+                            ),
+                        ));
+                    }
+                    name.push_str(&seg.text);
+                }
+                TokenKind::Dot => {
+                    self.next()?;
+                    name.push('.');
+                    let seg = self.next()?;
+                    if !can_be_repository_qualifier_segment(&seg.kind) {
+                        return Err(self.error_at_token(
+                            &seg,
+                            format!(
+                                "Expected identifier after '.' in repository qualifier segment, found {}",
+                                seg.kind
+                            ),
+                        ));
+                    }
+                    name.push_str(&seg.text);
+                }
+                TokenKind::Minus => {
+                    let minus_text_peek = self.lexer.peek_second()?;
+                    if !can_be_repository_qualifier_segment(&minus_text_peek.kind) {
+                        break;
+                    }
+                    self.next()?;
+                    name.push('-');
+                    let seg = self.next()?;
+                    name.push_str(&seg.text);
+                }
+                _ => break,
+            }
+        }
+
+        if has_at {
+            name.insert(0, '@');
+        }
+
+        let full_span = self.span_covering(&start_span, &self.last_span);
+        Ok((RepositoryQualifier { name }, full_span))
+    }
+
+    /// Parses `[<repository_qualifier>] <spec> [<effective>]`
+    pub fn parse_spec_ref_target(&mut self) -> Result<SpecRef, Error> {
+        let mut repository = None;
+        let mut repository_span = None;
+
+        if self.at(&TokenKind::At)? {
+            let (q, span) = self.parse_repository_qualifier()?;
+            repository = Some(q);
+            repository_span = Some(span);
+        } else {
+            let saved_state = self.lexer.clone();
+            if let Ok((potential_repository, span)) = self.parse_repository_qualifier() {
+                if let Ok(next_tok) = self.peek() {
+                    if next_tok.kind.is_identifier_like() {
+                        repository = Some(potential_repository);
+                        repository_span = Some(span);
+                    } else {
+                        self.lexer = saved_state;
+                    }
+                } else {
+                    self.lexer = saved_state;
+                }
+            } else {
+                self.lexer = saved_state;
+            }
+        }
+
+        let (spec_name, spec_name_span) = self.parse_spec_name()?;
+        let effective = self.parse_spec_ref_trailing_effective()?;
+        let target_span = self.span_covering(&spec_name_span, &self.last_span);
+
+        let has_repository = repository.is_some();
+        Ok(SpecRef {
+            name: spec_name,
+            repository,
+            effective,
+            repository_span: if has_repository {
+                repository_span
+            } else {
+                None
+            },
+            target_span: Some(target_span),
+        })
     }
 
     fn try_parse_effective_from(&mut self) -> Result<Option<DateTimeValue>, Error> {
@@ -468,41 +666,16 @@ impl Parser {
                 segment,
                 self.max_data_name_length,
                 "data",
-                Some(Source::new(self.lexer.attribute(), start_span.clone())),
+                Some(Source::new(self.source_type(), start_span.clone())),
             )?;
         }
 
-        // `data X from <spec>` -- type import (replaces old `type X from <spec>`)
         if self.at(&TokenKind::From)? {
-            self.next()?; // consume `from`
-            let (from_name, _from_span) = self.parse_spec_name()?;
-            let from_registry = from_name.starts_with('@');
-            let effective = self.parse_spec_ref_trailing_effective()?;
-            let from = SpecRef {
-                name: from_name,
-                from_registry,
-                effective,
-            };
-            let constraints = if self.at(&TokenKind::Arrow)? {
-                let (_, _, constraints) = self.parse_remaining_arrow_chain()?;
-                constraints
-            } else {
-                None
-            };
-            let end_span = self.peek()?.span.clone();
-            let span = self.span_covering(&start_span, &end_span);
-            let source = self.make_source(span);
-            let base = ParentType::Custom {
-                name: reference.name.clone(),
-            };
-            return Ok(LemmaData::new(
-                reference,
-                DataValue::TypeDeclaration {
-                    base,
-                    constraints,
-                    from: Some(from),
-                },
-                source,
+            let from_tok = self.peek()?.clone();
+            return Err(self.error_at_token_with_suggestion(
+                &from_tok,
+                "`data <name> from <spec>` syntax has been removed",
+                "Use `uses` to import a spec, or `data <name>: <type> from [<repository>] <spec> [<effective>]` to import data from another spec.",
             ));
         }
 
@@ -511,8 +684,7 @@ impl Parser {
         let is_binding = !reference.segments.is_empty();
         let value = self.parse_data_value(is_binding)?;
 
-        let end_span = self.peek()?.span.clone();
-        let span = self.span_covering(&start_span, &end_span);
+        let span = self.span_covering(&start_span, &self.last_span);
         let source = self.make_source(span);
 
         Ok(LemmaData::new(reference, value, source))
@@ -566,7 +738,7 @@ impl Parser {
             return Err(self.error_at_token_with_suggestion(
                 &token,
                 "'data ... : spec ...' syntax has been removed",
-                "Use 'with <spec_name>' or 'with <alias>: <spec_name>' instead",
+                "Use 'uses <spec_name>' or 'uses <alias>: <spec_name>' instead",
             ));
         }
 
@@ -603,219 +775,60 @@ impl Parser {
                     "Typedef references must be a single identifier. To reference another data or rule by value, use a dotted path like 'other_spec.name'",
                 ));
             }
-            return Ok(DataValue::TypeDeclaration {
-                base,
+            return Ok(DataValue::Definition {
+                base: Some(base),
                 constraints,
                 from: from_spec,
+                value: None,
             });
         }
 
         // Otherwise, it's a literal value
         let value = self.parse_literal_value()?;
-        Ok(DataValue::Literal(value))
+        Ok(DataValue::Definition {
+            base: None,
+            constraints: None,
+            from: None,
+            value: Some(value),
+        })
     }
 
-    fn parse_with_spec_name(&mut self) -> Result<(String, String), Error> {
-        if self.at(&TokenKind::At)? {
-            let (name, _) = self.parse_spec_name()?;
-            let alias = name.rsplit('/').next().unwrap_or(&name).to_string();
-            return Ok((name, alias));
-        }
-        let first = self.next()?;
-        if !can_be_reference_segment(&first.kind) {
-            return Err(self.error_at_token(
-                &first,
-                format!("Expected a spec name after 'with', found {}", first.kind),
-            ));
-        }
-        let mut name = first.text.clone();
-        while self.at(&TokenKind::Slash)? {
-            self.next()?;
-            name.push('/');
-            let seg = self.next()?;
-            if !seg.kind.is_identifier_like() {
-                return Err(self.error_at_token(
-                    &seg,
-                    format!(
-                        "Expected identifier after '/' in spec name, found {}",
-                        seg.kind
-                    ),
-                ));
-            }
-            name.push_str(&seg.text);
-        }
-        while self.at(&TokenKind::Minus)? {
-            self.next()?;
-            let seg = self.next()?;
-            if !seg.kind.is_identifier_like() {
-                return Err(self.error_at_token(
-                    &seg,
-                    format!(
-                        "Expected identifier after '-' in spec name, found {}",
-                        seg.kind
-                    ),
-                ));
-            }
-            name.push('-');
-            name.push_str(&seg.text);
-            while self.at(&TokenKind::Slash)? {
-                self.next()?;
-                name.push('/');
-                let seg2 = self.next()?;
-                if !seg2.kind.is_identifier_like() {
-                    return Err(self.error_at_token(
-                        &seg2,
-                        format!(
-                            "Expected identifier after '/' in spec name, found {}",
-                            seg2.kind
-                        ),
-                    ));
-                }
-                name.push_str(&seg2.text);
-            }
-        }
-        let alias = name.rsplit('/').next().unwrap_or(&name).to_string();
-        Ok((name, alias))
-    }
+    /// Parse a single `uses` item: `[alias ':'] spec_identifier [effective] [from repository_qualifier]`.
+    fn parse_uses_item(&mut self, start_span: &Span) -> Result<LemmaData, Error> {
+        let alias_marker = if can_be_reference_segment(&self.peek()?.kind)
+            && self.lexer.peek_second()?.kind == TokenKind::Colon
+        {
+            let alias_tok = self.next()?;
+            self.expect(&TokenKind::Colon)?;
+            Some(alias_tok.text)
+        } else {
+            None
+        };
 
-    fn make_with_data(
-        &self,
-        spec_name: String,
-        alias: String,
-        effective: Option<DateTimeValue>,
-        span: &Span,
-    ) -> LemmaData {
-        let from_registry = spec_name.starts_with('@');
-        let source = self.make_source(span.clone());
-        LemmaData::new(
+        let spec_ref = self.parse_spec_ref_target()?;
+        let alias = alias_marker.unwrap_or_else(|| spec_ref.name.clone());
+
+        let span = self.span_covering(start_span, &self.last_span);
+        Ok(LemmaData::new(
             Reference::local(alias),
-            DataValue::SpecReference(SpecRef {
-                name: spec_name,
-                from_registry,
-                effective,
-            }),
-            source,
-        )
+            DataValue::Import(spec_ref),
+            self.make_source(span),
+        ))
     }
 
-    fn parse_with_statement(&mut self) -> Result<Vec<LemmaData>, Error> {
-        let with_token = self.expect(&TokenKind::With)?;
-        let start_span = with_token.span.clone();
+    fn parse_uses_statement(&mut self) -> Result<Vec<LemmaData>, Error> {
+        let uses_token = self.expect(&TokenKind::Uses)?;
+        let start_span = uses_token.span.clone();
 
-        // Check if first token (non-@) is followed by `:` — alias mode, single item
-        if !self.at(&TokenKind::At)? {
-            let first = self.peek()?;
-            if can_be_reference_segment(&first.kind) {
-                let first_text = first.text.clone();
-                // Peek ahead: is the token after the identifier a colon?
-                // We need to consume the identifier to check, then branch.
-                let first_tok = self.next()?;
-                if self.at(&TokenKind::Colon)? {
-                    self.next()?; // consume `:`
-                    let (spec_name, _) = self.parse_spec_name()?;
-                    let effective = self.parse_spec_ref_trailing_effective()?;
-                    let end_span = self.peek()?.span.clone();
-                    let span = self.span_covering(&start_span, &end_span);
-                    return Ok(vec![
-                        self.make_with_data(spec_name, first_text, effective, &span)
-                    ]);
-                }
-                // Not alias mode — re-assemble as spec name. The identifier was consumed,
-                // continue parsing the rest of the spec name from here.
-                let mut name = first_tok.text.clone();
-                while self.at(&TokenKind::Slash)? {
-                    self.next()?;
-                    name.push('/');
-                    let seg = self.next()?;
-                    if !seg.kind.is_identifier_like() {
-                        return Err(self.error_at_token(
-                            &seg,
-                            format!(
-                                "Expected identifier after '/' in spec name, found {}",
-                                seg.kind
-                            ),
-                        ));
-                    }
-                    name.push_str(&seg.text);
-                }
-                while self.at(&TokenKind::Minus)? {
-                    self.next()?;
-                    let seg = self.next()?;
-                    if !seg.kind.is_identifier_like() {
-                        return Err(self.error_at_token(
-                            &seg,
-                            format!(
-                                "Expected identifier after '-' in spec name, found {}",
-                                seg.kind
-                            ),
-                        ));
-                    }
-                    name.push('-');
-                    name.push_str(&seg.text);
-                    while self.at(&TokenKind::Slash)? {
-                        self.next()?;
-                        name.push('/');
-                        let seg2 = self.next()?;
-                        if !seg2.kind.is_identifier_like() {
-                            return Err(self.error_at_token(
-                                &seg2,
-                                format!(
-                                    "Expected identifier after '/' in spec name, found {}",
-                                    seg2.kind
-                                ),
-                            ));
-                        }
-                        name.push_str(&seg2.text);
-                    }
-                }
-                let alias = name.rsplit('/').next().unwrap_or(&name).to_string();
+        let mut results = Vec::new();
+        results.push(self.parse_uses_item(&start_span)?);
 
-                // Comma continuation for bare form
-                if self.at(&TokenKind::Comma)? {
-                    let mut results = Vec::new();
-                    let end_span = self.peek()?.span.clone();
-                    let span = self.span_covering(&start_span, &end_span);
-                    results.push(self.make_with_data(name, alias, None, &span));
-                    while self.at(&TokenKind::Comma)? {
-                        self.next()?; // consume `,`
-                        let (next_name, next_alias) = self.parse_with_spec_name()?;
-                        let end_span = self.peek()?.span.clone();
-                        let span = self.span_covering(&start_span, &end_span);
-                        results.push(self.make_with_data(next_name, next_alias, None, &span));
-                    }
-                    return Ok(results);
-                }
-
-                // Single bare item — may have temporal pin
-                let effective = self.parse_spec_ref_trailing_effective()?;
-                let end_span = self.peek()?.span.clone();
-                let span = self.span_covering(&start_span, &end_span);
-                return Ok(vec![self.make_with_data(name, alias, effective, &span)]);
-            }
+        while self.at(&TokenKind::Comma)? {
+            self.next()?;
+            results.push(self.parse_uses_item(&start_span)?);
         }
 
-        // Starts with `@` — bare registry ref, supports comma continuation
-        let (spec_name, alias) = self.parse_with_spec_name()?;
-
-        if self.at(&TokenKind::Comma)? {
-            let mut results = Vec::new();
-            let end_span = self.peek()?.span.clone();
-            let span = self.span_covering(&start_span, &end_span);
-            results.push(self.make_with_data(spec_name, alias, None, &span));
-            while self.at(&TokenKind::Comma)? {
-                self.next()?;
-                let (next_name, next_alias) = self.parse_with_spec_name()?;
-                let end_span = self.peek()?.span.clone();
-                let span = self.span_covering(&start_span, &end_span);
-                results.push(self.make_with_data(next_name, next_alias, None, &span));
-            }
-            return Ok(results);
-        }
-
-        let effective = self.parse_spec_ref_trailing_effective()?;
-        let end_span = self.peek()?.span.clone();
-        let span = self.span_covering(&start_span, &end_span);
-        Ok(vec![self.make_with_data(spec_name, alias, effective, &span)])
+        Ok(results)
     }
 
     // ========================================================================
@@ -848,7 +861,7 @@ impl Parser {
             &rule_name,
             self.max_rule_name_length,
             "rule",
-            Some(Source::new(self.lexer.attribute(), name_tok.span.clone())),
+            Some(Source::new(self.source_type(), name_tok.span.clone())),
         )?;
 
         self.expect(&TokenKind::Colon)?;
@@ -930,7 +943,8 @@ impl Parser {
         })
     }
 
-    /// Parse a type arrow chain: type_name (-> command)* or type_name from spec (-> command)*
+    /// Parse a type arrow chain: type_name (-> command)*.
+    /// The legacy `type_name from <spec>` form is rejected with a migration error.
     fn parse_type_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
         let name_tok = self.next()?;
         let base = if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
@@ -946,25 +960,16 @@ impl Parser {
             ));
         };
 
-        // Check for 'from' (inline type import)
         let from_spec = if self.at(&TokenKind::From)? {
-            self.next()?; // consume from
-            let (from_name, _) = self.parse_spec_name()?;
-            let from_registry = from_name.starts_with('@');
-            let effective = self.parse_spec_ref_trailing_effective()?;
-            Some(SpecRef {
-                name: from_name,
-                from_registry,
-                effective,
-            })
+            self.next()?;
+            Some(self.parse_spec_ref_target()?)
         } else {
             None
         };
 
-        // Parse arrow chain constraints
         let mut commands = Vec::new();
         while self.at(&TokenKind::Arrow)? {
-            self.next()?; // consume ->
+            self.next()?;
             let (cmd, cmd_args) = self.parse_command()?;
             commands.push((cmd, cmd_args));
         }
@@ -1066,8 +1071,7 @@ impl Parser {
 
         let value = self.parse_meta_value()?;
 
-        let end_span = self.peek()?.span.clone();
-        let span = self.span_covering(&start_span, &end_span);
+        let span = self.span_covering(&start_span, &self.last_span);
 
         Ok(MetaField {
             key,
@@ -1509,8 +1513,8 @@ impl Parser {
             return self.parse_not_expression();
         }
 
-        // base_with_suffix: base_expression followed by optional suffix
-        self.parse_base_with_suffix()
+        // repository_with_suffix: repository_expression followed by optional suffix
+        self.parse_repository_with_suffix()
     }
 
     fn parse_not_expression(&mut self) -> Result<Expression, Error> {
@@ -1534,31 +1538,31 @@ impl Parser {
         )
     }
 
-    fn parse_base_with_suffix(&mut self) -> Result<Expression, Error> {
+    fn parse_repository_with_suffix(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
-        let base = self.parse_base_expression()?;
+        let repository = self.parse_repository_expression()?;
 
         // Check for suffixes
         let peeked = self.peek()?;
 
         // Comparison suffix: >, <, >=, <=, is, is not
         if is_comparison_operator(&peeked.kind) {
-            return self.parse_comparison_suffix(base, start_span);
+            return self.parse_comparison_suffix(repository, start_span);
         }
 
         // "not in calendar <unit>" suffix: expr not in calendar year|month|week
-        // After a base_expression, "not" must be this suffix (prefix "not" is only
+        // After a repository_expression, "not" must be this suffix (prefix "not" is only
         // at and_operand level, and "X and not Y" would have consumed "and" first).
         if peeked.kind == TokenKind::Not {
-            return self.parse_not_in_calendar_suffix(base, start_span);
+            return self.parse_not_in_calendar_suffix(repository, start_span);
         }
 
         // "in" suffix: conversion, date relative, date calendar
         if peeked.kind == TokenKind::In {
-            return self.parse_in_suffix(base, start_span);
+            return self.parse_in_suffix(repository, start_span);
         }
 
-        Ok(base)
+        Ok(repository)
     }
 
     fn parse_comparison_suffix(
@@ -1568,11 +1572,11 @@ impl Parser {
     ) -> Result<Expression, Error> {
         let operator = self.parse_comparison_operator()?;
 
-        // Right side can be: not_expr | base_expression (optionally with "in unit")
+        // Right side can be: not_expr | repository_expression (optionally with "in unit")
         let right = if self.at(&TokenKind::Not)? {
             self.parse_not_expression()?
         } else {
-            let rhs = self.parse_base_expression()?;
+            let rhs = self.parse_repository_expression()?;
             // Check for "in unit" conversion on the rhs
             if self.at(&TokenKind::In)? {
                 self.parse_in_suffix(rhs, start_span.clone())?
@@ -1619,7 +1623,7 @@ impl Parser {
 
     fn parse_not_in_calendar_suffix(
         &mut self,
-        base: Expression,
+        repository: Expression,
         start_span: Span,
     ) -> Result<Expression, Error> {
         self.expect(&TokenKind::Not)?;
@@ -1629,12 +1633,16 @@ impl Parser {
         let end = self.peek()?.span.clone();
         let span = self.span_covering(&start_span, &end);
         self.new_expression(
-            ExpressionKind::DateCalendar(DateCalendarKind::NotIn, unit, Arc::new(base)),
+            ExpressionKind::DateCalendar(DateCalendarKind::NotIn, unit, Arc::new(repository)),
             self.make_source(span),
         )
     }
 
-    fn parse_in_suffix(&mut self, base: Expression, start_span: Span) -> Result<Expression, Error> {
+    fn parse_in_suffix(
+        &mut self,
+        repository: Expression,
+        start_span: Span,
+    ) -> Result<Expression, Error> {
         self.expect(&TokenKind::In)?;
 
         let peeked = self.peek()?;
@@ -1660,7 +1668,7 @@ impl Parser {
                 let end = self.peek()?.span.clone();
                 let span = self.span_covering(&start_span, &end);
                 return self.new_expression(
-                    ExpressionKind::DateCalendar(cal_kind, unit, Arc::new(base)),
+                    ExpressionKind::DateCalendar(cal_kind, unit, Arc::new(repository)),
                     self.make_source(span),
                 );
             }
@@ -1678,7 +1686,7 @@ impl Parser {
                     || can_be_reference_segment(&peek_kind)
                     || is_math_function(&peek_kind)
                 {
-                    Some(Arc::new(self.parse_base_expression()?))
+                    Some(Arc::new(self.parse_repository_expression()?))
                 } else {
                     None
                 }
@@ -1689,7 +1697,7 @@ impl Parser {
             let end = self.peek()?.span.clone();
             let span = self.span_covering(&start_span, &end);
             return self.new_expression(
-                ExpressionKind::DateRelative(rel_kind, Arc::new(base), tolerance),
+                ExpressionKind::DateRelative(rel_kind, Arc::new(repository), tolerance),
                 self.make_source(span),
             );
         }
@@ -1701,7 +1709,7 @@ impl Parser {
             let end = self.peek()?.span.clone();
             let span = self.span_covering(&start_span, &end);
             return self.new_expression(
-                ExpressionKind::DateCalendar(DateCalendarKind::Current, unit, Arc::new(base)),
+                ExpressionKind::DateCalendar(DateCalendarKind::Current, unit, Arc::new(repository)),
                 self.make_source(span),
             );
         }
@@ -1711,7 +1719,7 @@ impl Parser {
         let target = conversion_target_from_token(&target_tok.kind, &target_tok.text);
 
         let converted = self.new_expression(
-            ExpressionKind::UnitConversion(Arc::new(base), target),
+            ExpressionKind::UnitConversion(Arc::new(repository), target),
             self.make_source(self.span_covering(&start_span, &target_tok.span)),
         )?;
 
@@ -1738,7 +1746,7 @@ impl Parser {
     // Arithmetic expressions (precedence climbing)
     // ========================================================================
 
-    fn parse_base_expression(&mut self) -> Result<Expression, Error> {
+    fn parse_repository_expression(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
         let mut left = self.parse_term()?;
 
@@ -1899,7 +1907,7 @@ impl Parser {
         };
 
         self.check_depth()?;
-        let operand = self.parse_base_expression()?;
+        let operand = self.parse_repository_expression()?;
         self.depth_tracker.pop_depth();
 
         let end_span = operand
@@ -1959,8 +1967,7 @@ impl Parser {
             // Reference (identifier, type keyword)
             k if can_be_reference_segment(k) => {
                 let reference = self.parse_expression_reference()?;
-                let end_span = self.peek()?.span.clone();
-                let span = self.span_covering(&start_span, &end_span);
+                let span = self.span_covering(&start_span, &self.last_span);
                 self.new_expression(ExpressionKind::Reference(reference), self.make_source(span))
             }
 

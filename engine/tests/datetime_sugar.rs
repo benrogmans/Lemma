@@ -44,7 +44,9 @@ fn eval_rule_bool(
     effective: &DateTimeValue,
     data: HashMap<String, String>,
 ) -> bool {
-    let response = engine.run(spec_name, Some(effective), data, false).unwrap();
+    let response = engine
+        .run(None, spec_name, Some(effective), data, false)
+        .unwrap();
     let rule_result = response
         .results
         .values()
@@ -63,7 +65,9 @@ fn eval_rule_date(
     effective: &DateTimeValue,
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
-    let response = engine.run(spec_name, Some(effective), data, false).unwrap();
+    let response = engine
+        .run(None, spec_name, Some(effective), data, false)
+        .unwrap();
     response
         .results
         .values()
@@ -87,7 +91,10 @@ spec test
 rule current: now
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 14, 30, 0);
     let lit = eval_rule_date(&engine, "test", "current", &effective, HashMap::new());
@@ -111,7 +118,10 @@ data birth_date: 2000-01-01
 rule age_duration: now - birth_date
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     let lit = eval_rule_date(&engine, "test", "age_duration", &effective, HashMap::new());
@@ -132,7 +142,10 @@ data deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -153,7 +166,10 @@ data deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 5, 1, 0, 0, 0);
     assert!(!eval_rule_bool(
@@ -174,7 +190,10 @@ data threshold: 2026-06-01
 rule is_past_threshold: now > threshold
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let before = make_effective(2026, 3, 1, 0, 0, 0);
@@ -209,7 +228,10 @@ data event_date: 2026-01-15
 rule was_in_past: event_date in past
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -230,7 +252,10 @@ data event_date: 2026-12-25
 rule was_in_past: event_date in past
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -251,7 +276,10 @@ data launch_date: 2026-12-01
 rule is_upcoming: launch_date in future
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -272,7 +300,10 @@ data launch_date: 2025-06-01
 rule is_upcoming: launch_date in future
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -293,7 +324,10 @@ data event_date: 2026-03-07T12:00:00Z
 rule check: event_date in past
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -314,7 +348,10 @@ data event_date: 2026-03-07T12:00:00Z
 rule check: event_date in future
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -339,7 +376,10 @@ data delivered: 2026-03-03
 rule recent_delivery: delivered in past 7 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -360,7 +400,10 @@ data delivered: 2026-02-15
 rule recent_delivery: delivered in past 7 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -381,7 +424,10 @@ data renewal_date: 2026-03-20
 rule upcoming_renewal: renewal_date in future 30 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -402,7 +448,10 @@ data renewal_date: 2026-06-15
 rule upcoming_renewal: renewal_date in future 30 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -423,7 +472,10 @@ data event: 2026-02-28T12:00:00Z
 rule check: event in past 7 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     // now - 7 days = 2026-02-28T12:00:00Z, event == window_start → inclusive
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
@@ -445,7 +497,10 @@ data event: 2026-03-07T10:00:00Z
 rule check: event in past 4 hours
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -466,7 +521,10 @@ data event: 2026-03-07T06:00:00Z
 rule check: event in past 4 hours
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -491,7 +549,10 @@ data invoice_date: 2026-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -512,7 +573,10 @@ data invoice_date: 2025-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -533,7 +597,10 @@ data invoice_date: 2025-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -554,7 +621,10 @@ data invoice_date: 2024-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -575,7 +645,10 @@ data target_date: 2027-06-15
 rule next_year: target_date in future calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -596,7 +669,10 @@ data old_date: 2024-01-01
 rule is_not_this_year: old_date not in calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -617,7 +693,10 @@ data today_date: 2026-03-07
 rule is_not_this_year: today_date not in calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -638,7 +717,10 @@ data payment_date: 2026-03-15
 rule this_month_payment: payment_date in calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -659,7 +741,10 @@ data payment_date: 2026-04-01
 rule this_month_payment: payment_date in calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -680,7 +765,10 @@ data payment_date: 2026-02-15
 rule last_month_payment: payment_date in past calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -701,7 +789,10 @@ data payment_date: 2025-12-15
 rule last_month_payment: payment_date in past calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 1, 15, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -722,7 +813,10 @@ data due_date: 2026-04-15
 rule next_month_due: due_date in future calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -743,7 +837,10 @@ data meeting_date: 2026-03-02
 rule this_week_meeting: meeting_date in calendar week
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     // 2026-03-07 is Saturday, ISO week 10 (Mon Mar 2 - Sun Mar 8)
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
@@ -765,7 +862,10 @@ data meeting_date: 2026-03-15
 rule this_week_meeting: meeting_date in calendar week
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -791,7 +891,10 @@ rule shipping_fee: 15
   unless order_date in past 3 days then 0
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
@@ -812,7 +915,10 @@ rule shipping_fee: 15
   unless order_date in past 3 days then 0
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
@@ -833,7 +939,10 @@ rule is_new_hire: false
   unless hire_date in calendar year then true
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -855,7 +964,10 @@ rule needs_recertification: false
   unless hire_date not in calendar year then true
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -881,7 +993,10 @@ data is_premium: true
 rule qualifies: order_date in past 7 days and is_premium
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -903,7 +1018,10 @@ data is_premium: false
 rule qualifies: order_date in past 7 days and is_premium
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -927,7 +1045,10 @@ rule status: "unknown"
   unless event_date in past 3 days then "recently_completed"
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "status", &effective, HashMap::new());
@@ -951,7 +1072,10 @@ data event_date: date
 rule was_recent: event_date in past 7 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let mut data = HashMap::new();
@@ -974,7 +1098,10 @@ data event_date: date
 rule was_recent: event_date in past 7 days
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let mut data = HashMap::new();
@@ -1001,7 +1128,10 @@ data event_date: 2026-03-07T00:00:00Z
 rule check: event_date in past
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     // effective is 2026-03-07T01:00:00+02:00 = 2026-03-06T23:00:00Z
     // event (UTC midnight Mar 7) is AFTER effective (UTC 23:00 Mar 6)
@@ -1024,7 +1154,10 @@ data event_date: 2026-12-31T23:00:00Z
 rule check: event_date in calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     // effective timezone is +05:00; year boundary ends at 2026-12-31T23:59:59.999999+05:00
     // = 2026-12-31T18:59:59.999999 UTC
@@ -1056,7 +1189,10 @@ data payment_date: 2024-02-29
 rule this_month: payment_date in calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2024, 2, 15, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -1077,7 +1213,10 @@ data event_date: 2026-03-31T23:59:59Z
 rule check: event_date in calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 1, 0, 0, 0);
     assert!(eval_rule_bool(
@@ -1098,7 +1237,10 @@ data event_date: 2026-04-01T00:00:00Z
 rule check: event_date in calendar month
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 15, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -1123,7 +1265,10 @@ data event_date: 2026-03-02T00:00:00Z
 rule check: event_date in calendar week
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     // 2026-03-07 is Saturday, week Mon Mar 2 - Sun Mar 8
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
@@ -1145,7 +1290,10 @@ data event_date: 2026-03-08T23:59:59Z
 rule check: event_date in calendar week
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -1166,7 +1314,10 @@ data event_date: 2026-03-09T00:00:00Z
 rule check: event_date in calendar week
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
@@ -1191,7 +1342,10 @@ data event_date: 2026-01-01T00:00:00Z
 rule check: event_date in calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -1212,7 +1366,10 @@ data event_date: 2025-12-31T23:59:59Z
 rule check: event_date in past calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     assert!(eval_rule_bool(
@@ -1233,7 +1390,10 @@ data event_date: 2025-01-01T00:00:00Z
 rule check: event_date in past calendar year
     "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(

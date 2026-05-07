@@ -16,14 +16,14 @@ spec leaf 2025-07-01
 data rate: text
 
 spec middle 2025-01-01
-with L: leaf
+uses L: leaf
 rule m: L.rate
 
 spec app 2025-01-01
-with M: middle
+uses M: middle
 rule out: M.m
 "#,
-            SourceType::Labeled("chain.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("chain.lemma"))),
         )
         .expect_err("leaf rate type changes across slices");
 

@@ -1,4 +1,4 @@
-spec compensation/base_policy
+spec base_policy
 """
 Corporate Base Compensation Policy
 Foundation for all employee compensation
@@ -26,7 +26,7 @@ rule effective_cola:
   unless cost_of_living_adjustment > 10% then 10%
 
 
-spec compensation/engineering_dept
+spec engineering_dept
 """
 Engineering Department Compensation Rules
 Inherits base policy with engineering-specific bindings
@@ -37,7 +37,7 @@ data level_multiplier   : number -> minimum 0 -> default 1.0
 data performance_rating : number -> minimum 0 -> maximum 5 -> default 0.0
 data years_of_service   : number -> minimum 0 -> default 0
 
-with policy: compensation/base_policy
+uses policy: base_policy
 data policy.bonus_pool_percentage     : 15%
 data policy.cost_of_living_adjustment : 3%
 data policy.stock_grant_percentage    : 5%
@@ -90,7 +90,7 @@ rule total_package:
   total_comp_with_stock + benefits_value
 
 
-spec compensation/senior_engineer
+spec senior_engineer
 """
 Senior Engineer (Level 3) - Specific Employee
 Multiple inheritance levels testing
@@ -100,7 +100,7 @@ data employee_name : "Alex van der Berg"
 data location      : "Amsterdam"
 data location_cola : 15%
 
-with eng_policy: compensation/engineering_dept
+uses eng_policy: engineering_dept
 data eng_policy.level_multiplier   : 2.5
 data eng_policy.performance_rating : 4.2
 data eng_policy.years_of_service   : 7
@@ -153,7 +153,7 @@ rule performance_category:
   unless perf_rating >= 4.5 then "Exceptional"
 
 
-spec compensation/principal_engineer
+spec principal_engineer
 """
 Principal Engineer (Level 5) - Maximum complexity test
 Tests deep inheritance and complex calculations
@@ -167,7 +167,7 @@ data manages_team       : true
 data on_call_rotation   : true
 data team_size          : number -> minimum 0 -> default 15
 
-with eng_policy: compensation/engineering_dept
+uses eng_policy: engineering_dept
 data eng_policy.level_multiplier              : 4.5
 data eng_policy.performance_rating            : 4.8
 data eng_policy.policy.bonus_pool_percentage  : 20%

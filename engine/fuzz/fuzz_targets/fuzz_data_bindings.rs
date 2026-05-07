@@ -16,13 +16,13 @@ rule doubled: x * 2
 "#;
 
         if engine
-            .load(code, lemma::SourceType::Labeled("fuzz_binding"))
+            .load(code, lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_binding"))))
             .is_ok()
         {
             let mut data = HashMap::new();
             data.insert("x".to_string(), s.to_string());
             let now = DateTimeValue::now();
-            let _ = engine.run("fuzz_test", Some(&now), data, false);
+            let _ = engine.run(None, "fuzz_test", Some(&now), data, false);
         }
     }
 });

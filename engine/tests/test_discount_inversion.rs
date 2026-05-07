@@ -18,7 +18,10 @@ fn discount_multiple_paths_to_same_value() {
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
 
     // Query: "What gives me 30% discount?"

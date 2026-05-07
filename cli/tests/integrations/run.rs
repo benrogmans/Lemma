@@ -20,7 +20,10 @@ rule product: x * y
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run").arg(temp_dir.path()).arg("simple_test");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("simple_test");
 
     cmd.assert()
         .success()
@@ -31,7 +34,7 @@ rule product: x * y
 }
 
 #[test]
-fn test_cli_run_with_data_values() {
+fn test_cli_run_set_data_values() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
@@ -45,6 +48,7 @@ rule doubled: base * 2
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("override_test")
         .arg("base=7");
@@ -59,7 +63,10 @@ fn test_cli_run_nonexistent_spec() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run").arg(temp_dir.path()).arg("nonexistent");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("nonexistent");
 
     cmd.assert()
         .failure()
@@ -73,7 +80,7 @@ fn test_cli_run_rejects_dash_source() {
 
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains("stdin is not supported"));
+        .stderr(predicate::str::contains("--prefix"));
 }
 
 #[test]
@@ -92,7 +99,10 @@ rule discount: 0
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run").arg(temp_dir.path()).arg("discount_test");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("discount_test");
 
     cmd.assert()
         .success()
@@ -155,6 +165,51 @@ data y: 2
 }
 
 #[test]
+fn test_cli_list_scopes_main_repository() {
+    let temp_dir = TempDir::new().unwrap();
+
+    fs::write(
+        temp_dir.path().join("named.lemma"),
+        r#"repo deps_repo
+
+spec dep_only
+data d: 1
+"#,
+    )
+    .unwrap();
+
+    fs::write(
+        temp_dir.path().join("workspace.lemma"),
+        r#"spec entry
+data x: 1"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("list").arg(temp_dir.path());
+
+    cmd.assert().success().stdout(
+        predicate::str::contains("entry")
+            .and(predicate::str::contains("Found 1"))
+            .and(predicate::str::contains("Repositories:"))
+            .and(predicate::str::contains("deps_repo"))
+            .and(predicate::str::contains("dep_only").not()),
+    );
+
+    let mut drill = cargo_bin_cmd!("lemma");
+    drill
+        .current_dir(temp_dir.path())
+        .arg("list")
+        .arg("deps_repo");
+
+    drill
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Repository: deps_repo"))
+        .stdout(predicate::str::contains("dep_only"));
+}
+
+#[test]
 fn test_cli_run_with_arithmetic() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
@@ -168,7 +223,10 @@ rule with_tax: price * 1.21
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run").arg(temp_dir.path()).arg("arithmetic_test");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("arithmetic_test");
 
     cmd.assert()
         .success()
@@ -188,7 +246,10 @@ this is not valid lemma syntax
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run").arg(temp_dir.path()).arg("invalid");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("invalid");
 
     cmd.assert()
         .failure()
@@ -228,7 +289,10 @@ also invalid lemma syntax
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("run").arg(temp_dir.path()).arg("valid_spec");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("valid_spec");
 
     let output = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -264,6 +328,7 @@ rule total: a + b + c
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("nested_explanation")
         .arg("--rules=total")
@@ -317,6 +382,7 @@ rule out: true
 
     let mut cmd = cargo_bin_cmd!("lemma");
     cmd.arg("run")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("explain_test")
         .arg("--explain");

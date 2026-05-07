@@ -6,14 +6,15 @@ pub(crate) mod response;
 mod server;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use formatter::Formatter;
-use lemma::parsing::ast::DateTimeValue;
-use lemma::Engine;
+use lemma::parsing::ast::{DateTimeValue, LemmaSpec};
+use lemma::{collect_lemma_sources, Engine};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -39,22 +40,22 @@ enum OutputFormat {
 enum Commands {
     /// Evaluate rules and display results
     ///
-    /// Load a .lemma file or workspace, evaluate the specified spec, and display results.
+    /// Load a workspace (see `--prefix`), evaluate the specified spec, and display results.
     ///
     /// Examples:
-    ///   lemma run tax.lemma income=85000
-    ///   lemma run tax.lemma calculator income=85000
     ///   lemma run calculator income=85000
-    ///   lemma run ./project calculator income=85000
+    ///   lemma run --prefix tax.lemma calculator income=85000
+    ///   lemma run --prefix ./project calculator income=85000
+    ///   lemma run @lemma/std finance
     Run {
-        /// [source] [spec] [name=value ...] — source is a .lemma file or directory
+        /// [repo] [spec] [name=value ...] — optional repository qualifier (e.g. `@org/pkg`), then spec name
         args: Vec<String>,
+        /// Workspace directory or `.lemma` file (default: current directory)
+        #[arg(long, value_name = "PATH")]
+        prefix: Option<PathBuf>,
         /// Rules to evaluate (comma-separated); omit to evaluate all rules
         #[arg(long, value_name = "RULES")]
         rules: Option<String>,
-        /// Invert a rule to find inputs that produce desired output
-        #[arg(short = 't', long)]
-        target: Option<String>,
         /// Output format: table (human-readable) or json (machine-readable)
         #[arg(
             short = 'o',
@@ -79,17 +80,23 @@ enum Commands {
     ///   lemma schema tax.lemma
     ///   lemma schema calculator
     Schema {
-        /// [source] [spec] — source is a .lemma file or directory
+        /// [source] [dependency] — source is a .lemma file or directory
         args: Vec<String>,
         /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
     },
-    /// List all specs with data and rules counts
+    /// List specs in the workspace main repository by default (entry points), plus loaded repositories.
+    /// Positional: optional workspace directory, optional `[REPO]` when the first arg is an explicit path.
+    /// For evaluation use `lemma run --prefix …` (see `lemma run --help`).
+    ///
+    /// Examples:
+    ///   lemma list
+    ///   lemma list @lemma/std
+    ///   lemma list ./project my_org/pkg
     List {
-        /// Workspace directory or .lemma file
-        #[arg(default_value = ".")]
-        source: PathBuf,
+        /// [source] [REPO] — omit source to use cwd; second arg only when source is an explicit path
+        args: Vec<String>,
         /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
@@ -130,14 +137,14 @@ enum Commands {
         #[arg(long)]
         admin: bool,
     },
-    /// Get dependencies from the registry
-    ///
-    /// Without arguments: resolves all @... references in the workspace.
-    /// With a spec: fetches that specific spec from the registry.
-    Get {
-        /// [source] [spec] — spec to fetch (e.g. @user/repo/spec)
+    /// Fetch dependencies from the registry
+    Fetch {
+        /// [source] [dependency] — dependency to fetch (e.g. @user/repo)
         args: Vec<String>,
-        /// Overwrite existing registry specs when content has changed
+        /// Fetch all @... references in the workspace
+        #[arg(short = 'a', long)]
+        all: bool,
+        /// Overwrite existing registry dependencies when content has changed
         #[arg(short = 'f', long)]
         force: bool,
     },
@@ -155,28 +162,65 @@ enum Commands {
     },
 }
 
-struct ParsedTarget {
-    source: PathBuf,
-    spec: Option<String>,
+struct SourceArgs {
+    /// Workspace path: directory, `.lemma` file, or `.` when the user gave only a qualifier.
+    path: PathBuf,
+    /// Spec name (`schema`, `fetch`) or repository qualifier (`list`).
+    qualifier: Option<String>,
+}
+
+/// Positional args for `lemma run`: optional `[repo]`, optional `[spec]`, then `name=value` data.
+/// Workspace root is always `--prefix` (default `.`), never a positional path.
+struct RunArgs {
+    positionals: Vec<String>,
     data: Vec<String>,
 }
 
-fn parse_target(args: &[String]) -> Result<ParsedTarget> {
+fn parse_run_args(arguments: &[String]) -> Result<RunArgs> {
     let mut data = Vec::new();
     let mut positionals = Vec::new();
-    for arg in args {
-        if arg.contains('=') {
-            data.push(arg.clone());
+    for argument in arguments {
+        if argument.contains('=') {
+            data.push(argument.clone());
         } else {
-            if arg == "-" {
+            if argument == "-" {
                 anyhow::bail!(
-                    "`-` is not a valid source path (stdin is not supported); pass a .lemma file or directory"
+                    "`-` is not a valid path (stdin is not supported); use `--prefix` for workspace files"
                 );
             }
-            positionals.push(arg.as_str());
+            positionals.push(argument.to_string());
         }
     }
-    let (source, spec) = match positionals.as_slice() {
+    if positionals.len() > 2 {
+        anyhow::bail!(
+            "Too many positional arguments; expected [repo] [spec], [spec], or [repo] with --interactive (use `--prefix` for workspace path)"
+        );
+    }
+    for pos in &positionals {
+        if Path::new(pos).exists() {
+            anyhow::bail!(
+                "Workspace path must be passed with --prefix {}, not as a bare positional",
+                pos
+            );
+        }
+    }
+    Ok(RunArgs { positionals, data })
+}
+
+fn parse_source_arguments(arguments: &[String]) -> Result<SourceArgs> {
+    let mut positionals = Vec::new();
+    for argument in arguments {
+        if argument.contains('=') {
+            continue;
+        }
+        if argument == "-" {
+            anyhow::bail!(
+                "`-` is not a valid source path (stdin is not supported); pass a .lemma file or directory"
+            );
+        }
+        positionals.push(argument.as_str());
+    }
+    let (path, qualifier) = match positionals.as_slice() {
         [] => (PathBuf::from("."), None),
         [first] => {
             if Path::new(first).exists() {
@@ -193,36 +237,33 @@ fn parse_target(args: &[String]) -> Result<ParsedTarget> {
             }
         }
     };
-    Ok(ParsedTarget { source, spec, data })
+    Ok(SourceArgs { path, qualifier })
 }
 
-/// Resolve spec name: use explicit name, auto-select for single-spec sources,
-/// or error/interactive for multi-spec sources.
-fn resolve_spec(engine: &Engine, spec: Option<&String>, interactive: bool) -> Result<String> {
-    resolve_spec_str(engine, spec.map(|s| s.as_str()), interactive)
-}
-
-fn resolve_spec_str(engine: &Engine, spec: Option<&str>, interactive: bool) -> Result<String> {
+/// Resolve spec name: explicit name wins; single-spec workspaces auto-resolve;
+/// interactive mode yields empty placeholder for multi-spec; otherwise error.
+fn resolve_spec(engine: &Engine, spec: Option<&str>, interactive: bool) -> Result<String> {
     if let Some(name) = spec {
         return Ok(name.to_string());
     }
-    let specs = engine.list_specs();
-    match specs.len() {
+    let workspace = engine.get_workspace();
+    let specification_count = workspace.specs.len();
+    match specification_count {
         0 => anyhow::bail!("No specs found in source"),
-        1 => Ok(specs[0].name.clone()),
+        1 => Ok(workspace.specs[0].name.clone()),
         _ if interactive => Ok(String::new()),
         _ => {
-            let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+            let names: Vec<&str> = workspace.specs.iter().map(|ss| ss.name.as_str()).collect();
             anyhow::bail!(
-                "Source contains multiple specs: {}\n\nUsage: lemma run <source> <spec> [data...]",
+                "Workspace contains multiple specs: {}\n\nUsage: lemma run [repo] <spec> [--prefix PATH] [name=value ...]",
                 names.join(", ")
             );
         }
     }
 }
 
-fn resolve_effective(raw: Option<&String>) -> Result<DateTimeValue> {
-    match raw {
+fn resolve_effective(cli_effective: Option<&String>) -> Result<DateTimeValue> {
+    match cli_effective {
         Some(s) => s
             .parse::<DateTimeValue>()
             .ok()
@@ -237,31 +278,42 @@ fn main() {
     let result: Result<()> = (|| match &cli.command {
         Commands::Run {
             args,
+            prefix,
             rules,
-            target,
             output,
             explain,
             interactive,
             effective,
         } => {
-            let parsed = parse_target(args)?;
+            let parsed_run = parse_run_args(args)?;
+            let workdir = prefix.as_deref().unwrap_or_else(|| Path::new("."));
             run_command(RunOptions {
-                source: &parsed.source,
-                spec_name: parsed.spec.as_ref(),
+                source: workdir,
+                positionals: &parsed_run.positionals,
                 rules: rules.as_ref(),
-                data: &parsed.data,
-                target: target.as_ref(),
+                data: &parsed_run.data,
                 output: *output,
                 explain: *explain,
                 interactive: *interactive,
-                effective_raw: effective.as_ref(),
+                effective: effective.as_ref(),
             })
         }
         Commands::Schema { args, effective } => {
-            let parsed = parse_target(args)?;
-            schema_command(&parsed.source, parsed.spec.as_deref(), effective.as_ref())
+            let source_args = parse_source_arguments(args)?;
+            schema_command(
+                &source_args.path,
+                source_args.qualifier.as_deref(),
+                effective.as_ref(),
+            )
         }
-        Commands::List { source, effective } => list_command(source, effective.as_ref()),
+        Commands::List { args, effective } => {
+            let source_args = parse_source_arguments(args)?;
+            list_command(
+                &source_args.path,
+                source_args.qualifier.as_deref(),
+                effective.as_ref(),
+            )
+        }
         Commands::Server {
             source,
             host,
@@ -273,9 +325,21 @@ fn main() {
             source: workdir,
             admin,
         } => mcp_command(workdir.as_deref(), *admin),
-        Commands::Get { args, force } => {
-            let parsed = parse_target(args)?;
-            get_command(&parsed.source, parsed.spec.as_deref(), *force)
+        Commands::Fetch { args, all, force } => {
+            if args.is_empty() && !*all {
+                let mut cmd = Cli::command();
+                cmd.build();
+                let fetch_cmd = cmd
+                    .find_subcommand_mut("fetch")
+                    .expect("BUG: Cli must define fetch subcommand");
+                let _ = fetch_cmd.print_help();
+                std::process::exit(1);
+            }
+            if !args.is_empty() && *all {
+                anyhow::bail!("Cannot specify both a dependency and --all");
+            }
+            let source_args = parse_source_arguments(args)?;
+            fetch_command(&source_args.path, source_args.qualifier.as_deref(), *force)
         }
         Commands::Format {
             paths,
@@ -292,79 +356,147 @@ fn main() {
 
 struct RunOptions<'a> {
     source: &'a Path,
-    spec_name: Option<&'a String>,
+    positionals: &'a [String],
     rules: Option<&'a String>,
     data: &'a [String],
-    target: Option<&'a String>,
     output: OutputFormat,
     explain: bool,
     interactive: bool,
-    effective_raw: Option<&'a String>,
+    effective: Option<&'a String>,
 }
 
-fn run_command(opts: RunOptions<'_>) -> Result<()> {
-    let now = resolve_effective(opts.effective_raw)?;
+fn run_command(options: RunOptions<'_>) -> Result<()> {
+    let now = resolve_effective(options.effective)?;
     let mut engine = Engine::new();
-    load_workspace(&mut engine, opts.source)?;
+    let _: usize = load_workspace(&mut engine, options.source)?;
 
-    let resolved_spec = resolve_spec(&engine, opts.spec_name, opts.interactive)?;
+    let (repository_qualifier_optional, spec_name_optional) = match options.positionals {
+        [] => (None, None),
+        [one] => {
+            let is_repo = engine.get_repository(one).is_ok();
+            let is_spec = engine.get_workspace().specs.iter().any(|s| s.name == *one);
 
-    let (name, rules, final_data, target) = if opts.interactive {
-        let (parsed_spec, parsed_rules) = if resolved_spec.is_empty() {
-            (None, None)
-        } else {
-            let (name, _) =
-                lemma::parse_spec_set_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
-            (Some(name), opts.rules.map(|r| parse_rule_names(r.as_str())))
-        };
-
-        let cli_data: std::collections::HashMap<String, String> = parse_data_strings(opts.data);
-
-        let (s, r, interactive_data, interactive_target) = interactive::run_interactive(
-            &engine,
-            parsed_spec,
-            parsed_rules,
-            &cli_data,
-            opts.target,
-            &now,
-        )?;
-
-        println!();
-
-        let mut all_data = cli_data;
-        all_data.extend(interactive_data);
-        (s, r.unwrap_or_default(), all_data, interactive_target)
-    } else {
-        lemma::parse_spec_set_id(&resolved_spec).map_err(|e| anyhow::anyhow!("{}", e))?;
-        let rules = opts
-            .rules
-            .map(|r| parse_rule_names(r.as_str()))
-            .unwrap_or_default();
-        let data_values = parse_data_strings(opts.data);
-        (resolved_spec, rules, data_values, None)
+            if is_repo && !is_spec {
+                (Some(one.to_string()), None)
+            } else if is_spec && !is_repo {
+                (None, Some(one.to_string()))
+            } else if is_repo && is_spec {
+                if options.interactive {
+                    anyhow::bail!(
+                        "'{}' resolves to both a repository and a specification. Please specify both [repo] [spec] to disambiguate.",
+                        one
+                    );
+                } else {
+                    (None, Some(one.to_string()))
+                }
+            } else {
+                (None, Some(one.to_string()))
+            }
+        }
+        [repo, spec] => (Some(repo.to_string()), Some(spec.to_string())),
+        _ => unreachable!("Parser ensures <= 2 positionals"),
     };
 
-    if target.is_some() {
-        return Err(anyhow::anyhow!("Inversion not implemented"));
+    if repository_qualifier_optional.is_some()
+        && spec_name_optional.is_none()
+        && !options.interactive
+    {
+        anyhow::bail!(
+            "Repository positional requires a specification name (second argument), or use --interactive"
+        );
     }
 
+    let resolved_spec_name =
+        resolve_spec(&engine, spec_name_optional.as_deref(), options.interactive)?;
+
+    let (repository_qualifier_for_run, spec_set_identifier, rule_names, evaluation_inputs) =
+        if options.interactive {
+            let (interactive_spec_preset, interactive_rules_preset) = if resolved_spec_name
+                .is_empty()
+            {
+                (None, None)
+            } else {
+                let preset_identifier = lemma::spec_set_id::parse_spec_set_id(&resolved_spec_name)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                (
+                    Some(preset_identifier),
+                    options
+                        .rules
+                        .map(|rules_fragment| parse_rule_names(rules_fragment.as_str())),
+                )
+            };
+
+            let command_line_data: HashMap<String, String> = parse_data_strings(options.data);
+
+            let interactive_outcome = interactive::run_interactive(
+                &engine,
+                interactive_spec_preset,
+                interactive_rules_preset,
+                &command_line_data,
+                &now,
+                repository_qualifier_optional.as_deref(),
+            )?;
+
+            let (
+                chosen_repository_qualifier,
+                chosen_specification_name,
+                interactive_rules_selection,
+                prompted_data,
+            ) = interactive_outcome;
+
+            println!();
+
+            let mut merged_inputs = command_line_data;
+            merged_inputs.extend(prompted_data);
+            let interactive_spec_id =
+                lemma::spec_set_id::parse_spec_set_id(&chosen_specification_name)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+            (
+                chosen_repository_qualifier,
+                interactive_spec_id,
+                interactive_rules_selection.unwrap_or_default(),
+                merged_inputs,
+            )
+        } else {
+            let non_interactive_spec_id =
+                lemma::spec_set_id::parse_spec_set_id(&resolved_spec_name)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let rule_names: Vec<String> = options
+                .rules
+                .map(|rules_fragment| parse_rule_names(rules_fragment.as_str()))
+                .unwrap_or_default();
+            let evaluation_inputs = parse_data_strings(options.data);
+            (
+                repository_qualifier_optional,
+                non_interactive_spec_id,
+                rule_names,
+                evaluation_inputs,
+            )
+        };
+
     let mut response = engine
-        .run(&name, Some(&now), final_data, false)
-        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
-    if !rules.is_empty() {
-        response.filter_rules(&rules);
+        .run(
+            repository_qualifier_for_run.as_deref(),
+            &spec_set_identifier,
+            Some(&now),
+            evaluation_inputs,
+            false,
+        )
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    if !rule_names.is_empty() {
+        response.filter_rules(&rule_names);
     }
     let formatter = Formatter;
 
-    match opts.output {
+    match options.output {
         OutputFormat::Table => {
-            print!("{}", formatter.format_response(&response, opts.explain));
+            print!("{}", formatter.format_response(&response, options.explain));
         }
         OutputFormat::Json => {
-            let json = format_response_json(&response, opts.explain, &now);
-            let json_str = serde_json::to_string_pretty(&json)
+            let serialized = response_to_json(&response, options.explain, &now);
+            let json_document = serde_json::to_string_pretty(&serialized)
                 .expect("BUG: failed to serialize response JSON");
-            println!("{}", json_str);
+            println!("{}", json_document);
         }
     }
 
@@ -380,7 +512,7 @@ struct RunOutputJson {
     result: indexmap::IndexMap<String, response::RuleResultJson>,
 }
 
-fn format_response_json(
+fn response_to_json(
     response: &lemma::Response,
     explain: bool,
     effective: &DateTimeValue,
@@ -407,37 +539,128 @@ fn parse_data_strings(data: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn schema_command(source: &Path, spec: Option<&str>, effective_raw: Option<&String>) -> Result<()> {
-    let now = resolve_effective(effective_raw)?;
+fn schema_command(
+    source_path: &Path,
+    specification_name: Option<&str>,
+    effective: Option<&String>,
+) -> Result<()> {
+    let now = resolve_effective(effective)?;
     let mut engine = Engine::new();
-    load_workspace(&mut engine, source)?;
+    let _: usize = load_workspace(&mut engine, source_path)?;
 
-    let spec_name = resolve_spec_str(&engine, spec, false)?;
+    let chosen_specification = resolve_spec(&engine, specification_name, false)?;
     let plan = engine
-        .get_plan(&spec_name, Some(&now))
-        .map_err(|e| anyhow::anyhow!("{}", error_formatter::format_error(&e, engine.sources())))?;
+        .get_plan(None, &chosen_specification, Some(&now))
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let formatter = Formatter;
     print!("{}", formatter.format_spec_inspection(plan));
     Ok(())
 }
 
-fn list_command(source: &Path, effective_raw: Option<&String>) -> Result<()> {
-    let now = resolve_effective(effective_raw)?;
+fn list_command(
+    source_path: &Path,
+    repository_qualifier: Option<&str>,
+    effective: Option<&String>,
+) -> Result<()> {
+    let now = resolve_effective(effective)?;
     let mut engine = Engine::new();
 
-    let file_count = if source.is_file() {
-        1
-    } else {
-        WalkDir::new(source)
-            .into_iter()
-            .flatten()
-            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("lemma"))
-            .count()
-    };
+    let lemma_sources_loaded = load_workspace(&mut engine, source_path)?;
 
-    load_workspace(&mut engine, source)?;
+    let formatter = Formatter;
 
-    let specs = engine.list_specs();
+    match repository_qualifier
+        .map(str::trim)
+        .filter(|qualifier| !qualifier.is_empty())
+    {
+        Some(repository_name) => {
+            let target_repository = engine
+                .get_repository(repository_name)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            print_repo_spec_list(&engine, &formatter, &target_repository, &now)?;
+        }
+        None => {
+            let workspace = engine.get_workspace();
+            let specs = specs_in_repository(&workspace);
+            let schemas: Vec<lemma::SpecSchema> = specs
+                .iter()
+                .filter_map(|spec| {
+                    let effective = spec
+                        .effective_from()
+                        .cloned()
+                        .unwrap_or_else(|| now.clone());
+                    match engine.schema(None, &spec.name, Some(&effective)) {
+                        Ok(schema) => Some(schema),
+                        Err(e) => {
+                            eprintln!(
+                                "warning: failed to generate schema for spec '{}': {}",
+                                spec.name, e
+                            );
+                            None
+                        }
+                    }
+                })
+                .collect();
+
+            let mut repo_rows: Vec<(String, usize)> = Vec::new();
+            for r in engine.list() {
+                if Arc::ptr_eq(&r.repository, &workspace.repository) {
+                    continue;
+                }
+                let label = interactive::repo_label(r.repository.as_ref());
+                let specification_count = specs_in_repository(&r).len();
+                repo_rows.push((label, specification_count));
+            }
+            repo_rows.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let mut output = formatter.format_workspace_summary(lemma_sources_loaded, &schemas);
+            output.push_str(&formatter.format_repositories_summary(&repo_rows));
+            println!("{}", output.trim_end());
+        }
+    }
+
+    Ok(())
+}
+
+fn specs_in_repository(repo: &lemma::ResolvedRepository) -> Vec<Arc<LemmaSpec>> {
+    let mut specs: Vec<Arc<LemmaSpec>> = repo.specs.iter().flat_map(|ss| ss.iter_specs()).collect();
+    specs.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then_with(|| a.effective_from.cmp(&b.effective_from))
+    });
+    specs
+}
+
+fn repository_file_paths(repo: &lemma::ResolvedRepository) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = repo
+        .specs
+        .iter()
+        .flat_map(|ss| ss.iter_specs())
+        .filter_map(|spec| match spec.source_type.as_ref()? {
+            lemma::SourceType::Path(p) => Some((**p).clone()),
+            _ => None,
+        })
+        .collect();
+    paths.sort_unstable_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+    paths.dedup();
+    if paths.is_empty() {
+        if let Some(lemma::SourceType::Path(p)) = repo.repository.source_type.as_ref() {
+            paths.push((**p).clone());
+        }
+    }
+    paths
+}
+
+fn print_repo_spec_list(
+    engine: &Engine,
+    formatter: &Formatter,
+    target_repo: &lemma::ResolvedRepository,
+    now: &lemma::DateTimeValue,
+) -> Result<()> {
+    let repository_label = interactive::repo_label(target_repo.repository.as_ref());
+    let repo_q: Option<&str> = target_repo.repository.name.as_deref();
+    let specs = specs_in_repository(target_repo);
     let schemas: Vec<lemma::SpecSchema> = specs
         .iter()
         .filter_map(|spec| {
@@ -445,16 +668,36 @@ fn list_command(source: &Path, effective_raw: Option<&String>) -> Result<()> {
                 .effective_from()
                 .cloned()
                 .unwrap_or_else(|| now.clone());
-            engine.schema(&spec.name, Some(&effective)).ok()
+            match engine.schema(repo_q, &spec.name, Some(&effective)) {
+                Ok(schema) => Some(schema),
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to generate schema for spec '{}': {}",
+                        spec.name, e
+                    );
+                    None
+                }
+            }
         })
         .collect();
 
-    let formatter = Formatter;
-    println!(
-        "{}",
-        formatter.format_workspace_summary(file_count, &schemas)
-    );
-
+    let mut output = format!("Repository: {}\n", repository_label);
+    let paths = repository_file_paths(target_repo);
+    if paths.is_empty() {
+        output.push_str("  (no file path recorded for this repository)\n");
+    } else {
+        for path_component in paths {
+            let canonical_display_string = path_component
+                .canonicalize()
+                .unwrap_or_else(|_| path_component.to_path_buf())
+                .display()
+                .to_string();
+            output.push_str(&format!("  {}\n", canonical_display_string));
+        }
+    }
+    output.push('\n');
+    output.push_str(&formatter.format_spec_schema_tables(&schemas));
+    println!("{}", output.trim_end());
     Ok(())
 }
 
@@ -469,10 +712,9 @@ fn server_command(
     let rt = Runtime::new()?;
     rt.block_on(async {
         let mut engine = Engine::new();
-        load_workspace(&mut engine, source)?;
+        let _: usize = load_workspace(&mut engine, source)?;
 
-        let spec_names = engine.list_specs();
-        let spec_count = spec_names.len();
+        let spec_count: usize = engine.get_workspace().specs.len();
         println!("Starting HTTP server with {} spec(s) loaded...", spec_count);
         server::http::start_server(
             engine,
@@ -490,56 +732,63 @@ fn server_command(
 fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {
     let mut engine = Engine::new();
     if let Some(path) = workdir {
-        load_workspace(&mut engine, path)?;
+        let _: usize = load_workspace(&mut engine, path)?;
     }
 
     let config = mcp::McpConfig { admin };
 
     eprintln!(
         "Starting MCP server with {} spec(s) loaded",
-        engine.list_specs().len()
+        engine.get_workspace().specs.len()
     );
     mcp::server::start_server(engine, config)?;
     Ok(())
 }
 
-fn get_command(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
+fn fetch_command(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(get_command_async(source, spec_name, force))
+    rt.block_on(fetch_command_async(source, spec_name, force))
 }
 
-async fn get_command_async(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
+async fn fetch_command_async(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
     let registry = make_fetch_registry();
 
     match spec_name {
-        Some(id) => get_single_spec(source, id, &*registry, force).await,
-        None => get_all_workspace_deps(source, &*registry, force).await,
+        Some(id) => fetch_repo(source, id, registry.as_ref(), force).await,
+        None => fetch_workspace_deps(source, registry.as_ref(), force).await,
     }
 }
 
-async fn get_single_spec(
+async fn fetch_repo(
     workdir: &Path,
-    spec_name: &str,
-    registry: &dyn lemma::Registry,
+    raw_id: &str,
+    registry: &dyn lemma::registry::Registry,
     force: bool,
 ) -> Result<()> {
-    if spec_name.is_empty() {
-        anyhow::bail!("Empty spec identifier. Usage: lemma get @user/repo/spec");
+    if raw_id.is_empty() {
+        anyhow::bail!("Empty repo identifier. Usage: lemma fetch @user/repo");
     }
 
     let bundle = registry
-        .get(spec_name)
+        .get(raw_id)
         .await
-        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", spec_name, e.message))?;
+        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", raw_id, e.message))?;
 
-    let attribute = &bundle.attribute;
+    let source_type_str = bundle.source_type.to_string();
+    let attribute = source_type_str.as_str();
     let source_text = &bundle.lemma_source;
-    let deps_dir = lemma_deps_dir(workdir);
+    let deps_dir = lemma::lemma_deps_dir(workdir);
     let limits = lemma::ResourceLimits::default();
 
-    let new_specs = lemma::parse(source_text, attribute, &limits)
-        .map_err(|e| anyhow::anyhow!("Registry returned unparseable spec: {}", e.message()))?
-        .specs;
+    let new_specs = lemma::parse(
+        source_text,
+        lemma::SourceType::Registry(std::sync::Arc::new(
+            lemma::parsing::ast::LemmaRepository::new(Some(raw_id.to_string())),
+        )),
+        &limits,
+    )
+    .map_err(|e| anyhow::anyhow!("Registry returned unparseable dependency: {}", e.message()))?
+    .into_flattened_specs();
     let new_spec_names: std::collections::HashSet<String> =
         new_specs.iter().map(|s| s.name.clone()).collect();
 
@@ -552,14 +801,17 @@ async fn get_single_spec(
             let path = entry.path();
             let existing_content = fs::read_to_string(path)?;
             if existing_content == *source_text {
-                eprintln!("Already up to date: {}.", spec_name);
+                eprintln!("Already up to date: {}.", raw_id);
                 return Ok(());
             }
-            let existing_specs =
-                match lemma::parse(&existing_content, &path.to_string_lossy(), &limits) {
-                    Ok(r) => r.specs,
-                    Err(_) => continue,
-                };
+            let existing_specs = match lemma::parse(
+                &existing_content,
+                lemma::SourceType::Path(Arc::new(path.to_path_buf())),
+                &limits,
+            ) {
+                Ok(r) => r.into_flattened_specs(),
+                Err(_) => continue,
+            };
             let conflict: Vec<&str> = existing_specs
                 .iter()
                 .filter(|s| new_spec_names.contains(&s.name))
@@ -568,7 +820,7 @@ async fn get_single_spec(
             if !conflict.is_empty() {
                 if !force {
                     anyhow::bail!(
-                        "Spec(s) {} already exist in {}.\n\
+                        "Dependency containing spec(s) {} already exists in {}.\n\
                          Content has changed on the registry. Re-run with --force to overwrite.",
                         conflict.join(", "),
                         path.display()
@@ -580,45 +832,51 @@ async fn get_single_spec(
         }
     }
 
-    lemma::parse_spec_set_id(spec_name).map_err(|e| anyhow::anyhow!("{}", e))?;
+    lemma::spec_set_id::parse_spec_set_id(raw_id).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
+    let registry_source = lemma::SourceType::Registry(std::sync::Arc::new(
+        lemma::parsing::ast::LemmaRepository::new(Some(raw_id.to_string())),
+    ));
     engine
-        .load(source_text, lemma::SourceType::Dependency(attribute))
+        .load_batch(
+            HashMap::from([(registry_source, source_text.to_string())]),
+            Some(raw_id),
+        )
         .map_err(|load_err| {
             for e in load_err.iter() {
                 eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
             }
             anyhow::anyhow!(
-                "Planning fetched spec failed ({} error(s))",
+                "Planning fetched dependency failed ({} error(s))",
                 load_err.errors.len()
             )
         })?;
 
-    let now = DateTimeValue::now();
+    let dependency_destination_relative = lemma::relative_dependency_cache_path(attribute);
+    let destination_absolute = deps_dir.join(&dependency_destination_relative);
 
-    let dep_path = dep_file_path(attribute);
-    let dest = deps_dir.join(&dep_path);
-
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
+    if let Some(parent_directory) = destination_absolute.parent() {
+        fs::create_dir_all(parent_directory)?;
     }
-    fs::write(&dest, source_text)?;
+    fs::write(&destination_absolute, source_text)?;
 
-    warn_past_effective(attribute, source_text, &now);
-
-    eprintln!("  fetched: {} -> {}", attribute, dep_path.display());
+    eprintln!(
+        "  fetched: {} -> {}",
+        attribute,
+        dependency_destination_relative.display()
+    );
     Ok(())
 }
 
-async fn get_all_workspace_deps(
+async fn fetch_workspace_deps(
     workdir: &Path,
-    registry: &dyn lemma::Registry,
+    registry: &dyn lemma::registry::Registry,
     force: bool,
 ) -> Result<()> {
     let mut ctx = lemma::engine::Context::new();
-    let mut sources: HashMap<String, String> = HashMap::new();
+    let mut sources: HashMap<lemma::SourceType, String> = HashMap::new();
     let limits = lemma::ResourceLimits::default();
 
     for entry in WalkDir::new(workdir) {
@@ -627,30 +885,37 @@ async fn get_all_workspace_deps(
             continue;
         }
         let path = entry.path();
-        let source_id = path.to_string_lossy().to_string();
         let code = fs::read_to_string(path)?;
-        match lemma::parse(&code, &source_id, &limits) {
+        let source_type = lemma::SourceType::Path(Arc::new(path.to_path_buf()));
+        match lemma::parse(&code, source_type.clone(), &limits) {
             Ok(result) => {
-                for spec in result.specs {
-                    let from_registry = spec.from_registry;
-                    if let Err(e) = ctx.insert_spec(std::sync::Arc::new(spec), from_registry) {
-                        eprintln!("warning: {}", e);
+                for (parsed_repo, specs) in &result.repositories {
+                    let repository_arc = std::sync::Arc::clone(parsed_repo);
+                    for spec in specs {
+                        if let Err(e) = ctx.insert_spec(
+                            std::sync::Arc::clone(&repository_arc),
+                            std::sync::Arc::new(spec.clone()),
+                        ) {
+                            eprintln!("warning: {}", e);
+                        }
                     }
                 }
-                sources.insert(source_id, code);
+                sources.insert(source_type, code);
             }
             Err(e) => {
-                sources.insert(source_id.clone(), code.clone());
+                sources.insert(source_type.clone(), code.clone());
                 eprintln!("{}", error_formatter::format_error(&e, &sources));
                 anyhow::bail!("Parse error in {}", path.display());
             }
         }
     }
 
-    let source_keys_before: std::collections::HashSet<String> = sources.keys().cloned().collect();
+    let local_workspace_sources: std::collections::HashSet<lemma::SourceType> =
+        sources.keys().cloned().collect();
 
     if let Err(errs) =
-        lemma::resolve_registry_references(&mut ctx, &mut sources, registry, &limits).await
+        lemma::registry::resolve_registry_references(&mut ctx, &mut sources, registry, &limits)
+            .await
     {
         for e in &errs {
             eprintln!("{}", error_formatter::format_error(e, &sources));
@@ -658,13 +923,12 @@ async fn get_all_workspace_deps(
         anyhow::bail!("Registry resolution failed ({} error(s))", errs.len());
     }
 
-    let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
+    let mut validate_engine = Engine::new();
     for (source_id, code) in &sources {
-        if source_keys_before.contains(source_id) {
+        if local_workspace_sources.contains(source_id) {
             continue;
         }
-        if let Err(load_err) = engine.load(code, lemma::SourceType::Dependency(source_id)) {
+        if let Err(load_err) = validate_engine.load(code.clone(), source_id.clone()) {
             for e in load_err.iter() {
                 eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
             }
@@ -674,9 +938,7 @@ async fn get_all_workspace_deps(
             );
         }
     }
-    let now = DateTimeValue::now();
-
-    let deps_dir = lemma_deps_dir(workdir);
+    let deps_dir = lemma::lemma_deps_dir(workdir);
 
     // Build index of spec names already on disk
     let mut existing_specs_by_name: HashMap<String, PathBuf> = HashMap::new();
@@ -689,9 +951,27 @@ async fn get_all_workspace_deps(
             }
             let path = entry.path().to_path_buf();
             let content = fs::read_to_string(&path)?;
-            if let Ok(result) = lemma::parse(&content, &path.to_string_lossy(), &limits) {
-                for spec in &result.specs {
-                    existing_specs_by_name.insert(spec.name.clone(), path.clone());
+            match lemma::parse(
+                &content,
+                lemma::SourceType::Path(Arc::new(path.clone())),
+                &limits,
+            ) {
+                Ok(result) => {
+                    for spec in result.flatten_specs() {
+                        existing_specs_by_name.insert(spec.name.clone(), path.clone());
+                    }
+                }
+                Err(e) => {
+                    let mut m = std::collections::HashMap::new();
+                    m.insert(
+                        lemma::SourceType::Path(Arc::new(path.clone())),
+                        content.clone(),
+                    );
+                    eprintln!(
+                        "warning: ignoring invalid cached dependency {}:\n{}",
+                        path.display(),
+                        error_formatter::format_error(&e, &m)
+                    );
                 }
             }
             existing_content_by_path.insert(path, content);
@@ -703,20 +983,25 @@ async fn get_all_workspace_deps(
     let mut removed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for (attribute, source_text) in &sources {
-        if source_keys_before.contains(attribute) {
+        if local_workspace_sources.contains(attribute) {
             continue;
         }
 
         // Check if identical content already on disk
         let already_on_disk = existing_content_by_path.values().any(|c| c == source_text);
-        if already_on_disk {
+        if already_on_disk && !force {
             skipped_count += 1;
             continue;
         }
 
-        let new_specs = match lemma::parse(source_text, attribute, &limits) {
-            Ok(r) => r.specs,
-            Err(_) => continue,
+        let new_specs = match lemma::parse(source_text, attribute.clone(), &limits) {
+            Ok(r) => r.into_flattened_specs(),
+            Err(e) => {
+                let mut m = std::collections::HashMap::new();
+                m.insert(attribute.clone(), source_text.clone());
+                eprintln!("{}", error_formatter::format_error(&e, &m));
+                anyhow::bail!("Parse error in registry dependency {}", attribute);
+            }
         };
 
         // Check for conflicting existing files by spec name
@@ -727,7 +1012,7 @@ async fn get_all_workspace_deps(
                 }
                 if !force {
                     anyhow::bail!(
-                        "Spec {} already exists in {}.\n\
+                        "Dependency containing spec {} already exists in {}.\n\
                          Content has changed on the registry. Re-run with --force to overwrite.",
                         spec.name,
                         old_path.display()
@@ -739,110 +1024,129 @@ async fn get_all_workspace_deps(
             }
         }
 
-        let dep_path = dep_file_path(attribute);
-        let dest = deps_dir.join(&dep_path);
+        let registry_source_identifier_display = attribute.to_string();
 
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
+        let dependency_destination_relative =
+            lemma::relative_dependency_cache_path(&registry_source_identifier_display);
+        let destination_absolute = deps_dir.join(&dependency_destination_relative);
+
+        if let Some(parent_directory) = destination_absolute.parent() {
+            fs::create_dir_all(parent_directory)?;
         }
-        fs::write(&dest, source_text)?;
+        fs::write(&destination_absolute, source_text)?;
         fetched_count += 1;
 
-        warn_past_effective(attribute, source_text, &now);
-
-        eprintln!("  fetched: {} -> {}", attribute, dep_path.display());
+        eprintln!(
+            "  fetched: {} -> {}",
+            registry_source_identifier_display,
+            dependency_destination_relative.display()
+        );
     }
 
-    if fetched_count == 0 && skipped_count == 0 {
-        eprintln!("No registry references found.");
-    } else if fetched_count == 0 {
-        eprintln!("All registry specs are up to date.");
+    let plural = if fetched_count == 1 {
+        "dependency"
     } else {
+        "dependencies"
+    };
+
+    if fetched_count == 0 && skipped_count == 0 {
+        eprintln!("No dependencies found.");
+    } else if fetched_count == 0 {
+        eprintln!("All dependencies are up to date. Use --force to overwrite.");
+    } else if skipped_count > 0 {
         eprintln!(
-            "Fetched {} registry spec(s) ({} already up to date).",
-            fetched_count, skipped_count
+            "Fetched {} {} ({} already up to date).",
+            fetched_count, plural, skipped_count
         );
+    } else {
+        eprintln!("Fetched {} {}.", fetched_count, plural);
     }
 
     Ok(())
 }
 
-pub(crate) fn lemma_deps_dir(workdir: &Path) -> PathBuf {
-    workdir.join(".deps")
-}
-
-/// Build the relative cache path for a fetched registry spec.
-/// Preserves the `@` prefix and `/` directory structure from the attribute.
-fn dep_file_path(attribute: &str) -> PathBuf {
-    let last_slash = attribute.rfind('/');
-    let (dir_part, name_part) = match last_slash {
-        Some(pos) => (&attribute[..pos], &attribute[pos + 1..]),
-        None => ("", attribute),
-    };
-    let filename = format!("{}.lemma", name_part);
-    if dir_part.is_empty() {
-        PathBuf::from(filename)
-    } else {
-        PathBuf::from(dir_part).join(filename)
-    }
-}
-
-fn warn_past_effective(attribute: &str, source_text: &str, now: &DateTimeValue) {
-    let limits = lemma::ResourceLimits::default();
-    let specs = match lemma::parse(source_text, attribute, &limits) {
-        Ok(r) => r.specs,
-        Err(_) => return,
-    };
-    for spec in &specs {
-        if let Some(effective_from) = spec.effective_from() {
-            if *effective_from < *now {
-                eprintln!(
-                    "  warning: {} has effective_from {} (in the past).\n\
-                     \x20          Queries with --effective in [{}, now) may return different results.",
-                    attribute, effective_from, effective_from
-                );
-            }
-        }
-    }
-}
-
 #[cfg(feature = "registry")]
-fn make_fetch_registry() -> Box<dyn lemma::Registry> {
-    Box::new(lemma::LemmaBase::new())
+fn make_fetch_registry() -> Box<dyn lemma::registry::Registry> {
+    Box::new(lemma::registry::LemmaBase::new())
 }
 
 #[cfg(not(feature = "registry"))]
-fn make_fetch_registry() -> Box<dyn lemma::Registry> {
-    eprintln!("Error: `lemma get` requires the `registry` feature.");
+fn make_fetch_registry() -> Box<dyn lemma::registry::Registry> {
+    eprintln!("Error: `lemma fetch` requires the `registry` feature.");
     eprintln!("Recompile with: cargo build --features registry");
     std::process::exit(1);
 }
 
-/// Load specs from a workspace directory (recursive walk) or a single .lemma file.
-/// When given a directory, also picks up cached registry deps in `.deps/`.
-fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
-    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+/// Load specs from a workspace directory (recursive walk) or a single `.lemma` path.
+/// `.deps/` `.lemma` paths load as dependencies with identifiers derived from paths under
+/// `.deps/` (e.g. `.deps/@org/repo.lemma` -> `"@org/repo"`).
+///
+/// Returns rough path-entry count for workspace listing (`1` for single file, else workspace + dep paths seen).
+fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<usize> {
+    let mut workspace_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut deps_paths: Vec<std::path::PathBuf> = Vec::new();
+
     if workdir.is_file() {
-        paths.push(workdir.to_path_buf());
+        workspace_paths.push(workdir.to_path_buf());
     } else {
+        let deps_dir = lemma::lemma_deps_dir(workdir);
         for entry in WalkDir::new(workdir) {
             let entry = entry?;
-            if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-                paths.push(entry.path().to_path_buf());
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+                continue;
+            }
+            if entry.path().starts_with(&deps_dir) {
+                deps_paths.push(entry.path().to_path_buf());
+            } else {
+                workspace_paths.push(entry.path().to_path_buf());
             }
         }
     }
-    if let Err(load_err) = engine.load_from_paths(&paths, false) {
-        for e in load_err.iter() {
-            eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
+
+    let discovered_lemma_source_total: usize = if workdir.is_file() {
+        1
+    } else {
+        workspace_paths.len() + deps_paths.len()
+    };
+
+    for dep_path in &deps_paths {
+        let dependency_id = lemma::dependency_identifier_from_dependency_path(workdir, dep_path);
+        let dependency_sources = match collect_lemma_sources(std::slice::from_ref(dep_path)) {
+            Ok(sources) => sources,
+            Err(read_errors) => return bail_workspace_load_errors(&read_errors),
+        };
+        if let Err(load_failures) = engine.load_batch(dependency_sources, Some(&dependency_id)) {
+            bail_workspace_load_errors(&load_failures)?;
         }
-        anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
     }
-    Ok(())
+    let workspace_sources = match collect_lemma_sources(&workspace_paths) {
+        Ok(sources) => sources,
+        Err(read_errors) => return bail_workspace_load_errors(&read_errors),
+    };
+    if let Err(load_failures) = engine.load_batch(workspace_sources, None) {
+        bail_workspace_load_errors(&load_failures)?;
+    }
+    Ok(discovered_lemma_source_total)
 }
 
-fn parse_rule_names(rules_str: &str) -> Vec<String> {
-    rules_str
+/// Always fails after printing diagnostics. Return type satisfies `Result<usize>` callers.
+fn bail_workspace_load_errors(load_errors: &lemma::Errors) -> anyhow::Result<usize> {
+    let mut emitted_message_keys = std::collections::HashSet::new();
+    let unique_errors: Vec<_> = load_errors
+        .iter()
+        .filter(|report| emitted_message_keys.insert(report.message().to_string()))
+        .collect();
+    for report in &unique_errors {
+        eprintln!(
+            "{}",
+            error_formatter::format_error(report, &load_errors.sources)
+        );
+    }
+    anyhow::bail!("Workspace load failed ({} error(s))", unique_errors.len());
+}
+
+fn parse_rule_names(comma_separated_rules: &str) -> Vec<String> {
+    comma_separated_rules
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -850,7 +1154,8 @@ fn parse_rule_names(rules_str: &str) -> Vec<String> {
 }
 
 /// Collect all .lemma file paths from the given paths (each may be a file or directory).
-fn collect_lemma_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error> {
+/// Collect every `.lemma` filesystem path rooted at the given files or directories.
+fn collect_lemma_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
     for path in paths {
@@ -862,7 +1167,14 @@ fn collect_lemma_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error
                 }
             }
         } else if path.is_dir() {
-            for entry in WalkDir::new(path).into_iter().flatten() {
+            for entry_result in WalkDir::new(path) {
+                let entry = match entry_result {
+                    Ok(e) => e,
+                    Err(e) => {
+                        eprintln!("warning: ignoring directory entry: {}", e);
+                        continue;
+                    }
+                };
                 let p = entry.path();
                 if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("lemma") {
                     if let Ok(canonical) = p.canonicalize() {
@@ -880,7 +1192,7 @@ fn collect_lemma_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>, std::io::Error
 }
 
 fn format_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
-    let files = collect_lemma_files(paths)?;
+    let files = collect_lemma_paths(paths)?;
     let mut any_changed = false;
     let mut parse_errors = 0u32;
 
@@ -893,12 +1205,17 @@ fn format_command(paths: &[PathBuf], check: bool, stdout: bool) -> Result<()> {
                 continue;
             }
         };
-        let attribute = file_path.to_string_lossy().to_string();
-        let formatted = match lemma::format_source(&source, &attribute) {
+        let formatted = match lemma::format_source(
+            &source,
+            lemma::SourceType::Path(std::sync::Arc::new(file_path.clone())),
+        ) {
             Ok(s) => s,
             Err(e) => {
                 let mut m = std::collections::HashMap::new();
-                m.insert(attribute.clone(), source.clone());
+                m.insert(
+                    lemma::SourceType::Path(std::sync::Arc::new(file_path.clone())),
+                    source.clone(),
+                );
                 eprintln!("{}", error_formatter::format_error(&e, &m));
                 parse_errors += 1;
                 continue;

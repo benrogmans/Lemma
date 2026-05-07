@@ -23,12 +23,15 @@ rule is_adult: age >= 18
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("age_check", Some(&now), HashMap::new(), false)
+        .run(None, "age_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -55,12 +58,15 @@ rule is_valid: value > 0
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("validation", Some(&now), HashMap::new(), false)
+        .run(None, "validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -85,12 +91,15 @@ rule is_adult: age >= 18
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("age_check", Some(&now), HashMap::new(), false)
+        .run(None, "age_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -117,12 +126,15 @@ rule eligible: age >= 18 and score >= 80
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("validation", Some(&now), HashMap::new(), false)
+        .run(None, "validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -151,12 +163,15 @@ rule eligible: age >= 18 and score >= 80
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("validation", Some(&now), HashMap::new(), false)
+        .run(None, "validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -184,12 +199,15 @@ rule valid_compensation: salary >= 40000
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("salary_check", Some(&now), HashMap::new(), false)
+        .run(None, "salary_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -220,12 +238,15 @@ rule can_drive: age >= 16
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("mixed_validation", Some(&now), HashMap::new(), false)
+        .run(None, "mixed_validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -250,12 +271,15 @@ rule can_ship: package_weight <= 50
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("weight_check", Some(&now), HashMap::new(), false)
+        .run(None, "weight_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -282,12 +306,15 @@ rule is_affordable: price <= 1000
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("pricing_check", Some(&now), HashMap::new(), false)
+        .run(None, "pricing_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -315,12 +342,15 @@ rule is_valid_date: event_date >= min_date
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("date_validation", Some(&now), HashMap::new(), false)
+        .run(None, "date_validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -347,12 +377,15 @@ rule is_complete: completion >= 95%
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("completion_check", Some(&now), HashMap::new(), false)
+        .run(None, "completion_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -381,12 +414,15 @@ rule eligible: has_permission
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("eligibility", Some(&now), HashMap::new(), false)
+        .run(None, "eligibility", Some(&now), HashMap::new(), false)
         .unwrap();
     let eligible_result = response
         .results
@@ -414,12 +450,15 @@ rule within_budget: expenses < income
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("budget_check", Some(&now), HashMap::new(), false)
+        .run(None, "budget_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -446,12 +485,15 @@ rule is_active: status is "active"
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("status_check", Some(&now), HashMap::new(), false)
+        .run(None, "status_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -480,12 +522,15 @@ rule double_value: value * 2
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("multi_rule", Some(&now), HashMap::new(), false)
+        .run(None, "multi_rule", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let check_positive = response
@@ -516,10 +561,8 @@ rule double_value: value * 2
         .find(|r| r.rule.name == "double_value")
         .unwrap();
     assert_eq!(
-        double_value.result,
-        OperationResult::Value(Box::new(LiteralValue::number(
-            Decimal::from_str("-20.0").unwrap()
-        )))
+        double_value.result.value().unwrap().to_string(),
+        LiteralValue::number(Decimal::from_str("-20.0").unwrap()).to_string(),
     );
 }
 
@@ -534,12 +577,15 @@ rule valid: age >= 18
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("special_chars", Some(&now), HashMap::new(), false)
+        .run(None, "special_chars", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -573,12 +619,15 @@ rule valid: value > 0
 
     let mut engine = Engine::new();
     engine
-        .load(&code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            &code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("long_message", Some(&now), HashMap::new(), false)
+        .run(None, "long_message", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -606,12 +655,15 @@ rule check: value > 10
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("priority_test", Some(&now), HashMap::new(), false)
+        .run(None, "priority_test", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -640,12 +692,15 @@ rule eligible: age >= 18
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("multi_unless", Some(&now), HashMap::new(), false)
+        .run(None, "multi_unless", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -672,12 +727,15 @@ rule can_proceed: true
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("negation_test", Some(&now), HashMap::new(), false)
+        .run(None, "negation_test", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results

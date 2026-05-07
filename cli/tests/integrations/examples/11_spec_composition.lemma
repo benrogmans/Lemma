@@ -1,4 +1,6 @@
-spec pricing/base_config
+repo spec_composition
+
+spec base_config
 """
 Base Pricing Configuration
 
@@ -19,7 +21,7 @@ rule final_price:
   base_price * (1 - standard_discount) * (1 + tax_rate)
 
 
-spec pricing/wholesale
+spec wholesale
 """
 Wholesale Pricing
 
@@ -46,7 +48,7 @@ rule margin_savings:
   100 - base_price
 
 
-spec pricing/retail
+spec retail
 """
 Retail Pricing
 
@@ -73,7 +75,7 @@ rule premium_multiplier:
   base_price / 100
 
 
-spec order/line_item
+spec line_item
 """
 Order Line Item
 
@@ -83,7 +85,7 @@ Demonstrates nested spec references and multi-level data access.
 
 data quantity : number -> minimum 0 -> default 10
 
-with pricing: pricing/base_config
+uses pricing: base_config
 
 rule line_total:
   pricing.final_price * quantity
@@ -92,7 +94,7 @@ rule has_discount:
   pricing.standard_discount > 0%
 
 
-spec order/simple_order
+spec simple_order
 """
 Simple Order
 
@@ -100,7 +102,7 @@ References an order line item and overrides its literal data.
 Demonstrates literal bindings through nested spec references.
 """
 
-with line: order/line_item
+uses line: line_item
 data line.quantity : 100
 
 rule order_total:
@@ -110,29 +112,27 @@ rule effective_unit_price:
   order_total / line.quantity
 
 
-spec complex/multi_reference
+spec multi_reference
 """
-Multiple Spec References
+Multiple Page References
 
 Shows multiple independent spec references in a single spec.
 Demonstrates mixing different base specs for complex scenarios.
 """
 
-with pricing/base_config
-
-with retail_config: pricing/retail
-
-with wholesale_config: pricing/wholesale
+uses base_config
+uses retail
+uses wholesale
 
 rule avg_discount:
-  (wholesale_config.standard_discount
-  + retail_config.standard_discount
+  (wholesale.standard_discount
+  + retail.standard_discount
   + base_config.standard_discount)
   / 3
 
 rule price_range:
-  retail_config.retail_final
-  - wholesale_config.wholesale_final
+  retail.retail_final
+  - wholesale.wholesale_final
 
 rule all_configs_loaded:
-  wholesale_config.wholesale_final > 0 and retail_config.retail_final > 0 and base_config.final_price > 0
+  wholesale.wholesale_final > 0 and retail.retail_final > 0 and base_config.final_price > 0

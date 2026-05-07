@@ -51,7 +51,7 @@ Lemma is not "interpret rules line by line in order." It is a **compiled pipelin
 
 ### 2.1 Temporality, composition, and dependency interfaces (cornerstone)
 
-A **spec** is a namespace of **data** (inputs / parameters), **rules** (derived values), and **user-defined types**. **Data imports** (`data money from dep_spec`, or from a registry bundle) tie the consumer to another spec's **type definitions**; they follow the same **temporal range** and **reference** rules as `with` references (see below). **Slice-interface** validation ensures the **data, referenced rules, and named types** the consumer actually uses stay **compatible** across the consumer's temporal slices.
+A **spec** is a namespace of **data** (inputs / parameters), **rules** (derived values), and **user-defined types**. **Data imports** (`data money from dep_spec`, or from a registry bundle) tie the consumer to another spec's **type definitions**; they follow the same **temporal range** and **reference** rules as `uses` references (see below). **Slice-interface** validation ensures the **data, referenced rules, and named types** the consumer actually uses stay **compatible** across the consumer's temporal slices.
 
 Lemma's approach to **time** and **composition** is one story: every context has a **temporal range** that decides which temporal versions of dependencies are visible; composable references (data, rules, **and** imported types) express that wiring; the engine checks **contract stability** across slices when an **unqualified** reference spans multiple dependency versions.
 
@@ -69,11 +69,11 @@ Every planning / evaluation context carries a **temporal range**. It bounds **wh
 
 #### Composability and how references resolve
 
-- Specs **reference** other specs (`with dep: other`) and **import types** from them (`data name from dep_spec`) or from registry sources. **Hierarchical** names (e.g. `company/policies/pricing`) organize namespaces; they are not a second versioning mechanism.
+- Specs **reference** other specs (`uses dep: other`) and **import types** from them (`data name from dep_spec`) or from registry sources. **Hierarchical** names (e.g. `company/policies/pricing`) organize namespaces; they are not a second versioning mechanism.
 
-**Unqualified reference** (`with dep` with **no** datetime on the reference): the consumer sees **every** temporal version of **`dep`** whose **temporal range** **intersects** the **consumer's** temporal range (§2.1 **Temporal range**). That intersection is what can yield **multiple** resolved bodies over the consumer's lifetime.
+**Unqualified reference** (`uses dep` with **no** datetime on the reference): the consumer sees **every** temporal version of **`dep`** whose **temporal range** **intersects** the **consumer's** temporal range (§2.1 **Temporal range**). That intersection is what can yield **multiple** resolved bodies over the consumer's lifetime.
 
-**Qualified reference** (`with dep 2025-06-01`): **point-in-time**. The engine selects the **one** temporal version of **`dep`** active at that instant and resolves **`dep`'s entire transitive subtree** at **that same instant**—not over the consumer's range.
+**Qualified reference** (`uses dep 2025-06-01`): **point-in-time**. The engine selects the **one** temporal version of **`dep`** active at that instant and resolves **`dep`'s entire transitive subtree** at **that same instant**—not over the consumer's range.
 
 #### Temporal slicing (consequence of unqualified references)
 
@@ -98,7 +98,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
   ```lemma
   spec app 2025-01-01
-  with d: dep
+  uses d: dep
   rule x: d.rate
 
   spec dep 2025-07-01
@@ -109,7 +109,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
   If instead `dep` had a row for January and a row for July with **different** `rate` **types** or a **removed** `rate` in one slice, coverage might succeed but **slice-interface** validation could still **fail**—that is the separate "contract unchanged across slices" check.
 
-  **Qualified reference:** `with d: dep 2025-08-01` resolves **`dep`** (and **`dep`'s** transitive dependencies) at **2025-08-01** only. The consumer's own temporal range no longer drives which **`dep`** bodies appear for that edge; slice boundaries from **`dep`'s** timeline still apply to **other** unqualified links in the graph as usual.
+  **Qualified reference:** `uses d: dep 2025-08-01` resolves **`dep`** (and **`dep`'s** transitive dependencies) at **2025-08-01** only. The consumer's own temporal range no longer drives which **`dep`** bodies appear for that edge; slice boundaries from **`dep`'s** timeline still apply to **other** unqualified links in the graph as usual.
 
 ### 2.2 Declarative rules: default / unless
 
@@ -135,7 +135,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
 ### 2.6 Registry vs engine boundary
 
-- The **engine does not fetch the network**. `@…` registry references are **resolved externally** (CLI `lemma get`, embedders calling `resolve_registry_references`, WASM with `fetch`), then **loaded** as sources. This keeps evaluation **pure** and deployments **predictable**.
+- The **engine does not fetch the network**. `@…` registry references are **resolved externally** (CLI `lemma fetch`, embedders calling `resolve_registry_references`, WASM with `fetch`), then **loaded** as sources. This keeps evaluation **pure** and deployments **predictable**.
 
 ### 2.7 Implementation stack (codebase)
 
@@ -182,7 +182,7 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 
 ### 3.5 Composition and naming
 
-- **Spec references** (`with parent` / `with child: parent`) compose policies from smaller specs; this is the **mechanism** by which temporality is chained (§2.1). **Unqualified** `with parent` resolves **all** temporal versions of `parent` that **intersect** the referencing spec's **temporal range**; **qualified** `with parent 2025-06-01` resolves `parent` and its subtree at **that instant** only.
+- **Spec references** (`uses parent` / `uses child: parent`) compose policies from smaller specs; this is the **mechanism** by which temporality is chained (§2.1). **Unqualified** `uses parent` resolves **all** temporal versions of `parent` that **intersect** the referencing spec's **temporal range**; **qualified** `uses parent 2025-06-01` resolves `parent` and its subtree at **that instant** only.
 - **Hierarchical** spec names (paths / segments) for organization.
 - **Registry references** `@org/path/spec` for shared libraries ([registry.md](registry.md)).
 

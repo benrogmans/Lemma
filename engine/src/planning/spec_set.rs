@@ -1,7 +1,7 @@
-//! Source-level grouping: all specs sharing a name, keyed by effective_from.
+//! Source-level grouping: specs sharing a name, keyed by effective_from.
 
 use crate::engine::Context;
-use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaSpec};
+use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -78,17 +78,37 @@ impl TemporalBound {
     }
 }
 
-/// All specs sharing a name, keyed by effective_from.
+/// All spec versions sharing a (repository, name) identity, keyed by effective_from.
+///
+/// The owning [`LemmaRepository`] is held by `Arc` so the set carries repository identity as
+/// a real memory reference instead of relying on string parsing.
 #[derive(Debug, Clone)]
 pub struct LemmaSpecSet {
+    pub repository: Arc<LemmaRepository>,
     pub name: String,
     specs: BTreeMap<EffectiveDate, Arc<LemmaSpec>>,
 }
 
+impl serde::Serialize for LemmaSpecSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("LemmaSpecSet", 3)?;
+        state.serialize_field("repository", &self.repository)?;
+        state.serialize_field("name", &self.name)?;
+        let specs: Vec<_> = self.iter_specs().collect();
+        state.serialize_field("specs", &specs)?;
+        state.end()
+    }
+}
+
 impl LemmaSpecSet {
     #[must_use]
-    pub fn new(name: String) -> Self {
+    pub fn new(repository: Arc<LemmaRepository>, name: String) -> Self {
         Self {
+            repository,
             name,
             specs: BTreeMap::new(),
         }
@@ -291,6 +311,10 @@ mod tests {
     use super::*;
     use crate::parsing::ast::LemmaSpec;
 
+    fn main_repository() -> Arc<LemmaRepository> {
+        Arc::new(LemmaRepository::new(None))
+    }
+
     fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         DateTimeValue {
             year,
@@ -316,7 +340,7 @@ mod tests {
 
     #[test]
     fn effective_range_unbounded_single_spec() {
-        let mut ss = LemmaSpecSet::new("a".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "a".to_string());
         let spec = Arc::new(make_spec("a"));
         assert!(ss.insert(Arc::clone(&spec)));
 
@@ -327,7 +351,7 @@ mod tests {
 
     #[test]
     fn effective_range_soft_end_from_next_spec() {
-        let mut ss = LemmaSpecSet::new("a".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "a".to_string());
         let v1 = Arc::new(make_spec_with_range("a", Some(date(2025, 1, 1))));
         let v2 = Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1))));
         assert!(ss.insert(Arc::clone(&v1)));
@@ -347,7 +371,7 @@ mod tests {
     /// next row begins; the latest row's `effective_to` is `None`.
     #[test]
     fn iter_with_ranges_yields_specs_paired_with_half_open_range() {
-        let mut ss = LemmaSpecSet::new("a".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "a".to_string());
         let earlier = Arc::new(make_spec_with_range("a", Some(date(2025, 1, 1))));
         let latest = Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1))));
         assert!(ss.insert(Arc::clone(&earlier)));
@@ -376,7 +400,7 @@ mod tests {
 
     #[test]
     fn effective_range_unbounded_start_with_successor() {
-        let mut ss = LemmaSpecSet::new("a".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "a".to_string());
         let v1 = Arc::new(make_spec("a"));
         let v2 = Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1))));
         assert!(ss.insert(Arc::clone(&v1)));
@@ -389,14 +413,14 @@ mod tests {
 
     #[test]
     fn temporal_boundaries_single_spec() {
-        let mut ss = LemmaSpecSet::new("a".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "a".to_string());
         assert!(ss.insert(Arc::new(make_spec("a"))));
         assert!(ss.temporal_boundaries().is_empty());
     }
 
     #[test]
     fn temporal_boundaries_multiple_specs() {
-        let mut ss = LemmaSpecSet::new("a".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "a".to_string());
         assert!(ss.insert(Arc::new(make_spec("a"))));
         assert!(ss.insert(Arc::new(make_spec_with_range("a", Some(date(2025, 3, 1))))));
         assert!(ss.insert(Arc::new(make_spec_with_range("a", Some(date(2025, 6, 1))))));
@@ -409,14 +433,14 @@ mod tests {
 
     #[test]
     fn coverage_empty_set_is_full_gap() {
-        let ss = LemmaSpecSet::new("missing".to_string());
+        let ss = LemmaSpecSet::new(main_repository(), "missing".to_string());
         let gaps = ss.coverage_gaps(Some(&date(2025, 1, 1)), Some(&date(2025, 6, 1)));
         assert_eq!(gaps, vec![(Some(date(2025, 1, 1)), Some(date(2025, 6, 1)))]);
     }
 
     #[test]
     fn coverage_single_unbounded_spec_covers_everything() {
-        let mut ss = LemmaSpecSet::new("dep".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "dep".to_string());
         assert!(ss.insert(Arc::new(make_spec("dep"))));
 
         assert!(ss.coverage_gaps(None, None).is_empty());
@@ -427,7 +451,7 @@ mod tests {
 
     #[test]
     fn coverage_single_spec_with_from_leaves_leading_gap() {
-        let mut ss = LemmaSpecSet::new("dep".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "dep".to_string());
         assert!(ss.insert(Arc::new(make_spec_with_range(
             "dep",
             Some(date(2025, 3, 1))
@@ -441,7 +465,7 @@ mod tests {
 
     #[test]
     fn coverage_continuous_specs_no_gaps() {
-        let mut ss = LemmaSpecSet::new("dep".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "dep".to_string());
         assert!(ss.insert(Arc::new(make_spec_with_range(
             "dep",
             Some(date(2025, 1, 1))
@@ -458,7 +482,7 @@ mod tests {
 
     #[test]
     fn coverage_dep_starts_after_required_start() {
-        let mut ss = LemmaSpecSet::new("dep".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "dep".to_string());
         assert!(ss.insert(Arc::new(make_spec_with_range(
             "dep",
             Some(date(2025, 6, 1))
@@ -472,7 +496,7 @@ mod tests {
 
     #[test]
     fn coverage_unbounded_required_range() {
-        let mut ss = LemmaSpecSet::new("dep".to_string());
+        let mut ss = LemmaSpecSet::new(main_repository(), "dep".to_string());
         assert!(ss.insert(Arc::new(make_spec_with_range(
             "dep",
             Some(date(2025, 6, 1))

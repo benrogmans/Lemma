@@ -35,19 +35,24 @@ spec law
 data other: number -> default 42
 
 spec license
-with l: law
+uses l: law
 data license2: l.other
 rule check: license2 > 10
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("license", Some(&now), HashMap::new(), false)
+        .run(None, "license", Some(&now), HashMap::new(), false)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "check"), "true");
@@ -60,24 +65,29 @@ spec law
 data other: number -> default 99
 
 spec inner
-with l: law
+uses l: law
 data slot: number
 
 spec top
-with lic: inner
-with lw: law
+uses lic: inner
+uses lw: law
 data lic.slot: lw.other
 rule answer: lic.slot
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "answer"), "99");
@@ -90,14 +100,19 @@ spec law
 data other: number -> default 42
 
 spec license
-with l: law
+uses l: law
 data license2: l.other
 rule check: license2
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -105,7 +120,7 @@ rule check: license2
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("license", Some(&now), data, false)
+        .run(None, "license", Some(&now), data, false)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "check"), "777");
@@ -118,23 +133,28 @@ spec base
 data other: number -> default 5
 
 spec mid
-with b: base
+uses b: base
 data m2: b.other
 
 spec top
-with mm: mid
+uses mm: mid
 data t2: mm.m2
 rule result: t2
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "result"), "5");
@@ -153,13 +173,18 @@ data a: number
 data b: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.a: i.b
 data i.b: i.a
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("Circular data reference"),
@@ -176,12 +201,17 @@ spec inner
 data x: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.x: i.x
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("Circular data reference"),
@@ -199,7 +229,12 @@ rule r: b
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("'a' is not a spec reference")
@@ -218,13 +253,18 @@ spec inner
 data x: number -> default 1
 
 spec outer
-with i: inner
+uses i: inner
 data copy_of_i: i
 rule r: copy_of_i
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("is a spec reference and cannot carry a value"),
@@ -242,13 +282,18 @@ data conflict: number -> default 1
 rule conflict: 2
 
 spec outer
-with i: inner
+uses i: inner
 data c: i.conflict
 rule r: c
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("is ambiguous"),
@@ -270,14 +315,19 @@ spec source_spec
 data s: text -> default "hello"
 
 spec outer
-with i: inner
-with src: source_spec
+uses i: inner
+uses src: source_spec
 data i.n: src.s
 rule r: i.n
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("type mismatch"),
@@ -297,19 +347,24 @@ spec inner
 rule my_r: 42
 
 spec top
-with i: inner
+uses i: inner
 data x: i.my_r
 rule out: x
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("rule-target reference must be accepted at plan time");
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("must evaluate without error");
 
     assert_eq!(rule_value(&result, "out"), "42");
@@ -326,19 +381,24 @@ data denom: number -> default 0
 rule divided: 10 / denom
 
 spec top
-with i: inner
+uses i: inner
 data x: i.divided
 rule out: x
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("rule-target reference must be accepted at plan time");
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = result
@@ -371,13 +431,18 @@ spec inner
 data slot: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.slot: r
 rule r: i.slot
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.to_lowercase().contains("circular") || joined.to_lowercase().contains("cycle"),
@@ -400,14 +465,19 @@ spec source_spec
 rule greeting: "hello"
 
 spec outer
-with i: inner
-with src: source_spec
+uses i: inner
+uses src: source_spec
 data i.v: src.greeting
 rule r: i.v
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, lemma::SourceType::Labeled("reference.lemma")));
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
 
     assert!(
         joined.contains("type mismatch"),
@@ -432,23 +502,28 @@ spec inner
 rule my_r: 42
 
 spec mid
-with i: inner
+uses i: inner
 data x: i.my_r
 
 spec top
-with m: mid
+uses m: mid
 data y: m.x
 rule out: y
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("rule-target reference chain must be accepted at plan time");
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("must evaluate without error");
 
     assert_eq!(rule_value(&result, "out"), "42");
@@ -466,21 +541,26 @@ spec inner
 rule my_r: 42
 
 spec top
-with i: inner
+uses i: inner
 data x: i.my_r
 rule out: x
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("rule-target reference must be accepted at plan time");
 
     let now = DateTimeValue::now();
     let mut overrides = HashMap::new();
     overrides.insert("x".to_string(), "99".to_string());
     let result = engine
-        .run("top", Some(&now), overrides, false)
+        .run(None, "top", Some(&now), overrides, false)
         .expect("must evaluate without error");
 
     assert_eq!(
@@ -505,19 +585,24 @@ spec source_spec
 data v: number -> default 10
 
 spec outer
-with i: inner
-with src: source_spec
+uses i: inner
+uses src: source_spec
 data i.limited: src.v
 rule r: i.limited
 "#;
 
     let mut engine = Engine::new();
-    let load_result = engine.load(code, lemma::SourceType::Labeled("reference.lemma"));
+    let load_result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    );
 
     match load_result {
         Ok(()) => {
             let now = DateTimeValue::now();
-            let run_result = engine.run("outer", Some(&now), HashMap::new(), false);
+            let run_result = engine.run(None, "outer", Some(&now), HashMap::new(), false);
 
             match run_result {
                 Ok(resp) => {
@@ -572,19 +657,24 @@ spec inner
 data maybe: number
 
 spec outer
-with i: inner
+uses i: inner
 data here: i.maybe -> default 77
 rule r: here
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("must load");
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("must evaluate");
 
     assert_eq!(
@@ -595,11 +685,11 @@ rule r: here
 }
 
 /// PARSER PIN: `data x: notdotted` in local (non-binding) context MUST remain
-/// a `TypeDeclaration`, NOT be parsed as a `Reference`. The AST doc claims
+/// `DataValue::Definition` (schema RHS), NOT be parsed as a `Reference`. The AST doc claims
 /// this; the parser agrees. This test pins that behavior so a future refactor
 /// does not silently change it.
 #[test]
-fn local_non_dotted_rhs_stays_type_declaration() {
+fn local_non_dotted_rhs_stays_definition() {
     let code = r#"
 spec s
 data age: number -> default 30
@@ -609,12 +699,17 @@ rule r: person
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("loads: `data person: age` is a typedef reference, not a value-copy reference");
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("s", Some(&now), HashMap::new(), false)
+        .run(None, "s", Some(&now), HashMap::new(), false)
         .expect("evaluates; `person` is typed 'age' and inherits its default");
 
     assert_eq!(
@@ -636,7 +731,7 @@ spec inner
 data slot: number
 
 spec outer
-with i: inner
+uses i: inner
 data src: number -> default 123
 data i.slot: src
 rule r: i.slot
@@ -644,12 +739,17 @@ rule r: i.slot
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("non-dotted RHS in binding context must resolve in the enclosing spec");
 
     let now = DateTimeValue::now();
     let result = engine
-        .run("outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(
         rule_value(&result, "r"),
@@ -670,19 +770,24 @@ spec inner
 data maybe: number
 
 spec outer
-with i: inner
+uses i: inner
 data here: i.maybe -> default 77
 rule r: here
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("reference.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
         .expect("must load");
 
     let now = DateTimeValue::now();
     let schema = engine
-        .schema("outer", Some(&now))
+        .schema(None, "outer", Some(&now))
         .expect("schema must build");
 
     let here_entry = schema
@@ -724,14 +829,19 @@ data temp_unit: scale -> unit celsius 1.0
 data temperature: temp_unit
 
 spec outer
-with i: inner
-with src: source_spec
+uses i: inner
+uses src: source_spec
 data i.payment: src.temperature
 rule r: i.payment
 "#;
 
     let mut engine = Engine::new();
-    let res = engine.load(code, lemma::SourceType::Labeled("reference.lemma"));
+    let res = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    );
     let joined = load_err_joined(res);
     assert!(
         joined.contains("scale family")

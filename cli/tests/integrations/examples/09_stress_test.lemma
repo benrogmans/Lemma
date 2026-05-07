@@ -200,12 +200,12 @@ Extended stress test with spec composition
 Demonstrates: cross-spec references, field access, complex dependencies, data bindings
 """
 
-with config: stress_test_config
+uses config: stress_test_config
 data config.base_tax_rate        : 7%
 data config.luxury_tax_threshold : 1_200
 data config.max_discount_cap     : 35%
 
-with order: stress_test
+uses order: stress_test
 data order.free_shipping_threshold : 600
 data order.min_order_value         : 100
 

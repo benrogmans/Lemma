@@ -15,7 +15,7 @@ data x: number from b
 spec b
 data x: number from a
 "#,
-            SourceType::Labeled("cycle.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("cycle.lemma"))),
         )
         .expect_err("cross-spec data cycle must fail load");
 
@@ -47,7 +47,9 @@ spec c 2025-01-01
 data y: number from b
 rule r: y
 "#,
-            SourceType::Labeled("cycle2.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "cycle2.lemma",
+            ))),
         )
         .expect_err("must fail");
 
@@ -73,7 +75,9 @@ spec t
 rule x: y
 rule y: x
 "#,
-            SourceType::Labeled("rule_cycle.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "rule_cycle.lemma",
+            ))),
         )
         .expect_err("rule cycle");
 
