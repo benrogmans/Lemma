@@ -1,19 +1,21 @@
-//! Registry trait, types, and resolution logic for external `@...` references.
+//! Registry trait, types, and resolution logic for external repository references.
 //!
-//! A Registry maps `@`-prefixed identifiers to Lemma source text (for resolution)
+//! A Registry maps repository identifiers to Lemma source text (for resolution)
 //! and to human-facing addresses (for editor navigation).
 //!
-//! The engine calls `resolve_spec` and `resolve_type` during the resolution step
+//! The engine calls `resolve_registry_references` during the resolution step
 //! (after parsing local files, before planning) to fetch external specs.
 //! The Language Server calls `url_for_id` to produce clickable links.
 //!
-//! Input to all methods is the identifier **without** the leading `@`
-//! (for example `"user/workspace/somespec"` for `spec @user/workspace/somespec`).
+//! Input to all methods is the full repository name as it appears in source
+//! (e.g. `"@org/project"` including the `@` prefix).
 
 use crate::engine::Context;
 use crate::error::Error;
 use crate::limits::ResourceLimits;
-use crate::parsing::ast::{DataValue, DateTimeValue};
+use crate::parsing::ast::{
+    DataValue, DateTimeValue, LemmaRepository, RepositoryQualifier, SpecRef,
+};
 use crate::parsing::source::Source;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -32,8 +34,7 @@ pub struct RegistryBundle {
     pub lemma_source: String,
 
     /// Source identifier used for diagnostics and explanations
-    /// (for example `"@user/workspace/somespec"`).
-    pub attribute: String,
+    pub source_type: crate::parsing::source::SourceType,
 }
 
 /// The kind of failure that occurred during a Registry operation.
@@ -82,30 +83,31 @@ impl fmt::Display for RegistryError {
 
 impl std::error::Error for RegistryError {}
 
-/// Trait for resolving external `@...` references.
+/// Trait for resolving external repository references.
 ///
 /// Implementations must be `Send + Sync` so they can be shared across threads.
 /// Resolution is async so that WASM can use `fetch()` and native can use async HTTP.
 ///
 /// `get` returns a bundle containing ALL temporal versions for the requested
 /// identifier. The engine handles temporal resolution locally using
-/// `effective_from` on the parsed specs. Both `spec @...` references and
-/// `type ... from @...` imports are resolved through the same `get` method.
+/// `effective_from` on the parsed specs. Registry-qualified `uses` / `from`
+/// references and data imports from specs share this resolution path.
 ///
-/// `name` is the base identifier **without** the leading `@`.
+/// `name` is the full repository name as it appears in source (e.g. `"@org/project"`).
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait Registry: Send + Sync {
-    /// Fetch all temporal versions for an `@...` identifier.
+    /// Fetch all temporal versions for a repository identifier.
     ///
-    /// `name` is the base name (e.g. `"user/workspace/somespec"`).
+    /// `name` is the full repository name (e.g. `"@org/project"`).
     /// Returns a bundle whose `lemma_source` contains all temporal versions.
     async fn get(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
-    /// Map a Registry identifier to a human-facing address for navigation.
+    /// Map a repository identifier to a human-facing address for navigation.
     ///
-    /// `name` is the base name after `@`. `effective` is an optional datetime for
-    /// linking directly to a specific temporal version in the registry UI.
+    /// `name` is the full repository name (e.g. `"@org/project"`).
+    /// `effective` is an optional datetime for linking directly to a specific
+    /// temporal version in the registry UI.
     fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String>;
 }
 
@@ -197,10 +199,12 @@ impl HttpFetcher for WasmHttpFetcher {
 
 // ---------------------------------------------------------------------------
 
-/// The LemmaBase registry fetches Lemma source text from LemmaBase.com.
+/// The LemmaBase registry fetches Lemma source text from LemmaBase.
 ///
 /// This is the default registry for the Lemma engine. It resolves `@...` identifiers
-/// by making HTTP GET requests to `https://lemmabase.com/@{identifier}.lemma`.
+/// via `GET {base}/{name}.lemma` (`name` includes the leading `@`). The base depends on compile profile:
+/// [`LemmaBase::BASE_URL`] (`http://localhost:4222` in debug builds,
+/// `https://lemmabase.com` in release builds).
 ///
 /// LemmaBase.com returns the requested spec with all of its dependencies inlined,
 /// so the resolution loop typically completes in a single iteration.
@@ -215,8 +219,14 @@ pub struct LemmaBase {
 
 #[cfg(feature = "registry")]
 impl LemmaBase {
-    /// The base URL for the LemmaBase.com registry.
-    pub const BASE_URL: &'static str = "http://localhost:4444";
+    /// LemmaBase registry root: `http://localhost:4222` when `debug_assertions` are on
+    /// (normal `cargo build` / `cargo run`), `https://lemmabase.com` in `--release`.
+    ///
+    /// Same rule for any crate embedding this one (CLI, LSP, WASM) at that profile.
+    #[cfg(debug_assertions)]
+    pub const BASE_URL: &'static str = "http://localhost:4222";
+    #[cfg(not(debug_assertions))]
+    pub const BASE_URL: &'static str = "https://lemmabase.com";
 
     /// Create a new LemmaBase registry backed by the real HTTP client (reqwest on native, fetch on WASM).
     pub fn new() -> Self {
@@ -235,7 +245,6 @@ impl LemmaBase {
     }
 
     /// Base URL for the spec; when effective is set, appends ?effective=... for temporal resolution.
-    /// `name` includes the leading `@` (e.g. `@org/repo/spec`).
     fn source_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
         let base = format!("{}/{}.lemma", Self::BASE_URL, name);
         match effective {
@@ -245,7 +254,6 @@ impl LemmaBase {
     }
 
     /// Human-facing URL for navigation; when effective is set, appends ?effective=... for linking to a specific temporal version.
-    /// `name` includes the leading `@` (e.g. `@org/repo/spec`).
     fn navigation_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
         let base = format!("{}/{}", Self::BASE_URL, name);
         match effective {
@@ -254,12 +262,10 @@ impl LemmaBase {
         }
     }
 
-    /// Format a display identifier for error messages, e.g. `"@owner/repo/spec"` or `"@owner/repo/spec 2026-01-01"`.
-    /// `name` includes the leading `@`.
     fn display_id(name: &str, effective: Option<&DateTimeValue>) -> String {
         match effective {
             None => name.to_string(),
-            Some(d) => format!("{} {}", name, d),
+            Some(d) => format!("{name} {d}"),
         }
     }
 
@@ -267,7 +273,6 @@ impl LemmaBase {
     async fn fetch_source(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
         let url = self.source_url(name, None);
         let display = Self::display_id(name, None);
-        let source_url = self.source_url(name, None);
 
         let lemma_source = self.fetcher.get(&url).await.map_err(|error| {
             if let Some(code) = error.status_code {
@@ -278,10 +283,7 @@ impl LemmaBase {
                     _ => RegistryErrorKind::Other,
                 };
                 RegistryError {
-                    message: format!(
-                        "LemmaBase returned HTTP {} {} for '{}'",
-                        code, source_url, display
-                    ),
+                    message: format!("LemmaBase returned HTTP {} {} for '{}'", code, url, display),
                     kind,
                 }
             } else {
@@ -297,7 +299,9 @@ impl LemmaBase {
 
         Ok(RegistryBundle {
             lemma_source,
-            attribute: display,
+            source_type: crate::parsing::source::SourceType::Registry(Arc::new(
+                LemmaRepository::new(Some(name.to_string())),
+            )),
         })
     }
 }
@@ -326,30 +330,31 @@ impl Registry for LemmaBase {
 // Resolution: fetching external `@...` specs from a Registry
 // ---------------------------------------------------------------------------
 
-/// Resolve all external `@...` references in the given spec set.
+/// Resolve every `uses <repository> <spec>` or `data x: y from <repository> <spec>` reference in the loaded specs.
 ///
 /// Starting from the already-parsed local specs, this function:
-/// 1. Collects all `@...` identifiers referenced by the specs.
-/// 2. For each identifier not already present as a spec name, calls the Registry.
-/// 3. Parses the returned source text into additional Lemma specs.
-/// 4. Recurses: checks the newly added specs for further `@...` references.
-/// 5. Repeats until no unresolved references remain.
+/// 1. Collects every distinct registry repository qualifier referenced by the specs.
+/// 2. For each repository qualifier not already loaded into `ctx`, calls the Registry.
+/// 3. Parses the returned source text and inserts every spec from the bundle
+///    under the registry [`LemmaRepository`] for that fetch (from `reference.repository_qualifier`).
+/// 4. Recurses: the newly inserted specs may themselves reference further
+///    registry repositories.
+/// 5. Repeats until no unresolved repository qualifiers remain.
 ///
-/// Fetches unresolved `@...` references from the registry and inserts resulting specs into `ctx`.
-/// Updates `sources` with Registry-returned source texts.
-///
-/// Errors are fatal: if the Registry returns an error, or if a `@...` reference
-/// cannot be resolved after calling the Registry, this function returns a `Error`.
+/// Errors are fatal: any registry failure or any unresolved qualifier produces
+/// errors that are returned to the caller without partial loads being silently
+/// retained.
+#[cfg(feature = "registry")]
 pub async fn resolve_registry_references(
     ctx: &mut Context,
-    sources: &mut HashMap<String, String>,
+    sources: &mut HashMap<crate::parsing::source::SourceType, String>,
     registry: &dyn Registry,
     limits: &ResourceLimits,
 ) -> Result<(), Vec<Error>> {
     let mut already_requested: HashSet<String> = HashSet::new();
 
     loop {
-        let unresolved = collect_unresolved_registry_references(ctx, &already_requested);
+        let unresolved = find_missing_repositories(ctx, &already_requested);
 
         if unresolved.is_empty() {
             break;
@@ -357,19 +362,19 @@ pub async fn resolve_registry_references(
 
         let mut round_errors: Vec<Error> = Vec::new();
         for reference in &unresolved {
-            if already_requested.contains(&reference.name) {
+            if already_requested.contains(&reference.repository.name) {
                 continue;
             }
-            already_requested.insert(reference.name.clone());
+            already_requested.insert(reference.repository.name.clone());
 
-            let bundle_result = registry.get(&reference.name).await;
+            let bundle_result = registry.get(&reference.repository.name).await;
 
             let bundle = match bundle_result {
                 Ok(b) => b,
                 Err(registry_error) => {
                     let suggestion = match &registry_error.kind {
                         RegistryErrorKind::NotFound => Some(
-                            "Check that the identifier is spelled correctly and that the spec exists on the registry.".to_string(),
+                            "Check that the repository qualifier is spelled correctly and that the repository exists on the registry.".to_string(),
                         ),
                         RegistryErrorKind::Unauthorized => Some(
                             "Check your authentication credentials or permissions for this registry.".to_string(),
@@ -382,13 +387,13 @@ pub async fn resolve_registry_references(
                         ),
                         RegistryErrorKind::Other => None,
                     };
-                    let spec_context = ctx.iter().find(|s| {
-                        s.attribute.as_deref() == Some(reference.source.attribute.as_str())
-                    });
+                    let spec_context = ctx
+                        .iter()
+                        .find(|s| s.source_type == Some(reference.source.source_type.clone()));
                     round_errors.push(Error::registry(
                         registry_error.message,
                         reference.source.clone(),
-                        &reference.name,
+                        reference.repository.name.clone(),
                         registry_error.kind,
                         suggestion,
                         spec_context,
@@ -398,39 +403,35 @@ pub async fn resolve_registry_references(
                 }
             };
 
-            sources.insert(bundle.attribute.clone(), bundle.lemma_source.clone());
+            sources.insert(bundle.source_type.clone(), bundle.lemma_source.clone());
 
-            let new_specs =
-                match crate::parsing::parse(&bundle.lemma_source, &bundle.attribute, limits) {
-                    Ok(result) => result.specs,
-                    Err(e) => {
-                        round_errors.push(e);
-                        return Err(round_errors);
-                    }
-                };
-
-            for spec in new_specs {
-                let bare_refs = crate::planning::graph::collect_bare_registry_refs(&spec);
-                if !bare_refs.is_empty() {
-                    round_errors.push(Error::validation_with_context(
-                        format!(
-                            "Registry spec '{}' contains references without '@' prefix: {}. \
-                             The registry must rewrite all references to use '@'-prefixed names",
-                            spec.name,
-                            bare_refs.join(", ")
-                        ),
-                        None,
-                        Some(
-                            "The registry must prefix all spec references with '@' \
-                             before serving the bundle.",
-                        ),
-                        Some(std::sync::Arc::new(spec.clone())),
-                        None,
-                    ));
-                    continue;
-                }
-                if let Err(e) = ctx.insert_spec(Arc::new(spec), true) {
+            let parsed = match crate::parsing::parse(
+                &bundle.lemma_source,
+                bundle.source_type.clone(),
+                limits,
+            ) {
+                Ok(result) => result,
+                Err(e) => {
                     round_errors.push(e);
+                    return Err(round_errors);
+                }
+            };
+
+            for (parsed_repo, specs) in parsed.repositories {
+                let repo_name = parsed_repo
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| reference.repository.name.clone());
+                let header = LemmaRepository::new(Some(repo_name))
+                    .with_dependency(reference.repository.name.clone())
+                    .with_start_line(parsed_repo.start_line)
+                    .with_source_type(bundle.source_type.clone());
+                let repository_arc = Arc::new(header);
+
+                for spec in specs {
+                    if let Err(e) = ctx.insert_spec(Arc::clone(&repository_arc), Arc::new(spec)) {
+                        round_errors.push(e);
+                    }
                 }
             }
         }
@@ -443,16 +444,41 @@ pub async fn resolve_registry_references(
     Ok(())
 }
 
-/// A collected `@...` reference needing registry fetch.
+/// A collected registry repository reference needing fetch.
 #[derive(Debug, Clone)]
 struct RegistryReference {
-    name: String,
+    repository: RepositoryQualifier,
     source: Source,
 }
 
-/// Collect all unresolved `@...` references from specs in `ctx`.
-/// Collects from both data-level spec refs and type imports into a single flat set.
-fn collect_unresolved_registry_references(
+fn collect_repository_qualifiers_from_spec_ref(
+    spec_ref: &SpecRef,
+    source: &Source,
+    ctx: &Context,
+    already_requested: &HashSet<String>,
+    seen_in_this_round: &mut HashSet<String>,
+    out: &mut Vec<RegistryReference>,
+) {
+    let Some(qualifier) = spec_ref.repository.as_ref() else {
+        return;
+    };
+    if ctx.find_repository(&qualifier.name).is_some() {
+        return;
+    }
+    if already_requested.contains(&qualifier.name) {
+        return;
+    }
+    if !seen_in_this_round.insert(qualifier.name.clone()) {
+        return;
+    }
+    out.push(RegistryReference {
+        repository: qualifier.clone(),
+        source: source.clone(),
+    });
+}
+
+/// Collect every distinct registry repository qualifier referenced by specs in `ctx`.
+fn find_missing_repositories(
     ctx: &Context,
     already_requested: &HashSet<String>,
 ) -> Vec<RegistryReference> {
@@ -461,50 +487,33 @@ fn collect_unresolved_registry_references(
 
     for spec in ctx.iter() {
         let spec = spec.as_ref();
-        if spec.attribute.is_none() {
-            let has_registry_refs = spec.data.iter().any(|f| match &f.value {
-                DataValue::SpecReference(ref r) => r.from_registry,
-                DataValue::TypeDeclaration {
-                    from: Some(ref r), ..
-                } => r.from_registry,
-                _ => false,
-            });
-            if has_registry_refs {
-                panic!(
-                    "BUG: spec '{}' must have source attribute when it has registry references",
-                    spec.name
-                );
-            }
-            continue;
-        }
-
-        let mut try_collect = |name: &str, source: &Source| {
-            let already_satisfied = ctx
-                .spec_sets()
-                .get(name)
-                .and_then(|ss| ss.get_exact(None))
-                .is_some();
-            if !already_satisfied
-                && !already_requested.contains(name)
-                && seen_in_this_round.insert(name.to_string())
-            {
-                unresolved.push(RegistryReference {
-                    name: name.to_string(),
-                    source: source.clone(),
-                });
-            }
-        };
 
         for data in &spec.data {
             match &data.value {
-                DataValue::SpecReference(spec_ref) if spec_ref.from_registry => {
-                    try_collect(&spec_ref.name, &data.source_location);
+                // `uses <repository> <spec>`
+                DataValue::Import(spec_ref) => {
+                    collect_repository_qualifiers_from_spec_ref(
+                        spec_ref,
+                        &data.source_location,
+                        ctx,
+                        already_requested,
+                        &mut seen_in_this_round,
+                        &mut unresolved,
+                    );
                 }
-                DataValue::TypeDeclaration {
+                // `data x: y from <repository> <spec>`
+                DataValue::Definition {
                     from: Some(from_ref),
                     ..
-                } if from_ref.from_registry => {
-                    try_collect(&from_ref.name, &data.source_location);
+                } => {
+                    collect_repository_qualifiers_from_spec_ref(
+                        from_ref,
+                        &data.source_location,
+                        ctx,
+                        already_requested,
+                        &mut seen_in_this_round,
+                        &mut unresolved,
+                    );
                 }
                 _ => {}
             }
@@ -534,13 +543,15 @@ mod tests {
             }
         }
 
-        /// Add a bundle containing all zones for this identifier (including `@` prefix).
+        /// Add a bundle containing all zones for this identifier (e.g. `"@org/repo"`).
         fn add_spec_bundle(&mut self, identifier: &str, lemma_source: &str) {
             self.bundles.insert(
                 identifier.to_string(),
                 RegistryBundle {
                     lemma_source: lemma_source.to_string(),
-                    attribute: identifier.to_string(),
+                    source_type: crate::parsing::source::SourceType::Registry(Arc::new(
+                        LemmaRepository::new(Some(identifier.to_string())),
+                    )),
                 },
             );
         }
@@ -575,15 +586,25 @@ mod tests {
     async fn resolve_with_no_registry_references_returns_local_specs_unchanged() {
         let source = r#"spec example
 data price: 100"#;
-        let local_specs = crate::parse(source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let local_specs = crate::parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in &local_specs {
-            store.insert_spec(Arc::new(spec.clone()), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec.clone()))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            source.to_string(),
+        );
 
         let registry = TestRegistry::new();
         resolve_registry_references(
@@ -603,22 +624,33 @@ data price: 100"#;
     #[tokio::test]
     async fn resolve_fetches_single_spec_from_registry() {
         let local_source = r#"spec main_spec
-with external: @org/project/helper
+uses external: @org/project helper
 rule value: external.quantity"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "@org/project/helper",
-            r#"spec @org/project/helper
+            "@org/project",
+            r#"repo @org/project
+spec helper
 data quantity: 42"#,
         );
 
@@ -634,7 +666,65 @@ data quantity: 42"#,
         assert_eq!(store.len(), 2);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "@org/project/helper"));
+        assert!(names.iter().any(|n| n == "helper"));
+    }
+
+    #[tokio::test]
+    async fn resolve_registry_bundle_without_repo_decl_uses_reference_repository_name() {
+        let local_source = r#"spec main_spec
+uses external: @org/project helper
+rule value: external.quantity"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+        let mut store = Context::new();
+        let local_repository = store.workspace();
+        for spec in local_specs {
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
+        }
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
+
+        let mut registry = TestRegistry::new();
+        registry.add_spec_bundle(
+            "@org/project",
+            r#"spec helper
+data quantity: 42"#,
+        );
+
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
+
+        let ext_repo = store
+            .find_repository("@org/project")
+            .expect("registry bundle must land under fetched @ id");
+        let spec_names: Vec<String> = store
+            .repositories()
+            .get(&ext_repo)
+            .expect("spec sets for @org/project")
+            .keys()
+            .cloned()
+            .collect();
+        assert!(
+            spec_names.iter().any(|n| n == "helper"),
+            "helper spec should live under @org/project, got {:?}",
+            spec_names
+        );
     }
 
     #[tokio::test]
@@ -651,47 +741,59 @@ data quantity: 42"#,
         };
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "org/spec",
+            "@org/spec",
             "spec org/spec 2025-01-01\ndata x: 1\n\nspec org/spec 2026-01-15\ndata x: 2",
         );
 
-        let bundle = registry.get("org/spec").await.unwrap();
+        let bundle = registry.get("@org/spec").await.unwrap();
         assert!(bundle.lemma_source.contains("data x: 1"));
         assert!(bundle.lemma_source.contains("data x: 2"));
 
         assert_eq!(
-            registry.url_for_id("org/spec", None),
-            Some("https://test.registry/org/spec".to_string())
+            registry.url_for_id("@org/spec", None),
+            Some("https://test.registry/@org/spec".to_string())
         );
         assert_eq!(
-            registry.url_for_id("org/spec", Some(&effective)),
-            Some("https://test.registry/org/spec?effective=2026-01-15".to_string())
+            registry.url_for_id("@org/spec", Some(&effective)),
+            Some("https://test.registry/@org/spec?effective=2026-01-15".to_string())
         );
     }
 
     #[tokio::test]
     async fn resolve_fetches_transitive_dependencies() {
         let local_source = r#"spec main_spec
-with a: @org/project/spec_a"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+uses a: @org/project spec_a"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "@org/project/spec_a",
-            r#"spec @org/project/spec_a
-with b: @org/project/spec_b"#,
+            "@org/project",
+            r#"repo @org/project
+spec spec_a
+uses b: @org/sub spec_b"#,
         );
         registry.add_spec_bundle(
-            "@org/project/spec_b",
-            r#"spec @org/project/spec_b
+            "@org/sub",
+            r#"repo @org/sub
+spec spec_b
 data value: 99"#,
         );
 
@@ -707,31 +809,42 @@ data value: 99"#,
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "@org/project/spec_a"));
-        assert!(names.iter().any(|n| n == "@org/project/spec_b"));
+        assert!(names.iter().any(|n| n == "spec_a"));
+        assert!(names.iter().any(|n| n == "spec_b"));
     }
 
     #[tokio::test]
     async fn resolve_handles_bundle_with_multiple_specs() {
         let local_source = r#"spec main_spec
-with a: @org/project/spec_a"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+uses a: @org/project spec_a"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "@org/project/spec_a",
-            r#"spec @org/project/spec_a
-with b: @org/project/spec_b
+            "@org/project",
+            r#"repo @org/project
+spec spec_a
+uses b: spec_b
 
-spec @org/project/spec_b
+spec spec_b
 data value: 99"#,
         );
 
@@ -747,23 +860,33 @@ data value: 99"#,
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "@org/project/spec_a"));
-        assert!(names.iter().any(|n| n == "@org/project/spec_b"));
+        assert!(names.iter().any(|n| n == "spec_a"));
+        assert!(names.iter().any(|n| n == "spec_b"));
     }
 
     #[tokio::test]
     async fn resolve_returns_registry_error_when_registry_fails() {
         let local_source = r#"spec main_spec
-with external: @org/project/missing"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+uses external: @org/project missing"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let registry = TestRegistry::new(); // empty — no bundles
 
@@ -787,7 +910,7 @@ with external: @org/project/missing"#;
                 kind,
                 details,
             } => {
-                assert_eq!(identifier, "@org/project/missing");
+                assert_eq!(identifier, "@org/project");
                 assert_eq!(*kind, RegistryErrorKind::NotFound);
                 assert!(
                     details.suggestion.is_some(),
@@ -803,26 +926,36 @@ with external: @org/project/missing"#;
             .collect::<Vec<_>>()
             .join(" ");
         assert!(
-            error_message.contains("org/project/missing"),
+            error_message.contains("@org/project"),
             "Error should mention the identifier: {}",
             error_message
         );
     }
 
     #[tokio::test]
-    async fn resolve_returns_all_registry_errors_when_multiple_refs_fail() {
+    async fn resolve_returns_all_registry_errors_when_multiple_repositorys_fail() {
         let local_source = r#"spec main_spec
-with @org/example/helper
-data money from @lemma/std/finance"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+uses @org/example helper
+data money: money from @lemma/std finance"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let registry = TestRegistry::new(); // empty — no bundles
 
@@ -836,11 +969,6 @@ data money from @lemma/std/finance"#;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
         let errors = result.unwrap_err();
-        assert_eq!(
-            errors.len(),
-            2,
-            "Both spec ref and type import ref should produce a Registry error"
-        );
         let identifiers: Vec<&str> = errors
             .iter()
             .filter_map(|e| {
@@ -852,38 +980,49 @@ data money from @lemma/std/finance"#;
             })
             .collect();
         assert!(
-            identifiers.contains(&"@org/example/helper"),
-            "Should include spec ref error: {:?}",
+            identifiers.contains(&"@org/example"),
+            "Should include repository error: {:?}",
             identifiers
         );
         assert!(
-            identifiers.contains(&"@lemma/std/finance"),
-            "Should include type import error: {:?}",
+            identifiers.contains(&"@lemma/std"),
+            "Should include data import repository error: {:?}",
             identifiers
         );
     }
 
     #[tokio::test]
-    async fn resolve_does_not_request_same_identifier_twice() {
+    async fn resolve_does_not_request_same_repository_twice() {
         let local_source = r#"spec spec_one
-with a: @org/shared
+uses a: @org/shared shared
 
 spec spec_two
-with b: @org/shared"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+uses b: @org/shared shared"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
             "@org/shared",
-            r#"spec @org/shared
+            r#"repo @org/shared
+spec shared
 data value: 1"#,
         );
 
@@ -896,31 +1035,41 @@ data value: 1"#,
         .await
         .unwrap();
 
-        // Should have spec_one, spec_two, and @org/shared (fetched only once).
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "@org/shared"));
+        assert!(names.iter().any(|n| n == "shared"));
     }
 
     #[tokio::test]
-    async fn resolve_handles_type_import_from_registry() {
+    async fn resolve_handles_data_import_from_registry() {
         let local_source = r#"spec main_spec
-data money from @lemma/std/finance
+data money: money from @lemma/std finance
 data price: money"#;
-        let local_specs = crate::parse(local_source, "local.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let mut store = Context::new();
+        let local_repository = store.workspace();
         for spec in local_specs {
-            store.insert_spec(Arc::new(spec), false).unwrap();
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
         }
-        let mut sources = HashMap::new();
-        sources.insert("local.lemma".to_string(), local_source.to_string());
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "@lemma/std/finance",
-            r#"spec @lemma/std/finance
+            "@lemma/std",
+            r#"repo @lemma/std
+spec finance
 data money: scale
  -> unit eur 1.00
  -> unit usd 1.10
@@ -939,7 +1088,7 @@ data money: scale
         assert_eq!(store.len(), 2);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "@lemma/std/finance"));
+        assert!(names.iter().any(|n| n == "finance"));
     }
 
     // -----------------------------------------------------------------------
@@ -1146,7 +1295,7 @@ data money: scale
             let bundle = registry.fetch_source("@org/my_spec").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "spec org/my_spec\ndata x: 1");
-            assert_eq!(bundle.attribute, "@org/my_spec");
+            assert_eq!(bundle.source_type.to_string(), "@org/my_spec");
         }
 
         #[tokio::test]
@@ -1296,7 +1445,7 @@ data money: scale
             let bundle = registry.get("@org/resolved").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "spec org/resolved\ndata a: 1");
-            assert_eq!(bundle.attribute, "@org/resolved");
+            assert_eq!(bundle.source_type.to_string(), "@org/resolved");
         }
 
         #[tokio::test]
@@ -1306,7 +1455,7 @@ data money: scale
             let bundle = registry.fetch_source("@org/empty").await.unwrap();
 
             assert_eq!(bundle.lemma_source, "");
-            assert_eq!(bundle.attribute, "@org/empty");
+            assert_eq!(bundle.source_type.to_string(), "@org/empty");
         }
     }
 }

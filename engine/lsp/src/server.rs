@@ -14,8 +14,9 @@ use tower_lsp::{Client, LanguageServer};
 use crate::diagnostics;
 use crate::registry::Registry;
 use crate::semantic_tokens;
-use crate::spec_links;
 use crate::workspace::WorkspaceModel;
+use lemma::parsing::ast::{DataValue, SpecRef};
+use lemma::Context;
 
 async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
     let file_diagnostics = workspace.validate_workspace();
@@ -44,7 +45,7 @@ struct SharedState {
 ///
 /// Implements the LSP protocol for Lemma files:
 /// - Diagnostics (parse errors + planning errors) published on file open/change
-/// - Registry links for clickable `@external` spec references (url_for_id only, no fetching)
+/// - Registry and local `.deps` document links from parsed [`SpecRef`] spans
 pub struct LemmaLanguageServer {
     client: Client,
     state: Arc<SharedState>,
@@ -79,7 +80,7 @@ impl LemmaLanguageServer {
     #[cfg(target_arch = "wasm32")]
     async fn publish_full_diagnostics(&self) {
         let workspace = self.state.workspace.read().await;
-        publish_workspace_diagnostics(&self.client, &*workspace).await;
+        publish_workspace_diagnostics(&self.client, &workspace).await;
     }
 
     /// Discover all `.lemma` files under a directory and add them to the workspace.
@@ -88,6 +89,7 @@ impl LemmaLanguageServer {
     async fn discover_workspace_files(&self, root_path: &Path) {
         let lemma_files = find_lemma_files(root_path);
         let mut workspace = self.state.workspace.write().await;
+        workspace.set_workspace_root(root_path.to_path_buf());
 
         for file_path in lemma_files {
             if let Ok(content) = std::fs::read_to_string(&file_path) {
@@ -100,10 +102,9 @@ impl LemmaLanguageServer {
 
     /// Spawn the background debounce task.
     ///
-    /// This task waits for change notifications, then waits for a 250ms quiet period
-    /// (no further changes) before running a full workspace validation. The engine
-    /// does not resolve `@` references — deps must be pre-fetched (via `lemma fetch`)
-    /// and present on disk. Unresolved `@` refs surface as planning errors.
+    /// Waits for a quiet period after edits, then runs full workspace validation
+    /// (parse + planning). Fetched registry bundles under `<workspace>/.deps/` are loaded
+    /// like the CLI; unresolved `@` references surface as planning errors.
     ///
     /// Not available on WASM — `tokio::spawn` requires `Send` futures, but on WASM
     /// the registry trait uses `?Send` futures.
@@ -161,7 +162,7 @@ impl LanguageServer for LemmaLanguageServer {
                         SemanticTokensOptions {
                             legend: SemanticTokensLegend {
                                 token_types: semantic_tokens::TOKEN_TYPES.to_vec(),
-                                token_modifiers: vec![],
+                                token_modifiers: semantic_tokens::TOKEN_MODIFIERS.to_vec(),
                             },
                             full: Some(SemanticTokensFullOptions::Bool(true)),
                             range: None,
@@ -269,7 +270,10 @@ impl LanguageServer for LemmaLanguageServer {
         };
 
         // Only format if the file parses successfully — don't mangle broken code.
-        match lemma::format_source(&text, &attribute) {
+        match lemma::format_source(
+            &text,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(&attribute))),
+        ) {
             Ok(formatted) if formatted == text => Ok(None), // No changes needed
             Ok(formatted) => {
                 let line_count = text.lines().count() as u32;
@@ -290,21 +294,102 @@ impl LanguageServer for LemmaLanguageServer {
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
 
-        let text = {
-            let workspace = self.state.workspace.read().await;
-            workspace.get_file_text(&uri).map(|text| text.to_string())
+        let workspace = self.state.workspace.read().await;
+        let Some(text) = workspace.get_file_text(&uri).map(|t| t.to_string()) else {
+            return Ok(None);
+        };
+        let Some(parse_result) = workspace.parse_success_for_url(&uri) else {
+            return Ok(None);
         };
 
-        match text {
-            Some(text) => {
-                let links = spec_links::find_registry_links(&text, self.registry.as_ref());
-                if links.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(links))
+        #[cfg(not(target_arch = "wasm32"))]
+        let workspace_root = workspace.workspace_root().cloned();
+        let mut ctx = Context::new();
+        let _ = workspace.insert_specs_into_context(&mut ctx);
+
+        let mut links: Vec<DocumentLink> = Vec::new();
+
+        for specs in parse_result.repositories.values() {
+            for consumer in specs {
+                for data in &consumer.data {
+                    let spec_refs: Vec<&SpecRef> = match &data.value {
+                        DataValue::Import(sr) => vec![sr],
+                        DataValue::Definition { from: Some(sr), .. } => vec![sr],
+                        _ => Vec::new(),
+                    };
+
+                    for spec_ref in spec_refs {
+                        let Some(repo_qual) = spec_ref.repository.as_ref() else {
+                            continue;
+                        };
+                        if !repo_qual.is_registry() {
+                            continue;
+                        }
+                        let qualifier_name = repo_qual.name.as_str();
+
+                        if let Some(ref span) = spec_ref.repository_span {
+                            if let Some(url_s) = self.registry.url_for_id(qualifier_name, None) {
+                                if let Ok(target_url) = Url::parse(&url_s) {
+                                    links.push(DocumentLink {
+                                        range: diagnostics::span_to_range(
+                                            &text, span.start, span.end,
+                                        ),
+                                        target: Some(target_url),
+                                        tooltip: Some(format!("Open {qualifier_name} in registry")),
+                                        data: None,
+                                    });
+                                }
+                            }
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let (Some(tspan), Some(root)) =
+                            (spec_ref.target_span.as_ref(), workspace_root.as_ref())
+                        {
+                            let consumer_eff = &consumer.effective_from;
+                            if let Some(repo_arc) = ctx.find_repository(qualifier_name) {
+                                let instant = spec_ref.at(consumer_eff);
+                                if let Some(spec_set) =
+                                    ctx.spec_set(&repo_arc, spec_ref.name.as_str())
+                                {
+                                    if let Some(resolved) = spec_set.spec_at(&instant) {
+                                        let dep_path = match resolved.source_type.as_ref() {
+                                            Some(lemma::SourceType::Path(p)) => p.as_ref().clone(),
+                                            _ => lemma::dependency_cache_file(root, qualifier_name),
+                                        };
+                                        if let Ok(mut file_url) = Url::from_file_path(&dep_path) {
+                                            let _ = file_url.set_fragment(Some(&format!(
+                                                "L{}",
+                                                resolved.start_line
+                                            )));
+                                            links.push(DocumentLink {
+                                                range: diagnostics::span_to_range(
+                                                    &text,
+                                                    tspan.start,
+                                                    tspan.end,
+                                                ),
+                                                target: Some(file_url),
+                                                tooltip: Some(format!(
+                                                    "Open {} (line {})",
+                                                    dep_path.display(),
+                                                    resolved.start_line
+                                                )),
+                                                data: None,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            None => Ok(None),
+        }
+
+        if links.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(links))
         }
     }
 
@@ -358,7 +443,8 @@ fn find_lemma_files_recursive(directory: &Path, results: &mut Vec<std::path::Pat
         if path.is_dir() {
             let dir_name = path.file_name().and_then(|name| name.to_str());
             match dir_name {
-                Some(name) if name.starts_with('.') => continue,
+                Some(".deps") => find_lemma_files_recursive(&path, results),
+                Some(name) if name.starts_with('.') => {}
                 _ => find_lemma_files_recursive(&path, results),
             }
         } else if path.extension().and_then(|ext| ext.to_str()) == Some("lemma") {

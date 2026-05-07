@@ -3,7 +3,8 @@
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SemanticDurationUnit};
+use lemma::planning::semantics::SemanticDurationUnit;
+use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -15,7 +16,9 @@ fn get_rule_value(
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
-    let response = engine.run(spec_name, Some(&now), data, false).unwrap();
+    let response = engine
+        .run(None, spec_name, Some(&now), data, false)
+        .unwrap();
     response
         .results
         .get(rule_name)
@@ -42,7 +45,10 @@ fn load_specs_folder_examples() -> Engine {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
         engine
-            .load(&content, lemma::SourceType::Labeled(path))
+            .load(
+                &content,
+                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(path))),
+            )
             .unwrap_or_else(|errs| {
                 panic!(
                     "Failed to parse {}: {}",

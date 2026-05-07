@@ -56,11 +56,11 @@ The client does **not** send Accept headers for content negotiation, nor does it
 
 ---
 
-### Optional: human-facing page (navigation URL)
+### Optional: human-facing spec (navigation URL)
 
 The LSP and other tools use `url_for_id(identifier)` to build “open in browser” links: `https://lemmabase.com/@{identifier}` (no `.lemma`). The engine does not require this URL to return Lemma source; it is for humans. Options:
 
-- **GET /@<identifier>** returns HTML (e.g. a spec page, or a redirect to the canonical page).
+- **GET /@<identifier>** returns HTML (e.g. a spec spec, or a redirect to the canonical spec).
 - Or return 404 if you do not provide a human UI yet.
 
 This is optional for Registry resolution but improves UX when users click through from the IDE.
@@ -73,7 +73,7 @@ This is optional for Registry resolution but improves UX when users click throug
 - [ ] **Storage / resolution:** Map identifier → Lemma source (DB, object store, or filesystem). Decide identifier namespace and visibility (public vs private, org boundaries).
 - [ ] **Success response:** 200, body = raw Lemma source, `Content-Type: text/plain; charset=utf-8`.
 - [ ] **Errors:** 404 (not found), 401/403 (unauthorized/forbidden when auth exists), 5xx (server error). No special error body required for the engine; status code is enough.
-- [ ] **Optional:** GET `/@<identifier>` (without `.lemma`) for human-facing page or redirect.
+- [ ] **Optional:** GET `/@<identifier>` (without `.lemma`) for human-facing spec or redirect.
 - [ ] **Optional:** Caching (e.g. `Cache-Control`, `ETag`) to reduce load; client does not depend on it.
 
 ---

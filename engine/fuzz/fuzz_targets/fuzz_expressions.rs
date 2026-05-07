@@ -12,6 +12,6 @@ data x: 100
 data y: 50
 rule test_expr: {}
 "#, s);
-        let _ = engine.load(&code, lemma::SourceType::Labeled("fuzz_expr"));
+        let _ = engine.load(&code, lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_expr"))));
     }
 });

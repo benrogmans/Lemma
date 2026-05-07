@@ -1,12 +1,12 @@
 spec base_employee
 """
-Base Employee Spec
+Base Employee Page
 
 Defines basic employee data that can be referenced and extended.
 """
 
 data department          : "Engineering"
-data employment_duration : 0 years
+data employment_duration : duration -> default 0 years
 data is_full_time        : true
 data name                : "John Doe"
 data monthly_salary      : number -> minimum 0 -> default 5_000
@@ -21,13 +21,13 @@ rule is_eligible_for_bonus:
 
 spec specific_employee
 """
-Specific Employee Spec
+Specific Employee Page
 
 References the base employee spec and binds specific data.
 Demonstrates spec composition, data binding, and rule references.
 """
 
-with employee: base_employee
+uses employee: base_employee
 data employee.employment_duration : 3 years
 data employee.monthly_salary      : 7_500
 data employee.name                : "Alice Smith"
@@ -43,7 +43,7 @@ rule employee_summary:
 
 spec contractor
 """
-Contractor Spec
+Contractor Page
 
 Shows a different employment model using spec references.
 """
@@ -54,7 +54,7 @@ data money: scale
 data hours_worked : 120 hours
 data hourly_rate  : money -> minimum 0 -> default 85 eur
 
-with person: base_employee
+uses person: base_employee
 data person.is_full_time : false
 
 rule total_payment:

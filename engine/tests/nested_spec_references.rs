@@ -18,24 +18,31 @@ rule final_price: base_price * (1 + tax_rate)
 
     let line_item_spec = r#"
 spec line_item
-with pricing
+uses pricing
 data quantity: 10
 rule line_total: pricing.final_price * quantity
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("pricing.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
+        )
         .unwrap();
     engine
         .load(
             line_item_spec,
-            lemma::SourceType::Labeled("line_item.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "line_item.lemma",
+            ))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("line_item", Some(&now), HashMap::new(), false)
+        .run(None, "line_item", Some(&now), HashMap::new(), false)
         .unwrap();
     let line_total = response
         .results
@@ -68,29 +75,38 @@ rule doubled: value * 2
 
     let middle_spec = r#"
 spec middle
-with base_ref: base
+uses base_ref: base
 rule middle_calc: base_ref.doubled + 50
 "#;
 
     let top_spec = r#"
 spec top
-with middle_ref: middle
+uses middle_ref: middle
 rule top_calc: middle_ref.middle_calc
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(middle_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            middle_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(top_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            top_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let top_calc = response
@@ -108,9 +124,9 @@ rule top_calc: middle_ref.middle_calc
     }
 }
 
-/// The old `data X: spec Y` syntax is rejected with a helpful error.
+/// The old shorthand `data X: spec Y` RHS is rejected with a helpful error.
 #[test]
-fn test_old_data_spec_syntax_rejected() {
+fn test_old_data_spec_shorthand_rejected() {
     let mut engine = Engine::new();
 
     let specs = r#"
@@ -119,7 +135,10 @@ data x: spec other
 "#;
 
     let errs = engine
-        .load(specs, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            specs,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap_err();
     let msg = errs
         .iter()
@@ -144,29 +163,38 @@ data value: 50
 
     let middle_spec = r#"
 spec middle
-with config: base
+uses config: base
 data config.value: 100
 "#;
 
     let top_spec = r#"
 spec top
-with settings: middle
+uses settings: middle
 rule final_value: settings.config.value * 2
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(middle_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            middle_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(top_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            top_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .unwrap();
     let final_value = response
         .results
@@ -199,32 +227,41 @@ rule final_price: base_price * (1 + tax_rate)
 
     let line_item_spec = r#"
 spec line_item
-with pricing
+uses pricing
 data quantity: 10
 rule line_total: pricing.final_price * quantity
 "#;
 
     let order_spec = r#"
 spec order
-with line: line_item
+uses line: line_item
 data line.pricing.tax_rate: 10%
 data line.quantity: 5
 rule order_total: line.line_total
 "#;
 
     engine
-        .load(pricing_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            pricing_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(line_item_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            line_item_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(order_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            order_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("order", Some(&now), HashMap::new(), false)
+        .run(None, "order", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let order_total = response
@@ -259,13 +296,13 @@ rule total: price * 1.21
 
     let wrapper_spec = r#"
 spec wrapper
-with base
+uses base
 "#;
 
     let comparison_spec = r#"
 spec comparison
-with path1: wrapper
-with path2: wrapper
+uses path1: wrapper
+uses path2: wrapper
 data path2.base.price: 75
 rule total1: path1.base.total
 rule total2: path2.base.total
@@ -273,18 +310,27 @@ rule difference: total2 - total1
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(wrapper_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            wrapper_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(comparison_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            comparison_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("comparison", Some(&now), HashMap::new(), false)
+        .run(None, "comparison", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let total1 = response
@@ -349,25 +395,34 @@ rule tripled: value * 3
 
     let combined_spec = r#"
 spec combined
-with c1: config1
-with c2: config2
+uses c1: config1
+uses c2: config2
 rule sum: c1.doubled + c2.tripled
 rule product: c1.value * c2.value
 "#;
 
     engine
-        .load(config1_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            config1_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(config2_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            config2_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(combined_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            combined_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("combined", Some(&now), HashMap::new(), false)
+        .run(None, "combined", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let sum = response
@@ -413,30 +468,41 @@ rule x_squared: x * x
 
     let middle_spec = r#"
 spec middle
-with base_config: base
+uses base_config: base
 data base_config.x: 20
 rule x_squared_plus_ten: base_config.x_squared + 10
 "#;
 
     let top_spec = r#"
 spec top
-with middle_config: middle
+uses middle_config: middle
 rule final_result: middle_config.x_squared_plus_ten * 2
 "#;
 
     engine
-        .load(base_spec, lemma::SourceType::Labeled("base.lemma"))
+        .load(
+            base_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("base.lemma"))),
+        )
         .unwrap();
     engine
-        .load(middle_spec, lemma::SourceType::Labeled("middle.lemma"))
+        .load(
+            middle_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "middle.lemma",
+            ))),
+        )
         .unwrap();
     engine
-        .load(top_spec, lemma::SourceType::Labeled("top.lemma"))
+        .load(
+            top_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("top.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let final_result = response
@@ -470,10 +536,10 @@ rule final_price: price * (1 - discount)
 
     let scenario_spec = r#"
 spec scenarios
-with retail: pricing
+uses retail: pricing
 data retail.discount: 5%
 
-with wholesale: pricing
+uses wholesale: pricing
 data wholesale.discount: 15%
 data wholesale.price: 80
 
@@ -483,15 +549,21 @@ rule price_difference: retail_final - wholesale_final
 "#;
 
     engine
-        .load(pricing_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            pricing_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
     engine
-        .load(scenario_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            scenario_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("scenarios", Some(&now), HashMap::new(), false)
+        .run(None, "scenarios", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let retail_final = response
@@ -536,9 +608,9 @@ rule price_difference: retail_final - wholesale_final
     }
 }
 
-/// The old `data X: spec Y` syntax is rejected even with dotted paths.
+/// The old shorthand `data …: spec …` RHS is rejected even with dotted LHS.
 #[test]
-fn test_old_data_spec_syntax_rejected_with_dotted_path() {
+fn test_old_data_spec_shorthand_rejected_with_dotted_lhs() {
     let mut engine = Engine::new();
 
     let specs = r#"
@@ -546,17 +618,20 @@ spec a
 rule x: 5
 
 spec c
-with aa: a
+uses aa: a
 rule y: aa.x > 1
 
 spec d
-with cc: c
+uses cc: c
 data cc.aa: spec a
 rule yy: cc.y
 "#;
 
     let errs = engine
-        .load(specs, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            specs,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap_err();
     let msg = errs
         .iter()

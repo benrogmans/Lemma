@@ -3,6 +3,42 @@ use lemma::{Engine, TypeSpecification};
 use std::collections::HashMap;
 
 #[test]
+fn test_missing_uses_for_data_reference_fails() {
+    let mut engine = Engine::new();
+
+    let money_spec = r#"
+spec money
+data salary: number
+"#;
+
+    let test_spec = r#"
+spec test
+data salary: money.salary
+rule total: salary
+"#;
+
+    engine
+        .load(
+            money_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("money.lemma"))),
+        )
+        .unwrap();
+    let err = engine
+        .load(
+            test_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
+        .unwrap_err();
+
+    let err_msg = err.errors[0].to_string();
+    assert!(
+        err_msg.contains("Data 'money' not found"),
+        "Unexpected error message: {}",
+        err_msg
+    );
+}
+
+#[test]
 fn test_type_system_with_imports_and_extensions() {
     let mut engine = Engine::new();
 
@@ -16,7 +52,7 @@ data age: number
     let test_types_spec = r#"
 spec test_types
 
-data age from age
+data age: age from age
 
 data adult_age: age
   -> minimum 21
@@ -27,12 +63,17 @@ rule total: age + adult_age + twenties
 "#;
 
     engine
-        .load(age_spec, lemma::SourceType::Labeled("age.lemma"))
+        .load(
+            age_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("age.lemma"))),
+        )
         .unwrap();
     engine
         .load(
             test_types_spec,
-            lemma::SourceType::Labeled("test_types.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "test_types.lemma",
+            ))),
         )
         .unwrap();
     let now = DateTimeValue::now();
@@ -43,7 +84,7 @@ rule total: age + adult_age + twenties
     data.insert("twenties".to_string(), "25".to_string());
 
     let response = engine
-        .run("test_types", Some(&now), data, false)
+        .run(None, "test_types", Some(&now), data, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "test_types");
@@ -56,6 +97,35 @@ rule total: age + adult_age + twenties
 
     // 25 + 30 + 25 = 80
     assert_eq!(total_rule.result.value().unwrap().to_string(), "80");
+}
+
+#[test]
+fn test_import_literal_number_via_from_dependency_spec() {
+    let mut engine = Engine::new();
+
+    engine
+        .load(
+            r#"
+spec constants
+data pi: 3.14
+
+spec finance
+data pi: pi from constants
+rule x: pi
+"#,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "workspace.lemma",
+            ))),
+        )
+        .expect("loading specs with literal + from-import must succeed");
+
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "finance", Some(&now), HashMap::new(), false)
+        .expect("run finance");
+
+    let rule_x = response.results.get("x").expect("rule x");
+    assert_eq!(rule_x.result.value().unwrap().to_string(), "3.14");
 }
 
 /// Regression test: scale type with `-> default` before `-> unit` must work.
@@ -76,12 +146,14 @@ fn test_scale_type_default_before_unit_declarations() {
         data price: money
         rule doubled: price * 2
     "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .expect("default before unit should be valid");
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("pricing", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "pricing", Some(&now)).unwrap();
     let schema = plan.schema();
     let entry = schema.data.get("price").expect("price data in schema");
     assert!(
@@ -97,8 +169,8 @@ fn test_scale_type_default_before_unit_declarations() {
         other => panic!("expected Scale, got {:?}", other),
     }
     assert!(
-        entry.default.is_some(),
-        "typedef default 4 eur must be promoted into price binding"
+        entry.default.is_some() && entry.bound_value.is_none(),
+        "typedef money default must surface on price as schema suggestion"
     );
 }
 
@@ -118,12 +190,14 @@ fn test_scale_type_default_after_unit_declarations() {
         data price: money
         rule doubled: price * 2
     "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .expect("default after unit should be valid");
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("pricing", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "pricing", Some(&now)).unwrap();
     let schema = plan.schema();
     let entry = schema.data.get("price").expect("price data in schema");
     assert!(
@@ -139,8 +213,8 @@ fn test_scale_type_default_after_unit_declarations() {
         other => panic!("expected Scale, got {:?}", other),
     }
     assert!(
-        entry.default.is_some(),
-        "typedef default 4 eur must be promoted into price binding"
+        entry.default.is_some() && entry.bound_value.is_none(),
+        "typedef money default must surface on price as schema suggestion"
     );
 }
 
@@ -157,12 +231,14 @@ fn test_schema_returns_data_in_definition_order() {
         data middle: number
         rule total: zebra + alpha + middle
     "#,
-            lemma::SourceType::Labeled("ordering.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "ordering.lemma",
+            ))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("ordering", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "ordering", Some(&now)).unwrap();
     let schema = plan.schema();
     let data_names: Vec<&String> = schema.data.keys().collect();
     assert_eq!(
@@ -185,12 +261,14 @@ fn test_schema_for_rules_returns_data_in_definition_order() {
         data middle: number
         rule total: zebra + alpha + middle
     "#,
-            lemma::SourceType::Labeled("ordering.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "ordering.lemma",
+            ))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("ordering", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "ordering", Some(&now)).unwrap();
     let schema = plan.schema_for_rules(&["total".to_string()]).unwrap();
     let data_names: Vec<&String> = schema.data.keys().collect();
     assert_eq!(
@@ -201,7 +279,7 @@ fn test_schema_for_rules_returns_data_in_definition_order() {
 }
 
 #[test]
-fn test_schema_default_valued_data_are_values() {
+fn test_schema_splits_bound_literal_and_default_suggestion() {
     let mut engine = Engine::new();
 
     engine
@@ -214,28 +292,33 @@ fn test_schema_default_valued_data_are_values() {
         rule total: quantity * price
         rule label: name
     "#,
-            lemma::SourceType::Labeled("defaults.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "defaults.lemma",
+            ))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("defaults", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "defaults", Some(&now)).unwrap();
     let schema = plan.schema();
 
     let quantity = schema.data.get("quantity").expect("quantity should exist");
     assert!(
-        quantity.default.is_some(),
-        "Type default promotes to value in execution plan"
+        quantity.default.is_some() && quantity.bound_value.is_none(),
+        "type-level default is a suggestion only"
     );
 
     let name = schema.data.get("name").expect("name should exist");
     assert!(
-        name.default.is_none(),
-        "Type-only data without default has no value"
+        name.default.is_none() && name.bound_value.is_none(),
+        "type-only data without default has no bound value or suggestion"
     );
 
     let price = schema.data.get("price").expect("price should exist");
-    assert!(price.default.is_some(), "Explicit literal is a value");
+    assert!(
+        price.bound_value.is_some() && price.default.is_none(),
+        "explicit literal is a bound value, not a default suggestion"
+    );
 }
 
 #[test]
@@ -253,18 +336,20 @@ fn test_schema_scale_default_is_value() {
         data salary: money
         rule doubled: salary * 2
     "#,
-            lemma::SourceType::Labeled("salary.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "salary.lemma",
+            ))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan("salary", Some(&now)).unwrap();
+    let plan = engine.get_plan(None, "salary", Some(&now)).unwrap();
     let schema = plan.schema();
 
     let salary = schema.data.get("salary").expect("salary should exist");
     assert!(
-        salary.default.is_some(),
-        "Scale type default promotes to value in execution plan"
+        salary.default.is_some() && salary.bound_value.is_none(),
+        "scale typedef default must surface as schema suggestion on salary"
     );
 }
 
@@ -285,18 +370,18 @@ fn test_typedef_default_inherits_through_extension_chain() {
             data final_price: price
             rule doubled: final_price * 2
             "#,
-            lemma::SourceType::Labeled("chain.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("chain.lemma"))),
         )
         .unwrap();
     let now = DateTimeValue::now();
 
-    let schema = engine.get_plan("chain", Some(&now)).unwrap().schema();
+    let schema = engine.get_plan(None, "chain", Some(&now)).unwrap().schema();
     let final_price = schema
         .data
         .get("final_price")
         .expect("final_price should exist");
     assert!(
-        final_price.default.is_some(),
-        "typedef default declared on ancestor type must inherit down to leaf binding"
+        final_price.default.is_some() && final_price.bound_value.is_none(),
+        "typedef default declared on ancestor type must inherit as suggestion on leaf binding"
     );
 }

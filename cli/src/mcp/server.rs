@@ -196,7 +196,7 @@ mod imp {
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Spec name, e.g. pricing"
+                                        "description": "Spec set id, e.g. pricing"
                             },
                             "rule": {
                                 "type": "string",
@@ -237,7 +237,7 @@ mod imp {
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Spec name, e.g. pricing"
+                                        "description": "Spec set id, e.g. pricing"
                                     },
                                     "rule": {
                                         "type": "string",
@@ -256,7 +256,7 @@ mod imp {
             if self.config.admin {
                 tools.push(serde_json::json!({
                     "name": "add_spec",
-                    "description": "Add a Lemma spec to the engine. Returns the spec schema on success.",
+                    "description": "Add Lemma source to the engine. Returns each new spec schema on success.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -266,7 +266,7 @@ mod imp {
                             },
                             "source_id": {
                                 "type": "string",
-                                "description": "Optional identifier for this spec source"
+                                "description": "Optional identifier for this source fragment"
                             }
                         },
                         "required": ["code"]
@@ -274,13 +274,13 @@ mod imp {
                 }));
                 tools.push(serde_json::json!({
                     "name": "get_spec_source",
-"description": "Return the Lemma source code for a spec. Useful for inspecting or debugging the rules that produce evaluation results.",
+                    "description": "Return formatted Lemma source for a spec. Useful for inspecting or debugging the rules that produce evaluation results.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "spec": {
                                         "type": "string",
-                                        "description": "Name of the spec"
+                                        "description": "Spec set id"
                                     },
                             "effective": {
                                 "type": "string",
@@ -341,7 +341,7 @@ mod imp {
 
             if code.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "Spec code cannot be empty".to_string(),
+                    "Lemma source cannot be empty".to_string(),
                 ));
             }
 
@@ -352,39 +352,41 @@ mod imp {
 
             let names_before: std::collections::HashSet<String> = self
                 .engine
-                .list_specs()
+                .get_workspace()
+                .specs
                 .iter()
-                .map(|d| d.name.clone())
+                .map(|ss| ss.name.clone())
                 .collect();
 
-            self.engine
-                .load(code, lemma::SourceType::Labeled(&source_id))
-                .map_err(|load_err| {
-                    for e in load_err.iter() {
-                        error!(
-                            "{}",
-                            crate::error_formatter::format_error(e, &load_err.sources)
-                        );
-                    }
-                    McpError::internal_error(format!(
-                        "Failed to parse spec ({} error(s))",
-                        load_err.errors.len()
-                    ))
-                })?;
+            let source_type =
+                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(&source_id)));
+            self.engine.load(code, source_type).map_err(|load_err| {
+                for e in load_err.iter() {
+                    error!(
+                        "{}",
+                        crate::error_formatter::format_error(e, &load_err.sources)
+                    );
+                }
+                McpError::internal_error(format!(
+                    "Failed to load Lemma source ({} error(s))",
+                    load_err.errors.len()
+                ))
+            })?;
 
             let new_spec_names: Vec<String> = self
                 .engine
-                .list_specs()
+                .get_workspace()
+                .specs
                 .iter()
-                .filter(|d| !names_before.contains(&d.name))
-                .map(|d| d.name.clone())
+                .filter(|ss| !names_before.contains(&ss.name))
+                .map(|ss| ss.name.clone())
                 .collect();
 
             let mut output = String::from("Spec added successfully.\n\n");
 
             let now = DateTimeValue::now();
             for spec_name in &new_spec_names {
-                if let Ok(plan) = self.engine.get_plan(spec_name, Some(&now)) {
+                if let Ok(plan) = self.engine.get_plan(None, spec_name, Some(&now)) {
                     output.push_str(&plan.schema().to_string());
                     output.push('\n');
                 }
@@ -407,19 +409,22 @@ mod imp {
             &self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let spec_name = args["spec"]
+            let spec_set_id = args["spec"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
 
+            let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
+                .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
+
             let now = resolve_effective(args)?;
-            let spec = self.engine.get_spec(spec_name, Some(&now)).map_err(|e| {
+            let spec = self.engine.get_spec(&spec_name, Some(&now)).map_err(|e| {
                 McpError::invalid_params(format!(
                     "Spec '{}' not found: {}. Use list_specs to see available specs.",
-                    spec_name, e
+                    spec_set_id, e
                 ))
             })?;
 
-            let source = lemma::format_specs(std::slice::from_ref(spec.as_ref()));
+            let source = lemma::formatting::format_specs(std::slice::from_ref(spec.as_ref()));
 
             debug!("Returned source for spec '{}'", spec_name);
 
@@ -441,11 +446,11 @@ mod imp {
 
             if spec_set_id.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "SpecSet id cannot be empty".to_string(),
+                    "Spec set id cannot be empty".to_string(),
                 ));
             }
 
-            lemma::parse_spec_set_id(spec_set_id.trim())
+            let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
@@ -469,7 +474,7 @@ mod imp {
             let now = resolve_effective(args)?;
             let mut response = self
                 .engine
-                .run(spec_set_id.trim(), Some(&now), data_values, false)
+                .run(None, &spec_name, Some(&now), data_values, false)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -521,18 +526,19 @@ mod imp {
 
         fn tool_list_specs(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
             let now = resolve_effective(args)?;
-            let specs_list = self.engine.list_specs_effective(&now);
+            let workspace = self.engine.get_workspace();
 
-            let output = if specs_list.is_empty() {
+            let output = if workspace.specs.is_empty() {
                 if self.config.admin {
-                    "No specs loaded.\n\nUse the 'add_spec' tool to load Lemma code.".to_string()
+                    "No specs loaded.\n\nUse the 'add_spec' tool to load Lemma source.".to_string()
                 } else {
                     "No specs loaded.".to_string()
                 }
             } else {
-                let schemas: Vec<lemma::SpecSchema> = specs_list
+                let schemas: Vec<lemma::SpecSchema> = workspace
+                    .specs
                     .iter()
-                    .filter_map(|s| self.engine.schema(&s.name, Some(&now)).ok())
+                    .filter_map(|ss| self.engine.schema(None, &ss.name, Some(&now)).ok())
                     .collect();
 
                 schemas
@@ -542,7 +548,7 @@ mod imp {
                     .join("\n\n")
             };
 
-            debug!("Listed {} specs", specs_list.len());
+            debug!("Listed {} specs", workspace.specs.len());
 
             Ok(serde_json::json!({
                 "content": [{
@@ -559,17 +565,17 @@ mod imp {
 
             if spec_set_id.trim().is_empty() {
                 return Err(McpError::invalid_params(
-                    "SpecSet id cannot be empty".to_string(),
+                    "Spec set id cannot be empty".to_string(),
                 ));
             }
 
-            lemma::parse_spec_set_id(spec_set_id.trim())
+            let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
             let plan = self
                 .engine
-                .get_plan(spec_set_id.trim(), Some(&now))
+                .get_plan(None, &spec_name, Some(&now))
                 .map_err(|_| {
                     McpError::invalid_params(format!(
                         "Spec '{}' not found. Use list_specs to see available specs.",

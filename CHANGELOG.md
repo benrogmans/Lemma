@@ -2,9 +2,63 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
-## [0.8.12] - 2026-04-28
+## [0.8.13] - 2026-05-06
 
-Release-pipeline fixes only. No engine, CLI, or language changes.
+### Added
+
+- Public `lemma::deps`: `lemma_deps_dir`, `relative_dependency_cache_path`, `dependency_identifier_from_dependency_path`, `dependency_cache_file` — `.deps/` layout shared by CLI fetch, workspace load, and LSP.
+- `cargo lsp` (`xtask`): release-build `lsp`, then `npm ci` + `npm run compile` in `engine/lsp/editors/vscode`; `cargo lsp vsix` runs `npm run package` and prints the newest `.vsix` path.
+- `@lemmabase/lemma-engine` npm bundle: `LspClient.didClose` sends `textDocument/didClose`.
+
+### Changed
+
+**Engine public API**
+- Removed `Engine::list_specs()`. Use `Engine::get_workspace()` or `Engine::get_repository(qualifier)` instead — both return `ResolvedRepository { repository: Arc<LemmaRepository>, specs: Vec<LemmaSpecSet> }`.
+- `Engine::get_workspace()` returns `ResolvedRepository` (was `Arc<LemmaRepository>`).
+- `Engine::get_repository(qualifier)` returns `Result<ResolvedRepository, Error>` (was `Result<Arc<LemmaRepository>, Error>`).
+- `Engine::list()` returns `Vec<ResolvedRepository>` (was `Vec<Arc<LemmaRepository>>`).
+- `Engine::load(code, source_type)` replaces the old `load(HashMap<SourceType, String>)`. Single source, single call.
+- `Engine::load_batch(sources, dependency)` replaces `load_files` / `load_dependency`. Accepts `HashMap<SourceType, String>`.
+- `collect_lemma_sources` replaces `collect_lemma_files` (filesystem path expansion helper).
+- `ResourceLimits`: `max_sources` and `max_source_size_bytes` replace `max_files` and `max_file_size_bytes`; matching resource-limit error ids updated.
+- `SourceType::Path` replaces `SourceType::File` (Serde variant `"path"` instead of `"file"`).
+- `Engine::sources()` removed — error formatting uses `Error`'s `Display` impl directly.
+- `repo: None` in `get_plan` / `get_spec` / `remove` means workspace (not global search).
+- `ExecutionPlan::with_defaults` simplified; call order in `run_plan` is now `with_defaults()` then `set_data_values()`.
+- `ResolvedRepository` / `Engine::list()` documented: `LemmaRepository` and each `LemmaSpec` carry `start_line` and `source_type` from parse/load.
+
+**WASM / NPM package**
+- WASM `Engine.list()` matches `Engine::list()` JSON (`ResolvedRepository[]`: each `specs` is `LemmaSpecSet[]`; each set’s `specs` is `LemmaSpec[]` with full AST nodes, not flat catalog rows). `Engine.schema` / `Engine.run` take optional `repository` first (workspace when `null`/empty), matching the Rust engine.
+- Various improvements to the LSP and syntax highlighting (removed redundant TM)
+
+**Hex**
+- `Lemma.list/1` returns specs grouped by repository via `Engine::list()`; each `repository` and each spec row includes `start_line` and `attribute` (load source label).
+- Moved `temporal_api_sources` and `generate_openapi` to `Lemma.OpenAPI` module.
+- Engine limits map keys: `max_sources` and `max_source_size_bytes` replace `max_files` and `max_file_size_bytes`.
+
+**Parsing / AST**
+
+- `SpecRef` records optional `repository_span` and `target_span` (serde omits when absent) for tooling; parser fills spans on registry qualifiers and spec-reference targets.
+
+**Formatter**
+
+- Spec bodies indent `meta`, sorted `data`, and each rule line consistently; `data` definitions with `->` constraints wrap constraints onto indented continuation lines under the head.
+
+**LSP**
+
+- `documentLink` uses parsed `SpecRef` spans: registry URL on the qualifier span when available; on native, resolved target opens the dependency file (`SourceType::Path` when known, else `.deps` cache path) with `#L<start_line>`.
+- Workspace tracks a host root for those paths; file discovery includes `.deps/**/*.lemma` (other dot-directories still skipped). Debounced validation loads fetched bundles under `.deps/` like the CLI when present.
+- Removed regex-based `spec_links` module in favor of AST-driven links.
+
+**CLI**
+
+- Fetch and workspace loading call `lemma::deps::*` instead of duplicate helpers.
+
+**VS Code extension**
+
+- Ships `LICENSE` alongside the extension manifest.
+
+## [0.8.12] - 2026-04-28
 
 ### Fixed
 
@@ -12,6 +66,8 @@ Release-pipeline fixes only. No engine, CLI, or language changes.
 
 ### Changed
 
+- **Schema: bound value vs default suggestion**: Stored execution plans keep `-> default ...` on `TypeDeclaration` / reference `local_default` instead of folding them into `Value` during planning. `SpecSchema` `DataEntry` now has `bound_value` (explicit spec literal or caller override) and `default` (suggestion only). `ExecutionPlan::with_defaults` materializes suggestions before evaluation; `Engine::run` and `Engine::run_plan` invoke it after `ExecutionPlan::set_data_values`. `Engine::run_plan_without_defaults` skips materialization (CLI interactive trial runs, inversion).
+- **Evaluator**: Reference resolution copies only from the target path's binding; it does not read `local_default` (defaults are plan-prep only).
 - **npm release workflow**: `publish-npm` now uses npm Trusted Publishing (OIDC) via `npm/publish@v1.0.1` with `id-token: write`, eliminating the long-lived `NPM_TOKEN` secret and the `EOTP` 2FA failure mode for automation.
 - **npm package metadata**: `engine/packages/npm/build.js` emits `repository.url` as `git+https://github.com/lemma/lemma.git`, silencing npm's autocorrect warning on publish.
 
@@ -53,15 +109,15 @@ Release-pipeline fixes only. No engine, CLI, or language changes.
 
 **Planning subsystem**
 - Major refactor: `graph.rs`, `execution_plan.rs`, `semantics.rs` — consolidated from standalone `fingerprint`, `temporal`, `types`, `validation`, `slice_interface` modules into core planning files.
-- New `SpecSetId` module for parsing and identifying spec-set identifiers.
+- New `PageSetId` module for parsing and identifying spec-set identifiers.
 - New `discovery` module: `resolve_spec_ref`, `dependency_edges`, `validate_dependency_interfaces`, `build_dag_for_spec` for topological sort and cycle detection.
 - `LemmaSpecSet`: `effective_range`, `temporal_boundaries`, `effective_dates`, `coverage_gaps` for temporal slice computation.
 - `SpecSchema.data[].default` now uses `DataDefinition::schema_default()`, which surfaces `-> default N` from both `TypeDeclaration` and `Reference` entries. Previously references silently dropped their declared default.
 - `CommandArg` enum collapsed to `Literal(Value)` — command arguments are directly typed literals rather than raw strings.
 
 **Types**
-- `TypeSpecification::Text` drops `minimum` / `maximum` length-range constraints; only `length` (exact match) remains. Specs using `text -> minimum N` or `text -> maximum N` are rejected at planning.
-- `TypeSpecification::Duration` gains `minimum` / `maximum`.
+- `TypePageification::Text` drops `minimum` / `maximum` length-range constraints; only `length` (exact match) remains. Specs using `text -> minimum N` or `text -> maximum N` are rejected at planning.
+- `TypePageification::Duration` gains `minimum` / `maximum`.
 - Reference kind compatibility check replaced discriminant-only comparison with `has_same_base_type` + `same_scale_family` — scale types in different families are now correctly rejected.
 
 **Inversion subsystem**
@@ -82,7 +138,7 @@ Release-pipeline fixes only. No engine, CLI, or language changes.
 - `cli/tests/integrations/interactive.rs` (superseded by interactive mode tests).
 - `documentation/plans/temporal_ranges_blueprint_alignment.md` and `temporal_ranges_tests.md` (implementation complete; absorbed into `blueprint.md §2.1` and `engine/tests/temporal_range_references.rs`).
 - `documentation/plans/tables.md` (obsolete syntax; tables not yet implemented; direction noted in `blueprint.md §3.14`).
-- `TypeSpecification::Text` `minimum` / `maximum` length commands (breaking change; use `length` for exact length).
+- `TypePageification::Text` `minimum` / `maximum` length commands (breaking change; use `length` for exact length).
 
 ## [0.8.10] - 2026-03-31
 
@@ -91,12 +147,12 @@ Release-pipeline fixes only. No engine, CLI, or language changes.
 - Nix flake dev shell (Rust from `rust-toolchain.toml`, cargo-nextest, cargo-deny, wasm-pack, Node 24, Elixir, nixpkgs-fmt formatter) plus `flake.lock`.
 - `rust-toolchain.toml`: `wasm32-unknown-unknown` target.
 - Test cases for temporal type imports.
-- `ExecutionPlan.sources`: keyed `SpecSources` map (`IndexMap<(name, effective_from), source>`) with AST-reconstructed canonical source for every spec in the plan. Custom serde serializes as `[{name, effective_from, source}]` for downstream consumers.
+- `ExecutionPlan.sources`: keyed `PageSources` map (`IndexMap<(name, effective_from), source>`) with AST-reconstructed canonical source for every spec in the plan. Custom serde serializes as `[{name, effective_from, source}]` for downstream consumers.
 
 ### Changed
 
-- CLI: workspace or `.lemma` file is a positional argument (`run`/`schema`/`get [source] [spec]…`, `list`/`server`/`mcp [source]`); `-d`/`--dir` removed. Spec auto-selected when the source defines exactly one spec; multiple specs without a name yield an error listing names (or use `-i`). Lemma source from filesystem only; positional `-` is rejected (not a valid path).
-- Planning: `DataDefinition::SpecRef.resolved_plan_hash` is a required `String`; fingerprints always build `SpecId` from it (no optional fallback to bare spec name).
+- CLI: workspace or `.lemma` file is a positional argument (`run`/`schema`/`fetch [source] [spec]…`, `list`/`server`/`mcp [source]`); `-d`/`--dir` removed. Page auto-selected when the source defines exactly one spec; multiple specs without a name yield an error listing names (or use `-i`). Lemma source from filesystem only; positional `-` is rejected (not a valid path).
+- Planning: `DataDefinition::SpecRef.resolved_plan_hash` is a required `String`; fingerprints always build `PageId` from it (no optional fallback to bare spec name).
 - Graph / types: missing plan hash on type-import or spec-reference binding yields validation errors instead of `unreachable!` when a dependency spec failed validation or is absent from the hash registry.
 - `build_graph` test helper pre-plans dependency specs so `PlanHashRegistry` matches topological `plan()` behavior.
 - `.gitignore`: `result` / `result-*` (Nix build outputs).
@@ -142,14 +198,14 @@ Release-pipeline fixes only. No engine, CLI, or language changes.
 
 ### Added
 
-- `SpecId` type (`name` + `plan_hash`) with `Display` impl (`name~hash`); replaces ad-hoc `Arc<ExecutionPlan>` set and `format!` string concatenation in fingerprints.
-- Execution plans now carry `dependencies: IndexSet<SpecId>` populated from dependency rules in topological order.
+- `PageId` type (`name` + `plan_hash`) with `Display` impl (`name~hash`); replaces ad-hoc `Arc<ExecutionPlan>` set and `format!` string concatenation in fingerprints.
+- Execution plans now carry `dependencies: IndexSet<PageId>` populated from dependency rules in topological order.
 - Six dependency-tracking unit tests: basic cross-spec, standalone, multiple deps, hash correctness, unused spec ref, and implicit dep via rules.
 
 ### Changed
 
 - Cross-spec interface validation improvements and stricter test assertions.
-- Fingerprint `spec_id` fields use `SpecId::to_string()` instead of raw `format!("{}~{}", ...)`.
+- Fingerprint `spec_id` fields use `PageId::to_string()` instead of raw `format!("{}~{}", ...)`.
 
 ### Removed
 

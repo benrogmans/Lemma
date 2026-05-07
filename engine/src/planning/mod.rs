@@ -15,18 +15,19 @@ pub mod graph;
 pub mod semantics;
 pub mod spec_set;
 use crate::engine::Context;
-use crate::parsing::ast::DateTimeValue;
+use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::Error;
 pub use execution_plan::ExecutionPlanSet;
 pub use execution_plan::{Branch, ExecutableRule, ExecutionPlan, SpecSchema};
+use indexmap::IndexMap;
 pub use semantics::{
-    is_same_spec, negated_comparison, ArithmeticComputation, ComparisonComputation, Data,
-    DataDefinition, DataPath, DataValue, Expression, ExpressionKind, LemmaType, LiteralValue,
-    LogicalComputation, MathematicalComputation, NegationType, PathSegment, RulePath, Source, Span,
-    TypeDefiningSpec, TypeExtends, ValueKind, VetoExpression,
+    negated_comparison, ArithmeticComputation, ComparisonComputation, Data, DataDefinition,
+    DataPath, DataValue, Expression, ExpressionKind, LemmaType, LiteralValue, LogicalComputation,
+    MathematicalComputation, NegationType, PathSegment, RulePath, Source, Span, TypeDefiningSpec,
+    TypeExtends, ValueKind, VetoExpression,
 };
 pub use spec_set::LemmaSpecSet;
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Result of planning a single `LemmaSpec`.
 #[derive(Debug, Clone)]
@@ -39,21 +40,27 @@ pub struct SpecPlanningResult {
 /// Result of planning a `LemmaSpecSet` (all specs sharing a name).
 #[derive(Debug, Clone)]
 pub struct SpecSetPlanningResult {
+    /// Owning repository for all slices in this set.
+    pub repository: Arc<LemmaRepository>,
     /// Logical spec name.
     pub name: String,
     pub lemma_spec_set: LemmaSpecSet,
-    pub specs: Vec<SpecPlanningResult>,
+    pub slice_results: Vec<SpecPlanningResult>,
 }
 
 impl SpecSetPlanningResult {
     pub fn errors(&self) -> impl Iterator<Item = &Error> {
-        self.specs.iter().flat_map(|s| s.errors.iter())
+        self.slice_results.iter().flat_map(|s| s.errors.iter())
     }
 
     pub fn execution_plan_set(&self) -> ExecutionPlanSet {
         ExecutionPlanSet {
             spec_name: self.name.clone(),
-            plans: self.specs.iter().flat_map(|s| s.plans.clone()).collect(),
+            plans: self
+                .slice_results
+                .iter()
+                .flat_map(|s| s.plans.clone())
+                .collect(),
         }
     }
 
@@ -67,7 +74,7 @@ impl SpecSetPlanningResult {
         to: &Option<DateTimeValue>,
     ) -> Option<SpecSchema> {
         let schemas: Vec<SpecSchema> = self
-            .specs
+            .slice_results
             .iter()
             .filter(|sr| {
                 let (slice_from, slice_to) = self.lemma_spec_set.effective_range(&sr.spec);
@@ -117,75 +124,118 @@ pub struct PlanningResult {
 /// Iterates every spec, filters effective dates to its validity range,
 /// builds a per-spec DAG and ExecutionPlan for each slice.
 pub fn plan(context: &Context) -> PlanningResult {
-    let mut results: BTreeMap<String, SpecSetPlanningResult> = BTreeMap::new();
+    let mut results: IndexMap<Arc<LemmaRepository>, IndexMap<String, SpecSetPlanningResult>> =
+        IndexMap::new();
 
-    for spec in context.iter() {
-        let spec_name = &spec.name;
-        let lemma_spec_set = context
-            .spec_sets()
-            .get(spec_name)
-            .expect("spec not found in context");
-
-        let mut spec_result = SpecPlanningResult {
-            spec: std::sync::Arc::clone(&spec),
-            plans: Vec::new(),
-            errors: Vec::new(),
-        };
-
-        for effective in lemma_spec_set.effective_dates(&spec, context) {
-            let dag = match discovery::build_dag_for_spec(context, &spec, &effective) {
-                Ok(dag) => dag,
-                Err(discovery::DagError::Cycle(errors)) => {
-                    spec_result.errors.extend(errors);
-                    continue;
-                }
-                Err(discovery::DagError::Other(errors)) => {
-                    spec_result.errors.extend(errors);
-                    continue;
-                }
-            };
-
-            match graph::Graph::build(context, &spec, &dag, &effective) {
-                Ok((graph, slice_types)) => {
-                    let execution_plan =
-                        execution_plan::build_execution_plan(&graph, &slice_types, &effective);
-                    let value_errors =
-                        execution_plan::validate_literal_data_against_types(&execution_plan);
-                    spec_result.errors.extend(value_errors);
-                    spec_result.plans.push(execution_plan);
-                }
-                Err(build_errors) => {
-                    spec_result.errors.extend(build_errors);
-                }
+    for (repository, inner) in context.repositories().iter() {
+        for (_name, lemma_spec_set) in inner.iter() {
+            for spec in lemma_spec_set.iter_specs() {
+                plan_spec(context, repository, lemma_spec_set, &spec, &mut results);
             }
-        }
-
-        if !spec_result.plans.is_empty() || !spec_result.errors.is_empty() {
-            let entry = results
-                .entry(spec_name.clone())
-                .or_insert_with(|| SpecSetPlanningResult {
-                    name: spec_name.clone(),
-                    lemma_spec_set: lemma_spec_set.clone(),
-                    specs: Vec::new(),
-                });
-            entry.specs.push(spec_result);
         }
     }
 
-    for (spec_name, err) in discovery::validate_dependency_interfaces(context, &results) {
+    for (consumer_repository, spec_name, err) in
+        discovery::validate_dependency_interfaces(context, &results)
+    {
         let set_result = results
-            .get_mut(&spec_name)
+            .get_mut(&consumer_repository)
+            .and_then(|by_name| by_name.get_mut(&spec_name))
             .expect("BUG: validate_dependency_interfaces returned error for absent spec set");
         let first_spec = set_result
-            .specs
+            .slice_results
             .first_mut()
-            .expect("BUG: spec set has no specs to attach error to");
+            .expect("planning result must contain at least one spec");
         first_spec.errors.push(err);
     }
 
-    PlanningResult {
-        results: results.into_values().collect(),
+    for by_name in results.values_mut() {
+        for set_result in by_name.values_mut() {
+            for spec_result in &mut set_result.slice_results {
+                dedup_errors(&mut spec_result.errors);
+            }
+        }
     }
+
+    PlanningResult {
+        results: results
+            .into_values()
+            .flat_map(|by_name| by_name.into_values())
+            .collect(),
+    }
+}
+
+fn plan_spec(
+    context: &Context,
+    repository: &Arc<LemmaRepository>,
+    lemma_spec_set: &LemmaSpecSet,
+    spec: &Arc<LemmaSpec>,
+    results: &mut IndexMap<Arc<LemmaRepository>, IndexMap<String, SpecSetPlanningResult>>,
+) {
+    let spec_name = &spec.name;
+
+    let mut spec_result = SpecPlanningResult {
+        spec: Arc::clone(spec),
+        plans: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    for effective in lemma_spec_set.effective_dates(spec, context) {
+        let dag = match discovery::build_dag_for_spec(context, spec, &effective) {
+            Ok(dag) => dag,
+            Err(discovery::DagError::Cycle(errors)) => {
+                spec_result.errors.extend(errors);
+                continue;
+            }
+            Err(discovery::DagError::Other(errors)) => {
+                spec_result.errors.extend(errors);
+                vec![(Arc::clone(repository), Arc::clone(spec))]
+            }
+        };
+
+        match graph::Graph::build(context, repository, spec, &dag, &effective) {
+            Ok((graph, slice_types)) => {
+                let execution_plan =
+                    execution_plan::build_execution_plan(&graph, &slice_types, &effective);
+                let value_errors =
+                    execution_plan::validate_literal_data_against_types(&execution_plan);
+                spec_result.errors.extend(value_errors);
+                spec_result.plans.push(execution_plan);
+            }
+            Err(build_errors) => {
+                spec_result.errors.extend(build_errors);
+            }
+        }
+    }
+
+    if !spec_result.plans.is_empty() || !spec_result.errors.is_empty() {
+        let entry = results
+            .entry(Arc::clone(repository))
+            .or_default()
+            .entry(spec_name.clone())
+            .or_insert_with(|| SpecSetPlanningResult {
+                repository: Arc::clone(repository),
+                name: spec_name.clone(),
+                lemma_spec_set: lemma_spec_set.clone(),
+                slice_results: Vec::new(),
+            });
+        entry.slice_results.push(spec_result);
+    }
+}
+
+/// Remove duplicate errors in-place, preserving first occurrence order.
+/// Two errors are considered duplicates when they share the same kind,
+/// message, and source location.
+fn dedup_errors(errors: &mut Vec<Error>) {
+    let mut seen = std::collections::HashSet::new();
+    errors.retain(|error| {
+        let key = (
+            error.kind(),
+            error.message().to_string(),
+            error.location().cloned(),
+        );
+        seen.insert(key)
+    });
 }
 
 // ============================================================================
@@ -196,7 +246,9 @@ pub fn plan(context: &Context) -> PlanningResult {
 mod internal_tests {
     use super::plan;
     use crate::engine::Context;
-    use crate::parsing::ast::{DataValue, LemmaData, LemmaSpec, ParentType, Reference, Span};
+    use crate::parsing::ast::{
+        DataValue, LemmaData, LemmaRepository, LemmaSpec, ParentType, Reference, Span,
+    };
     use crate::parsing::source::Source;
     use crate::planning::execution_plan::ExecutionPlan;
     use crate::planning::semantics::{DataPath, PathSegment, TypeDefiningSpec, TypeExtends};
@@ -210,14 +262,14 @@ mod internal_tests {
         all_specs: &[LemmaSpec],
     ) -> Result<ExecutionPlan, Vec<Error>> {
         let mut ctx = Context::new();
+        let repository = ctx.workspace();
         for spec in all_specs {
-            if let Err(e) = ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry) {
+            if let Err(e) = ctx.insert_spec(Arc::clone(&repository), Arc::new(spec.clone())) {
                 return Err(vec![e]);
             }
         }
         let main_spec_arc = ctx
-            .spec_sets()
-            .get(main_spec.name.as_str())
+            .spec_set(&repository, main_spec.name.as_str())
             .and_then(|ss| ss.get_exact(main_spec.effective_from()).cloned())
             .expect("main_spec must be in all_specs");
         let result = plan(&ctx);
@@ -240,7 +292,7 @@ mod internal_tests {
                     Err(vec![Error::validation(
                         format!("No execution plan produced for spec '{}'", main_spec.name),
                         Some(crate::planning::semantics::Source::new(
-                            "<test>",
+                            crate::parsing::source::SourceType::Volatile,
                             crate::planning::semantics::Span {
                                 start: 0,
                                 end: 0,
@@ -258,7 +310,7 @@ mod internal_tests {
             None => Err(vec![Error::validation(
                 format!("No execution plan produced for spec '{}'", main_spec.name),
                 Some(crate::planning::semantics::Source::new(
-                    "<test>",
+                    crate::parsing::source::SourceType::Volatile,
                     crate::planning::semantics::Span {
                         start: 0,
                         end: 0,
@@ -278,12 +330,19 @@ data name: "John"
 data age: 25
 rule is_adult: age >= 18"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), input.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            input.to_string(),
+        );
 
         for spec in &specs {
             let result = plan_single(spec, &specs);
@@ -301,12 +360,19 @@ rule is_adult: age >= 18"#;
 data name: "John"
 data name: "Jane""#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), input.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            input.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
 
@@ -335,12 +401,19 @@ data age: 25
 rule is_adult: age >= 18
 rule is_adult: age >= 21"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), input.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            input.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
 
@@ -368,12 +441,19 @@ rule is_adult: age >= 21"#;
 rule a: b
 rule b: a"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), input.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            input.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
 
@@ -398,14 +478,21 @@ data age: 25
 
 spec company
 data name: "Acme Corp"
-with employee: person"#;
+uses employee: person"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), input.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            input.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
 
@@ -420,14 +507,21 @@ with employee: person"#;
     fn test_invalid_spec_reference() {
         let input = r#"spec person
 data name: "John"
-with contract: nonexistent"#;
+uses contract: nonexistent"#;
 
-        let specs = parse(input, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), input.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            input.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
 
@@ -452,10 +546,10 @@ with contract: nonexistent"#;
     }
 
     #[test]
-    fn test_type_declaration_empty_base_returns_lemma_error() {
+    fn test_definition_empty_base_returns_lemma_error() {
         let mut spec = LemmaSpec::new("test".to_string());
         let source = Source::new(
-            "test.lemma",
+            crate::parsing::source::SourceType::Volatile,
             Span {
                 start: 0,
                 end: 10,
@@ -468,24 +562,28 @@ with contract: nonexistent"#;
                 segments: vec![],
                 name: "x".to_string(),
             },
-            DataValue::TypeDeclaration {
-                base: ParentType::Custom {
+            DataValue::Definition {
+                base: Some(ParentType::Custom {
                     name: String::new(),
-                },
+                }),
                 constraints: None,
                 from: None,
+                value: None,
             },
             source,
         ));
 
         let specs = vec![spec.clone()];
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), "spec test\ndata x:".to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            "spec test\ndata x:".to_string(),
+        );
 
         let result = plan_single(&spec, &specs);
         assert!(
             result.is_err(),
-            "TypeDeclaration with empty base should fail planning"
+            "Definition with empty base should fail planning"
         );
         let errors = result.unwrap_err();
         let combined = errors
@@ -494,7 +592,7 @@ with contract: nonexistent"#;
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            combined.contains("Unknown type: ''"),
+            combined.contains("Unknown parent ''"),
             "Error should mention empty/unknown type; got: {}",
             combined
         );
@@ -518,18 +616,25 @@ data money: number
 data x: money
 
 spec two
-with one
+uses one
 data one.x: 7
 rule getx: one.x
 "#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let spec_two = specs.iter().find(|d| d.name == "two").unwrap();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
         let execution_plan = plan_single(spec_two, &specs).expect("planning should succeed");
 
         // Verify that one.x has type 'money' (resolved from spec one)
@@ -557,7 +662,7 @@ rule getx: one.x
     }
 
     #[test]
-    fn test_data_type_declaration_from_spec_has_import_defining_spec() {
+    fn test_data_definition_from_spec_has_import_defining_spec() {
         let code = r#"
 spec examples
 data money: scale
@@ -570,29 +675,35 @@ data local_price: money
 data imported_price: money from examples
 "#;
 
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut ctx = Context::new();
+        let repository = ctx.workspace();
         for spec in &specs {
-            ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry)
+            ctx.insert_spec(Arc::clone(&repository), Arc::new(spec.clone()))
                 .expect("insert spec");
         }
 
         let examples_arc = ctx
-            .spec_sets()
-            .get("examples")
+            .spec_set(&repository, "examples")
             .and_then(|ss| ss.get_exact(None).cloned())
             .expect("examples spec should be present");
         let checkout_arc = ctx
-            .spec_sets()
-            .get("checkout")
+            .spec_set(&repository, "checkout")
             .and_then(|ss| ss.get_exact(None).cloned())
             .expect("checkout spec should be present");
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
 
         let result = plan(&ctx);
 
@@ -654,51 +765,75 @@ data imported_price: money from examples
     }
 
     #[test]
-    fn test_plan_with_registry_style_spec_names() {
-        let source = r#"spec @user/workspace/somespec
+    fn test_plan_with_registry_grouped_specs() {
+        let source = r#"spec somespec
 data quantity: 10
 
-spec user/workspace/example
-with inventory: @user/workspace/somespec
+spec example
+uses inventory: somespec
 rule total_quantity: inventory.quantity"#;
 
-        let specs = parse(source, "registry_bundle.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
-        assert_eq!(specs.len(), 2);
+        let parsed = parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(parsed.flatten_specs().len(), 2);
 
-        let example_spec = specs
+        let mut ctx = Context::new();
+        let repository = Arc::new(
+            LemmaRepository::new(Some("@user/workspace".to_string()))
+                .with_dependency("@user/workspace")
+                .with_start_line(1)
+                .with_source_type(crate::parsing::source::SourceType::Volatile),
+        );
+        for spec in parsed.flatten_specs() {
+            ctx.insert_spec(Arc::clone(&repository), Arc::new(spec.clone()))
+                .expect("insert spec");
+        }
+
+        let result = plan(&ctx);
+        let example_result = result
+            .results
             .iter()
-            .find(|d| d.name == "user/workspace/example")
-            .expect("should find user/workspace/example");
-
-        let mut sources = HashMap::new();
-        sources.insert("registry_bundle.lemma".to_string(), source.to_string());
-
-        let result = plan_single(example_spec, &specs);
+            .find(|r| r.name == "example")
+            .expect("example result must exist");
+        let errors: Vec<_> = example_result.errors().collect();
         assert!(
-            result.is_ok(),
-            "Planning with @... spec names should succeed: {:?}",
-            result.err()
+            errors.is_empty(),
+            "Planning under registry-scoped specs should succeed: {:?}",
+            errors
+        );
+        assert!(
+            !example_result.execution_plan_set().plans.is_empty(),
+            "expected at least one plan for registry-grouped example"
         );
     }
 
     #[test]
     fn test_multiple_independent_errors_are_all_reported() {
-        // A spec referencing a non-existing type import AND a non-existing
+        // A spec referencing a non-existing data import AND a non-existing
         // spec should report errors for BOTH, not just stop at the first.
         let source = r#"spec demo
-data money from nonexistent_type_source
-with helper: nonexistent_spec
+data money: nonexistent_type_source.amount
+uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#;
 
-        let specs = parse(source, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), source.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            source.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
         assert!(result.is_err(), "Planning should fail with multiple errors");
@@ -709,18 +844,18 @@ rule total: helper.value + price"#;
 
         assert!(
             combined.contains("nonexistent_type_source"),
-            "Should report type import error for 'nonexistent_type_source'. Got:\n{}",
+            "Should report data import error for 'nonexistent_type_source'. Got:\n{}",
             combined
         );
 
-        // Must also report the spec reference error (not just the type error)
+        // Must also report the spec reference error (not just the data import error)
         assert!(
             combined.contains("nonexistent_spec"),
             "Should report spec reference error for 'nonexistent_spec'. Got:\n{}",
             combined
         );
 
-        // Should have at least 2 distinct kinds of errors (type + spec ref)
+        // Should have at least 2 distinct kinds of errors (data import + spec ref)
         assert!(
             errors.len() >= 2,
             "Expected at least 2 errors, got {}: {}",
@@ -728,37 +863,47 @@ rule total: helper.value + price"#;
             combined
         );
 
-        let type_import_err = errors
+        let data_import_err = errors
             .iter()
             .find(|e| e.to_string().contains("nonexistent_type_source"))
-            .expect("type import error");
-        let loc = type_import_err
+            .expect("data import error");
+        let loc = data_import_err
             .location()
-            .expect("type import error should carry source location");
-        assert_eq!(loc.attribute, "test.lemma");
+            .expect("data import error should carry source location");
+        assert_eq!(
+            loc.source_type,
+            crate::parsing::source::SourceType::Volatile
+        );
         assert_ne!(
             (loc.span.start, loc.span.end),
             (0, 0),
-            "type import error span should not be empty"
+            "data import error span should not be empty"
         );
     }
 
     #[test]
     fn test_type_error_does_not_suppress_cross_spec_data_error() {
-        // When a type import fails, errors about cross-spec data references
+        // When a data import fails, errors about cross-spec data references
         // (e.g. ext.some_data where ext is a spec ref to a non-existing spec)
         // must still be reported.
         let source = r#"spec demo
-data currency from missing_spec
-with ext: also_missing
+data currency: missing_spec.currency
+uses ext: also_missing
 rule val: ext.some_data"#;
 
-        let specs = parse(source, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), source.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            source.to_string(),
+        );
 
         let result = plan_single(&specs[0], &specs);
         assert!(result.is_err());
@@ -772,7 +917,7 @@ rule val: ext.some_data"#;
 
         assert!(
             combined.contains("missing_spec"),
-            "Should report type import error about 'missing_spec'. Got:\n{}",
+            "Should report data import error about 'missing_spec'. Got:\n{}",
             combined
         );
 
@@ -793,13 +938,18 @@ data x: money
 spec consumer 2025-01-01
 data imported_amount: money from dep
 rule passthrough: imported_amount"#;
-        let specs = parse(source, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut ctx = Context::new();
+        let repository = ctx.workspace();
         for spec in &specs {
-            ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry)
+            ctx.insert_spec(Arc::clone(&repository), Arc::new(spec.clone()))
                 .expect("insert spec");
         }
 
@@ -815,13 +965,12 @@ rule passthrough: imported_amount"#;
         };
         let effective = crate::parsing::ast::EffectiveDate::DateTimeValue(dt);
         let consumer_arc = ctx
-            .spec_sets()
-            .get("consumer")
+            .spec_set(&repository, "consumer")
             .and_then(|ss| ss.spec_at(&effective))
             .expect("consumer spec");
         let dag = super::discovery::build_dag_for_spec(&ctx, &consumer_arc, &effective)
             .expect("DAG should succeed");
-        let ordered_names: Vec<String> = dag.iter().map(|s| s.name.clone()).collect();
+        let ordered_names: Vec<String> = dag.iter().map(|s| s.1.name.clone()).collect();
         let dep_idx = ordered_names
             .iter()
             .position(|n| n == "dep")
@@ -840,18 +989,23 @@ rule passthrough: imported_amount"#;
     #[test]
     fn test_spec_dependency_cycle_surfaces_as_spec_error_and_populates_results() {
         let source = r#"spec a 2025-01-01
-with dep_b: b
+uses dep_b: b
 
 spec b 2025-01-01
 data imported_value: amount from a
 "#;
-        let specs = parse(source, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut ctx = Context::new();
+        let repository = ctx.workspace();
         for spec in &specs {
-            ctx.insert_spec(Arc::new(spec.clone()), spec.from_registry)
+            ctx.insert_spec(Arc::clone(&repository), Arc::new(spec.clone()))
                 .expect("insert spec");
         }
 
@@ -881,7 +1035,7 @@ data imported_value: amount from a
     // ========================================================================
 
     fn has_source_for(plan: &super::execution_plan::ExecutionPlan, name: &str) -> bool {
-        plan.sources.keys().any(|(n, _)| n == name)
+        plan.sources.iter().any(|e| e.name == name)
     }
 
     #[test]
@@ -892,17 +1046,24 @@ data x: 10
 rule val: x
 
 spec consumer
-with d: dep
+uses d: dep
 data d.x: 5
 rule result: d.val
 "#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
 
         let plan = plan_single(consumer, &specs).expect("planning should succeed");
 
@@ -924,12 +1085,19 @@ spec standalone
 data age: 25
 rule is_adult: age >= 18
 "#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
 
         let plan = plan_single(&specs[0], &specs).expect("planning should succeed");
 
@@ -953,19 +1121,26 @@ data threshold: 100
 rule limit: threshold
 
 spec calculator
-with r: rates
+uses r: rates
 data r.base_rate: 0.03
-with c: config
+uses c: config
 data c.threshold: 200
 rule combined: r.rate + c.limit
 "#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let calc = specs.iter().find(|s| s.name == "calculator").unwrap();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
 
         let plan = plan_single(calc, &specs).expect("planning should succeed");
 
@@ -987,17 +1162,24 @@ spec dep
 data x: 10
 
 spec consumer
-with d: dep
+uses d: dep
 data local: 99
 rule result: local
 "#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
 
         let plan = plan_single(consumer, &specs).expect("planning should succeed");
 
@@ -1021,21 +1203,37 @@ data x: 42
 rule val: x
 
 spec consumer
-with d: dep
+uses d: dep
 rule result: d.val
 "#;
-        let specs = parse(code, "test.lemma", &ResourceLimits::default())
-            .unwrap()
-            .specs;
+        let specs = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
         let consumer = specs.iter().find(|s| s.name == "consumer").unwrap();
 
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), code.to_string());
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            code.to_string(),
+        );
 
         let plan = plan_single(consumer, &specs).expect("planning should succeed");
 
-        for ((name, _), source_text) in &plan.sources {
-            let parsed = parse(source_text, "roundtrip.lemma", &ResourceLimits::default());
+        for super::execution_plan::SpecSource {
+            name,
+            source: source_text,
+            ..
+        } in &plan.sources
+        {
+            let parsed = parse(
+                source_text,
+                crate::parsing::source::SourceType::Volatile,
+                &ResourceLimits::default(),
+            );
             assert!(
                 parsed.is_ok(),
                 "source for '{}' must re-parse: {:?}\nsource:\n{}",

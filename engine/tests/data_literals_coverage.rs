@@ -1,4 +1,4 @@
-//! QA coverage for `DataValue::Literal(Value)` — inline literal bindings.
+//! QA coverage for `DataValue::Definition` with inline literal RHS (`value: Some(Value)`).
 //!
 //! One test per primitive literal kind + edge cases. Assertions pin exact
 //! values. Tests that encode invariants the implementation may not satisfy
@@ -11,7 +11,12 @@ use std::collections::HashMap;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(code, lemma::SourceType::Labeled("literals.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "literals.lemma",
+            ))),
+        )
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -24,7 +29,12 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(code, lemma::SourceType::Labeled("literals.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "literals.lemma",
+            ))),
+        )
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -46,7 +56,7 @@ fn rule_value(result: &lemma::evaluation::Response, rule_name: &str) -> String {
 fn run(engine: &Engine, spec: &str) -> lemma::evaluation::Response {
     let now = DateTimeValue::now();
     engine
-        .run(spec, Some(&now), HashMap::new(), false)
+        .run(None, spec, Some(&now), HashMap::new(), false)
         .expect("run")
 }
 
@@ -434,7 +444,12 @@ data d: -5 days
 rule r: d
 "#;
     let mut engine = Engine::new();
-    match engine.load(code, lemma::SourceType::Labeled("literals.lemma")) {
+    match engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "literals.lemma",
+        ))),
+    ) {
         Ok(()) => {
             let out = rule_value(&run(&engine, "s"), "r");
             assert!(

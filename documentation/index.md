@@ -177,7 +177,7 @@ data name: "John Doe"
 data salary: 5000
 
 spec manager
-with employee: base_employee
+uses employee: base_employee
 data employee.name: "Alice Smith"
 data employee.salary: 8000
 
@@ -186,7 +186,7 @@ rule manager_bonus: employee.salary * 0.15
 
 Spec names may include a `.version_tag` suffix (e.g. `spec pricing.v1`). An unversioned reference resolves to the latest loaded temporal version by natural sort.
 
-See: [reference.md -- Spec References](reference.md#spec-references-with)
+See: [reference.md -- Spec References](reference.md#spec-references-uses)
 
 ## Expressions
 

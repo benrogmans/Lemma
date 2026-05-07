@@ -6,7 +6,7 @@ use std::collections::HashMap;
 fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .run(spec_name, Some(&now), HashMap::new(), false)
+        .run(None, spec_name, Some(&now), HashMap::new(), false)
         .unwrap();
     response
         .get(rule_name)
@@ -27,7 +27,10 @@ rule check: leap_date
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
@@ -50,7 +53,10 @@ rule check: leap_date
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
@@ -73,7 +79,10 @@ rule next_day: start_date + 1 day
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
@@ -96,7 +105,10 @@ rule next_day: start_date + 1 day
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
@@ -119,7 +131,10 @@ rule next_month: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
@@ -142,7 +157,10 @@ rule next_month: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
@@ -165,7 +183,10 @@ rule next_year: leap_date + 1 year
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_year");
@@ -188,7 +209,10 @@ rule four_years_later: leap_date + 4 years
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "four_years_later");
@@ -211,7 +235,10 @@ rule three_months_ago: start_date - 3 months
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "three_months_ago");
@@ -234,7 +261,10 @@ rule twenty_months_later: start_date + 20 months
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "twenty_months_later");
@@ -257,7 +287,10 @@ rule last_year: start_date - 1 year
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "last_year");
@@ -281,7 +314,10 @@ rule days_diff: end_date - start_date
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
@@ -304,7 +340,10 @@ rule days_diff: end_date - start_date
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
@@ -326,7 +365,10 @@ rule next_day: start_datetime + 5 hours
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
@@ -351,7 +393,10 @@ rule prev_day: start_datetime - 5 hours
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "prev_day");
@@ -376,7 +421,10 @@ rule later: start_time + 90 minutes
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
@@ -399,7 +447,10 @@ rule later: start_time + 90 seconds
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
@@ -422,7 +473,10 @@ rule after_midnight: evening_time + 90 minutes
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "after_midnight");
@@ -446,7 +500,10 @@ rule timespan: end_time - start_time
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "timespan");
@@ -469,7 +526,10 @@ rule timespan: end_time - start_time
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "timespan");
@@ -491,7 +551,10 @@ rule future: start_date + 1000 days
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "future");
@@ -514,7 +577,10 @@ rule later: start_time + 2.5 hours
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
@@ -538,7 +604,10 @@ rule is_before: date1 < date2
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "is_before");
@@ -559,7 +628,10 @@ rule april: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "april");
@@ -582,7 +654,10 @@ rule january: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "january");

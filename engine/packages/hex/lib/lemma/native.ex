@@ -19,6 +19,7 @@ defmodule Lemma.Native do
   def lemma_new(_limits), do: :erlang.nif_error(:nif_not_loaded)
   def lemma_load(_resource, _code, _source_label), do: :erlang.nif_error(:nif_not_loaded)
   def lemma_load_from_paths(_resource, _paths), do: :erlang.nif_error(:nif_not_loaded)
+  def lemma_load_batch(_resource, _sources, _dependency), do: :erlang.nif_error(:nif_not_loaded)
   def lemma_list(_resource), do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_schema(_resource, _spec, _effective_opt),
@@ -44,6 +45,8 @@ defmodule Lemma.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_format(_code), do: :erlang.nif_error(:nif_not_loaded)
+
+  def lemma_repositories(_resource), do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_generate_openapi(_resource, _explanations_enabled, _effective_opt),
     do: :erlang.nif_error(:nif_not_loaded)

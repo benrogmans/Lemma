@@ -8,7 +8,12 @@ use std::collections::HashMap;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(code, lemma::SourceType::Labeled("nested.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "nested.lemma",
+            ))),
+        )
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -21,7 +26,12 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(code, lemma::SourceType::Labeled("nested.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "nested.lemma",
+            ))),
+        )
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -49,7 +59,7 @@ spec inner
 data x: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.x: 42
 rule r: i.x
 "#;
@@ -57,7 +67,7 @@ rule r: i.x
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run("outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -69,10 +79,10 @@ spec leaf
 data v: number
 
 spec middle
-with l: leaf
+uses l: leaf
 
 spec outer
-with m: middle
+uses m: middle
 data m.l.v: 7
 rule r: m.l.v
 "#;
@@ -80,7 +90,7 @@ rule r: m.l.v
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run("outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "7");
 }
@@ -110,7 +120,7 @@ spec inner
 data x: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.nonexistent: 42
 rule r: i.x
 "#;
@@ -131,7 +141,7 @@ spec inner
 data x: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.x: 1
 data i.x: 2
 rule r: i.x
@@ -147,29 +157,29 @@ rule r: i.x
 }
 
 #[test]
-fn binding_rhs_as_type_declaration_is_rejected() {
-    // Binding to a child data with `number` (type decl) is semantically
-    // wrong — bindings must supply VALUES, not typedefs.
+fn binding_rhs_as_definition_is_rejected() {
+    // Binding to a child data with `number` (schema definition RHS) is semantically
+    // wrong — bindings must supply VALUES, not defs.
     let code = r#"
 spec inner
 data x: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.x: number
 rule r: i.x
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.contains("literal value") || joined.contains("type declaration"),
-        "binding with type declaration must be rejected, got: {joined}"
+        joined.contains("literal value") || joined.contains("data definition"),
+        "binding with schema definition RHS must be rejected, got: {joined}"
     );
 }
 
 #[test]
 fn binding_rhs_as_spec_reference_is_rejected() {
-    // `data i.x: spec something` is the legacy removed syntax. Must fail.
+    // `data i.x: spec something` triggers the migration error for removed RHS shorthand.
     let code = r#"
 spec other
 data y: number -> default 1
@@ -178,8 +188,8 @@ spec inner
 data x: number
 
 spec outer
-with i: inner
-with o: other
+uses i: inner
+uses o: other
 data i.x: spec other
 rule r: i.x
 "#;
@@ -187,11 +197,11 @@ rule r: i.x
     let joined = load_err_joined(&mut engine, code);
     assert!(
         joined.contains("spec") || joined.contains("removed") || joined.contains("syntax"),
-        "binding RHS as spec keyword must be rejected (legacy syntax removed), got: {joined}"
+        "binding RHS `spec …` shorthand must be rejected (legacy syntax removed), got: {joined}"
     );
 }
 
-// ─── User override via with_data_values uses dotted input_key ────────
+// ─── User override via set_data_values uses dotted input_key ────────
 
 #[test]
 fn user_override_of_nested_binding_via_dotted_key() {
@@ -200,7 +210,7 @@ spec inner
 data x: number
 
 spec outer
-with i: inner
+uses i: inner
 data i.x: 42
 rule r: i.x
 "#;
@@ -210,7 +220,7 @@ rule r: i.x
     data.insert("i.x".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run("outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(
         rule_value(&resp, "r"),
@@ -226,10 +236,10 @@ spec leaf
 data v: number
 
 spec middle
-with l: leaf
+uses l: leaf
 
 spec outer
-with m: middle
+uses m: middle
 data m.l.v: 5
 rule r: m.l.v
 "#;
@@ -239,7 +249,7 @@ rule r: m.l.v
     data.insert("m.l.v".to_string(), "123".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run("outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "123");
 }
@@ -260,7 +270,7 @@ rule r: x
     let mut data = HashMap::new();
     data.insert("X".to_string(), "99".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run("s", Some(&now), data, false);
+    let result = engine.run(None, "s", Some(&now), data, false);
     assert!(
         result.is_err(),
         "uppercase 'X' must not match 'x'; engine silently accepted case-insensitive key"

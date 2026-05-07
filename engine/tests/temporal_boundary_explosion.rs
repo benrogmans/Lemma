@@ -24,7 +24,7 @@ fn many_global_boundaries_inside_consumer_range_plan_at_each_still_consistent() 
 data v: 1
 
 spec consumer 2025-01-01
-with s: stable
+uses s: stable
 rule out: s.v
 
 "#,
@@ -35,12 +35,15 @@ rule out: s.v
 
     let mut engine = Engine::new();
     engine
-        .load(&src, SourceType::Labeled("big.lemma"))
+        .load(
+            &src,
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("big.lemma"))),
+        )
         .expect("many specs with boundaries inside consumer range");
 
     for month in 1..=12 {
         let d = date(2025, month, 5);
-        let r = engine.run("consumer", Some(&d), HashMap::new(), false);
+        let r = engine.run(None, "consumer", Some(&d), HashMap::new(), false);
         assert!(r.is_ok(), "month {month}: {:?}", r.err());
         let resp = r.unwrap();
         let rule = resp.results.get("out").expect("out");

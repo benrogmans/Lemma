@@ -4,7 +4,7 @@ title: WebAssembly
 
 # Lemma engine in the browser
 
-JS API mirrors Rust types (`Response`, `SpecSchema`, spec list entries) as plain objects.
+JS API mirrors Rust shapes: `Response` and `SpecSchema` as plain objects; `list()` is `JSON.stringify` of `Vec<ResolvedRepository>` from `Engine::list()` — for each resolved repo, `specs` is a list of spec sets (`LemmaSpecSet`: `name`, `repository`, `specs`), and each inner `specs` entry is a full `LemmaSpec` (AST) with `effective_from`, `start_line`, and `source_type` (no planning payloads; use `schema` for field shapes).
 
 ## Install
 
@@ -33,7 +33,7 @@ try {
   console.error(Array.isArray(errs) ? errs.join('\n') : errs);
 }
 
-const response = engine.run('example', [], {}, null);
+const response = engine.run(null, 'example', [], {}, null);
 console.log(response.results);
 ```
 
@@ -54,7 +54,7 @@ console.log(response.results);
 - **`Engine`** — `load`, `list`, `schema`, `run`, `format` (supported surface for now).
 - **`@lemmabase/lemma-engine/lsp-client`** — `LspClient`: `start()` (no args), `initialize()`, `didOpen`, `onDiagnostics`, `formatting`, `semanticTokensFull`. Call `init()` first.
 
-**Spec id** (for `show` / `run`): `name`.
+**Page id** (for `show` / `run`): disambiguated key `repository::name` plus optional effective (see playground `specKey`).
 
 See [engine/packages/npm/README.md](../engine/packages/npm/README.md).
 

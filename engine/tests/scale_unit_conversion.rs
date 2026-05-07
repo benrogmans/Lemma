@@ -22,12 +22,16 @@ rule check: accept
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "pricing",
             Some(&now),
             HashMap::from([("price".to_string(), "100 eur".to_string())]),
@@ -64,12 +68,16 @@ rule check: accept
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let err = engine
         .run(
+            None,
             "pricing",
             Some(&now),
             HashMap::from([("price".to_string(), "100 btc".to_string())]),
@@ -94,12 +102,15 @@ rule price_usd: 100 eur in usd
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("pricing", Some(&now), HashMap::new(), false)
+        .run(None, "pricing", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -140,11 +151,16 @@ rule taxable: gross - pension
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
-    let response = engine.run("t", Some(&now), HashMap::new(), false).unwrap();
+    let response = engine
+        .run(None, "t", Some(&now), HashMap::new(), false)
+        .unwrap();
 
     let rule_result = response
         .results
@@ -178,7 +194,10 @@ rule price_gbp: 100 eur in gbp
 
     let mut engine = Engine::new();
     let load_err = engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap_err();
     let msg = load_err
         .errors
@@ -210,12 +229,15 @@ rule base_shipping: 5.99
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("shipping", Some(&now), HashMap::new(), false)
+        .run(None, "shipping", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let rule_result = response
@@ -253,12 +275,15 @@ rule total: base_fee + surcharge
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("shipping", Some(&now), HashMap::new(), false)
+        .run(None, "shipping", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let rule_result = response

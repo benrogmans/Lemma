@@ -1,7 +1,8 @@
+use lemma::formatting::format_parse_result;
 use lemma::{format_source, parse, ResourceLimits};
 
 fn format_and_extract_rule_expr(source: &str) -> String {
-    let formatted = format_source(source, "test.lemma").unwrap();
+    let formatted = format_source(source, lemma::parsing::source::SourceType::Volatile).unwrap();
     let lines: Vec<&str> = formatted.lines().collect();
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
@@ -128,21 +129,22 @@ const EXAMPLE_FILES: &[(&str, &str)] = &[
 /// parse(source) and parse(format(source)) must have the same specs,
 /// with the same names, data references, rule names, and unless-clause counts.
 fn round_trip_example(filename: &str, source: &str) {
-    let formatted = format_source(source, filename)
+    let st = lemma::parsing::source::SourceType::Volatile;
+    let formatted = format_source(source, st.clone())
         .unwrap_or_else(|e| panic!("[{}] format_source failed: {:?}", filename, e));
 
     let limits = ResourceLimits::default();
-    let original_specs = parse(source, filename, &limits)
+    let original_specs = parse(source, st.clone(), &limits)
         .unwrap_or_else(|e| panic!("[{}] initial parse failed: {:?}", filename, e))
-        .specs;
-    let reformatted_specs = parse(&formatted, filename, &limits)
+        .into_flattened_specs();
+    let reformatted_specs = parse(&formatted, st, &limits)
         .unwrap_or_else(|e| {
             panic!(
                 "[{}] re-parse of formatted output failed: {:?} Formatted output: {}",
                 filename, e, formatted
             )
         })
-        .specs;
+        .into_flattened_specs();
 
     assert_eq!(
         original_specs.len(),
@@ -168,8 +170,10 @@ fn round_trip_example(filename: &str, source: &str) {
             orig.name
         );
 
-        let orig_data_refs: Vec<_> = orig.data.iter().map(|f| &f.reference).collect();
-        let refmt_data_refs: Vec<_> = refmt.data.iter().map(|f| &f.reference).collect();
+        let mut orig_data_refs: Vec<_> = orig.data.iter().map(|f| &f.reference).collect();
+        let mut refmt_data_refs: Vec<_> = refmt.data.iter().map(|f| &f.reference).collect();
+        orig_data_refs.sort_by_key(|r| r.to_string());
+        refmt_data_refs.sort_by_key(|r| r.to_string());
         assert_eq!(
             orig_data_refs, refmt_data_refs,
             "[{}] spec '{}' data references mismatch",
@@ -269,14 +273,15 @@ fn idempotency_precedence_expressions() {
             "spec test data a: 1 data b: 2 data c: 3 data d: 4 rule x: {}",
             expr
         );
-        let output1 = format_source(&src, "test.lemma")
+        let output1 = format_source(&src, lemma::parsing::source::SourceType::Volatile)
             .unwrap_or_else(|e| panic!("first format failed for '{}': {:?}", expr, e));
-        let output2 = format_source(&output1, "test.lemma").unwrap_or_else(|e| {
-            panic!(
-                "second format failed for '{}': {:?} First output: {}",
-                expr, e, output1
-            )
-        });
+        let output2 = format_source(&output1, lemma::parsing::source::SourceType::Volatile)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "second format failed for '{}': {:?} First output: {}",
+                    expr, e, output1
+                )
+            });
         assert_eq!(
             output1, output2,
             "formatter is not idempotent for expression '{}'. First: {} Second: {}",
@@ -286,37 +291,95 @@ fn idempotency_precedence_expressions() {
 }
 
 // =============================================================================
-// Type import round-trip tests
+// Data import round-trip tests
 // =============================================================================
 
 #[test]
-fn round_trip_type_import_with_effective() {
-    let source = "spec consumer data money from finance 2026-01-15 data p: money";
-    let formatted = format_source(source, "test.lemma").unwrap();
+fn round_trip_value_copy_reference_with_effective() {
+    let source = "spec consumer data money: money from finance 2026-01-15 data p: money";
+    let formatted = format_source(source, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert!(
-        formatted.contains("data money from finance 2026-01-15"),
-        "expected effective datetime in formatted output: {}",
+        formatted.contains("money from finance 2026-01-15"),
+        "expected reference + effective datetime in formatted output: {}",
         formatted
     );
-    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    let reformatted =
+        format_source(&formatted, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert_eq!(
         formatted, reformatted,
-        "type import with effective is not idempotent"
+        "value-copy reference with effective is not idempotent"
     );
 }
 
 #[test]
-fn round_trip_type_import_registry_with_effective() {
-    let source = "spec consumer data money from @lemma/std/finance 2026-01-15 data p: money";
-    let formatted = format_source(source, "test.lemma").unwrap();
+fn round_trip_value_copy_reference_registry_with_effective() {
+    let source = "spec consumer data money: money from @lemma/std finance 2026-01-15 data p: money";
+    let formatted = format_source(source, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert!(
-        formatted.contains("data money from @lemma/std/finance 2026-01-15"),
-        "expected registry+effective in formatted output: {}",
+        formatted.contains("money from @lemma/std finance 2026-01-15"),
+        "expected registry base + effective in formatted output: {}",
         formatted
     );
-    let reformatted = format_source(&formatted, "test.lemma").unwrap();
+    let reformatted =
+        format_source(&formatted, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert_eq!(
         formatted, reformatted,
-        "registry type import with effective is not idempotent"
+        "registry value-copy reference with effective is not idempotent"
+    );
+}
+
+// =============================================================================
+// `repo` declaration formatting
+// =============================================================================
+
+#[test]
+fn format_repo_block_preserves_repository_header_in_output() {
+    let src = "repo pack\n\nspec a\ndata x: 1";
+    let parsed = parse(
+        src,
+        lemma::parsing::source::SourceType::Volatile,
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let out = format_parse_result(&parsed);
+    assert!(
+        out.contains("repo pack"),
+        "formatted output must retain repo header:\n{out}"
+    );
+}
+
+#[test]
+fn format_two_repo_blocks_emit_two_headers() {
+    let src = "repo p1\n\nspec a\ndata x: 1\n\nrepo p2\n\nspec b\ndata y: 2";
+    let parsed = parse(
+        src,
+        lemma::parsing::source::SourceType::Volatile,
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let out = format_parse_result(&parsed);
+    assert!(out.contains("repo p1") && out.contains("repo p2"), "{out}");
+}
+
+#[test]
+fn format_repo_sections_idempotent_under_format_parse_result_roundtrip() {
+    let src = "repo q\n\nspec z\ndata n: 7";
+    let parsed = parse(
+        src,
+        lemma::parsing::source::SourceType::Volatile,
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let once = format_parse_result(&parsed);
+    let again = parse(
+        &once,
+        lemma::parsing::source::SourceType::Volatile,
+        &ResourceLimits::default(),
+    )
+    .unwrap();
+    let twice = format_parse_result(&again);
+    assert_eq!(
+        once, twice,
+        "format_parse_result must be stable when reapplied"
     );
 }

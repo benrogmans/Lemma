@@ -1,13 +1,40 @@
-use crate::parsing::ast::Span;
+use crate::parsing::ast::{LemmaRepository, Span};
 use std::collections::HashMap;
+use std::fmt;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-/// Positional source location: file and span.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceType {
+    Path(Arc<PathBuf>),
+    Volatile,
+    Registry(Arc<LemmaRepository>),
+}
+
+impl fmt::Display for SourceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SourceType::Path(path) => write!(f, "{}", path.display()),
+            SourceType::Volatile => write!(f, "volatile"),
+            SourceType::Registry(repo) => {
+                if let Some(name) = &repo.name {
+                    write!(f, "{}", name)
+                } else {
+                    write!(f, "<anonymous registry>")
+                }
+            }
+        }
+    }
+}
+
+/// Positional source location: source id and span.
 ///
 /// Text is resolved via `text_from(sources)` when needed. No embedded source text.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Source {
-    /// Source file identifier (e.g., filename)
-    pub attribute: String,
+    /// Source identifier (e.g. filesystem path label)
+    pub source_type: SourceType,
 
     /// Span in source code
     pub span: Span,
@@ -15,20 +42,17 @@ pub struct Source {
 
 impl Source {
     #[must_use]
-    pub fn new(attribute: impl Into<String>, span: Span) -> Self {
-        Self {
-            attribute: attribute.into(),
-            span,
-        }
+    pub fn new(source_type: SourceType, span: Span) -> Self {
+        Self { source_type, span }
     }
 
     /// Resolve source text from the sources map.
     #[must_use]
     pub fn text_from<'a>(
         &self,
-        sources: &'a HashMap<String, String>,
+        sources: &'a HashMap<SourceType, String>,
     ) -> Option<std::borrow::Cow<'a, str>> {
-        let s = sources.get(&self.attribute)?;
+        let s = sources.get(&self.source_type)?;
         s.get(self.span.start..self.span.end)
             .map(std::borrow::Cow::Borrowed)
     }
@@ -61,7 +85,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span);
+        let loc = Source::new(SourceType::Volatile, span);
         assert_eq!(loc.extract_text(source), Some("hello".to_string()));
     }
 
@@ -74,7 +98,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span);
+        let loc = Source::new(SourceType::Volatile, span);
         assert_eq!(loc.extract_text(source), Some("hello world".to_string()));
     }
 
@@ -87,7 +111,7 @@ mod tests {
             line: 1,
             col: 5,
         };
-        let loc = Source::new("test.lemma", span);
+        let loc = Source::new(SourceType::Volatile, span);
         assert_eq!(loc.extract_text(source), Some("".to_string()));
     }
 
@@ -100,7 +124,7 @@ mod tests {
             line: 1,
             col: 10,
         };
-        let loc = Source::new("test.lemma", span);
+        let loc = Source::new(SourceType::Volatile, span);
         assert_eq!(loc.extract_text(source), None);
     }
 
@@ -113,7 +137,7 @@ mod tests {
             line: 1,
             col: 0,
         };
-        let loc = Source::new("test.lemma", span);
+        let loc = Source::new(SourceType::Volatile, span);
         assert_eq!(loc.extract_text(source), None);
     }
 
@@ -126,16 +150,17 @@ mod tests {
             line: 1,
             col: 6,
         };
-        let loc = Source::new("test.lemma", span);
+        let loc = Source::new(SourceType::Volatile, span);
         assert_eq!(loc.extract_text(source), Some("世界".to_string()));
     }
 
     #[test]
     fn test_text_from() {
         let mut sources = HashMap::new();
-        sources.insert("test.lemma".to_string(), "hello world".to_string());
+        let st = SourceType::Path(Arc::new(PathBuf::from("test.lemma")));
+        sources.insert(st.clone(), "hello world".to_string());
         let loc = Source::new(
-            "test.lemma",
+            st,
             Span {
                 start: 0,
                 end: 5,

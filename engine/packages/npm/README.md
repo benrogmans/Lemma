@@ -30,7 +30,7 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 await engine.load(pricing, 'pricing.lemma');
 
-const response = engine.run('pricing', [], { quantity: 50, is_vip: false }, null);
+const response = engine.run(null, 'pricing', [], { quantity: 50, is_vip: false }, null);
 // response.results.unit_price → 16 eur
 // response.results.total      → 800 eur
 ```
@@ -112,12 +112,29 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | Method | Description |
 |--------|-------------|
 | `load(code, attribute?)` | Parse and validate a `.lemma` spec set. Resolves on success; rejects with `EngineError[]`. |
-| `list()` | All loaded specs with metadata and an inlined `SpecSchema`. |
-| `schema(spec, effective?)` | `SpecSchema` for the spec at the given effective date. |
-| `run(spec, rules, data, effective?)` | Evaluate. `rules: []` runs everything; pass an array to filter. Returns a `Response`. |
+| `load_batch(sources, dependency?)` | Load many sources in one planning pass (see `lemma.d.ts`). |
+| `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. Rejects with `EngineError[]`. |
+| `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Each set has `name`, `repository`, and `specs` — temporal versions as full `LemmaSpec` objects (`effective_from`, `start_line`, `source_type`, …). |
+| `schema(repo, name, effective?)` | `SpecSchema`; `repo` null for workspace. |
+| `run(repo, name, ruleNames, data, effective?)` | Evaluate. `rules: []` runs everything; pass an array to filter. Returns a `Response`. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled - see `lemma.d.ts`.
+
+### Registry dependencies
+
+Specs that reference `uses … @org/pkg` need that package available. `fetch` only downloads; call `load_batch` to load the dependency, then load your workspace:
+
+```javascript
+import { Lemma } from '@lemmabase/lemma-engine';
+
+const engine = await Lemma();
+const { source, id } = await engine.fetch('@lemma/std');
+await engine.load_batch({ '': source }, id);
+await engine.load(sourceThatUsesStd, 'app.lemma');
+```
+
+In the browser, the registry must allow your origin (CORS). Use `https` or `http://localhost` when using `fetch`.
 
 ## Status
 

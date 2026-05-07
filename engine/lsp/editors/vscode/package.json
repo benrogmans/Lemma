@@ -2,7 +2,7 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.12",
+  "version": "0.8.13",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "repository": {
@@ -33,13 +33,6 @@
         "configuration": "./language-configuration.json"
       }
     ],
-    "grammars": [
-      {
-        "language": "lemma",
-        "scopeName": "source.lemma",
-        "path": "./syntaxes/lemma.tmLanguage.json"
-      }
-    ],
     "configuration": {
       "title": "Lemma",
       "properties": {
@@ -54,7 +47,23 @@
       "[lemma]": {
         "editor.formatOnSave": true,
         "editor.formatOnSaveMode": "file",
-        "editor.defaultFormatter": "lemma.lemma-language"
+        "editor.defaultFormatter": "lemma.lemma-language",
+        "editor.semanticTokenColorCustomizations": {
+          "rules": {
+            "namespace":      "#BD8EBB",
+            "class":          "#5DBDAA",
+            "property":       "#A3B5DF",
+            "function":       "#A3B5DF",
+            "string":         "#D07868",
+            "comment":        "#595945",
+            "keyword":        "#6BA0C2",
+            "operator":       "#80807A",
+            "controlKeyword": "#726B83",
+            "dataBody":       "#D07868",
+            "punctuation":    "#79987F",
+            "reference":      "#A59582"
+          }
+        }
       }
     }
   },
@@ -71,6 +80,9 @@
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.74.0",
     "typescript": "^5.3.0",
-    "@vscode/vsce": "^2.22.0"
+    "@vscode/vsce": "^3.9.1"
+  },
+  "overrides": {
+    "glob": "^13.0.6"
   }
 }

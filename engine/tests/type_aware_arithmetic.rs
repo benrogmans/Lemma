@@ -19,11 +19,15 @@ rule test_passes: price_after_discount is expected
 "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "test_money_minus_percentage",
             Some(&now),
             HashMap::new(),
@@ -58,11 +62,15 @@ rule test_passes: price_with_markup is expected
 "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "test_money_plus_percentage",
             Some(&now),
             HashMap::new(),
@@ -94,11 +102,15 @@ rule test_passes: result is expected
 "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "test_number_times_percentage",
             Some(&now),
             HashMap::new(),
@@ -131,11 +143,15 @@ rule test_passes: final_price is expected
 "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "test_with_rule_reference",
             Some(&now),
             HashMap::new(),
@@ -170,11 +186,15 @@ rule test_passes: after_second is expected
 "#;
 
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
+            None,
             "test_chained_percentages",
             Some(&now),
             HashMap::new(),

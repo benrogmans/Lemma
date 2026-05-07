@@ -1,4 +1,4 @@
-spec nl/tax/net_salary 2026-01-01
+spec net_salary 2026-01-01
 """
 Dutch Net Salary Calculator 2026
 
@@ -40,7 +40,6 @@ data income_source_type: text
   -> option "employment"
   -> option "benefit"
 
-data pay_period           : pay_period
 data gross_salary         : money -> help "Gross salary per chosen period. Found on your payslip or in your employment contract."
 data income_source        : income_source_type -> default "employment" -> help "Source of income: employment for employees, benefit for unemployment/disability/welfare. Employees receive the employment tax credit, benefit recipients do not."
 data pension_contribution : money -> default 0 eur -> help "Employee share of the pension premium per period. Found on your payslip under pension deduction. Reduces taxable salary."

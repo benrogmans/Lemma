@@ -1,38 +1,48 @@
-//! Parse SpecSet identifier: a spec `name`.
+//! Parse spec set identifiers: a single spec set `name`.
 //!
-//! Effective datetime is never embedded in the id string; pass it separately (e.g. CLI `--effective`).
+//! Effective datetime is never embedded in the id; pass it separately
+//! (e.g. CLI `--effective`, HTTP `Accept-Datetime`).
 
 use crate::error::Error;
 use crate::limits::MAX_SPEC_NAME_LENGTH;
-use crate::parsing::ast::DateTimeValue;
 
-/// Parse a SpecSet identifier into logical name and optional effective.
-pub fn parse_spec_set_id(s: &str) -> Result<(String, Option<DateTimeValue>), Error> {
+/// Validate and normalize a spec set identifier (a workspace spec name).
+///
+/// Trims whitespace and rejects empty input, embedded whitespace, and the
+/// version sigils `~` / `^` (which once denoted revisions and are now reserved).
+/// Evaluation entry points use the workspace main base only, so `from` qualifiers
+/// are not accepted here.
+pub fn parse_spec_set_id(s: &str) -> Result<String, Error> {
     let s = s.trim();
     if s.is_empty() {
         return Err(Error::request(
-            "SpecSet identifier cannot be empty",
-            Some("Use a spec name"),
+            "Spec set identifier cannot be empty",
+            Some("Use a spec set name"),
         ));
     }
 
     if s.contains('~') {
         return Err(Error::request(
-            "SpecSet identifier cannot contain '~'",
+            "Spec set identifier cannot contain '~'",
             Some("Use a plain spec name"),
         ));
     }
 
     if s.contains('^') {
         return Err(Error::request(
-            "SpecSet identifier cannot contain '^'",
+            "Spec set identifier cannot contain '^'",
             Some("Use a plain spec name"),
         ));
     }
 
-    let name = s.to_string();
+    if s.split_whitespace().count() != 1 {
+        return Err(Error::request(
+            "Spec set identifier must be a single spec name",
+            Some("Specs run from the workspace main base; do not include an extra repository qualifier"),
+        ));
+    }
 
-    if name.len() > MAX_SPEC_NAME_LENGTH {
+    if s.len() > MAX_SPEC_NAME_LENGTH {
         return Err(Error::request(
             format!(
                 "Spec name exceeds maximum length ({} characters)",
@@ -42,7 +52,7 @@ pub fn parse_spec_set_id(s: &str) -> Result<(String, Option<DateTimeValue>), Err
         ));
     }
 
-    Ok((name, None))
+    Ok(s.to_string())
 }
 
 #[cfg(test)]
@@ -51,14 +61,17 @@ mod tests {
 
     #[test]
     fn parse_name_only() {
-        assert_eq!(
-            parse_spec_set_id("pricing").unwrap(),
-            ("pricing".to_string(), None)
-        );
+        assert_eq!(parse_spec_set_id("pricing").unwrap(), "pricing".to_string());
         assert_eq!(
             parse_spec_set_id("  pricing  ").unwrap(),
-            ("pricing".to_string(), None)
+            "pricing".to_string()
         );
+    }
+
+    #[test]
+    fn repository_qualifier_rejected() {
+        assert!(parse_spec_set_id("nl/tax pricing").is_err());
+        assert!(parse_spec_set_id("@lemma/std pricing").is_err());
     }
 
     #[test]

@@ -17,13 +17,19 @@ data c: 100
 rule equal_true: a is b
 rule equal_false: a is c
 "#,
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_numbers", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_equal_numbers",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let equal_true = response.results.get("equal_true").unwrap();
@@ -47,13 +53,13 @@ data other: "world"
 rule same_greeting: greeting is "hello"
 rule different_greeting: greeting is other
 "#,
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_text", Some(&now), HashMap::new(), false)
+        .run(None, "test_equal_text", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let same = response.results.get("same_greeting").unwrap();
@@ -78,13 +84,19 @@ data flag_c: false
 rule both_true: flag_a is flag_b
 rule mixed: flag_a is flag_c
 "#,
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_booleans", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_equal_booleans",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let both_true = response.results.get("both_true").unwrap();
@@ -109,13 +121,19 @@ rule message: "inactive"
   unless status is "active" then "active"
   unless count is 10 then "count is 10"
 "#,
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test_equal_conditions", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_equal_conditions",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
         .unwrap();
 
     let message = response.results.get("message").unwrap();

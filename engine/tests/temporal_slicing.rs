@@ -25,7 +25,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(spec_name, Some(effective), HashMap::new(), false)
+        .run(None, spec_name, Some(effective), HashMap::new(), false)
         .unwrap()
 }
 
@@ -39,7 +39,9 @@ fn eval_with(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.run(spec_name, Some(effective), map, false).unwrap()
+    engine
+        .run(None, spec_name, Some(effective), map, false)
+        .unwrap()
 }
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
@@ -72,7 +74,9 @@ fn single_unversioned_dependency() {
     engine
         .load(
             "spec config\ndata base_rate: 100",
-            lemma::SourceType::Labeled("config.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "config.lemma",
+            ))),
         )
         .unwrap();
 
@@ -80,10 +84,12 @@ fn single_unversioned_dependency() {
         .load(
             r#"
 spec pricing 2025-01-01
-with cfg: config
+uses cfg: config
 rule rate: cfg.base_rate * 2
 "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .unwrap();
 
@@ -109,7 +115,9 @@ data base_rate: 100
 spec config 2025-04-01
 data base_rate: 200
 "#,
-            lemma::SourceType::Labeled("config.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "config.lemma",
+            ))),
         )
         .unwrap();
 
@@ -117,10 +125,12 @@ data base_rate: 200
         .load(
             r#"
 spec pricing 2025-01-01
-with cfg: config
+uses cfg: config
 rule rate: cfg.base_rate
 "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .unwrap();
 
@@ -143,7 +153,9 @@ data rate: 50
 spec config 2025-01-01
 data rate: 75
 "#,
-            lemma::SourceType::Labeled("config.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "config.lemma",
+            ))),
         )
         .unwrap();
 
@@ -151,10 +163,12 @@ data rate: 75
         .load(
             r#"
 spec pricing 2025-01-01
-with cfg: config
+uses cfg: config
 rule rate: cfg.rate
 "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .unwrap();
 
@@ -182,7 +196,7 @@ data rate: 20
 spec rates 2025-07-01
 data rate: 30
 "#,
-            lemma::SourceType::Labeled("rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("rates.lemma"))),
         )
         .unwrap();
 
@@ -190,11 +204,13 @@ data rate: 30
         .load(
             r#"
 spec pricing 2025-01-01
-with r: rates
+uses r: rates
 data quantity: number
 rule total: quantity * r.rate
 "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .unwrap();
 
@@ -232,7 +248,7 @@ data rate: 30
 spec rates 2025-09-01
 data rate: 40
 "#,
-            lemma::SourceType::Labeled("rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("rates.lemma"))),
         )
         .unwrap();
 
@@ -241,10 +257,12 @@ data rate: 40
         .load(
             r#"
 spec pricing 2025-04-01
-with r: rates
+uses r: rates
 rule rate: r.rate
 "#,
-            lemma::SourceType::Labeled("pricing.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
         )
         .unwrap();
 
@@ -272,7 +290,9 @@ data vat: 19
 spec tax_rates 2025-04-01
 data vat: 21
 "#,
-            lemma::SourceType::Labeled("tax_rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "tax_rates.lemma",
+            ))),
         )
         .unwrap();
 
@@ -286,7 +306,9 @@ data fee: 5
 spec shipping_rates 2025-07-01
 data fee: 8
 "#,
-            lemma::SourceType::Labeled("shipping_rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "shipping_rates.lemma",
+            ))),
         )
         .unwrap();
 
@@ -295,14 +317,16 @@ data fee: 8
         .load(
             r#"
 spec invoice 2025-01-01
-with tax: tax_rates
-with shipping: shipping_rates
+uses tax: tax_rates
+uses shipping: shipping_rates
 data price: number
 rule vat_amount: price * tax.vat / 100
 rule shipping_fee: shipping.fee
 rule total: price + vat_amount + shipping_fee
 "#,
-            lemma::SourceType::Labeled("invoice.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "invoice.lemma",
+            ))),
         )
         .unwrap();
 
@@ -354,7 +378,9 @@ data vat: 19
 spec tax_rates 2025-04-01
 data vat: 21
 "#,
-            lemma::SourceType::Labeled("tax_rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "tax_rates.lemma",
+            ))),
         )
         .unwrap();
 
@@ -367,7 +393,9 @@ data fee: 5
 spec shipping_rates 2025-04-01
 data fee: 8
 "#,
-            lemma::SourceType::Labeled("shipping_rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "shipping_rates.lemma",
+            ))),
         )
         .unwrap();
 
@@ -375,11 +403,13 @@ data fee: 8
         .load(
             r#"
 spec invoice 2025-01-01
-with tax: tax_rates
-with shipping: shipping_rates
+uses tax: tax_rates
+uses shipping: shipping_rates
 rule combined: tax.vat + shipping.fee
 "#,
-            lemma::SourceType::Labeled("invoice.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "invoice.lemma",
+            ))),
         )
         .unwrap();
 
@@ -406,7 +436,9 @@ fn one_dep_versioned_one_dep_unversioned() {
 spec constants
 data pi: 3
 "#,
-            lemma::SourceType::Labeled("constants.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "constants.lemma",
+            ))),
         )
         .unwrap();
 
@@ -419,7 +451,7 @@ data multiplier: 2
 spec rates 2025-06-01
 data multiplier: 4
 "#,
-            lemma::SourceType::Labeled("rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("rates.lemma"))),
         )
         .unwrap();
 
@@ -427,11 +459,11 @@ data multiplier: 4
         .load(
             r#"
 spec calc 2025-01-01
-with c: constants
-with r: rates
+uses c: constants
+uses r: rates
 rule result: c.pi * r.multiplier
 "#,
-            lemma::SourceType::Labeled("calc.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("calc.lemma"))),
         )
         .unwrap();
 
@@ -457,7 +489,9 @@ data multiplier: 2
 spec base_rates 2025-06-01
 data multiplier: 3
 "#,
-            lemma::SourceType::Labeled("base_rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "base_rates.lemma",
+            ))),
         )
         .unwrap();
 
@@ -466,11 +500,13 @@ data multiplier: 3
         .load(
             r#"
 spec intermediate
-with base: base_rates
+uses base: base_rates
 data value: 10
 rule adjusted: value * base.multiplier
 "#,
-            lemma::SourceType::Labeled("intermediate.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "intermediate.lemma",
+            ))),
         )
         .unwrap();
 
@@ -479,10 +515,10 @@ rule adjusted: value * base.multiplier
         .load(
             r#"
 spec top 2025-01-01
-with mid: intermediate
+uses mid: intermediate
 rule result: mid.adjusted
 "#,
-            lemma::SourceType::Labeled("top.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("top.lemma"))),
         )
         .unwrap();
 
@@ -504,7 +540,7 @@ data factor: 2
 spec deep 2025-06-01
 data factor: 5
 "#,
-            lemma::SourceType::Labeled("deep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("deep.lemma"))),
         )
         .unwrap();
 
@@ -513,16 +549,18 @@ data factor: 5
         .load(
             r#"
 spec middle
-with d: deep
+uses d: deep
 data base: 10
 rule value: base * d.factor
 
 spec middle 2025-04-01
-with d: deep
+uses d: deep
 data base: 100
 rule value: base * d.factor
 "#,
-            lemma::SourceType::Labeled("middle.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "middle.lemma",
+            ))),
         )
         .unwrap();
 
@@ -531,10 +569,10 @@ rule value: base * d.factor
         .load(
             r#"
 spec top 2025-01-01
-with m: middle
+uses m: middle
 rule result: m.value
 "#,
-            lemma::SourceType::Labeled("top.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("top.lemma"))),
         )
         .unwrap();
 
@@ -560,7 +598,9 @@ data value: 10
 spec shared 2025-06-01
 data value: 20
 "#,
-            lemma::SourceType::Labeled("shared.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "shared.lemma",
+            ))),
         )
         .unwrap();
 
@@ -569,10 +609,10 @@ data value: 20
         .load(
             r#"
 spec left_branch
-with s: shared
+uses s: shared
 rule doubled: s.value * 2
 "#,
-            lemma::SourceType::Labeled("left.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("left.lemma"))),
         )
         .unwrap();
 
@@ -580,10 +620,10 @@ rule doubled: s.value * 2
         .load(
             r#"
 spec right_branch
-with s: shared
+uses s: shared
 rule tripled: s.value * 3
 "#,
-            lemma::SourceType::Labeled("right.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("right.lemma"))),
         )
         .unwrap();
 
@@ -592,11 +632,11 @@ rule tripled: s.value * 3
         .load(
             r#"
 spec top 2025-01-01
-with l: left_branch
-with r: right_branch
+uses l: left_branch
+uses r: right_branch
 rule total: l.doubled + r.tripled
 "#,
-            lemma::SourceType::Labeled("top.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("top.lemma"))),
         )
         .unwrap();
 
@@ -620,7 +660,9 @@ data base: 10
 spec shared 2025-08-01
 data base: 50
 "#,
-            lemma::SourceType::Labeled("shared.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "shared.lemma",
+            ))),
         )
         .unwrap();
 
@@ -629,16 +671,16 @@ data base: 50
         .load(
             r#"
 spec left
-with s: shared
+uses s: shared
 data add: 1
 rule result: s.base + add
 
 spec left 2025-04-01
-with s: shared
+uses s: shared
 data add: 2
 rule result: s.base + add
 "#,
-            lemma::SourceType::Labeled("left.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("left.lemma"))),
         )
         .unwrap();
 
@@ -647,10 +689,10 @@ rule result: s.base + add
         .load(
             r#"
 spec right
-with s: shared
+uses s: shared
 rule result: s.base * 2
 "#,
-            lemma::SourceType::Labeled("right.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("right.lemma"))),
         )
         .unwrap();
 
@@ -659,11 +701,11 @@ rule result: s.base * 2
         .load(
             r#"
 spec top 2025-01-01
-with l: left
-with r: right
+uses l: left
+uses r: right
 rule total: l.result + r.result
 "#,
-            lemma::SourceType::Labeled("top.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("top.lemma"))),
         )
         .unwrap();
 
@@ -692,7 +734,7 @@ data tax: 19
 spec rates 2026-01-01
 data tax: 21
 "#,
-            lemma::SourceType::Labeled("rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("rates.lemma"))),
         )
         .unwrap();
 
@@ -700,11 +742,13 @@ data tax: 21
         .load(
             r#"
 spec calculator
-with r: rates
+uses r: rates
 data income: number
 rule tax_amount: income * r.tax / 100
 "#,
-            lemma::SourceType::Labeled("calculator.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "calculator.lemma",
+            ))),
         )
         .unwrap();
 
@@ -750,7 +794,9 @@ data limit: 2000
 spec policy 2025-08-01
 data limit: 3000
 "#,
-            lemma::SourceType::Labeled("policy.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "policy.lemma",
+            ))),
         )
         .unwrap();
 
@@ -758,11 +804,13 @@ data limit: 3000
         .load(
             r#"
 spec contract 2025-01-01
-with p: policy
+uses p: policy
 data amount: number
 rule under_limit: amount < p.limit
 "#,
-            lemma::SourceType::Labeled("contract.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "contract.lemma",
+            ))),
         )
         .unwrap();
 
@@ -816,7 +864,7 @@ data val: 1
 spec dep 2025-06-01
 data val: 2
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -824,10 +872,10 @@ data val: 2
         .load(
             r#"
 spec main
-with d: dep
+uses d: dep
 rule result: d.val
 "#,
-            lemma::SourceType::Labeled("main.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
         )
         .unwrap();
 
@@ -854,7 +902,7 @@ data base: 100
 spec rates 2025-05-01
 data base: 200
 "#,
-            lemma::SourceType::Labeled("rates.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("rates.lemma"))),
         )
         .unwrap();
 
@@ -863,10 +911,12 @@ data base: 200
         .load(
             r#"
 spec policy
-with r: rates
+uses r: rates
 rule threshold: r.base * 2
 "#,
-            lemma::SourceType::Labeled("policy.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "policy.lemma",
+            ))),
         )
         .unwrap();
 
@@ -875,11 +925,13 @@ rule threshold: r.base * 2
         .load(
             r#"
 spec contract 2025-01-01
-with p: policy
+uses p: policy
 data amount: number
 rule is_over_threshold: amount > p.threshold
 "#,
-            lemma::SourceType::Labeled("contract.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "contract.lemma",
+            ))),
         )
         .unwrap();
 
@@ -925,7 +977,7 @@ data income_tax_rate: 30
 spec tax_law 2025-04-01
 data income_tax_rate: 32
 "#,
-            lemma::SourceType::Labeled("tax.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("tax.lemma"))),
         )
         .unwrap();
 
@@ -941,7 +993,7 @@ spec labor_law 2025-07-01
 data min_wage_hourly: 15
 data max_weekly_hours: 38
 "#,
-            lemma::SourceType::Labeled("labor.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("labor.lemma"))),
         )
         .unwrap();
 
@@ -950,8 +1002,8 @@ data max_weekly_hours: 38
         .load(
             r#"
 spec employment 2025-01-01
-with tax: tax_law
-with labor: labor_law
+uses tax: tax_law
+uses labor: labor_law
 data hourly_rate: number
 data weekly_hours: number
 
@@ -961,7 +1013,9 @@ rule annual_net: annual_gross - annual_tax
 rule min_annual_gross: labor.min_wage_hourly * labor.max_weekly_hours * 52
 rule meets_minimum: annual_gross >= min_annual_gross
 "#,
-            lemma::SourceType::Labeled("employment.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "employment.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1006,7 +1060,7 @@ data val: 10
 spec dep 2025-06-01
 data val: 20
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -1017,16 +1071,16 @@ data val: 20
         .load(
             r#"
 spec main 2025-01-01
-with d: dep
+uses d: dep
 data multiplier: 2
 rule result: d.val * multiplier
 
 spec main 2025-04-01
-with d: dep
+uses d: dep
 data multiplier: 3
 rule result: d.val * multiplier
 "#,
-            lemma::SourceType::Labeled("main.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
         )
         .unwrap();
 
@@ -1059,7 +1113,9 @@ data base_rate: 100
 spec config 2025-04-01
 data cost: 200
 "#,
-            lemma::SourceType::Labeled("config.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "config.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1067,10 +1123,12 @@ data cost: 200
     let result = engine.load(
         r#"
 spec pricing 2025-01-01
-with cfg: config
+uses cfg: config
 rule rate: cfg.base_rate
 "#,
-        lemma::SourceType::Labeled("pricing.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "pricing.lemma",
+        ))),
     );
 
     assert!(
@@ -1104,7 +1162,9 @@ data base: 200
 rule discount: 20
 rule bonus: 5
 "#,
-            lemma::SourceType::Labeled("policy.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "policy.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1113,10 +1173,12 @@ rule bonus: 5
         .load(
             r#"
 spec contract 2025-01-01
-with p: policy
+uses p: policy
 rule applied_discount: p.discount
 "#,
-            lemma::SourceType::Labeled("contract.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "contract.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1151,7 +1213,9 @@ data limit: 20
 data description: "updated settings"
 data extra_number: 999
 "#,
-            lemma::SourceType::Labeled("settings.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "settings.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1159,10 +1223,10 @@ data extra_number: 999
         .load(
             r#"
 spec app 2025-01-01
-with s: settings
+uses s: settings
 rule max: s.limit
 "#,
-            lemma::SourceType::Labeled("app.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("app.lemma"))),
         )
         .unwrap();
 
@@ -1184,7 +1248,7 @@ spec calc 2025-04-01
 rule base_fee: 150
 rule surcharge: 25
 "#,
-            lemma::SourceType::Labeled("calc.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("calc.lemma"))),
         )
         .unwrap();
 
@@ -1192,10 +1256,12 @@ rule surcharge: 25
         .load(
             r#"
 spec invoice 2025-01-01
-with c: calc
+uses c: calc
 rule fee: c.base_fee
 "#,
-            lemma::SourceType::Labeled("invoice.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "invoice.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1220,14 +1286,14 @@ spec dep 2025-06-01
 data x: "hello"
 
 spec consumer 2025-01-01
-with d: dep
+uses d: dep
 rule val: d.x
 
 spec consumer 2025-06-01
-with d: dep
+uses d: dep
 rule val: d.x
 "#,
-            lemma::SourceType::Labeled("t.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .unwrap();
 
@@ -1253,14 +1319,16 @@ spec dep 2025-06-01
 data x: "hello"
 
 spec app 2025-01-01
-with d: dep
+uses d: dep
 rule total: d.x + 2
 
 spec app 2025-06-01
-with d: dep
+uses d: dep
 rule greeting: d.x
 "#,
-            lemma::SourceType::Labeled("app_dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "app_dep.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1285,7 +1353,9 @@ rule discount: 10
 spec policy 2025-05-01
 rule discount: 25
 "#,
-            lemma::SourceType::Labeled("policy.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "policy.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1293,10 +1363,10 @@ rule discount: 25
         .load(
             r#"
 spec shop 2025-01-01
-with p: policy
+uses p: policy
 rule d: p.discount
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         )
         .unwrap();
 
@@ -1317,7 +1387,7 @@ data threshold: number
 spec cfg 2025-04-01
 data threshold: number
 "#,
-            lemma::SourceType::Labeled("cfg.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("cfg.lemma"))),
         )
         .unwrap();
 
@@ -1325,11 +1395,13 @@ data threshold: number
         .load(
             r#"
 spec consumer 2025-01-01
-with c: cfg
+uses c: cfg
 data c.threshold: 50
 rule t: c.threshold
 "#,
-            lemma::SourceType::Labeled("consumer.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "consumer.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1354,7 +1426,9 @@ data x: 10
 spec stable_dep 2025-06-01
 data x: 20
 "#,
-            lemma::SourceType::Labeled("stable.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "stable.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1367,19 +1441,23 @@ data y: 5
 spec unstable_dep 2025-06-01
 data y: "five"
 "#,
-            lemma::SourceType::Labeled("unstable.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "unstable.lemma",
+            ))),
         )
         .unwrap();
 
     let result = engine.load(
         r#"
 spec consumer 2025-01-01
-with a: stable_dep
-with b: unstable_dep
+uses a: stable_dep
+uses b: unstable_dep
 rule sx: a.x
 rule sy: b.y
 "#,
-        lemma::SourceType::Labeled("consumer.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "consumer.lemma",
+        ))),
     );
 
     assert!(
@@ -1423,7 +1501,7 @@ spec dep 2025-06-01
 data main_val: "ten"
 data alt_val: "twenty"
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -1433,12 +1511,14 @@ data alt_val: "twenty"
     let result = engine.load(
         r#"
 spec caller 2025-01-01
-with d: dep
+uses d: dep
 data use_alt: boolean
 rule result: d.main_val
  unless use_alt then d.alt_val
 "#,
-        lemma::SourceType::Labeled("caller.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "caller.lemma",
+        ))),
     );
 
     assert!(
@@ -1471,7 +1551,9 @@ data amount: 100
 spec amounts 2025-05-01
 data amount: 200
 "#,
-            lemma::SourceType::Labeled("amounts.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "amounts.lemma",
+            ))),
         )
         .unwrap();
 
@@ -1480,11 +1562,11 @@ data amount: 200
         .load(
             r#"
 spec calc 2025-01-01
-with d: amounts
+uses d: amounts
 rule result: 0
  unless d.amount > 50 then d.amount * 2
 "#,
-            lemma::SourceType::Labeled("calc.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("calc.lemma"))),
         )
         .unwrap();
 
@@ -1505,17 +1587,19 @@ rule compute: 42
 spec svc 2025-06-01
 rule other_compute: 99
 "#,
-            lemma::SourceType::Labeled("svc.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("svc.lemma"))),
         )
         .unwrap();
 
     let result = engine.load(
         r#"
 spec caller 2025-01-01
-with s: svc
+uses s: svc
 rule val: s.compute
 "#,
-        lemma::SourceType::Labeled("caller.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "caller.lemma",
+        ))),
     );
 
     assert!(
@@ -1548,13 +1632,13 @@ fn adversarial_consumer_range_end_exclusive_dep_starting_at_end_not_covering() {
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep
+uses d: dep
 rule x: d.v
 
 spec dep 2025-06-01
 data v: 1
 "#,
-            lemma::SourceType::Labeled("adv.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("adv.lemma"))),
         )
         .expect_err("dep must not cover consumer range ending at 2025-06-01");
 
@@ -1578,13 +1662,13 @@ fn adversarial_consumer_starts_before_dep_first_effective_errors() {
         .load(
             r#"
 spec consumer 2025-03-01
-with d: dep
+uses d: dep
 rule x: d.v
 
 spec dep 2025-08-01
 data v: 1
 "#,
-            lemma::SourceType::Labeled("adv2.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("adv2.lemma"))),
         )
         .expect_err("gap before dep exists");
 
@@ -1613,7 +1697,7 @@ data rate: number
 spec dep 2025-07-01
 data rate: text
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -1621,10 +1705,10 @@ data rate: text
         .load(
             r#"
 spec app 2025-01-01
-with d: dep
+uses d: dep
 rule r: d.rate
 "#,
-            lemma::SourceType::Labeled("app.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("app.lemma"))),
         )
         .expect_err("interface change");
 
@@ -1652,7 +1736,7 @@ rule discount: 5
 spec dep 2025-07-01
 rule discount: true
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -1660,10 +1744,10 @@ rule discount: true
         .load(
             r#"
 spec app 2025-01-01
-with d: dep
+uses d: dep
 rule out: d.discount
 "#,
-            lemma::SourceType::Labeled("app.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("app.lemma"))),
         )
         .expect_err("rule type mismatch across slices");
 
@@ -1694,7 +1778,7 @@ data money: scale
  -> unit eur 1.0
  -> unit usd 1.1
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -1705,7 +1789,7 @@ spec app 2025-01-01
 data m: money from dep
 rule x: 1
 "#,
-            lemma::SourceType::Labeled("app.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("app.lemma"))),
         )
         .expect_err("type shape change");
 
@@ -1736,7 +1820,7 @@ data rate: text
 spec dep 2025-10-01
 data rate: number
 "#,
-            lemma::SourceType::Labeled("dep.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
         )
         .unwrap();
 
@@ -1744,10 +1828,10 @@ data rate: number
         .load(
             r#"
 spec app 2025-01-01
-with d: dep
+uses d: dep
 rule r: d.rate
 "#,
-            lemma::SourceType::Labeled("app.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("app.lemma"))),
         )
         .expect_err("middle slice incompatible");
 

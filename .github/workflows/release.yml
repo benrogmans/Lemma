@@ -330,10 +330,8 @@ jobs:
         run: node build.js
 
       - name: Publish to npm
-        uses: npm/publish@v1.0.1
-        with:
-          package: engine/packages/npm/dist
-          provenance: true
+        working-directory: engine/packages/npm/dist
+        run: npm publish --provenance --access public
 
   publish-vscode:
     name: Publish VS Code Extension
@@ -359,9 +357,17 @@ jobs:
         working-directory: engine/lsp/editors/vscode
         run: npm run compile
 
+      - name: Package extension
+        working-directory: engine/lsp/editors/vscode
+        run: npx vsce package
+
       - name: Publish to Marketplace
         working-directory: engine/lsp/editors/vscode
-        run: npx vsce publish -p ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath lemma-language-*.vsix -p ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        working-directory: engine/lsp/editors/vscode
+        run: npx ovsx publish lemma-language-*.vsix -p ${{ secrets.OPEN_VSX_TOKEN }}
 
   publish-hex:
     name: Publish to Hex.pm

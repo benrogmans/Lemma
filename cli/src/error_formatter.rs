@@ -7,16 +7,18 @@ fn format_details(
     error_type: &str,
     details: &ErrorDetails,
     label_message: &str,
-    sources: &HashMap<String, String>,
+    sources: &HashMap<lemma::SourceType, String>,
 ) -> String {
     let Some(ref src) = details.source else {
         return format!("{}: {}", error_type, details.message);
     };
 
-    let Some(full_content) = sources.get(&src.attribute) else {
+    let source_type_str = src.source_type.to_string();
+
+    let Some(full_content) = sources.get(&src.source_type) else {
         return format!(
             "{}: {} ({}:{})",
-            error_type, details.message, src.attribute, src.span.line
+            error_type, details.message, source_type_str, src.span.line
         );
     };
 
@@ -25,15 +27,15 @@ fn format_details(
     let header = match details.spec_context.as_ref() {
         Some(spec) => format!(
             "{}: {} (in spec '{}', file {}:{})",
-            error_type, details.message, spec.name, src.attribute, src.span.line
+            error_type, details.message, spec.name, source_type_str, src.span.line
         ),
         None => format!(
             "{}: {} ({}:{})",
-            error_type, details.message, src.attribute, src.span.line
+            error_type, details.message, source_type_str, src.span.line
         ),
     };
 
-    let span = (src.attribute.as_str(), src.span.start..src.span.end);
+    let span = (source_type_str.as_str(), src.span.start..src.span.end);
     let mut report = Report::build(ReportKind::Error, span.clone())
         .with_message(header)
         .with_label(
@@ -49,19 +51,22 @@ fn format_details(
     let content: &str = full_content.as_str();
     if report
         .finish()
-        .write((src.attribute.as_str(), Source::from(content)), &mut output)
+        .write(
+            (source_type_str.as_str(), Source::from(content)),
+            &mut output,
+        )
         .is_err()
     {
         return format!(
             "{}: {} ({}:{})",
-            error_type, details.message, src.attribute, src.span.line
+            error_type, details.message, source_type_str, src.span.line
         );
     }
     String::from_utf8_lossy(&output).to_string()
 }
 
 #[must_use]
-pub fn format_error(error: &Error, sources: &HashMap<String, String>) -> String {
+pub fn format_error(error: &Error, sources: &HashMap<lemma::SourceType, String>) -> String {
     let fmt = |typ: &str, details: &ErrorDetails, label: &str| {
         format_details(typ, details, label, sources)
     };
@@ -74,6 +79,10 @@ pub fn format_error(error: &Error, sources: &HashMap<String, String>) -> String 
             identifier,
             kind,
         } => fmt(&format!("Registry error ({})", kind), details, identifier),
+        Error::MissingRepository {
+            details,
+            repository,
+        } => fmt("Missing repository", details, repository),
         Error::ResourceLimitExceeded {
             details,
             limit_name,

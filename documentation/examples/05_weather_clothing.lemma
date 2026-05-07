@@ -1,4 +1,4 @@
-spec weather_clothing
+spec weather_clothing 2025-01-01
 """
 Weather-Based Clothing Recommendation
 
@@ -23,39 +23,36 @@ data comfort: text
   -> option "hot"
   -> option "uncomfortable"
 
-data is_raining  : boolean
-data wind_speed  : number -> minimum 0
+data wind_speed: number
+  -> minimum 0
 
-rule clothing_layer:
-  "light"
-  unless temperature < 5 celsius then "very_warm"
+data is_raining:    boolean
+data is_snowingddd: boolean
+
+rule clothing_layer: "light"
+  unless temperature < 5 celsius  then "very_warm"
   unless temperature < 10 celsius then "warm"
   unless temperature > 25 celsius then "none"
 
-rule needs_jacket:
-  no
+rule needs_jacket: no
   unless temperature < 15 celsius then yes
-  unless is_raining then yes
-  unless wind_speed > 20 then yes
+  unless is_raining               then yes
+  unless wind_speed > 20          then yes
 
-rule needs_umbrella:
-  no
-  unless is_raining then yes
+rule needs_umbrella: is_raining
 
-rule needs_hat:
-  no
+rule needs_hat: no
   unless temperature > 25 celsius then yes
-  unless temperature < 0 celsius then yes
+  unless temperature < 0 celsius  then yes
 
-rule comfort_level:
-  "comfortable"
-  unless temperature < 5 celsius then "cold"
+rule comfort_level: "comfortable"
+  unless temperature < 5 celsius  then "cold"
   unless temperature > 30 celsius then "hot"
   unless is_raining and temperature < 10 celsius
     then "uncomfortable"
 
 rule recommendation:
-  "Enjoy your day!"
+  "Enjoy your day! You don't need a hat."
   unless comfort_level is "cold"
     then "Dress warmly and stay indoors if possible"
   unless comfort_level is "hot"

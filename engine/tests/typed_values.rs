@@ -14,12 +14,15 @@ rule net_multiplier: 1 - discount
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("pricing", Some(&now), HashMap::new(), false)
+        .run(None, "pricing", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response
         .results
@@ -48,12 +51,15 @@ rule double_meeting: meeting_length * 2
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("scheduling", Some(&now), HashMap::new(), false)
+        .run(None, "scheduling", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response
         .results
@@ -85,12 +91,15 @@ rule end: start + 7 days
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("dates", Some(&now), HashMap::new(), false)
+        .run(None, "dates", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response.results.get("end").unwrap().result.value().unwrap();
 
@@ -118,12 +127,15 @@ rule can_access: is_active and not is_premium
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("logic", Some(&now), HashMap::new(), false)
+        .run(None, "logic", Some(&now), HashMap::new(), false)
         .unwrap();
     let result = response
         .results

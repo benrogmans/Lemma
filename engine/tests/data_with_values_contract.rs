@@ -1,19 +1,19 @@
-//! QA coverage for the `with_data_values` contract on every
+//! QA coverage for the `set_data_values` contract on every
 //! `DataDefinition` variant.
 //!
 //! Matrix:
 //!   - unknown key → error
 //!   - SpecRef → error (no value)
-//!   - TypeDeclaration → success
+//!   - schema-backed [`DataDefinition::TypeDeclaration`] → success
 //!   - Value → replaces literal
 //!   - Reference → replaces reference target copy
 //!   - validation failures per primitive
 //!   - related_data attribution in errors
 
+use lemma::error::ErrorKind;
 use lemma::evaluation::OperationResult;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-use lemma::ErrorKind;
 use std::collections::HashMap;
 
 fn rule_value(result: &lemma::evaluation::Response, name: &str) -> String {
@@ -36,7 +36,10 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -45,7 +48,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("unknown key must fail");
     let s = err.to_string();
     assert!(
@@ -61,12 +64,15 @@ spec inner
 data x: number -> default 1
 
 spec outer
-with i: inner
+uses i: inner
 rule r: i.x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -75,7 +81,7 @@ rule r: i.x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false)
         .expect_err("spec-ref override must fail");
     let s = err.to_string();
     assert!(
@@ -85,7 +91,7 @@ rule r: i.x
 }
 
 #[test]
-fn override_of_type_declaration_succeeds() {
+fn override_of_schema_declaration_succeeds() {
     let code = r#"
 spec s
 data x: number
@@ -93,14 +99,19 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
     data.insert("x".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let resp = engine.run("s", Some(&now), data, false).expect("evaluates");
+    let resp = engine
+        .run(None, "s", Some(&now), data, false)
+        .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
 
@@ -113,14 +124,19 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
     data.insert("x".to_string(), "99".to_string());
 
     let now = DateTimeValue::now();
-    let resp = engine.run("s", Some(&now), data, false).expect("evaluates");
+    let resp = engine
+        .run(None, "s", Some(&now), data, false)
+        .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }
 
@@ -133,7 +149,10 @@ rule r: age
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -141,7 +160,7 @@ rule r: age
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("wrong kind must fail");
 
     assert_eq!(
@@ -161,7 +180,10 @@ rule r: n
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -169,7 +191,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("violates minimum");
     let s = err.to_string();
     assert!(
@@ -187,7 +209,10 @@ rule r: n
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -195,7 +220,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("violates maximum");
     let s = err.to_string();
     assert!(
@@ -213,7 +238,10 @@ rule r: msg
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -221,7 +249,7 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("violates length");
     let s = err.to_string();
     assert!(
@@ -239,7 +267,10 @@ data color: text -> options red green blue
 rule r: color
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(code, lemma::SourceType::Labeled("w.lemma"));
+    let load_result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+    );
     if let Err(errors) = &load_result {
         // If `options` on text is not yet supported, this test pins the gap.
         panic!(
@@ -258,7 +289,7 @@ rule r: color
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false)
         .expect_err("not in options");
     let s = err.to_string();
     assert!(
@@ -276,12 +307,15 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run("s", Some(&now), HashMap::new(), false)
+        .run(None, "s", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -293,13 +327,16 @@ spec inner
 data v: number -> default 1
 
 spec outer
-with i: inner
+uses i: inner
 data copy: i.v
 rule r: copy
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("w.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+        )
         .unwrap();
 
     let mut data = HashMap::new();
@@ -307,7 +344,7 @@ rule r: copy
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run("outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "500");
 }
@@ -322,13 +359,16 @@ spec inner
 data v: number
 
 spec outer
-with i: inner
+uses i: inner
 data n: number -> maximum 5
 data n: i.v
 rule r: n
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(code, lemma::SourceType::Labeled("w.lemma"));
+    let load_result = engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
+    );
     if load_result.is_err() {
         // Planning might reject this particular shape (LHS+reference redeclare);
         // if so, test ends here (shape-specific error is not our concern).
@@ -340,7 +380,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     let err = engine
-        .run("outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false)
         .expect_err("merged-type validation must reject 10 against LHS `maximum 5`");
     let s = err.to_string();
     assert!(

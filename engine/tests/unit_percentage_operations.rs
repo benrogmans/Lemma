@@ -23,16 +23,15 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
 
         rule price: 200 - discount
         "#,
-        lemma::SourceType::Labeled("pricing.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "pricing.lemma",
+        ))),
     )?;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("pricing", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
+        .run(None, "pricing", Some(&now), HashMap::new(), false)
+        .expect("run should succeed after load");
 
     // Check discount rule result
     let discount_result = response
@@ -88,16 +87,13 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
 
         rule price_with_tax: base_price + tax_rate
         "#,
-        lemma::SourceType::Labeled("tax.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("tax.lemma"))),
     )?;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("tax_calculation", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
+        .run(None, "tax_calculation", Some(&now), HashMap::new(), false)
+        .expect("run should succeed after load");
 
     let result = response
         .results
@@ -144,16 +140,19 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
         rule decreased: price - decrease
         rule scaled: price * increase
         "#,
-        lemma::SourceType::Labeled("ops.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("ops.lemma"))),
     )?;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("unit_percentage_ops", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
+        .run(
+            None,
+            "unit_percentage_ops",
+            Some(&now),
+            HashMap::new(),
+            false,
+        )
+        .expect("run should succeed after load");
 
     // Check increased (50 + 20% = 60)
     let increased_result = response
@@ -245,16 +244,15 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
         rule after_bulk: base_price - bulk_discount
         rule final_price: after_bulk - loyalty_discount
         "#,
-        lemma::SourceType::Labeled("complex.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "complex.lemma",
+        ))),
     )?;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("complex_pricing", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
+        .run(None, "complex_pricing", Some(&now), HashMap::new(), false)
+        .expect("run should succeed after load");
 
     // Check after_bulk (1000 - 15% = 850)
     let after_bulk_result = response
@@ -331,16 +329,15 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         rule compound: compound_rate * compound_rate
         rule ratio: compound_rate / discount_a
         "#,
-        lemma::SourceType::Labeled("percentage.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "percentage.lemma",
+        ))),
     )?;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("percentage_ops", Some(&now), HashMap::new(), false)
-        .map_err(|e| lemma::Errors {
-            errors: vec![e],
-            sources: engine.sources().clone(),
-        })?;
+        .run(None, "percentage_ops", Some(&now), HashMap::new(), false)
+        .expect("run should succeed after load");
 
     // Check combined_discount (5% + 10% = 15%)
     let combined_result = response

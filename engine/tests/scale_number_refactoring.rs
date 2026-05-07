@@ -40,7 +40,10 @@ rule quotient: price1 / price2"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -49,7 +52,7 @@ rule quotient: price1 / price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     for name in ["total", "difference", "product", "quotient"] {
@@ -132,7 +135,10 @@ rule divided: price / multiplier"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -141,7 +147,7 @@ rule divided: price / multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -171,7 +177,10 @@ rule divided: multiplier / price"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -180,7 +189,7 @@ rule divided: multiplier / price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -206,7 +215,10 @@ rule result: ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -215,7 +227,7 @@ rule result: ratio_value * multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -236,7 +248,10 @@ rule result: ratio_value * price"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -245,7 +260,7 @@ rule result: ratio_value * price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -269,7 +284,10 @@ rule result: price * ratio_value"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -278,7 +296,7 @@ rule result: price * ratio_value"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -303,7 +321,10 @@ rule is_equal: price1 is price2"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -312,7 +333,7 @@ rule is_equal: price1 is price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "is_greater"), "true");
@@ -341,7 +362,10 @@ rule power: a ^ exponent"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -352,7 +376,7 @@ rule power: a ^ exponent"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let add = rule_value_str(&response, "add");
@@ -397,7 +421,10 @@ rule power: a ^ b"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -406,7 +433,7 @@ rule power: a ^ b"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "add"), "13");
@@ -439,7 +466,10 @@ rule total: with_tax * quantity"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -450,7 +480,7 @@ rule total: with_tax * quantity"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let disc = rule_value_str(&response, "discounted");
@@ -486,7 +516,10 @@ rule result: scale_value * number_value"#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -495,7 +528,7 @@ rule result: scale_value * number_value"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");

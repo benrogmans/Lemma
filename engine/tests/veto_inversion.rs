@@ -16,7 +16,10 @@ fn veto_query_with_value_branches_filters_correctly() {
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
 
     // Query: "What discount values trigger any veto?"

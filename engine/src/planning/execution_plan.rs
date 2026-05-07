@@ -8,7 +8,8 @@
 //! - `SpecSchema` is the IO contract surface for consumers (data and rule outputs).
 //!   IO compatibility is the consumer-facing guarantee.
 
-use crate::parsing::ast::{EffectiveDate, LemmaSpec, MetaValue};
+use crate::parsing::ast::{EffectiveDate, LemmaRepository, LemmaSpec, MetaValue};
+use crate::parsing::source::Source;
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
 use crate::planning::semantics;
@@ -18,14 +19,27 @@ use crate::planning::semantics::{
 };
 use crate::Error;
 use crate::ResourceLimits;
-use crate::Source;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-/// Spec sources keyed by (name, effective_from).
-pub type SpecSources = IndexMap<(String, EffectiveDate), String>;
+/// One spec's contribution to an [`ExecutionPlan`], together with its
+/// formatted AST source.
+///
+/// `repository` is `None` for workspace (root) specs. Including the
+/// repository name means two specs with the same base name from different
+/// repos are always distinct entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpecSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    pub name: String,
+    pub effective_from: EffectiveDate,
+    pub source: String,
+}
+
+pub type SpecSources = Vec<SpecSource>;
 
 /// A complete execution plan ready for the evaluator
 ///
@@ -59,13 +73,9 @@ pub struct ExecutionPlan {
 
     pub effective: EffectiveDate,
 
-    /// Canonical source for all specs in this plan, keyed by (name, effective_from).
+    /// Canonical source for all specs in this plan (one entry per spec, includes repository).
     /// Reconstructed from AST — not raw file content.
     #[serde(default)]
-    #[serde(
-        serialize_with = "serialize_sources",
-        deserialize_with = "deserialize_sources"
-    )]
     pub sources: SpecSources,
 }
 
@@ -94,48 +104,6 @@ impl ExecutionPlanSet {
         }
         None
     }
-}
-
-fn serialize_sources<S>(sources: &SpecSources, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeSeq;
-    let mut seq = serializer.serialize_seq(Some(sources.len()))?;
-    for ((name, effective_from), source) in sources {
-        seq.serialize_element(&SpecSourceEntry {
-            name,
-            effective_from,
-            source,
-        })?;
-    }
-    seq.end()
-}
-
-fn deserialize_sources<'de, D>(deserializer: D) -> Result<SpecSources, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let entries: Vec<SpecSourceEntryOwned> = Vec::deserialize(deserializer)?;
-    let mut map = IndexMap::with_capacity(entries.len());
-    for e in entries {
-        map.insert((e.name, e.effective_from), e.source);
-    }
-    Ok(map)
-}
-
-#[derive(Serialize)]
-struct SpecSourceEntry<'a> {
-    name: &'a str,
-    effective_from: &'a EffectiveDate,
-    source: &'a str,
-}
-
-#[derive(Deserialize)]
-struct SpecSourceEntryOwned {
-    name: String,
-    effective_from: EffectiveDate,
-    source: String,
 }
 
 /// An executable rule with flattened branches
@@ -183,7 +151,7 @@ pub struct Branch {
 /// Internal implementation detail - only called by plan()
 pub(crate) fn build_execution_plan(
     graph: &Graph,
-    resolved_types: &HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>,
+    resolved_types: &[(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)],
     effective: &EffectiveDate,
 ) -> ExecutionPlan {
     let data = graph.build_data();
@@ -235,12 +203,20 @@ pub(crate) fn build_execution_plan(
     let main_spec = graph.main_spec();
     let named_types = build_type_tables(main_spec, resolved_types);
 
-    let mut sources: SpecSources = IndexMap::new();
-    for spec in resolved_types.keys() {
-        let key = (spec.name.clone(), spec.effective_from.clone());
-        sources
-            .entry(key)
-            .or_insert_with(|| crate::formatting::format_spec(spec, crate::formatting::MAX_COLS));
+    let mut sources: SpecSources = Vec::new();
+    for (repo, spec, _) in resolved_types.iter() {
+        if !sources.iter().any(|e| {
+            e.repository == repo.name
+                && e.name == spec.name
+                && e.effective_from == spec.effective_from
+        }) {
+            sources.push(SpecSource {
+                repository: repo.name.clone(),
+                name: spec.name.clone(),
+                effective_from: spec.effective_from.clone(),
+                source: crate::formatting::format_specs(&[spec.as_ref().clone()]),
+            });
+        }
     }
 
     ExecutionPlan {
@@ -262,14 +238,14 @@ pub(crate) fn build_execution_plan(
 /// Build the named types table from the main spec's resolved types.
 fn build_type_tables(
     main_spec: &Arc<LemmaSpec>,
-    resolved_types: &HashMap<Arc<LemmaSpec>, ResolvedSpecTypes>,
+    resolved_types: &[(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)],
 ) -> BTreeMap<String, LemmaType> {
     let mut named_types = BTreeMap::new();
 
     let main_resolved = resolved_types
         .iter()
-        .find(|(spec, _)| Arc::ptr_eq(spec, main_spec))
-        .map(|(_, types)| types);
+        .find(|(_, spec, _)| Arc::ptr_eq(spec, main_spec))
+        .map(|(_, _, types)| types);
 
     if let Some(resolved) = main_resolved {
         for (type_name, lemma_type) in &resolved.named_types {
@@ -300,20 +276,22 @@ fn build_type_tables(
 /// this contract. Plan hashes are complementary: they lock full behavior.
 /// One data input in a [`SpecSchema`].
 ///
-/// A named struct instead of a `(type, default)` tuple so JSON-native consumers
-/// (TypeScript, Python, ...) get stable field names. `default` is `None` unless
-/// the spec (or a typedef it references) declared one.
+/// A named struct instead of a `(type, bound, default)` tuple so JSON-native consumers
+/// (TypeScript, Python, ...) get stable field names. `bound_value` holds a spec or
+/// caller-fixed literal; `default` is only a `-> default ...` suggestion.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DataEntry {
     #[serde(rename = "type")]
     pub lemma_type: LemmaType,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bound_value: Option<LiteralValue>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default: Option<LiteralValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpecSchema {
-    /// Spec name
+    /// Resolved spec id (logical name including path segments).
     pub spec: String,
     /// Data (inputs) keyed by name.
     pub data: indexmap::IndexMap<String, DataEntry>,
@@ -330,10 +308,10 @@ impl std::fmt::Display for SpecSchema {
         if !self.meta.is_empty() {
             write!(f, "\n\nMeta:")?;
             // Sort keys for deterministic output
-            let mut keys: Vec<&String> = self.meta.keys().collect();
-            keys.sort();
-            for key in keys {
-                write!(f, "\n  {}: {}", key, self.meta.get(key).unwrap())?;
+            let mut entries: Vec<(&String, &MetaValue)> = self.meta.iter().collect();
+            entries.sort_by_key(|(k, _)| *k);
+            for (key, value) in entries {
+                write!(f, "\n  {}: {}", key, value)?;
             }
         }
 
@@ -344,6 +322,9 @@ impl std::fmt::Display for SpecSchema {
                 if let Some(constraints) = format_type_constraints(&entry.lemma_type.specifications)
                 {
                     write!(f, ", {}", constraints)?;
+                }
+                if let Some(val) = &entry.bound_value {
+                    write!(f, ", value: {}", val)?;
                 }
                 if let Some(val) = &entry.default {
                     write!(f, ", default: {}", val)?;
@@ -507,12 +488,14 @@ impl ExecutionPlan {
                     .schema_type()
                     .expect("BUG: filter above ensured schema_type is Some")
                     .clone();
-                let default = data.schema_default();
+                let bound_value = data.bound_value().cloned();
+                let default = data.default_suggestion();
                 (
                     data.source().span.start,
                     path.input_key(),
                     DataEntry {
                         lemma_type,
+                        bound_value,
                         default,
                     },
                 )
@@ -568,18 +551,19 @@ impl ExecutionPlan {
             .data
             .iter()
             .filter(|(path, _)| needed_data.contains(path))
-            .filter(|(_, data)| data.schema_type().is_some())
-            .map(|(path, data)| {
-                let lemma_type = data.schema_type().unwrap().clone();
-                let default = data.schema_default();
-                (
+            .filter_map(|(path, data)| {
+                let lemma_type = data.schema_type()?.clone();
+                let bound_value = data.bound_value().cloned();
+                let default = data.default_suggestion();
+                Some((
                     data.source().span.start,
                     path.input_key(),
                     DataEntry {
                         lemma_type,
+                        bound_value,
                         default,
                     },
-                )
+                ))
             })
             .collect();
         data_entries.sort_by_key(|(pos, _, _)| *pos);
@@ -621,7 +605,7 @@ impl ExecutionPlan {
     /// Provide string values for data.
     ///
     /// Parses each string to its expected type, validates constraints, and applies to the plan.
-    pub fn with_data_values(
+    pub fn set_data_values(
         mut self,
         values: HashMap<String, String>,
         limits: &ResourceLimits,
@@ -703,6 +687,43 @@ impl ExecutionPlan {
         }
 
         Ok(self)
+    }
+
+    /// Promote declared defaults on type declarations into concrete [`DataDefinition::Value`] entries.
+    /// Call BEFORE [`Self::set_data_values`] so user-provided values override defaults.
+    /// Reference resolution is handled by the evaluator at runtime.
+    #[must_use]
+    pub fn with_defaults(mut self) -> Self {
+        let promotions: Vec<(DataPath, DataDefinition)> = self
+            .data
+            .iter()
+            .filter_map(|(path, def)| {
+                if let DataDefinition::TypeDeclaration {
+                    declared_default: Some(dv),
+                    resolved_type,
+                    source,
+                } = def
+                {
+                    Some((
+                        path.clone(),
+                        DataDefinition::Value {
+                            value: LiteralValue {
+                                value: dv.clone(),
+                                lemma_type: resolved_type.clone(),
+                            },
+                            source: source.clone(),
+                        },
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for (path, def) in promotions {
+            self.data.insert(path, def);
+        }
+        self
     }
 }
 
@@ -907,7 +928,7 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
         let (expected_type, lit) = match data_definition {
             DataDefinition::Value { value, .. } => (&value.lemma_type, value),
             DataDefinition::TypeDeclaration { .. }
-            | DataDefinition::SpecRef { .. }
+            | DataDefinition::Import { .. }
             | DataDefinition::Reference { .. } => continue,
         };
 
@@ -954,18 +975,20 @@ mod tests {
                 spec test
                 data age: number -> default 25
                 "#,
-                crate::SourceType::Labeled("test.lemma"),
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
         let data_path = DataPath::new(vec![], "age".to_string());
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), "30".to_string());
 
-        let updated_plan = plan.with_data_values(values, &default_limits()).unwrap();
+        let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
         let updated_value = updated_plan.get_data_value(&data_path).unwrap();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
@@ -984,17 +1007,19 @@ mod tests {
                 spec test
                 data age: number
                 "#,
-                crate::SourceType::Labeled("test.lemma"),
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("age".to_string(), "thirty".to_string());
 
-        assert!(plan.with_data_values(values, &default_limits()).is_err());
+        assert!(plan.set_data_values(values, &default_limits()).is_err());
     }
 
     #[test]
@@ -1006,17 +1031,19 @@ mod tests {
                 spec test
                 data known: number
                 "#,
-                crate::SourceType::Labeled("test.lemma"),
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("unknown".to_string(), "30".to_string());
 
-        assert!(plan.with_data_values(values, &default_limits()).is_err());
+        assert!(plan.set_data_values(values, &default_limits()).is_err());
     }
 
     #[test]
@@ -1029,19 +1056,21 @@ mod tests {
                 data base_price: number
 
                 spec test
-                with rules: private
+                uses rules: private
                 "#,
-                crate::SourceType::Labeled("test.lemma"),
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
             )
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan("test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
         let mut values = HashMap::new();
         values.insert("rules.base_price".to_string(), "100".to_string());
 
-        let updated_plan = plan.with_data_values(values, &default_limits()).unwrap();
+        let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
         let data_path = DataPath {
             segments: vec![PathSegment {
                 data: "rules".to_string(),
@@ -1058,10 +1087,10 @@ mod tests {
         }
     }
 
-    fn test_source() -> crate::Source {
+    fn test_source() -> Source {
         use crate::parsing::ast::Span;
-        crate::Source::new(
-            "<test>",
+        Source::new(
+            crate::parsing::source::SourceType::Volatile,
             Span {
                 start: 0,
                 end: 0,
@@ -1113,7 +1142,7 @@ mod tests {
             },
         );
         let source = Source::new(
-            "<test>",
+            crate::parsing::source::SourceType::Volatile,
             crate::parsing::ast::Span {
                 start: 0,
                 end: 0,
@@ -1141,14 +1170,14 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let mut values = HashMap::new();
         values.insert("x".to_string(), "11".to_string());
 
         assert!(
-            plan.with_data_values(values, &default_limits()).is_err(),
+            plan.set_data_values(values, &default_limits()).is_err(),
             "Providing x=11 should fail due to maximum 10"
         );
     }
@@ -1166,7 +1195,7 @@ mod tests {
             },
         );
         let source = Source::new(
-            "<test>",
+            crate::parsing::source::SourceType::Volatile,
             crate::parsing::ast::Span {
                 start: 0,
                 end: 0,
@@ -1194,14 +1223,14 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let mut values = HashMap::new();
         values.insert("tier".to_string(), "platinum".to_string());
 
         assert!(
-            plan.with_data_values(values, &default_limits()).is_err(),
+            plan.set_data_values(values, &default_limits()).is_err(),
             "Invalid enum value should be rejected (tier='platinum')"
         );
     }
@@ -1228,7 +1257,7 @@ mod tests {
             },
         );
         let source = Source::new(
-            "<test>",
+            crate::parsing::source::SourceType::Volatile,
             crate::parsing::ast::Span {
                 start: 0,
                 end: 0,
@@ -1257,14 +1286,14 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let mut values = HashMap::new();
         values.insert("price".to_string(), "1.234 eur".to_string());
 
         assert!(
-            plan.with_data_values(values, &default_limits()).is_err(),
+            plan.set_data_values(values, &default_limits()).is_err(),
             "Scale decimals=2 should reject 1.234 eur"
         );
     }
@@ -1291,7 +1320,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1328,7 +1357,7 @@ mod tests {
             meta: HashMap::new(),
             named_types,
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1373,7 +1402,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let rule = ExecutableRule {
@@ -1436,7 +1465,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1486,7 +1515,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1529,7 +1558,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let rule = ExecutableRule {
@@ -1593,7 +1622,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let json = serde_json::to_string(&plan).expect("Should serialize");
@@ -1625,7 +1654,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let rule = ExecutableRule {
@@ -1691,7 +1720,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective: EffectiveDate::Origin,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         };
 
         let rule = ExecutableRule {
@@ -1742,7 +1771,7 @@ mod tests {
             meta: HashMap::new(),
             named_types: BTreeMap::new(),
             effective,
-            sources: IndexMap::new(),
+            sources: Vec::new(),
         }
     }
 
@@ -1881,11 +1910,16 @@ mod tests {
                 data quantity: number -> minimum 0
                 rule cost: bridge_height * quantity
                 "#,
-                crate::SourceType::Labeled("test.lemma"),
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "test.lemma",
+                ))),
             )
             .unwrap();
         let now = DateTimeValue::now();
-        let schema = engine.get_plan("pricing", Some(&now)).unwrap().schema();
+        let schema = engine
+            .get_plan(None, "pricing", Some(&now))
+            .unwrap()
+            .schema();
 
         let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
 
@@ -1900,7 +1934,11 @@ mod tests {
         );
         assert!(
             bh.get("default").is_some(),
-            "bridge_height has a promoted default"
+            "bridge_height exposes `-> default` as schema default suggestion"
+        );
+        assert!(
+            bh.get("bound_value").is_none(),
+            "bridge_height is not a spec-bound literal"
         );
 
         let ty = &bh["type"];
@@ -1921,7 +1959,11 @@ mod tests {
         assert_eq!(qty["type"]["kind"], "number");
         assert!(
             qty.get("default").is_none(),
-            "no declared default means no field"
+            "quantity has no default suggestion"
+        );
+        assert!(
+            qty.get("bound_value").is_none(),
+            "quantity has no bound literal"
         );
 
         let cost = &value["rules"]["cost"];
@@ -1939,11 +1981,11 @@ mod tests {
                 data grade: text -> options "A" "B" "C"
                 rule adult: age >= 18
                 "#,
-                crate::SourceType::Labeled("s.lemma"),
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("s.lemma"))),
             )
             .unwrap();
         let now = DateTimeValue::now();
-        let schema = engine.get_plan("s", Some(&now)).unwrap().schema();
+        let schema = engine.get_plan(None, "s", Some(&now)).unwrap().schema();
 
         let json = serde_json::to_string(&schema).unwrap();
         let round_tripped: SpecSchema = serde_json::from_str(&json).unwrap();

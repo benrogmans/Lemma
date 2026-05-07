@@ -19,7 +19,7 @@ fn test_duplicate_data_definition_error() {
         data salary: 50000
         data salary: 60000
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -52,7 +52,7 @@ fn test_duplicate_rule_definition_error() {
         rule total: x * 2
         rule total: x * 3
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -85,7 +85,7 @@ fn test_duplicate_data_shows_name() {
         data age: 30
         data name: "Bob"
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -123,13 +123,13 @@ fn test_runtime_error_division_by_zero() {
         data denominator: 0
         rule result: numerator / denominator
     "#,
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .expect("Division by zero should return Veto, not Error");
 
     let result_rule = response
@@ -171,7 +171,7 @@ fn test_transpile_error_self_referencing_rule() {
         spec test
         rule x: x + 1
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -201,7 +201,9 @@ fn test_duplicate_error_contains_data_name() {
         data price: 100
         data price: 200
     "#,
-        lemma::SourceType::Labeled("my_file.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "my_file.lemma",
+        ))),
     );
 
     let errs = result.unwrap_err();
@@ -226,7 +228,7 @@ fn test_duplicate_error_is_reported() {
         data x: 10
         data x: 20
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -254,7 +256,7 @@ fn test_duplicate_in_second_spec_is_caught() {
         data b: 2
         data b: 3
     "#,
-        lemma::SourceType::Labeled("multi.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("multi.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -283,7 +285,7 @@ fn test_error_display_contains_duplicate_info() {
         data value: 100
         data value: 200
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -314,13 +316,13 @@ fn test_division_by_zero_returns_veto_with_message() {
         data y: 0
         rule result: x / y
     "#,
-            lemma::SourceType::Labeled("test.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .expect("Should return Veto, not Error");
 
     let result_rule = response
@@ -352,7 +354,7 @@ fn test_circular_dependency_has_helpful_suggestion() {
         rule x: y
         rule y: x
     "#,
-        lemma::SourceType::Labeled("test.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
     );
 
     let errs = result.unwrap_err();
@@ -382,7 +384,10 @@ data line3: 2
 data line4: 3
 data line4: 4"#;
 
-    let result = engine.load(lemma_code, lemma::SourceType::Labeled("test.lemma"));
+    let result = engine.load(
+        lemma_code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+    );
 
     let errs = result.unwrap_err();
     let details = errs
@@ -410,7 +415,9 @@ fn test_duplicate_detected_from_database_source() {
         data amount: 1000
         data amount: 2000
     "#,
-        lemma::SourceType::Labeled("db://contracts/123"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "db://contracts/123",
+        ))),
     );
 
     let errs = result.unwrap_err();
@@ -457,7 +464,9 @@ fn test_multiple_error_phases_reported_together() {
         rule total: price * quantity - non_existent_rule
           unless price > 100 usd then veto "This price is too high."
     "#,
-        lemma::SourceType::Labeled("pricing.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "pricing.lemma",
+        ))),
     );
 
     let errs = result.unwrap_err();
@@ -488,10 +497,10 @@ fn unversioned_spec_missing_dep_message_names_specs() {
     let result = engine.load(
         r#"
 spec app
-with z: no_such_dep
+uses z: no_such_dep
 rule r: 1
 "#,
-        lemma::SourceType::Labeled("t.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
     );
     let errs = result.expect_err("missing dep");
     let joined = errs
@@ -515,13 +524,13 @@ fn unversioned_consumer_temporal_coverage_gap_names_consumer_and_dep() {
     let result = engine.load(
         r#"
 spec app
-with d: dep
+uses d: dep
 rule r: d.x
 
 spec dep 2025-12-01
 data x: 1
 "#,
-        lemma::SourceType::Labeled("gap.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("gap.lemma"))),
     );
     let errs = result.expect_err("coverage gap");
     let joined = errs

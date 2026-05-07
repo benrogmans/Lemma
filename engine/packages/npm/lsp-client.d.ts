@@ -17,6 +17,7 @@ export class LspClient {
   initialize(): Promise<void>;
   didOpen(uri: string, languageId: string, version: number, text: string): void;
   didChange(uri: string, version: number, text: string): void;
+  didClose(uri: string): void;
   formatting(uri: string, tabSize: number, insertSpaces: boolean): Promise<unknown>;
   semanticTokensFull(uri: string): Promise<{ data: number[] } | null>;
   onDiagnostics(callback: (uri: string, diagnostics: LspDiagnostic[]) => void): void;

@@ -4,7 +4,9 @@ use crate::parsing::source::Source;
 
 fn test_source() -> Source {
     Source::new(
-        "test.lemma",
+        crate::parsing::source::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "test.lemma",
+        ))),
         Span {
             start: 14,
             end: 21,
@@ -25,7 +27,9 @@ fn test_error_creation_and_display() {
     );
 
     let typo_source = Source::new(
-        "suggestion.lemma",
+        crate::parsing::source::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "suggestion.lemma",
+        ))),
         Span {
             start: 5,
             end: 10,

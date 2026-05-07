@@ -60,8 +60,9 @@ rule discount: 0
 # Run with data
 {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "25"})
 
-# Introspect
-{:ok, specs} = Lemma.list(engine)
+# Introspect (specs grouped by repository)
+{:ok, groups} = Lemma.list(engine)
+# [%{repository: %{name: nil, dependency: nil}, specs: [...]}, ...]
 {:ok, schema} = Lemma.schema(engine, "pricing")
 
 # Format source code (no engine needed)

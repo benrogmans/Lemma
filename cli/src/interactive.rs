@@ -1,16 +1,26 @@
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, LemmaType, TypeSpecification};
+use lemma::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
+use lemma::{EffectiveDate, Engine, LemmaType, LiteralValue, TypeSpecification, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+pub(crate) fn repo_label(repository: &LemmaRepository) -> String {
+    match &repository.name {
+        Some(name) => name.clone(),
+        None => "(workspace)".to_string(),
+    }
+}
+
+/// Repository qualifier, spec name, selected rules, merged data (CLI + prompts).
 pub type InteractiveResult = (
+    Option<String>,
     String,
     Option<Vec<String>>,
     HashMap<String, String>,
-    Option<String>,
 );
 
 #[derive(Clone, Debug)]
@@ -27,58 +37,108 @@ struct NumericConstraints {
     help: String,
 }
 
+fn get_plan_for_interactive<'a>(
+    engine: &'a Engine,
+    repo: Option<&str>,
+    name: &str,
+    now: &DateTimeValue,
+) -> Result<&'a lemma::ExecutionPlan> {
+    engine
+        .get_plan(repo, name, Some(now))
+        .map_err(|e| anyhow::anyhow!("{}", e))
+}
+
 pub fn run_interactive(
     engine: &Engine,
     spec_name: Option<String>,
     rule_names: Option<Vec<String>>,
     provided_data: &HashMap<String, String>,
-    target: Option<&String>,
     now: &DateTimeValue,
+    cli_repository_qualifier: Option<&str>,
 ) -> Result<InteractiveResult> {
-    let spec = match spec_name {
-        Some(name) => name,
-        None => select_spec(engine, now)?,
+    let (repository_qualifier, specification_name) = match spec_name {
+        Some(name) => {
+            // Validate the spec exists (will error on ambiguity when repository is None).
+            get_plan_for_interactive(engine, cli_repository_qualifier, &name, now)?;
+            (cli_repository_qualifier.map(String::from), name)
+        }
+        None => select_spec(engine, now, cli_repository_qualifier)?,
     };
 
     let rules = match rule_names {
         Some(names) => Some(names),
-        None => select_rules(engine, &spec, now)?,
+        None => select_rules(
+            engine,
+            repository_qualifier.as_deref(),
+            &specification_name,
+            now,
+        )?,
     };
 
-    let data = prompt_data(engine, &spec, &rules, provided_data, now)?;
+    let data = prompt_data(
+        engine,
+        repository_qualifier.as_deref(),
+        &specification_name,
+        &rules,
+        provided_data,
+        now,
+    )?;
 
-    let target = match target {
-        Some(t) => Some(t.clone()),
-        None => prompt_target(engine, &spec, &rules, now)?,
-    };
-
-    Ok((spec, rules, data, target))
+    Ok((repository_qualifier, specification_name, rules, data))
 }
 
-fn select_spec(engine: &Engine, now: &DateTimeValue) -> Result<String> {
-    let specs = engine.list_specs_effective(now);
+fn select_spec(
+    engine: &Engine,
+    now: &DateTimeValue,
+    cli_repository_qualifier: Option<&str>,
+) -> Result<(Option<String>, String)> {
+    let effective_instant = EffectiveDate::DateTimeValue(now.clone());
+    let mut pairs: Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>)> = engine
+        .list()
+        .iter()
+        .flat_map(|repo| {
+            let repo_arc = Arc::clone(&repo.repository);
+            let instant = effective_instant.clone();
+            repo.specs.iter().filter_map(move |ss| {
+                ss.spec_at(&instant)
+                    .map(|spec| (Arc::clone(&repo_arc), spec))
+            })
+        })
+        .collect();
+    if let Some(q) = cli_repository_qualifier {
+        let resolved = engine
+            .get_repository(q)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        pairs.retain(|(repo, _)| Arc::ptr_eq(repo, &resolved.repository));
+    }
 
-    if specs.is_empty() {
+    if pairs.is_empty() {
         anyhow::bail!("No specs found in workspace. Add .lemma files to get started.");
     }
 
-    if specs.len() == 1 {
-        return Ok(specs
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("Expected at least one spec"))?
-            .name
-            .clone());
-    }
+    let needs_repo_qualifier = {
+        let mut names: Vec<&str> = pairs.iter().map(|(_, s)| s.name.as_str()).collect();
+        names.sort();
+        names.windows(2).any(|w| w[0] == w[1])
+    };
 
-    let display_options: Vec<String> = specs
+    let display_options: Vec<String> = pairs
         .iter()
-        .map(|spec| {
-            let (data_count, rules_count) = engine
-                .get_plan(&spec.name, Some(now))
+        .map(|(repo, spec)| {
+            let label = repo_label(repo);
+            let rq = if needs_repo_qualifier {
+                Some(label.as_str())
+            } else {
+                cli_repository_qualifier
+            };
+            let (data_count, rules_count) = get_plan_for_interactive(engine, rq, &spec.name, now)
                 .ok()
                 .map(|p| (p.data.len(), p.rules.len()))
                 .unwrap_or((0, 0));
-            format!("{} ({} data, {} rules)", spec.name, data_count, rules_count)
+            format!(
+                "{} ({}) — {} data, {} rules",
+                spec.name, label, data_count, rules_count
+            )
         })
         .collect();
 
@@ -92,25 +152,29 @@ fn select_spec(engine: &Engine, now: &DateTimeValue) -> Result<String> {
         .position(|d| d == &selected)
         .context("Failed to find selected spec index")?;
 
-    Ok(specs[spec_index].name.clone())
+    let (r, s) = pairs
+        .into_iter()
+        .nth(spec_index)
+        .context("Failed to match selected spec")?;
+    let rq = if needs_repo_qualifier {
+        Some(repo_label(&r))
+    } else {
+        cli_repository_qualifier.map(String::from)
+    };
+    Ok((rq, s.name.clone()))
 }
 
 fn select_rules(
     engine: &Engine,
+    repo: Option<&str>,
     spec_name: &str,
     now: &DateTimeValue,
 ) -> Result<Option<Vec<String>>> {
-    let plan = engine
-        .get_plan(spec_name, Some(now))
-        .map_err(|e| anyhow::anyhow!("{}", e))
+    let plan = get_plan_for_interactive(engine, repo, spec_name, now)
         .context(format!("Spec '{}' not found", spec_name))?;
     let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
 
     if rule_names.is_empty() {
-        return Ok(None);
-    }
-
-    if rule_names.len() == 1 {
         return Ok(None);
     }
 
@@ -126,128 +190,31 @@ fn select_rules(
     }
 }
 
-fn prompt_target(
-    engine: &Engine,
-    spec_name: &str,
-    rule_names: &Option<Vec<String>>,
-    now: &DateTimeValue,
-) -> Result<Option<String>> {
-    use inquire::Confirm;
-
-    if !Confirm::new("Do you want to invert a rule (find inputs for a target output)?")
-        .with_default(false)
-        .prompt()
-        .context("Failed to get inversion preference")?
-    {
-        return Ok(None);
-    }
-
-    let plan = engine
-        .get_plan(spec_name, Some(now))
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-    let available_rules: Vec<String> = plan
-        .rules
-        .iter()
-        .filter(|r| r.path.segments.is_empty())
-        .map(|r| r.name.clone())
-        .collect();
-    if available_rules.is_empty() {
-        return Ok(None);
-    }
-
-    let rule_options: Vec<String> = if let Some(selected_rules) = rule_names {
-        if selected_rules.len() == 1 {
-            vec![selected_rules[0].clone()]
-        } else {
-            available_rules
-        }
-    } else {
-        available_rules
-    };
-
-    if rule_options.is_empty() {
-        return Ok(None);
-    }
-
-    let selected_rule = if rule_options.len() == 1 {
-        rule_options[0].clone()
-    } else {
-        Select::new("Select rule to invert:", rule_options)
-            .prompt()
-            .context("Failed to select rule")?
-    };
-
-    let target_value = Text::new(&format!(
-        "Enter target for {} (e.g., =100, >50, <200, =veto):",
-        selected_rule
-    ))
-    .with_help_message("Format: =value, >value, <value, >=value, <=value, or =veto")
-    .prompt()
-    .context("Failed to get target value")?;
-
-    if target_value.trim().is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(format!("{}={}", selected_rule, target_value.trim())))
-}
-
 fn prompt_data(
     engine: &Engine,
+    repo: Option<&str>,
     spec_name: &str,
-    _rule_names: &Option<Vec<String>>,
+    rule_names: &Option<Vec<String>>,
     provided_data: &HashMap<String, String>,
     now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
-    let plan = engine
-        .get_plan(spec_name, Some(now))
-        .map_err(|e| anyhow::anyhow!("{}", e))
+    let plan = get_plan_for_interactive(engine, repo, spec_name, now)
         .context(format!("Spec '{}' not found", spec_name))?;
 
-    // Full schema: types for any data the evaluator may still need (branch-aware).
-    let full_schema = plan.schema();
+    let full_schema = match rule_names {
+        Some(names) if !names.is_empty() => plan
+            .schema_for_rules(names)
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to build schema for selected rules")?,
+        _ => plan.schema(),
+    };
 
     let mut collected = HashMap::new();
     let mut header_printed = false;
 
-    loop {
-        let mut merged = provided_data.clone();
-        merged.extend(collected.clone());
-
-        let response = engine
-            .run_plan(plan, Some(now), merged, false)
-            .map_err(|e| anyhow::anyhow!("{}", e))
-            .context("Evaluation failed while resolving interactive data")?;
-
-        let missing = response.missing_data_ordered();
-        if missing.is_empty() {
-            return Ok(collected);
-        }
-
-        let fp = missing
-            .into_iter()
-            .next()
-            .expect("missing_data_ordered non-empty implies at least one path");
-        let data_name = fp.input_key();
-
-        if provided_data.contains_key(&data_name) || collected.contains_key(&data_name) {
-            anyhow::bail!(
-                "Engine reports missing data '{}' but a value was already provided",
-                data_name
-            );
-        }
-
-        let entry = full_schema
-            .data
-            .get(&data_name)
-            .with_context(|| format!("Missing data '{}' has no entry in spec schema", data_name))?;
-        let lemma_type = &entry.lemma_type;
-
-        if entry.default.is_some() {
-            anyhow::bail!(
-                "BUG: data '{}' has a spec-defined value but evaluation reports it missing",
-                data_name
-            );
+    for (name, entry) in &full_schema.data {
+        if entry.bound_value.is_some() || provided_data.contains_key(name) {
+            continue;
         }
 
         if !header_printed {
@@ -256,15 +223,16 @@ fn prompt_data(
         }
 
         loop {
-            let input_value = prompt_value_for_type(&data_name, lemma_type, None)?;
+            let input_value =
+                prompt_value_for_type(name, &entry.lemma_type, entry.default.as_ref())?;
 
             let mut trial = provided_data.clone();
             trial.extend(collected.clone());
-            trial.insert(data_name.clone(), input_value.clone());
+            trial.insert(name.clone(), input_value.clone());
 
-            match engine.run_plan(plan, Some(now), trial, false) {
+            match engine.run_plan_without_defaults(plan, Some(now), trial, false) {
                 Ok(_) => {
-                    collected.insert(data_name.clone(), input_value);
+                    collected.insert(name.clone(), input_value);
                     break;
                 }
                 Err(e) => {
@@ -273,17 +241,19 @@ fn prompt_data(
             }
         }
     }
+
+    Ok(collected)
 }
 
 fn prompt_value_for_type(
     data_name: &str,
     lemma_type: &LemmaType,
-    default_value: Option<&str>,
+    schema_default: Option<&LiteralValue>,
 ) -> Result<String> {
     let type_str = lemma_type.to_string();
 
     match &lemma_type.specifications {
-        TypeSpecification::Boolean { .. } => prompt_boolean_data(data_name, default_value),
+        TypeSpecification::Boolean { .. } => prompt_boolean_data(data_name, schema_default),
         TypeSpecification::Text {
             options,
             length,
@@ -297,9 +267,11 @@ fn prompt_value_for_type(
                 let prompt_message = format!("{} [{}]", data_name, type_str);
                 let mut prompt =
                     Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
-                if let Some(default) = default_value {
-                    if let Some(idx) = options.iter().position(|o| o == default) {
-                        prompt = prompt.with_starting_cursor(idx);
+                if let Some(lit) = schema_default {
+                    if let ValueKind::Text(s) = &lit.value {
+                        if let Some(idx) = options.iter().position(|o| o == s) {
+                            prompt = prompt.with_starting_cursor(idx);
+                        }
                     }
                 }
                 prompt
@@ -314,7 +286,7 @@ fn prompt_value_for_type(
                     data_name,
                     &type_str,
                     lemma_type,
-                    default_value,
+                    schema_default,
                     &constraints,
                 )
             }
@@ -333,7 +305,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_scale_data(data_name, &type_str, None, units, &constraints)
+            prompt_scale_data(data_name, &type_str, schema_default, units, &constraints)
         }
         TypeSpecification::Number {
             minimum,
@@ -348,7 +320,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_number_data(data_name, &type_str, default_value, &constraints)
+            prompt_number_data(data_name, &type_str, schema_default, &constraints)
         }
         TypeSpecification::Ratio {
             minimum,
@@ -359,22 +331,21 @@ fn prompt_value_for_type(
         } => prompt_ratio_data(
             data_name,
             &type_str,
-            default_value,
+            schema_default,
             units,
             *minimum,
             *maximum,
             help.as_str(),
         ),
-        TypeSpecification::Date { .. } => prompt_date_data(data_name, default_value),
-        TypeSpecification::Time { help, .. } => prompt_simple_text(
-            data_name,
-            &type_str,
-            default_value,
-            help.as_str(),
-            "12:34:56",
-        ),
+        TypeSpecification::Date { .. } => prompt_date_data(data_name, schema_default),
+        TypeSpecification::Time { help, .. } => {
+            let def = schema_default
+                .filter(|l| matches!(l.value, ValueKind::Time(_)))
+                .map(|l| l.to_string());
+            prompt_simple_text(data_name, &type_str, def.as_deref(), help.as_str(), "12:34:56")
+        }
         TypeSpecification::Duration { help, .. } => {
-            prompt_duration_data(data_name, &type_str, default_value, help.as_str())
+            prompt_duration_data(data_name, &type_str, schema_default, help.as_str())
         }
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Data '{}' has veto type which is not promptable", data_name)
@@ -385,31 +356,44 @@ fn prompt_value_for_type(
     }
 }
 
-fn prompt_date_data(data_name: &str, default_value: Option<&str>) -> Result<String> {
-    let help_message = if default_value.is_some() {
+fn prompt_date_data(data_name: &str, schema_default: Option<&LiteralValue>) -> Result<String> {
+    let help_message = if schema_default.is_some() {
         "Use arrow keys to navigate, Enter to select (or accept default)"
     } else {
         "Use arrow keys to navigate, Enter to select"
     };
 
-    let date = DateSelect::new(&format!("{} [date]", data_name))
-        .with_help_message(help_message)
+    let prompt_title = format!("{} [date]", data_name);
+    let mut ds = DateSelect::new(&prompt_title).with_help_message(help_message);
+
+    if let Some(lit) = schema_default {
+        if let ValueKind::Date(d) = &lit.value {
+            if let Some(naive) = NaiveDate::from_ymd_opt(d.year, d.month, d.day) {
+                ds = ds.with_default(naive);
+            }
+        }
+    }
+
+    let date = ds
         .prompt()
         .context(format!("Failed to get date for {}", data_name))?;
 
     Ok(format!("{}T00:00:00Z", date.format("%Y-%m-%d")))
 }
 
-fn prompt_boolean_data(data_name: &str, default_value: Option<&str>) -> Result<String> {
+fn prompt_boolean_data(data_name: &str, schema_default: Option<&LiteralValue>) -> Result<String> {
     let options = vec!["true", "false"];
 
-    let default_index = match default_value {
-        Some(default) if default == "true" || default == "yes" || default == "accept" => 0,
-        Some(_) => 1,
+    let default_index = match schema_default.and_then(|lit| match &lit.value {
+        ValueKind::Boolean(b) => Some(*b),
+        _ => None,
+    }) {
+        Some(true) => 0,
+        Some(false) => 1,
         None => 0,
     };
 
-    let help_message = if default_value.is_some() {
+    let help_message = if schema_default.is_some() {
         format!(
             "Default: {} - Use arrow keys to change, Enter to confirm",
             options[default_index]
@@ -431,9 +415,10 @@ fn prompt_text_data_with_constraints(
     data_name: &str,
     type_str: &str,
     lemma_type: &LemmaType,
-    default_value: Option<&str>,
+    schema_default: Option<&LiteralValue>,
     constraints: &TextConstraints,
 ) -> Result<String> {
+    let default_str = schema_default.map(|l| l.to_string());
     let prompt_message = format!("{} [{}]", data_name, type_str);
     let example = lemma_type.example_value();
 
@@ -462,7 +447,7 @@ fn prompt_text_data_with_constraints(
     };
     prompt = prompt.with_help_message(&help_message);
 
-    if let Some(default) = default_value {
+    if let Some(default) = default_str.as_deref() {
         prompt = prompt.with_default(default);
     }
 
@@ -504,24 +489,30 @@ fn prompt_simple_text(
 fn prompt_number_data(
     data_name: &str,
     type_str: &str,
-    default_value: Option<&str>,
+    schema_default: Option<&LiteralValue>,
     constraints: &NumericConstraints,
 ) -> Result<String> {
+    let default_str = schema_default.map(|l| l.to_string());
     let prompt_message = format!("{} [{}]", data_name, type_str);
-    prompt_decimal_input(&prompt_message, default_value, constraints, "10")
+    prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "10")
 }
 
 fn prompt_scale_data(
     data_name: &str,
     type_str: &str,
-    default: Option<&(Decimal, String)>,
-    units: &lemma::ScaleUnits,
+    schema_default: Option<&LiteralValue>,
+    units: &lemma::planning::semantics::ScaleUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
+    let parsed = schema_default.and_then(|lit| match &lit.value {
+        ValueKind::Scale(n, u) => Some((*n, u.as_str())),
+        _ => None,
+    });
+
     let prompt_message = format!("{} [{}]", data_name, type_str);
 
     if units.is_empty() {
-        let default_str = default.map(|(v, _)| v.to_string());
+        let default_str = parsed.map(|(v, _)| v.to_string());
         return prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "7.65");
     }
 
@@ -531,8 +522,8 @@ fn prompt_scale_data(
     } else {
         let prompt_msg = format!("Select unit for {}", data_name);
         let mut select = Select::new(&prompt_msg, unit_names);
-        if let Some((_, def_unit)) = default {
-            if let Some(idx) = units.iter().position(|u| u.name == *def_unit) {
+        if let Some((_, def_unit)) = parsed {
+            if let Some(idx) = units.iter().position(|u| u.name == def_unit) {
                 select = select.with_starting_cursor(idx);
             }
         }
@@ -541,7 +532,7 @@ fn prompt_scale_data(
             .context(format!("Failed to get unit for {}", data_name))?
     };
 
-    let numeric_default = default.and_then(|(value, def_unit)| {
+    let numeric_default = parsed.and_then(|(value, def_unit)| {
         let from = units.get(def_unit).ok()?;
         let to = units.get(&unit).ok()?;
         Some((value * from.value / to.value).to_string())
@@ -565,17 +556,31 @@ fn prompt_scale_data(
     Ok(format!("{} {}", value, unit))
 }
 
+fn ratio_default_numeric_for_decimal_prompt(lit: &LiteralValue) -> Option<String> {
+    match &lit.value {
+        ValueKind::Ratio(n, Some(u)) if u == "percent" => {
+            Some((*n * Decimal::from(100)).normalize().to_string())
+        }
+        ValueKind::Ratio(n, Some(u)) if u == "permille" => {
+            Some((*n * Decimal::from(1000)).normalize().to_string())
+        }
+        ValueKind::Ratio(n, _) => Some(n.normalize().to_string()),
+        _ => None,
+    }
+}
+
 fn prompt_ratio_data(
     data_name: &str,
     type_str: &str,
-    default_value: Option<&str>,
-    units: &lemma::RatioUnits,
+    schema_default: Option<&LiteralValue>,
+    units: &lemma::planning::semantics::RatioUnits,
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
     help: &str,
 ) -> Result<String> {
     // Ratio types typically support percent/permille; offer a unit selector.
     let prompt_message = format!("{} [{}]", data_name, type_str);
+    let default_decimal = schema_default.and_then(ratio_default_numeric_for_decimal_prompt);
     let selected_unit = if units.len() == 1 {
         units
             .iter()
@@ -595,7 +600,7 @@ fn prompt_ratio_data(
 
     let value = prompt_decimal_input(
         &prompt_message,
-        default_value,
+        default_decimal.as_deref(),
         &NumericConstraints {
             minimum,
             maximum,
@@ -616,11 +621,12 @@ fn prompt_ratio_data(
 fn prompt_duration_data(
     data_name: &str,
     type_str: &str,
-    default_value: Option<&str>,
+    schema_default: Option<&LiteralValue>,
     help: &str,
 ) -> Result<String> {
     // If there is a default, let the user accept it.
-    if let Some(default) = default_value {
+    if let Some(lit) = schema_default.filter(|l| matches!(l.value, ValueKind::Duration(_, _))) {
+        let default = lit.to_string();
         let prompt_message = format!("{} [{}]", data_name, type_str);
         let help_message = if help.is_empty() {
             "Example: 5 days".to_string()
@@ -629,7 +635,7 @@ fn prompt_duration_data(
         };
         return Text::new(&prompt_message)
             .with_help_message(&help_message)
-            .with_default(default)
+            .with_default(&default)
             .prompt()
             .context(format!("Failed to get duration for {}", data_name));
     }

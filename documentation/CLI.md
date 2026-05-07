@@ -16,17 +16,17 @@ cargo install lemma-cli
 ### `lemma run` -- evaluate a spec
 
 ```bash
-lemma run [<spec>] [--rules=rule1,rule2] [data...] [options]
+lemma run [[repo] spec] [name=value ...] [--prefix PATH] [--rules=RULES] [options]
 ```
 
 **Syntax:**
-- `spec` -- evaluate all rules
+- Positionals: optional repository qualifier (e.g. `@lemma/std`), then spec name (see `lemma run --help`)
 - `spec --rules=rule` -- evaluate one rule
 - `spec --rules=rule1,rule2` -- evaluate specific rules (comma-separated)
 - No arguments with `-i` -- interactive mode
 
 **Options:**
-- `-d, --dir <path>` -- workspace root (default: `.`)
+- `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
 - `--rules <rules>` -- comma-separated rule names (omit to evaluate all)
 - `-o, --output <format>` -- `table` (default) or `json`
 - `-x, --explain` -- show data and reasoning
@@ -38,12 +38,13 @@ lemma run [<spec>] [--rules=rule1,rule2] [data...] [options]
 ```bash
 lemma run pricing
 lemma run pricing --rules=total,tax
-lemma run nl/tax/net_salary --rules=net_salary -x
+lemma run --prefix ./policies nl/tax/net_salary --rules=net_salary -x
 lemma run pricing quantity=10 is_vip=true
 lemma run pricing -o json
 lemma run pricing -x
 lemma run pricing --effective 2025-01-01
 lemma run -i
+lemma run '@lemma/std' finance
 ```
 
 ### `lemma schema` -- spec schema (data and rules)
@@ -54,22 +55,33 @@ Shows data and rules.
 lemma schema <spec> [-d <path>] [--effective <datetime>]
 ```
 
-### `lemma list` -- list all specs
+### `lemma list` -- list workspace specs and repositories
+
+Lists specs in the **workspace (main) repository** only, then a **Repositories** section for loaded named/registry repos. Optional first positional is a workspace directory if it exists on disk; otherwise a single positional is a **repository** qualifier (e.g. `@lemma/std`). With an explicit workspace path, pass `[REPO]` as the second positional. (`lemma run` uses `--prefix` for the workspace instead.)
 
 ```bash
-lemma list [path] [--effective <datetime>]
+lemma list [source] [REPO] [--effective <datetime>]
 ```
 
-### `lemma get` -- fetch registry dependencies
+Examples:
+
+```bash
+lemma list
+lemma list '@lemma/std'
+lemma list ./project spec_composition
+```
+
+### `lemma fetch` -- fetch registry dependencies
 
 Resolves `@...` references and downloads specs from the registry.
 
 ```bash
-lemma get [-d <path>] [-f]              # resolve all @... references in workspace
-lemma get <spec> [-f]                   # fetch a specific spec (e.g. @lemma/std/finance)
+lemma fetch [-d <path>] --all           # resolve all @... references in workspace
+lemma fetch <dependency> [-f]           # fetch a specific dependency (e.g. @lemma/std)
 ```
 
 **Options:**
+- `-a, --all` -- fetch all @... references in the workspace
 - `-f, --force` -- overwrite existing specs when content has changed on the registry
 
 ### `lemma format` -- format .lemma files
@@ -137,7 +149,7 @@ lemma mcp [path] [--admin]
 
 **Options:**
 - optional `path` — workspace directory or `.lemma` file; omit to start without loading from disk
-- `--admin` -- enable write tools (`add_spec`, `get_spec_source`)
+- `--admin` — enable write tools (`add_spec`, `get_spec_source`)
 
 ## Workspace
 

@@ -31,7 +31,9 @@ fn eval_with(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.run(spec_name, Some(effective), map, false).unwrap()
+    engine
+        .run(None, spec_name, Some(effective), map, false)
+        .unwrap()
 }
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
@@ -53,10 +55,10 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
     );
 }
 
-/// Qualified type import: `from finance 2025-02-01` pins to finance v1 (eur only)
+/// Qualified data import: `from finance 2025-02-01` pins to finance v1 (eur only)
 /// regardless of evaluation datetime. The pin freezes the type at that instant.
 #[test]
-fn qualified_type_import_pins_to_referenced_version() {
+fn qualified_data_import_pins_to_referenced_version() {
     let mut engine = Engine::new();
 
     engine
@@ -75,7 +77,9 @@ data money: scale
  -> decimals 2
 data base_price: 75.00 eur
 "#,
-            lemma::SourceType::Labeled("finance.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
         )
         .unwrap();
 
@@ -83,11 +87,11 @@ data base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-data money from finance 2025-02-01
+data money: money from finance 2025-02-01
 data price: money
 rule doubled: price * 2
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         )
         .unwrap();
 
@@ -116,11 +120,11 @@ rule doubled: price * 2
     );
 }
 
-/// Qualified type import `from finance 2025-02-01` pins to finance v1 (eur only).
+/// Qualified data import `from finance 2025-02-01` pins to finance v1 (eur only).
 /// Using a unit from v2 (usd) must produce a validation error even after the
 /// v2 boundary, because the pin freezes the type at the qualified instant.
 #[test]
-fn qualified_type_import_rejects_unit_from_later_version() {
+fn qualified_data_import_rejects_unit_from_later_version() {
     let mut engine = Engine::new();
 
     engine
@@ -137,7 +141,9 @@ data money: scale
  -> unit usd 1.10
  -> decimals 2
 "#,
-            lemma::SourceType::Labeled("finance.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
         )
         .unwrap();
 
@@ -145,11 +151,11 @@ data money: scale
         .load(
             r#"
 spec shop 2025-01-01
-data money from finance 2025-02-01
+data money: money from finance 2025-02-01
 data price: money
 rule doubled: price * 2
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         )
         .unwrap();
 
@@ -167,6 +173,7 @@ rule doubled: price * 2
 
     // usd must fail: pin locks to finance v1 which only has eur
     let result = engine.run(
+        None,
         "shop",
         Some(&date(2025, 9, 1)),
         vec![("price".to_string(), "10.00 usd".to_string())]
@@ -202,18 +209,20 @@ data weight: scale
  -> unit lb 2.205
  -> decimals 1
 "#,
-            lemma::SourceType::Labeled("units.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("units.lemma"))),
         )
         .unwrap();
 
     let result = engine.load(
         r#"
 spec warehouse
-data weight from units
+data weight: weight from units
 data item_weight: weight
 rule heavy: item_weight > 100.0 kg
 "#,
-        lemma::SourceType::Labeled("warehouse.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "warehouse.lemma",
+        ))),
     );
 
     assert!(
@@ -232,11 +241,11 @@ rule heavy: item_weight > 100.0 kg
     );
 }
 
-/// Mixed scenario: consumer has both a data-level spec ref and a type import
+/// Mixed scenario: consumer has both a data-level spec ref and a data import
 /// to the same dependency. Consumer needs separate temporal versions to satisfy
 /// the cross-spec interface contract (dep's interface changes between slices).
 #[test]
-fn mixed_spec_ref_and_type_import_to_same_dep() {
+fn mixed_spec_ref_and_data_import_to_same_dep() {
     let mut engine = Engine::new();
 
     engine
@@ -255,7 +264,9 @@ data money: scale
  -> decimals 2
 data base_price: 75.00 eur
 "#,
-            lemma::SourceType::Labeled("finance.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
         )
         .unwrap();
 
@@ -263,18 +274,18 @@ data base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-data money from finance
-with ref: finance
+data money: money from finance
+uses ref: finance
 data price: money
 rule total: ref.base_price + price
 
 spec shop 2025-07-01
-data money from finance
-with ref: finance
+data money: money from finance
+uses ref: finance
 data price: money
 rule total: ref.base_price + price
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         )
         .unwrap();
 
@@ -302,7 +313,7 @@ rule total: ref.base_price + price
         "85.00 eur",
     );
 
-    // After boundary: usd must be available from the type import
+    // After boundary: usd must be available from the data import
     assert_rule_value(
         &eval_with(
             &engine,
@@ -315,10 +326,10 @@ rule total: ref.base_price + price
     );
 }
 
-/// Inline type import (`data price: money from finance`) without pinning
+/// Inline data import (`data price: money from finance`) without pinning
 /// must be rejected when the source spec's interface changes across versions.
 #[test]
-fn inline_type_import_rejects_incompatible_unpinned_dep() {
+fn inline_data_import_rejects_incompatible_unpinned_dep() {
     let mut engine = Engine::new();
 
     engine
@@ -337,7 +348,9 @@ data money: scale
  -> decimals 2
 data base_price: 75.00 eur
 "#,
-            lemma::SourceType::Labeled("finance.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
         )
         .unwrap();
 
@@ -347,12 +360,12 @@ spec shop 2025-01-01
 data price: money from finance
 rule doubled: price * 2
 "#,
-        lemma::SourceType::Labeled("shop.lemma"),
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
     );
 
     assert!(
         result.is_err(),
-        "Unpinned inline type import with incompatible dep interfaces must be rejected"
+        "Unpinned inline data import with incompatible dep interfaces must be rejected"
     );
     let errs = result.unwrap_err();
     let combined: String = errs
@@ -366,9 +379,9 @@ rule doubled: price * 2
     );
 }
 
-/// Type import with explicit effective datetime pins resolution to that version.
+/// Data import with explicit effective datetime pins resolution to that version.
 #[test]
-fn type_import_with_effective_datetime_pins_version() {
+fn data_import_with_effective_datetime_pins_version() {
     let mut engine = Engine::new();
 
     engine
@@ -387,25 +400,27 @@ data money: scale
  -> decimals 2
 data base_price: 75.00 eur
 "#,
-            lemma::SourceType::Labeled("finance.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
         )
         .unwrap();
 
-    // Pin the type import to a date before the v2 boundary;
+    // Pin the data import to a date before the v2 boundary;
     // even when evaluated after 2025-07-01, only eur should be available
     engine
         .load(
             r#"
 spec shop 2025-01-01
-data money from finance 2025-03-01
+data money: money from finance 2025-03-01
 data price: money
 rule doubled: price * 2
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         )
         .unwrap();
 
-    // Evaluate after the finance boundary — but the type import is pinned
+    // Evaluate after the finance boundary — but the data import is pinned
     // to 2025-03-01 which resolves finance v1 (eur only).
     assert_rule_value(
         &eval_with(
@@ -441,7 +456,9 @@ data money: scale
  -> unit usd 1.10
  -> decimals 2
 "#,
-            lemma::SourceType::Labeled("finance.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
         )
         .unwrap();
 
@@ -449,16 +466,17 @@ data money: scale
         .load(
             r#"
 spec shop 2025-01-01
-data money from finance 2025-02-01
+data money: money from finance 2025-02-01
 data price: money
 rule doubled: price * 2
 "#,
-            lemma::SourceType::Labeled("shop.lemma"),
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         )
         .unwrap();
 
     // Evaluate after boundary with usd — must error because pin locks to v1 (no usd).
     let result = engine.run(
+        None,
         "shop",
         Some(&date(2025, 9, 1)),
         [("price".to_string(), "10.00 usd".to_string())]

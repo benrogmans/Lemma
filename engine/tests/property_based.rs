@@ -14,7 +14,7 @@ fn get_rule_result(
 ) -> lemma::OperationResult {
     let now = DateTimeValue::now();
     let response = engine
-        .run(spec_name, Some(&now), HashMap::new(), false)
+        .run(None, spec_name, Some(&now), HashMap::new(), false)
         .unwrap();
     response
         .results
@@ -33,7 +33,10 @@ data duration: 60 minutes
 rule to_hours: duration in hours
 "#;
     engine
-        .load(code, lemma::SourceType::Labeled("test"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
+        )
         .unwrap();
 
     let result = get_rule_result(&mut engine, "test", "to_hours");

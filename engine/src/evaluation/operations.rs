@@ -2,12 +2,10 @@
 
 use std::fmt;
 
-use crate::{
-    planning::semantics::{
-        ArithmeticComputation, ComparisonComputation, DataPath, LiteralValue, LogicalComputation,
-        MathematicalComputation, RulePath, SemanticDateTime, SemanticTime,
-    },
-    LemmaType, SemanticDurationUnit, TypeSpecification,
+use crate::planning::semantics::{
+    ArithmeticComputation, ComparisonComputation, DataPath, LemmaType, LiteralValue,
+    LogicalComputation, MathematicalComputation, RulePath, SemanticDateTime, SemanticDurationUnit,
+    SemanticTime, TypeSpecification,
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};

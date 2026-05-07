@@ -10,9 +10,9 @@ fn engine_with_files(files: HashMap<String, String>) -> Engine {
     let mut engine = Engine::new();
     for (attr, code) in files {
         let src = if attr.trim().is_empty() {
-            SourceType::Inline
+            SourceType::Volatile
         } else {
-            SourceType::Labeled(attr.as_str())
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(attr.as_str())))
         };
         let _ = engine.load(&code, src);
     }
@@ -48,12 +48,17 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     engine
-        .load(code, SourceType::Labeled("fuzz_binding"))
+        .load(
+            code,
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "fuzz_binding",
+            ))),
+        )
         .unwrap();
     let mut data = HashMap::new();
     data.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run("fuzz_test", Some(&now), data, false);
+    let result = engine.run(None, "fuzz_test", Some(&now), data, false);
     assert!(
         result.is_err(),
         "expected validation error for 29-digit number, got {:?}",

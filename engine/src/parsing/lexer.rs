@@ -9,6 +9,7 @@ use std::sync::Arc;
 pub enum TokenKind {
     // Keywords
     Spec,
+    Repo,
     Data,
     Rule,
     Unless,
@@ -18,7 +19,7 @@ pub enum TokenKind {
     In,
     Type,
     From,
-    With,
+    Uses,
     Meta,
     Veto,
     Now,
@@ -124,6 +125,7 @@ impl std::fmt::Display for TokenKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TokenKind::Spec => write!(f, "'spec'"),
+            TokenKind::Repo => write!(f, "'repo'"),
             TokenKind::Data => write!(f, "'data'"),
             TokenKind::Rule => write!(f, "'rule'"),
             TokenKind::Unless => write!(f, "'unless'"),
@@ -133,7 +135,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::In => write!(f, "'in'"),
             TokenKind::Type => write!(f, "'type'"),
             TokenKind::From => write!(f, "'from'"),
-            TokenKind::With => write!(f, "'with'"),
+            TokenKind::Uses => write!(f, "'uses'"),
             TokenKind::Meta => write!(f, "'meta'"),
             TokenKind::Veto => write!(f, "'veto'"),
             TokenKind::Now => write!(f, "'now'"),
@@ -237,20 +239,22 @@ impl Token {
     }
 }
 
+// todo: find out why derive Clone is necessary
+#[derive(Clone)]
 pub struct Lexer {
     source: Vec<char>,
     pos: usize,
     line: usize,
     col: usize,
     byte_offset: usize,
-    attribute: String,
+    source_type: crate::parsing::source::SourceType,
     source_text: Arc<str>,
     peeked: Option<Token>,
     peeked2: Option<Token>,
 }
 
 impl Lexer {
-    pub fn new(input: &str, attribute: &str) -> Self {
+    pub fn new(input: &str, source_type: &crate::parsing::source::SourceType) -> Self {
         let source_text: Arc<str> = Arc::from(input);
         Lexer {
             source: input.chars().collect(),
@@ -258,7 +262,7 @@ impl Lexer {
             line: 1,
             col: 1,
             byte_offset: 0,
-            attribute: attribute.to_string(),
+            source_type: source_type.clone(),
             source_text,
             peeked: None,
             peeked2: None,
@@ -269,8 +273,8 @@ impl Lexer {
         self.source_text.clone()
     }
 
-    pub fn attribute(&self) -> &str {
-        &self.attribute
+    pub fn source_type(&self) -> crate::parsing::source::SourceType {
+        self.source_type.clone()
     }
 
     pub fn peek(&mut self) -> Result<&Token, Error> {
@@ -353,7 +357,11 @@ impl Lexer {
     }
 
     fn make_error(&self, message: impl Into<String>, span: Span) -> Error {
-        Error::parsing(message, Source::new(&self.attribute, span), None::<String>)
+        Error::parsing(
+            message,
+            Source::new(self.source_type.clone(), span),
+            None::<String>,
+        )
     }
 
     fn lex_token(&mut self) -> Result<Token, Error> {
@@ -651,6 +659,7 @@ impl Lexer {
 fn keyword_from_identifier(text: &str) -> TokenKind {
     match text.to_lowercase().as_str() {
         "spec" => TokenKind::Spec,
+        "repo" => TokenKind::Repo,
         "data" => TokenKind::Data,
         "rule" => TokenKind::Rule,
         "unless" => TokenKind::Unless,
@@ -660,7 +669,7 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "in" => TokenKind::In,
         "type" => TokenKind::Type,
         "from" => TokenKind::From,
-        "with" => TokenKind::With,
+        "uses" => TokenKind::Uses,
         "meta" => TokenKind::Meta,
         "veto" => TokenKind::Veto,
         "now" => TokenKind::Now,
@@ -727,6 +736,7 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Spec
+            | TokenKind::Repo
             | TokenKind::Data
             | TokenKind::Rule
             | TokenKind::Unless
@@ -736,7 +746,7 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
             | TokenKind::In
             | TokenKind::Type
             | TokenKind::From
-            | TokenKind::With
+            | TokenKind::Uses
             | TokenKind::Meta
             | TokenKind::Veto
             | TokenKind::Now
@@ -969,12 +979,27 @@ pub fn can_be_reference_segment(kind: &TokenKind) -> bool {
     can_be_label(kind) || is_type_keyword(kind)
 }
 
+/// Slash-/dot-separated registry path segments (`@org/repo/...`). Keywords that are
+/// reserved at the structural level (`spec`, `rule`, etc.) are allowed inside
+/// multi-segment paths (e.g. `@org/repo`) but callers must reject them when they
+/// appear as the entire stand-alone name (e.g. `repo spec`).
+#[must_use]
+pub fn can_be_repository_qualifier_segment(kind: &TokenKind) -> bool {
+    matches!(kind, TokenKind::Identifier)
+        || is_structural_keyword(kind)
+        || can_be_label(kind)
+        || is_type_keyword(kind)
+        || is_boolean_keyword(kind)
+        || is_math_function(kind)
+        || is_duration_unit(kind)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn lex_all(input: &str) -> Result<Vec<Token>, Error> {
-        let mut lexer = Lexer::new(input, "test.lemma");
+        let mut lexer = Lexer::new(input, &crate::parsing::source::SourceType::Volatile);
         let mut tokens = Vec::new();
         loop {
             let token = lexer.next_token()?;
@@ -1097,7 +1122,7 @@ mod tests {
 
     #[test]
     fn lex_keywords() {
-        let kinds = lex_kinds("spec data rule unless then not and in type from with meta veto now")
+        let kinds = lex_kinds("spec data rule unless then not and in type from uses meta veto now")
             .unwrap();
         assert_eq!(
             &kinds[..14],
@@ -1112,7 +1137,7 @@ mod tests {
                 TokenKind::In,
                 TokenKind::Type,
                 TokenKind::From,
-                TokenKind::With,
+                TokenKind::Uses,
                 TokenKind::Meta,
                 TokenKind::Veto,
                 TokenKind::Now,
@@ -1218,7 +1243,7 @@ mod tests {
 
     #[test]
     fn lex_peek_does_not_consume() {
-        let mut lexer = Lexer::new("spec test", "test.lemma");
+        let mut lexer = Lexer::new("spec test", &crate::parsing::source::SourceType::Volatile);
         let peeked_kind = lexer.peek().unwrap().kind.clone();
         assert_eq!(peeked_kind, TokenKind::Spec);
         let next = lexer.next_token().unwrap();

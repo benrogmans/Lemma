@@ -1,23 +1,24 @@
-//! OpenAPI 3.1 specification generator for Lemma specs.
+//! OpenAPI 3.1 specification generator for the Lemma HTTP surface.
 //!
 //! Takes a Lemma `Engine` and produces a complete OpenAPI specification as JSON.
 //! Used by both `lemma server` (CLI) and LemmaBase.com for consistent API docs.
 //!
 //! ## Temporal versioning
 //!
-//! Lemma specs can have multiple temporal versions (e.g. `spec pricing 2024-01-01`
+//! Specs can have multiple temporal versions (e.g. `spec pricing 2024-01-01`
 //! and `spec pricing 2025-01-01`) with potentially different interfaces (data, rules,
-//! types). The OpenAPI spec must reflect the interface active at a specific point in
+//! types). The OpenAPI document reflects the interface active at a specific point in
 //! time. Use [`generate_openapi_effective`] with an explicit `DateTimeValue` to get the
-//! spec for a given instant. [`generate_openapi`] is a convenience wrapper that uses
+//! document for a given instant. [`generate_openapi`] is a convenience wrapper that uses
 //! the current time.
 //!
-//! For Scalar multi-spec rendering, [`temporal_api_sources`] returns the list of
+//! For Scalar multi-source rendering, [`temporal_api_sources`] returns the list of
 //! temporal version boundaries so the Scalar UI can offer a source selector.
 
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LemmaType, TypeSpecification};
 use serde_json::{json, Map, Value};
+use std::sync::Arc;
 
 /// Query slug for the default temporal view (request-time instant). OpenAPI URLs use no `?effective=`.
 pub const NOW_SLUG: &str = "now";
@@ -46,12 +47,10 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
     let mut all_boundaries: std::collections::BTreeSet<DateTimeValue> =
         std::collections::BTreeSet::new();
 
-    let all_specs = engine.list_specs();
-    let mut seen_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for spec in &all_specs {
-        if seen_names.insert(spec.name.clone()) {
-            for s in all_specs.iter().filter(|s| s.name == spec.name) {
-                if let Some(af) = s.effective_from() {
+    for repo in engine.list() {
+        for ss in &repo.specs {
+            for (spec, _, _) in ss.iter_with_ranges() {
+                if let Some(af) = spec.effective_from() {
                     all_boundaries.insert(af.clone());
                 }
             }
@@ -88,7 +87,7 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
 
 /// Generate a complete OpenAPI 3.1 specification using the current time.
 ///
-/// Convenience wrapper around [`generate_openapi_effective`]. The spec reflects
+/// Convenience wrapper around [`generate_openapi_effective`]. The document reflects
 /// only the specs and interfaces active at `DateTimeValue::now()`.
 pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
     generate_openapi_effective(engine, explanations_enabled, &DateTimeValue::now())
@@ -98,22 +97,18 @@ pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
 ///
 /// The specification includes:
 /// - `GET /` — list loaded specs (name, data/rule counts)
-/// - Spec endpoints (`/{spec_name}`) with `?rules=` query parameter
-/// - GET (schema: `spec_set_id`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
-///   POST (evaluate: envelope `spec`, `effective`, `result`) with `Accept-Datetime` header
-/// - `x-effective-from` / `x-effective-to` vendor extensions on each spec PathItem
+/// - `/{spec_set_id}` GET (schema: `spec_set_id`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
+///   POST (evaluate: envelope `spec`, `effective`, `result`) with optional `Accept-Datetime` header
+/// - `?rules=` on both methods to scope outputs
+/// - `x-effective-from` / `x-effective-to` vendor extensions on each PathItem
 ///   exposing the half-open `[effective_from, effective_to)` range of the version
 ///   resolved at the document's effective instant (both `null` when unbounded)
 ///
-/// CLI `lemma server` also exposes shell routes (`/openapi.json`, `/health`, `/docs`) and
-/// legacy schema routes (`/schema/{spec_name}`, `/schema/{spec_name}/{rules}`); both are
-/// intentionally omitted from the generated document. The legacy `/schema/*` routes
-/// predate the spec envelope returned by `GET /{spec_name}` and are kept for backward
-/// compatibility only; use `GET /{spec_name}` instead. `GET /` (list loaded specs) is
-/// included alongside `GET|POST /{spec_name}`.
+/// CLI `lemma server` also exposes shell routes (`/openapi.json`, `/health`, `/docs`) that are
+/// intentionally omitted from the generated document.
 ///
-/// When `explanations_enabled` is true, the spec adds the `x-explanations` header parameter
-/// to evaluation endpoints and describes the optional `explanation` field on rule results.
+/// When `explanations_enabled` is true, the document adds the `x-explanations` header parameter
+/// to evaluation operations and describes the optional `explanation` field on rule results.
 pub fn generate_openapi_effective(
     engine: &Engine,
     explanations_enabled: bool,
@@ -127,30 +122,42 @@ pub fn generate_openapi_effective(
         build_rule_result_schema(explanations_enabled),
     );
 
-    let active_specs = engine.list_specs_effective(effective);
-    let unique_spec_names: Vec<String> = active_specs.iter().map(|s| s.name.clone()).collect();
+    let workspace = engine.get_workspace();
+    let effective_instant = lemma::parsing::EffectiveDate::DateTimeValue(effective.clone());
+
+    let active_specs: Vec<(
+        Arc<lemma::LemmaSpec>,
+        Option<DateTimeValue>,
+        Option<DateTimeValue>,
+    )> = workspace
+        .specs
+        .iter()
+        .filter_map(|ss| {
+            ss.spec_at(&effective_instant).map(|spec| {
+                let (from, to) = ss.effective_range(&spec);
+                (spec, from, to)
+            })
+        })
+        .collect();
+
+    let unique_spec_names: Vec<String> = active_specs
+        .iter()
+        .map(|(s, _, _)| s.name.clone())
+        .collect();
 
     paths.insert(
         "/".to_string(),
         index_path_item(&unique_spec_names, engine, effective),
     );
 
-    for spec_name in &unique_spec_names {
-        if let Ok(plan) = engine.get_plan(spec_name, Some(effective)) {
+    for (spec_arc, spec_effective_from, spec_effective_to) in &active_specs {
+        let spec_name = &spec_arc.name;
+        if let Ok(plan) = engine.get_plan(None, spec_name, Some(effective)) {
             let schema = plan.schema();
             let data = collect_input_data_from_schema(&schema);
             let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
 
-            let spec_set = engine
-                .get_spec_set(spec_name)
-                .expect("BUG: spec in list_specs_effective but spec set missing from engine");
-            let active_spec = active_specs
-                .iter()
-                .find(|s| s.name == *spec_name)
-                .expect("BUG: active_specs was produced by this engine for this name");
-            let (spec_effective_from, spec_effective_to) = spec_set.effective_range(active_spec);
-
-            let safe_name = spec_name.replace('/', "_");
+            let safe_name = spec_name.replace('.', "_");
             let get_response_schema_name = format!("{}_get_response", safe_name);
             components_schemas.insert(
                 get_response_schema_name.clone(),
@@ -190,7 +197,7 @@ pub fn generate_openapi_effective(
         "description": "Simple API to retrieve the list of Lemma specs"
     })];
     for spec_name in &unique_spec_names {
-        let safe_tag = spec_name.replace('/', "_");
+        let safe_tag = spec_name.replace('.', "_");
         tags.push(json!({
             "name": safe_tag,
             "x-displayName": spec_name,
@@ -200,7 +207,7 @@ pub fn generate_openapi_effective(
 
     let spec_tags: Vec<Value> = unique_spec_names
         .iter()
-        .map(|n| Value::String(n.replace('/', "_")))
+        .map(|n| Value::String(n.replace('.', "_")))
         .collect();
 
     let tag_groups = vec![
@@ -232,9 +239,10 @@ struct InputData {
     name: String,
     /// The resolved Lemma type for this data.
     lemma_type: LemmaType,
-    /// The data's literal value if defined in the spec (e.g. `data quantity: 10`).
-    /// None for type-only data (e.g. `data quantity: number`).
-    default_value: Option<lemma::LiteralValue>,
+    /// Literal bound in the spec (`data x: literal`).
+    bound_value: Option<lemma::LiteralValue>,
+    /// Suggestion from `-> default ...` (`ExecutionPlan::with_defaults` applies it when omitted).
+    suggestion_default: Option<lemma::LiteralValue>,
 }
 
 /// Collect all local input data from a pre-built schema.
@@ -249,7 +257,8 @@ fn collect_input_data_from_schema(schema: &lemma::SpecSchema) -> Vec<InputData> 
         .map(|(name, entry)| InputData {
             name: name.clone(),
             lemma_type: entry.lemma_type.clone(),
-            default_value: entry.default.clone(),
+            bound_value: entry.bound_value.clone(),
+            suggestion_default: entry.default.clone(),
         })
         .collect()
 }
@@ -261,7 +270,7 @@ fn collect_input_data_from_schema(schema: &lemma::SpecSchema) -> Vec<InputData> 
 fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
     let spec_items: Vec<Value> = spec_names
         .iter()
-        .map(|name| match engine.schema(name, Some(effective)) {
+        .map(|name| match engine.schema(None, name, Some(effective)) {
             Ok(s) => {
                 let data_count = s.data.keys().filter(|n| !n.contains('.')).count();
                 let rules_count = s.rules.len();
@@ -543,7 +552,7 @@ fn build_spec_path_item(
         "$ref": format!("#/components/schemas/{}", post_body_schema_name)
     });
 
-    let tag = spec_name.replace('/', "_");
+    let tag = spec_name.replace('.', "_");
 
     let rules_example = if rule_names.is_empty() {
         String::new()
@@ -667,11 +676,15 @@ fn build_post_request_schema(data: &[InputData]) -> Value {
     let mut required = Vec::new();
 
     for data in data {
+        let default_for_docs = data
+            .bound_value
+            .as_ref()
+            .or(data.suggestion_default.as_ref());
         properties.insert(
             data.name.clone(),
-            build_post_property_schema(&data.lemma_type, data.default_value.as_ref()),
+            build_post_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.default_value.is_none() {
+        if data.bound_value.is_none() && data.suggestion_default.is_none() {
             required.push(Value::String(data.name.clone()));
         }
     }
@@ -734,7 +747,10 @@ mod tests {
     fn create_engine_with_code(code: &str) -> Engine {
         let mut engine = Engine::new();
         engine
-            .load(code, SourceType::Labeled("test.lemma"))
+            .load(
+                code,
+                SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            )
             .expect("failed to parse lemma code");
         engine
     }
@@ -743,7 +759,10 @@ mod tests {
         let mut engine = Engine::new();
         for (name, code) in files {
             engine
-                .load(code, SourceType::Labeled(name))
+                .load(
+                    code,
+                    SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(name))),
+                )
                 .expect("failed to parse lemma code");
         }
         engine
@@ -856,9 +875,8 @@ mod tests {
     }
 
     /// The generated OpenAPI document describes the public spec surface only.
-    /// Server shell routes (`/openapi.json`, `/health`, `/docs`) and legacy
-    /// schema routes (`/schema/{spec_name}` and `/schema/{spec_name}/{rules}`)
-    /// are intentionally omitted; consumers must not rely on them for code
+    /// Server shell routes (`/openapi.json`, `/health`, `/docs`) are
+    /// intentionally omitted; consumers must not rely on them for code
     /// generation or contract inspection.
     #[test]
     fn test_openapi_omits_shell_and_legacy_schema_routes() {
@@ -941,20 +959,20 @@ mod tests {
     #[test]
     fn test_nested_spec_path_schema_refs_are_valid() {
         let engine = create_engine_with_code(
-            "spec a/b/c
+            "spec bc
         data x: number
         rule result: x",
         );
         let spec = generate_openapi(&engine, false);
 
-        assert!(spec["paths"]["/a/b/c"]["post"].is_object());
-        let body_ref = spec["paths"]["/a/b/c"]["post"]["requestBody"]["content"]
+        assert!(spec["paths"]["/bc"]["post"].is_object());
+        let body_ref = spec["paths"]["/bc"]["post"]["requestBody"]["content"]
             ["application/x-www-form-urlencoded"]["schema"]["$ref"]
             .as_str()
             .unwrap();
-        assert_eq!(body_ref, "#/components/schemas/a_b_c_request");
-        assert!(spec["components"]["schemas"]["a_b_c_request"].is_object());
-        assert!(spec["components"]["schemas"]["a_b_c_request"]["properties"]["x"].is_object());
+        assert_eq!(body_ref, "#/components/schemas/bc_request");
+        assert!(spec["components"]["schemas"]["bc_request"].is_object());
+        assert!(spec["components"]["schemas"]["bc_request"]["properties"]["x"].is_object());
     }
 
     // =======================================================================

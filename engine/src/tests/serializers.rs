@@ -9,7 +9,7 @@ use std::str::FromStr;
 
 fn dummy_source() -> Source {
     Source::new(
-        "test.lemma",
+        crate::parsing::source::SourceType::Volatile,
         Span {
             start: 0,
             end: 0,

@@ -44,12 +44,12 @@ spec rate 2026-01-01T12:00:00+05:00
 data v: 2
 rule out: v
 "#,
-            SourceType::Labeled("tz.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("tz.lemma"))),
         )
         .expect("parse specs with offset on effective_from");
 
     let r = engine
-        .run("rate", Some(&utc_noon()), HashMap::new(), false)
+        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
         .expect("run");
     assert_rule_value(&r, "out", "1");
 }
@@ -66,12 +66,12 @@ rule out: 10
 spec rate 2026-01-01T12:00:00+05:00
 rule out: 20
 "#,
-            SourceType::Labeled("tz2.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("tz2.lemma"))),
         )
         .unwrap();
 
     let r = engine
-        .run("rate", Some(&utc_noon()), HashMap::new(), false)
+        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
         .unwrap();
     assert_rule_value(&r, "out", "10");
 }

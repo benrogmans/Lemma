@@ -104,7 +104,7 @@ mod tests {
 
     fn dummy_source() -> Source {
         Source::new(
-            "test",
+            crate::parsing::source::SourceType::Volatile,
             Span {
                 start: 0,
                 end: 0,
@@ -221,7 +221,7 @@ mod tests {
                 referencing_data_name: String::new(),
                 data: vec![crate::planning::semantics::Data {
                     path: crate::planning::semantics::DataPath::new(vec![], "data1".to_string()),
-                    value: crate::planning::semantics::DataValue::Literal(
+                    value: crate::planning::semantics::DataValue::from_bound_literal(
                         crate::planning::semantics::LiteralValue::from_bool(false),
                     ),
                     source: None,

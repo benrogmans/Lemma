@@ -3,7 +3,7 @@ use lemma::{Engine, Error};
 use std::collections::HashMap;
 
 #[test]
-fn test_inline_type_import() -> Result<(), Error> {
+fn test_inline_data_import() -> Result<(), Error> {
     let mut engine = Engine::new();
 
     // Define a type in one spec
@@ -15,22 +15,29 @@ data age: number -> minimum 0 -> maximum 150
     // Use that type inline in another spec (without commands)
     let test_spec = r#"
 spec test
-data user_age: age from age
+uses age
+data user_age: age.age
 rule is_adult: user_age >= 18
 "#;
 
     engine
-        .load(age_spec, lemma::SourceType::Labeled("age.lemma"))
+        .load(
+            age_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("age.lemma"))),
+        )
         .expect("add age spec");
     engine
-        .load(test_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            test_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "25".to_string());
 
-    let response = engine.run("test", Some(&now), data, false)?;
+    let response = engine.run(None, "test", Some(&now), data, false)?;
 
     // The data should be evaluated correctly with the imported type
 
@@ -56,7 +63,7 @@ rule is_adult: user_age >= 18
 }
 
 #[test]
-fn test_inline_type_import_with_constraints() -> Result<(), Error> {
+fn test_inline_data_import_with_constraints() -> Result<(), Error> {
     let mut engine = Engine::new();
 
     // Define a type in one spec
@@ -68,22 +75,29 @@ data age: number -> minimum 0 -> maximum 150
     // Use that type inline with additional constraints
     let test_spec = r#"
 spec test
-data user_age: age from age -> maximum 120
+uses age
+data user_age: age.age -> maximum 120
 rule is_senior: user_age >= 65
 "#;
 
     engine
-        .load(age_spec, lemma::SourceType::Labeled("age.lemma"))
+        .load(
+            age_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("age.lemma"))),
+        )
         .expect("add age spec");
     engine
-        .load(test_spec, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            test_spec,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "70".to_string());
 
-    let response = engine.run("test", Some(&now), data, false)?;
+    let response = engine.run(None, "test", Some(&now), data, false)?;
 
     // Check the rule result
     let is_senior_result = response

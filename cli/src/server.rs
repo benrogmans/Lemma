@@ -7,6 +7,7 @@ pub mod http {
         routing::get,
         Router,
     };
+    use lemma::collect_lemma_sources as engine_collect_sources;
     use lemma::parsing::ast::DateTimeValue;
     use lemma::Engine;
     use serde::Deserialize;
@@ -160,8 +161,6 @@ pub mod http {
             .route("/openapi.json", get(openapi_spec))
             .route("/docs", get(scalar_docs))
             .route("/scalar.js", get(scalar_js))
-            .route("/schema/{spec_name}", get(schema_all_rules))
-            .route("/schema/{spec_name}/{rules}", get(schema_for_rules))
             .route("/{*path}", get(spec_get_schema).post(spec_post_evaluate))
             .fallback(fallback_404)
             .layer(CorsLayer::permissive())
@@ -189,9 +188,10 @@ pub mod http {
         let engine = state.engine.read().await;
 
         let specs: Vec<lemma::SpecSchema> = engine
-            .list_specs_effective(&now)
+            .get_workspace()
+            .specs
             .iter()
-            .filter_map(|s| engine.schema(&s.name, Some(&now)).ok())
+            .filter_map(|ss| engine.schema(None, &ss.name, Some(&now)).ok())
             .collect();
 
         Ok(Json(specs))
@@ -322,7 +322,7 @@ pub mod http {
     // Doc path (wildcard): GET = schema with versions, POST = evaluate
     // -----------------------------------------------------------------------
 
-    /// `GET /{*path}` — schema of resolved version; path = SpecSet id. `Accept-Datetime` for temporal, `?rules=` to scope.
+    /// `GET /{*path}` — schema of resolved version; path = specset id. `Accept-Datetime` for temporal, `?rules=` to scope.
     async fn spec_get_schema(
         State(state): State<AppState>,
         Path(path): Path<String>,
@@ -333,21 +333,32 @@ pub mod http {
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = state.engine.read().await;
 
-        let schema = engine.schema(&spec_set_id, Some(&effective)).map_err(|e| {
+        let spec_name = lemma::spec_set_id::parse_spec_set_id(&spec_set_id).map_err(|e| {
             (
-                lemma_error_to_status(&e),
+                StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
                     error: e.to_string(),
                 }),
             )
         })?;
 
+        let schema = engine
+            .schema(None, &spec_name, Some(&effective))
+            .map_err(|e| {
+                (
+                    lemma_error_to_status(&e),
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
+                )
+            })?;
+
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let schema = if rule_names.is_empty() {
             schema
         } else {
             let plan = engine
-                .get_plan(&spec_set_id, Some(&effective))
+                .get_plan(None, &spec_name, Some(&effective))
                 .map_err(|e| {
                     (
                         lemma_error_to_status(&e),
@@ -366,25 +377,24 @@ pub mod http {
             })?
         };
 
-        let spec_arc = engine
-            .get_spec(&spec_set_id, Some(&effective))
-            .map_err(|e| {
-                (
-                    lemma_error_to_status(&e),
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
+        let spec_arc = engine.get_spec(&spec_name, Some(&effective)).map_err(|e| {
+            (
+                lemma_error_to_status(&e),
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
 
-        let spec_set = engine
-            .get_spec_set(&spec_arc.name)
-            .expect("BUG: spec resolved by get_spec but spec set missing from engine");
-        let versions: Vec<VersionEntry> = spec_set
-            .iter_with_ranges()
+        let versions: Vec<VersionEntry> = engine
+            .get_workspace()
+            .specs
+            .iter()
+            .filter(|ss| ss.name == spec_arc.name)
+            .flat_map(|ss| ss.iter_with_ranges())
             .map(|(_, effective_from, effective_to)| VersionEntry {
-                effective_from: effective_from.map(|d| d.to_string()),
-                effective_to: effective_to.map(|d| d.to_string()),
+                effective_from: effective_from.as_ref().map(|d| d.to_string()),
+                effective_to: effective_to.as_ref().map(|d| d.to_string()),
             })
             .collect();
 
@@ -413,7 +423,7 @@ pub mod http {
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = SpecSet id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = form-encoded data.
+    /// `POST /{*path}` — evaluate; path = specset id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = form-encoded data.
     async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
@@ -426,8 +436,17 @@ pub mod http {
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
 
+        let spec_name = lemma::spec_set_id::parse_spec_set_id(&spec_set_id).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
         let mut response = engine
-            .run(&spec_set_id, Some(&effective), data_values, false)
+            .run(None, &spec_name, Some(&effective), data_values, false)
             .map_err(|err| {
                 (
                     lemma_error_to_status(&err),
@@ -440,7 +459,7 @@ pub mod http {
             response.filter_rules(&rule_names);
         }
 
-        let spec_arc = engine.get_spec(&spec_set_id, Some(&effective)).ok();
+        let spec_arc = engine.get_spec(&spec_name, Some(&effective)).ok();
         let effective_from = spec_arc.as_ref().and_then(|a| a.effective_from());
         let results = response::convert_response_envelope(
             &response,
@@ -454,71 +473,6 @@ pub mod http {
             headers_mut.insert(k, v);
         }
         Ok(axum_response)
-    }
-
-    // -----------------------------------------------------------------------
-    // Schema routes (legacy — kept for backward compatibility only)
-    // -----------------------------------------------------------------------
-    //
-    // These routes predate the spec envelope returned by `GET /{spec_name}`
-    // (`spec_get_schema`). New clients must use `GET /{spec_name}` instead; it
-    // returns the same schema plus `spec_set_id`, `effective_from`, `versions`,
-    // and `meta`. The `/schema/*` routes are intentionally omitted from the
-    // generated OpenAPI document and are not part of the public contract.
-
-    /// `GET /schema/{spec_name}` — full spec schema (all data and rules).
-    async fn schema_all_rules(
-        State(state): State<AppState>,
-        Path(spec_name): Path<String>,
-        Query(q): Query<EffectiveQuery>,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let now = resolve_effective(q.effective.as_deref())?;
-        schema_inner(&state.engine, &spec_name, &[], &now).await
-    }
-
-    /// `GET /schema/{spec_name}/{rules}` — schema scoped to specific rules and
-    /// only the data those rules need.
-    async fn schema_for_rules(
-        State(state): State<AppState>,
-        Path((spec_name, rules)): Path<(String, String)>,
-        Query(q): Query<EffectiveQuery>,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let now = resolve_effective(q.effective.as_deref())?;
-        let rule_names = parse_rule_names(&rules);
-        schema_inner(&state.engine, &spec_name, &rule_names, &now).await
-    }
-
-    async fn schema_inner(
-        engine: &SharedEngine,
-        spec_name: &str,
-        rule_names: &[String],
-        now: &DateTimeValue,
-    ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let engine = engine.read().await;
-
-        let plan = engine.get_plan(spec_name, Some(now)).map_err(|e| {
-            (
-                lemma_error_to_status(&e),
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
-
-        if rule_names.is_empty() {
-            return Ok(Json(plan.schema()));
-        }
-
-        let schema = plan.schema_for_rules(rule_names).map_err(|err| {
-            (
-                lemma_error_to_status(&err),
-                Json(ErrorResponse {
-                    error: err.to_string(),
-                }),
-            )
-        })?;
-
-        Ok(Json(schema))
     }
 
     fn want_explanations(state: &AppState, headers: &HeaderMap) -> bool {
@@ -663,7 +617,7 @@ pub mod http {
                             runtime.block_on(async {
                                 match reload_engine(&workdir_clone).await {
                                     Ok(new_engine) => {
-                                        let spec_count = new_engine.list_specs().len();
+                                        let spec_count = new_engine.get_workspace().specs.len();
                                         let mut engine = engine_clone.write().await;
                                         *engine = new_engine;
                                         info!("Reloaded engine with {} spec(s)", spec_count);
@@ -697,22 +651,65 @@ pub mod http {
 
     /// Create a fresh engine by loading all .lemma files from the workspace
     /// directory (including `.deps/` for cached registry dependencies).
+    /// `.deps/` files are loaded as dependencies with IDs derived from their path.
     async fn reload_engine(workdir: &std::path::Path) -> anyhow::Result<Engine> {
         use walkdir::WalkDir;
 
         let mut engine = Engine::new();
-        let mut paths: Vec<std::path::PathBuf> = Vec::new();
+        let deps_dir = lemma::lemma_deps_dir(workdir);
+        let mut workspace_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut deps_paths: Vec<std::path::PathBuf> = Vec::new();
         for entry in WalkDir::new(workdir) {
             let entry = entry?;
-            if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-                paths.push(entry.path().to_path_buf());
+            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+                continue;
+            }
+            if entry.path().starts_with(&deps_dir) {
+                deps_paths.push(entry.path().to_path_buf());
+            } else {
+                workspace_paths.push(entry.path().to_path_buf());
             }
         }
-        if let Err(load_err) = engine.load_from_paths(&paths, false) {
-            for e in load_err.iter() {
+
+        for dep_path in &deps_paths {
+            let dependency_id =
+                lemma::dependency_identifier_from_dependency_path(workdir, dep_path);
+            let sources = match engine_collect_sources(std::slice::from_ref(dep_path)) {
+                Ok(s) => s,
+                Err(e) => {
+                    for err in e.iter() {
+                        tracing::error!(
+                            "{}",
+                            crate::error_formatter::format_error(err, &e.sources)
+                        );
+                    }
+                    anyhow::bail!("Workspace load failed ({} error(s))", e.errors.len());
+                }
+            };
+            if let Err(load_err) = engine.load_batch(sources, Some(&dependency_id)) {
+                for err in load_err.iter() {
+                    tracing::error!(
+                        "{}",
+                        crate::error_formatter::format_error(err, &load_err.sources)
+                    );
+                }
+                anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
+            }
+        }
+        let sources = match engine_collect_sources(&workspace_paths) {
+            Ok(s) => s,
+            Err(e) => {
+                for err in e.iter() {
+                    tracing::error!("{}", crate::error_formatter::format_error(err, &e.sources));
+                }
+                anyhow::bail!("Workspace load failed ({} error(s))", e.errors.len());
+            }
+        };
+        if let Err(load_err) = engine.load_batch(sources, None) {
+            for err in load_err.iter() {
                 tracing::error!(
                     "{}",
-                    crate::error_formatter::format_error(e, &load_err.sources)
+                    crate::error_formatter::format_error(err, &load_err.sources)
                 );
             }
             anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());

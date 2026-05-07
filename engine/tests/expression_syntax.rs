@@ -22,12 +22,15 @@ rule with_spaces: not  (  x  )
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Labeled("test.lemma"))
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run("test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
 
     // not(x) evaluates to false (since x = true)

@@ -33,7 +33,7 @@ engine/packages/hex/
 
 | NIF | Args | Returns |
 |-----|------|--------|
-| `lemma_new` | optional `limits_map`: omit / nil / `%{}` ⇒ default `ResourceLimits`; if a map is passed, keys are optional (e.g. `max_files`, `max_loaded_bytes`, `max_file_size_bytes`, `max_total_expression_count`, …) and merge onto defaults | `{:ok, resource}` \| `{:error, reason}` |
+| `lemma_new` | optional `limits_map`: omit / nil / `%{}` ⇒ default `ResourceLimits`; if a map is passed, keys are optional (e.g. `max_sources`, `max_loaded_bytes`, `max_source_size_bytes`, `max_total_expression_count`, …) and merge onto defaults | `{:ok, resource}` \| `{:error, reason}` |
 | `lemma_load` | resource, code_binary, source_label_binary | `:ok` \| `{:error, errors}` |
 | `lemma_load_from_paths` | resource, paths (list of path binaries) | `:ok` \| `{:error, errors}` |
 | `lemma_list` | resource | `{:ok, list}` (each item e.g. `%{name, effective_from}`) |
@@ -81,7 +81,7 @@ Public functions on `Lemma` match the NIF stem (drop `lemma_`): `load`, `load_fr
 ```elixir
 # Create engine; limits optional (%{} = defaults)
 {:ok, engine} = Lemma.new()
-{:ok, engine} = Lemma.new(%{"max_files" => 100, "max_loaded_bytes" => 10_000_000})
+{:ok, engine} = Lemma.new(%{"max_sources" => 100, "max_loaded_bytes" => 10_000_000})
 
 # Load
 :ok = Lemma.load(engine, "spec foo\ndata x: 1\nrule y: x + 1", "my_spec.lemma")

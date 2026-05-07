@@ -3,6 +3,59 @@ export { Engine, initSync } from './lemma.bindings.js';
 export declare function init(): Promise<void>;
 export declare function Lemma(): Promise<Engine>;
 
+/** Resolved shape of {@link Engine.fetch}. */
+export interface RegistryFetchResult {
+  source: string;
+  id: string;
+}
+
+declare module './lemma.bindings.js' {
+  interface Engine {
+    /**
+     * Load multiple Lemma sources in one planning pass. Object keys become error-reporting
+     * paths (`SourceType::Path`); use `""` for volatile/inline. Non-empty `dependency` tags
+     * the batch as that dependency id. Throws `EngineError[]` on failure.
+     */
+    load_batch(
+      sources: Record<string, string>,
+      dependency?: string | null,
+    ): void;
+
+    /**
+     * Download Lemma source from the registry for `name` (e.g. `@org/pkg`). Resolves with
+     * `{ source, id }`; does not load the engine. Rejects with `EngineError[]` like `load`.
+     */
+    fetch(name: string): Promise<RegistryFetchResult>;
+
+    /**
+     * JSON serialization of `Vec<ResolvedRepository>` from [`Engine::list`]:
+     * each item has `repository` ([`LemmaRepository`]) and `specs` (`LemmaSpecSet[]`),
+     * each set has `repository`, `name`, and `specs` (`LemmaSpec[]`).
+     */
+    list(): ResolvedRepositoryJson[];
+
+    /**
+     * `repository`: qualifier or `null`/omit for workspace — same as `Engine::schema` `repo`.
+     */
+    schema(
+      repository: string | null | undefined,
+      spec: string,
+      effective?: string | null,
+    ): SpecSchema;
+
+    /**
+     * `repository`: qualifier or `null`/omit for workspace — same as `Engine::run` `repo`.
+     */
+    run(
+      repository: string | null | undefined,
+      spec: string,
+      rule_names: string[] | string,
+      data_values: Record<string, unknown>,
+      effective?: string | null,
+    ): any;
+  }
+}
+
 /**
  * Source location attached to an {@link EngineError}. Line and column are
  * 1-based; `length` is the UTF-8 byte length of the offending span.
@@ -16,11 +69,12 @@ export interface EngineErrorSource {
 
 /**
  * Structured error thrown by {@link Engine.run}, {@link Engine.schema},
- * {@link Engine.format}, and rejected from {@link Engine.load} (as an array).
+ * {@link Engine.format}, {@link Engine.load}, and {@link Engine.load_batch}
+ * (as an array), and rejected from {@link Engine.fetch} (as an array).
  *
  * - `kind` classifies the failure ("parsing" for syntax, "validation" for
- *   semantic/planning including bad data values, "request" for bad API input,
- *   etc.).
+ *   semantic/planning including bad data values, "missing_repository" when a
+ *   referenced repo is not loaded, "request" for bad API input, etc.).
  * - `message` is the inner reason only. Callers that previously parsed
  *   `"Failed to parse data 'X' as Y: ..."` strings should now use `related_data`
  *   for attribution and `message` for the reason.
@@ -29,17 +83,26 @@ export interface EngineErrorSource {
  * - `source` points at the offending range in the original Lemma source.
  */
 export interface EngineError {
-  kind: "parsing" | "validation" | "inversion" | "registry" | "request" | "resource_limit";
+  kind:
+    | "parsing"
+    | "validation"
+    | "inversion"
+    | "registry"
+    | "missing_repository"
+    | "request"
+    | "resource_limit";
   message: string;
   related_data: string | null;
   spec: string | null;
   related_spec: string | null;
   source: EngineErrorSource | null;
   suggestion: string | null;
+  /** Present for `missing_repository` and `registry` errors (`@…` id). */
+  repository: string | null;
 }
 
 // ---------------------------------------------------------------------------
-// Schema envelope (return shape of Engine.schema and Engine.list entries)
+// Schema envelope (return shape of Engine.schema)
 // ---------------------------------------------------------------------------
 
 /** Literal value produced by `JSON.stringify` on a Lemma `LiteralValue`. */
@@ -103,9 +166,12 @@ export type LemmaType =
     | { kind: "veto"; message: string | null }
   );
 
-/** One input on a spec. `default` is omitted (not `null`) when absent. */
+/** One input declared in a spec. Omitted fields are absent (not `null`). */
 export interface DataEntry {
   type: LemmaType;
+  /** Literal bound in the source (`data x: literal`). */
+  bound_value?: LiteralValue;
+  /** `-> default ...` suggestion; omitted from `bound_value` until evaluation applies it. */
   default?: LiteralValue;
 }
 
@@ -117,11 +183,60 @@ export interface SpecSchema {
   meta: Record<string, unknown>;
 }
 
-/** One row of {@link Engine.list}. The schema is always inlined so callers
- *  never need a second `engine.schema(name, effective_from)` round-trip. */
-export interface SpecListEntry {
+/** JSON mirror of Rust `ResolvedRepository` (engine `list`). */
+export interface ResolvedRepositoryJson {
+  repository: LemmaRepositoryJson;
+  /** [`LemmaSpecSet`] list for this resolved repository. */
+  specs: LemmaSpecSetJson[];
+}
+
+/** JSON mirror of Rust `LemmaSpecSet` as serialized by the engine. */
+export interface LemmaSpecSetJson {
+  repository: LemmaRepositoryJson;
   name: string;
-  effective_from: string | null;
-  effective_to: string | null;
-  schema: SpecSchema;
+  /** Temporal versions, ascending `effective_from` (same order as `iter_specs`). */
+  specs: LemmaSpecJson[];
+}
+
+/** JSON mirror of Rust `LemmaRepository`. */
+export interface LemmaRepositoryJson {
+  name: string | null;
+  dependency: string | null;
+  start_line: number;
+  source_type: unknown;
+}
+
+/** JSON mirror of Rust `EffectiveDate` (externally tagged). */
+export type EffectiveDateJson =
+  | { Origin: null }
+  | { DateTimeValue: DateTimeValueJson };
+
+/** JSON mirror of Rust `DateTimeValue`. */
+export interface DateTimeValueJson {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  microsecond: number;
+  timezone: unknown;
+}
+
+/** JSON mirror of Rust `LemmaSpec` (full AST; deep nodes are engine-shaped). */
+export interface LemmaSpecJson {
+  name: string;
+  effective_from: EffectiveDateJson;
+  source_type: unknown;
+  start_line: number;
+  commentary: string | null;
+  data: unknown[];
+  rules: unknown[];
+  meta_fields: unknown[];
+}
+
+/** One entry of {@link Engine.repositories}. */
+export interface RepositoryEntry {
+  name: string | null;
+  dependency: string | null;
 }

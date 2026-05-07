@@ -4,9 +4,8 @@
 //! and resolution (`get`) work in the browser via fetch.
 
 pub use lemma::registry::Registry;
-pub use lemma::LemmaBase;
 
 /// Construct the Registry used by the LSP (LemmaBase on both native and WASM).
 pub fn make_registry() -> Box<dyn Registry> {
-    Box::new(LemmaBase::new())
+    Box::new(lemma::registry::LemmaBase::new())
 }

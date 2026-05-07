@@ -20,7 +20,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(spec_name, Some(effective), HashMap::new(), false)
+        .run(None, spec_name, Some(effective), HashMap::new(), false)
         .unwrap()
 }
 
@@ -52,13 +52,13 @@ fn unqualified_dep_must_cover_consumer_temporal_range_gap_errors() {
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep
+uses d: dep
 rule out: d.v
 
 spec dep 2025-08-01
 rule v: 42
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .expect_err("unqualified dep with coverage gap must fail planning");
 
@@ -87,13 +87,13 @@ fn qualified_dep_allows_consumer_starting_before_dep_exists() {
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep 2025-08-01
+uses d: dep 2025-08-01
 rule out: d.v
 
 spec dep 2025-08-01
 rule v: 42
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .expect("qualified dep at T should not require dep to cover entire consumer range");
 
@@ -109,15 +109,15 @@ fn qualified_dep_nested_unqualified_child_resolves_at_qualifier_instant() {
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep 2025-10-01
+uses d: dep 2025-10-01
 rule out: d.nested_val
 
 spec dep 2025-01-01
-with nested: child
+uses nested: child
 rule nested_val: nested.x
 
 spec dep 2025-12-01
-with nested: child
+uses nested: child
 rule nested_val: nested.x
 
 spec child 2025-01-01
@@ -126,7 +126,7 @@ rule x: 1
 spec child 2025-06-01
 rule x: 2
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .unwrap();
 
@@ -141,15 +141,15 @@ fn qualified_dep_nested_resolution_independent_of_run_effective() {
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep 2025-10-01
+uses d: dep 2025-10-01
 rule out: d.nested_val
 
 spec dep 2025-01-01
-with nested: child
+uses nested: child
 rule nested_val: nested.x
 
 spec dep 2025-12-01
-with nested: child
+uses nested: child
 rule nested_val: nested.x
 
 spec child 2025-01-01
@@ -158,7 +158,7 @@ rule x: 1
 spec child 2025-06-01
 rule x: 2
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .unwrap();
 
@@ -174,7 +174,7 @@ fn qualified_only_dep_reference_does_not_split_consumer_temporal_slices() {
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep 2025-06-15
+uses d: dep 2025-06-15
 rule out: d.v
 
 spec dep 2025-03-01
@@ -183,7 +183,7 @@ rule v: 10
 spec dep 2025-09-01
 rule v: 20
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .unwrap();
 
@@ -199,8 +199,8 @@ fn mixed_unqualified_and_qualified_deps_slice_count_from_unqualified_only() {
         .load(
             r#"
 spec consumer 2025-01-01
-with a: dep_a
-with b: dep_b 2025-04-01
+uses a: dep_a
+uses b: dep_b 2025-04-01
 rule out_a: a.v
 rule out_b: b.v
 
@@ -216,7 +216,7 @@ rule v: 10
 spec dep_b 2025-08-01
 rule v: 20
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
         .unwrap();
 
@@ -231,20 +231,20 @@ rule v: 20
     assert_rule_value(&r2, "out_b", "10");
 }
 
-// --- Type imports: same subtree instant as data-level qualified ref (§2.1) ---
+// --- Data imports: same subtree instant as data-level qualified ref (section 2.1) ---
 
 #[test]
-fn qualified_dep_type_import_from_child_uses_qualifier_not_slice_start() {
+fn qualified_dep_data_import_from_child_uses_qualifier_not_slice_start() {
     let mut engine = Engine::new();
     engine
         .load(
             r#"
 spec consumer 2025-01-01
-with d: dep 2025-10-01
+uses d: dep 2025-10-01
 rule out: d.doubled
 
 spec dep 2025-01-01
-data money from child 2025-06-01
+data money: money from child 2025-06-01
 data p: 5 usd
 rule doubled: p * 2
 
@@ -259,9 +259,9 @@ data money: scale
  -> unit usd 1.10
  -> decimals 2
 "#,
-            SourceType::Labeled("t.lemma"),
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
-        .expect("type import `from child` under qualified dep must resolve child at qualifier instant so `usd` exists");
+        .expect("data import `from child` under qualified dep must resolve child at qualifier instant so `usd` exists");
 
     assert_rule_value(
         &eval(&engine, "consumer", &date(2025, 3, 1)),

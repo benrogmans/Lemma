@@ -11,9 +11,43 @@ locally, the engine would call the Registry (e.g. LemmaBase); a
 missing spec would then produce a Registry error.
 """
 
-data money from @lemma/std/finance
+  uses @lemma/std finance 2026-01-01
 
-data unit_price : 5 eur
+  data z : finance.z
+    -> unit usd 1.19
+    -> decimals 2
 
-rule line_total:
-  unit_price * 2 in eur
+  rule x:
+    finance.x
+
+
+spec with_alias
+
+  uses @lemma/std finance 2024-01-01
+
+  data y          : z from finance
+  data unit_price : 5 eur
+
+  rule x:
+    finance.x
+
+  rule line_total:
+    unit_price * 2 in eur
+
+
+repo x
+
+spec finance
+
+  rule x:
+    4
+
+
+spec finance 2024-01-02
+
+  uses c: @benrogmans/test constants
+
+  uses b: @benrogmans/tess sdfsfd
+
+  rule x:
+    c.pi

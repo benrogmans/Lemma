@@ -21,11 +21,18 @@ fn missing_data_ordered_empty_when_all_datas_provided() {
     let path = coffee_example_path();
     let code = std::fs::read_to_string(&path).expect("read example");
     engine
-        .load(&code, lemma::SourceType::Labeled("01_coffee_order.lemma"))
+        .load(
+            &code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "01_coffee_order.lemma",
+            ))),
+        )
         .expect("load");
 
     let now = DateTimeValue::now();
-    let plan = engine.get_plan("coffee_order", Some(&now)).expect("plan");
+    let plan = engine
+        .get_plan(None, "coffee_order", Some(&now))
+        .expect("plan");
 
     let mut data = HashMap::new();
     data.insert("product".to_string(), "latte".to_string());
@@ -48,11 +55,18 @@ fn missing_data_ordered_includes_product_when_no_inputs() {
     let path = coffee_example_path();
     let code = std::fs::read_to_string(&path).expect("read example");
     engine
-        .load(&code, lemma::SourceType::Labeled("01_coffee_order.lemma"))
+        .load(
+            &code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "01_coffee_order.lemma",
+            ))),
+        )
         .expect("load");
 
     let now = DateTimeValue::now();
-    let plan = engine.get_plan("coffee_order", Some(&now)).expect("plan");
+    let plan = engine
+        .get_plan(None, "coffee_order", Some(&now))
+        .expect("plan");
 
     let response = engine
         .run_plan(plan, Some(&now), HashMap::new(), false)
