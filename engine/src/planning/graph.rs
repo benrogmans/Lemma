@@ -1,21 +1,24 @@
 use crate::engine::Context;
 use crate::parsing::ast::{
-    self as ast, Constraint, EffectiveDate, LemmaData, LemmaRepository, LemmaRule, LemmaSpec,
-    MetaValue, ParentType, PrimitiveKind, Value,
+    self as ast, CalendarUnit, CommandArg, Constraint, EffectiveDate, FillRhs, LemmaData,
+    LemmaRepository, LemmaRule, LemmaSpec, MetaValue, ParentType, PrimitiveKind,
+    TypeConstraintCommand, Value,
 };
 use crate::parsing::source::Source;
 use crate::planning::discovery;
 use crate::planning::semantics::{
-    self, conversion_target_to_semantic, primitive_boolean, primitive_date, primitive_duration,
-    primitive_number, primitive_ratio, primitive_text, primitive_time, value_to_semantic,
-    ArithmeticComputation, ComparisonComputation, DataDefinition, DataPath, Expression,
-    ExpressionKind, LemmaType, LiteralValue, PathSegment, ReferenceTarget, RulePath,
-    SemanticConversionTarget, TypeDefiningSpec, TypeExtends, TypeSpecification, ValueKind,
+    self, calendar_decomposition, combine_decompositions, conversion_target_to_semantic,
+    duration_decomposition, number_with_unit_to_value_kind, parser_value_to_value_kind,
+    primitive_boolean, primitive_calendar, primitive_calendar_range, primitive_date,
+    primitive_date_range, primitive_number, primitive_number_range, primitive_text, primitive_time,
+    value_to_semantic, ArithmeticComputation, BaseQuantityVector, ComparisonComputation,
+    DataDefinition, DataPath, Expression, ExpressionKind, LemmaType, LiteralValue, PathSegment,
+    ReferenceTarget, RulePath, SemanticConversionTarget, TypeDefiningSpec, TypeExtends,
+    TypeSpecification, ValueKind,
 };
 use crate::Error;
 use ast::DataValue as ParsedDataValue;
 use indexmap::IndexMap;
-use rust_decimal::Decimal;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -202,6 +205,45 @@ impl Graph {
         lit: &LiteralValue,
         schema_type: &LemmaType,
     ) -> Result<LiteralValue, String> {
+        fn range_endpoint_schema_type(schema_type: &LemmaType) -> Option<LemmaType> {
+            match &schema_type.specifications {
+                TypeSpecification::NumberRange { .. } => {
+                    Some(LemmaType::primitive(TypeSpecification::number()))
+                }
+                TypeSpecification::DateRange { .. } => {
+                    Some(LemmaType::primitive(TypeSpecification::date()))
+                }
+                TypeSpecification::RatioRange { units, .. } => {
+                    Some(LemmaType::primitive(TypeSpecification::Ratio {
+                        minimum: None,
+                        maximum: None,
+                        decimals: None,
+                        units: units.clone(),
+                        help: String::new(),
+                    }))
+                }
+                TypeSpecification::CalendarRange { .. } => {
+                    Some(LemmaType::primitive(TypeSpecification::calendar()))
+                }
+                TypeSpecification::QuantityRange {
+                    units,
+                    decomposition,
+                    canonical_unit,
+                    ..
+                } => Some(LemmaType::primitive(TypeSpecification::Quantity {
+                    minimum: None,
+                    maximum: None,
+                    decimals: None,
+                    units: units.clone(),
+                    traits: Vec::new(),
+                    decomposition: decomposition.clone(),
+                    canonical_unit: canonical_unit.clone(),
+                    help: String::new(),
+                })),
+                _ => None,
+            }
+        }
+
         if lit.lemma_type.specifications == schema_type.specifications {
             let mut out = lit.clone();
             out.lemma_type = schema_type.clone();
@@ -213,12 +255,59 @@ impl Graph {
             | (TypeSpecification::Boolean { .. }, ValueKind::Boolean(_))
             | (TypeSpecification::Date { .. }, ValueKind::Date(_))
             | (TypeSpecification::Time { .. }, ValueKind::Time(_))
-            | (TypeSpecification::Duration { .. }, ValueKind::Duration(_, _))
-            | (TypeSpecification::Ratio { .. }, ValueKind::Ratio(_, _))
-            | (TypeSpecification::Scale { .. }, ValueKind::Scale(_, _)) => {
+            | (TypeSpecification::Calendar { .. }, ValueKind::Calendar(_, _)) => {
                 let mut out = lit.clone();
                 out.lemma_type = schema_type.clone();
                 Ok(out)
+            }
+            (TypeSpecification::Quantity { units, .. }, ValueKind::Quantity(_, unit_name, _)) => {
+                if !units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
+                    return Err(format!(
+                        "value {} cannot be used as type {}: unknown unit '{}'",
+                        lit,
+                        schema_type.name(),
+                        unit_name
+                    ));
+                }
+                let mut out = lit.clone();
+                out.lemma_type = schema_type.clone();
+                Ok(out)
+            }
+            (TypeSpecification::Ratio { units, .. }, ValueKind::Ratio(_, unit_name)) => {
+                if let Some(unit_name) = unit_name {
+                    if !units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
+                        return Err(format!(
+                            "value {} cannot be used as type {}: unknown unit '{}'",
+                            lit,
+                            schema_type.name(),
+                            unit_name
+                        ));
+                    }
+                }
+                let mut out = lit.clone();
+                out.lemma_type = schema_type.clone();
+                Ok(out)
+            }
+            (
+                TypeSpecification::NumberRange { .. }
+                | TypeSpecification::DateRange { .. }
+                | TypeSpecification::RatioRange { .. }
+                | TypeSpecification::CalendarRange { .. }
+                | TypeSpecification::QuantityRange { .. },
+                ValueKind::Range(left, right),
+            ) => {
+                let endpoint_schema_type =
+                    range_endpoint_schema_type(schema_type).unwrap_or_else(|| {
+                        unreachable!("BUG: range_endpoint_schema_type missing range schema arm")
+                    });
+                let coerced_left =
+                    Self::coerce_literal_to_schema_type(left.as_ref(), &endpoint_schema_type)?;
+                let coerced_right =
+                    Self::coerce_literal_to_schema_type(right.as_ref(), &endpoint_schema_type)?;
+                Ok(LiteralValue {
+                    value: ValueKind::Range(Box::new(coerced_left), Box::new(coerced_right)),
+                    lemma_type: schema_type.clone(),
+                })
             }
             (TypeSpecification::Ratio { .. }, ValueKind::Number(n)) => {
                 Ok(LiteralValue::ratio_with_type(*n, None, schema_type.clone()))
@@ -316,8 +405,10 @@ impl Graph {
             };
             let mut captured_default: Option<ValueKind> = None;
             if let Some(constraints) = local_constraints {
+                let constraint_type_name = merged.name();
                 match apply_constraints_to_spec(
                     &self.main_spec,
+                    &constraint_type_name,
                     merged.specifications.clone(),
                     constraints,
                     source,
@@ -409,8 +500,10 @@ impl Graph {
                 let mut merged = target_type.clone();
                 let mut captured_default: Option<ValueKind> = None;
                 if let Some(constraints) = local_constraints {
+                    let constraint_type_name = merged.name();
                     match apply_constraints_to_spec(
                         &self.main_spec,
+                        &constraint_type_name,
                         merged.specifications.clone(),
                         constraints,
                         source,
@@ -454,8 +547,10 @@ impl Graph {
             };
             let mut captured_default: Option<ValueKind> = None;
             if let Some(constraints) = local_constraints {
+                let constraint_type_name = merged.name();
                 match apply_constraints_to_spec(
                     &self.main_spec,
+                    &constraint_type_name,
                     merged.specifications.clone(),
                     constraints,
                     source,
@@ -799,11 +894,11 @@ fn reference_error(main_spec: &Arc<LemmaSpec>, source: &Source, message: String)
 /// describing the mismatch otherwise.
 ///
 /// "Same kind" requires:
-/// 1. matching base type spec (number / scale / text / ratio / …) — see
+/// 1. matching base type spec (number / quantity / text / ratio / …) — see
 ///    [`LemmaType::has_same_base_type`]; and
-/// 2. for scale types, matching scale family — see
-///    [`LemmaType::same_scale_family`]. Two scales in different families
-///    (e.g. `eur` vs `celsius`) share the `Scale` discriminant but are not
+/// 2. for quantity types, matching quantity family — see
+///    [`LemmaType::same_quantity_family`]. Two quantities in different families
+///    (e.g. `eur` vs `celsius`) share the `Quantity` discriminant but are not
 ///    interchangeable values; copying one into the other would silently
 ///    propagate a wrong-domain quantity.
 ///
@@ -827,19 +922,19 @@ fn reference_kind_mismatch_message<P: fmt::Display>(
             target_type.name(),
         ));
     }
-    if lhs.is_scale() && !lhs.same_scale_family(target_type) {
-        let lhs_family = lhs.scale_family_name().expect(
-            "BUG: declared scale data must carry a family name; \
-             anonymous scale types only arise from runtime synthesis \
+    if lhs.is_quantity() && !lhs.same_quantity_family(target_type) {
+        let lhs_family = lhs.quantity_family_name().expect(
+            "BUG: declared quantity data must carry a family name; \
+             anonymous quantity types only arise from runtime synthesis \
              and never appear as a reference's LHS-declared type",
         );
-        let target_family = target_type.scale_family_name().expect(
-            "BUG: declared scale data must carry a family name; \
-             anonymous scale types only arise from runtime synthesis \
+        let target_family = target_type.quantity_family_name().expect(
+            "BUG: declared quantity data must carry a family name; \
+             anonymous quantity types only arise from runtime synthesis \
              and never appear as a reference target's schema type",
         );
         return Some(format!(
-            "Data reference '{}' scale family mismatch: declared as '{}' (family '{}') but {} '{}' is '{}' (family '{}')",
+            "Data reference '{}' quantity family mismatch: declared as '{}' (family '{}') but {} '{}' is '{}' (family '{}')",
             reference_path,
             lhs.name(),
             lhs_family,
@@ -852,25 +947,39 @@ fn reference_kind_mismatch_message<P: fmt::Display>(
     None
 }
 
+/// Type name shown in `-> default` constraint errors (the declared type, not the data slot).
+fn constraint_application_type_name(parent: &ParentType, data_name: &str) -> String {
+    match parent {
+        ParentType::Custom { name } => name.clone(),
+        ParentType::Qualified { inner, .. } => constraint_application_type_name(inner, data_name),
+        ParentType::Primitive { .. } => data_name.to_string(),
+    }
+}
+
 /// Fold a list of definition-style constraints into a [`TypeSpecification`].
 /// Used for both the GraphBuilder's regular TypeDeclaration path and the
 /// post-build reference type-merging pass, so the underlying constraint
 /// application logic stays in one place.
 fn apply_constraints_to_spec(
     spec: &Arc<LemmaSpec>,
+    type_name: &str,
     mut specs: TypeSpecification,
     constraints: &[Constraint],
     source: &crate::parsing::source::Source,
     declared_default: &mut Option<ValueKind>,
 ) -> Result<TypeSpecification, Vec<Error>> {
     let mut errors = Vec::new();
-    for (command, args) in constraints {
+    let mut apply_one = |specs: TypeSpecification,
+                         command: TypeConstraintCommand,
+                         args: &[CommandArg],
+                         declared_default: &mut Option<ValueKind>|
+     -> TypeSpecification {
         let specs_clone = specs.clone();
         let mut default_before = declared_default.clone();
-        match specs.apply_constraint(*command, args, &mut default_before) {
+        match specs.apply_constraint(type_name, command, args, &mut default_before) {
             Ok(updated_specs) => {
-                specs = updated_specs;
                 *declared_default = default_before;
+                updated_specs
             }
             Err(e) => {
                 errors.push(Error::validation_with_context(
@@ -880,9 +989,24 @@ fn apply_constraints_to_spec(
                     Some(Arc::clone(spec)),
                     None,
                 ));
-                specs = specs_clone;
+                specs_clone
             }
         }
+    };
+
+    let mut deferred: Vec<(TypeConstraintCommand, Vec<CommandArg>)> = Vec::new();
+    for (command, args) in constraints {
+        if matches!(
+            command,
+            TypeConstraintCommand::Unit | TypeConstraintCommand::Trait
+        ) {
+            specs = apply_one(specs, *command, args, declared_default);
+        } else {
+            deferred.push((*command, args.clone()));
+        }
+    }
+    for (command, args) in deferred {
+        specs = apply_one(specs, command, &args, declared_default);
     }
     if !errors.is_empty() {
         return Err(errors);
@@ -1038,6 +1162,73 @@ impl Graph {
     }
 }
 
+fn uses_import_surface_syntax(alias: &str, target_spec: &str) -> String {
+    if alias == target_spec {
+        format!("uses {alias}")
+    } else {
+        format!("uses {alias}: {target_spec}")
+    }
+}
+
+fn is_uses_vs_data_clash(existing: &DataDefinition, incoming: &ParsedDataValue) -> bool {
+    matches!(
+        (existing, incoming),
+        (
+            DataDefinition::Import { .. },
+            ParsedDataValue::Definition { .. }
+        )
+    ) || matches!(
+        (existing, incoming),
+        (
+            DataDefinition::TypeDeclaration { .. } | DataDefinition::Value { .. },
+            ParsedDataValue::Import(_)
+        )
+    )
+}
+
+fn qualified_type_name_from_definition(incoming: &ParsedDataValue) -> Option<&str> {
+    let ParsedDataValue::Definition {
+        base: Some(ParentType::Qualified { inner, .. }),
+        ..
+    } = incoming
+    else {
+        return None;
+    };
+    match inner.as_ref() {
+        ParentType::Custom { name } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn uses_vs_data_duplicate_message(
+    name: &str,
+    existing: &DataDefinition,
+    incoming: &ParsedDataValue,
+) -> (String, Option<String>) {
+    let (alias, target_spec) = match (existing, incoming) {
+        (DataDefinition::Import { spec, .. }, ParsedDataValue::Definition { .. }) => {
+            (name, spec.name.as_str())
+        }
+        (
+            DataDefinition::TypeDeclaration { .. } | DataDefinition::Value { .. },
+            ParsedDataValue::Import(spec_ref),
+        ) => (name, spec_ref.name.as_str()),
+        _ => unreachable!("uses_vs_data_duplicate_message requires a uses vs data clash"),
+    };
+    let uses_syntax = uses_import_surface_syntax(alias, target_spec);
+    let import_alias = format!("{alias}_spec");
+    let message = format!(
+        "You used the name `{alias}` in both `{uses_syntax}` and `data {alias}`. A `uses` import and a `data` definition can't share the same name.",
+    );
+    let suggestion = match qualified_type_name_from_definition(incoming) {
+        Some(type_name) => format!(
+            "Try `uses {import_alias}: {target_spec}` and `data {alias}: {import_alias}.{type_name}`."
+        ),
+        _ => format!("Try `uses {import_alias}: {target_spec}` with a different name than `{alias}`."),
+    };
+    (message, Some(suggestion))
+}
+
 impl<'a> GraphBuilder<'a> {
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> Error {
         Error::validation_with_context(
@@ -1073,15 +1264,16 @@ impl<'a> GraphBuilder<'a> {
         &self,
         spec_ref: &ast::SpecRef,
         effective: &EffectiveDate,
+        consumer_spec: &Arc<LemmaSpec>,
+        consumer_repository: &Arc<LemmaRepository>,
     ) -> Result<(Arc<LemmaRepository>, Arc<LemmaSpec>), Error> {
         discovery::resolve_spec_ref(
             self.context,
             spec_ref,
-            &self.main_repository,
+            consumer_repository,
+            consumer_spec,
             effective,
-            &self.main_spec.name,
             None,
-            Some(Arc::clone(&self.main_spec)),
         )
     }
 
@@ -1098,11 +1290,7 @@ impl<'a> GraphBuilder<'a> {
         parent_spec: &Arc<LemmaSpec>,
         effective: &EffectiveDate,
     ) -> Option<(Vec<String>, BindingValue, Source)> {
-        let binding_path_display = format!(
-            "{}.{}",
-            data.reference.segments.join("."),
-            data.reference.name
-        );
+        let binding_path_display = format!("{}", data.reference);
 
         let mut walk_spec = Arc::clone(parent_spec);
 
@@ -1136,13 +1324,31 @@ impl<'a> GraphBuilder<'a> {
                 }
             };
 
-            walk_spec = match self.resolve_spec_ref(spec_ref, effective) {
-                Ok((_, arc)) => arc,
-                Err(e) => {
-                    self.errors.push(e);
-                    return None;
-                }
-            };
+            let walk_repository = discovery::lookup_owning_repository(self.context, &walk_spec)
+                .unwrap_or_else(|| Arc::clone(&self.main_repository));
+            walk_spec =
+                match self.resolve_spec_ref(spec_ref, effective, &walk_spec, &walk_repository) {
+                    Ok((_, arc)) => arc,
+                    Err(e) => {
+                        self.errors.push(e);
+                        return None;
+                    }
+                };
+        }
+
+        if !walk_spec
+            .data
+            .iter()
+            .any(|d| d.reference.segments.is_empty() && d.reference.name == data.reference.name)
+        {
+            self.errors.push(self.engine_error(
+                format!(
+                    "Data binding path '{}': data '{}' not found in spec '{}'",
+                    binding_path_display, data.reference.name, walk_spec.name
+                ),
+                &data.source_location,
+            ));
+            return None;
         }
 
         // Build the binding key: current_segment_names ++ data.reference.segments ++ [data.reference.name]
@@ -1151,15 +1357,8 @@ impl<'a> GraphBuilder<'a> {
         binding_key.push(data.reference.name.clone());
 
         let binding_value = match &data.value {
-            ParsedDataValue::Definition { value: Some(v), .. }
-                if data.value.is_definition_literal_only() =>
-            {
-                BindingValue::Literal(v.clone())
-            }
-            ParsedDataValue::Reference {
-                target,
-                constraints,
-            } => {
+            ParsedDataValue::Fill(FillRhs::Literal(v)) => BindingValue::Literal(v.clone()),
+            ParsedDataValue::Fill(FillRhs::Reference { target }) => {
                 let resolved_target = self.resolve_reference_target_in_spec(
                     target,
                     &data.source_location,
@@ -1169,8 +1368,13 @@ impl<'a> GraphBuilder<'a> {
                 )?;
                 BindingValue::Reference {
                     target: resolved_target,
-                    constraints: constraints.clone(),
+                    constraints: None,
                 }
+            }
+            ParsedDataValue::Definition { value: Some(v), .. }
+                if data.value.is_definition_literal_only() =>
+            {
+                BindingValue::Literal(v.clone())
             }
             ParsedDataValue::Import(_) => {
                 unreachable!(
@@ -1262,6 +1466,7 @@ impl<'a> GraphBuilder<'a> {
             reference_source,
             containing_data_map,
             containing_segments,
+            Arc::clone(containing_spec_arc),
             effective,
         )?;
 
@@ -1328,15 +1533,13 @@ impl<'a> GraphBuilder<'a> {
         let mut errors: Vec<Error> = Vec::new();
 
         for data in &spec.data {
-            if data.reference.segments.is_empty() {
-                continue; // Local data are not bindings
+            let has_binding_lhs_segments = !data.reference.segments.is_empty();
+            let is_local_fill = matches!(&data.value, ParsedDataValue::Fill(_));
+            if !has_binding_lhs_segments && !is_local_fill {
+                continue;
             }
 
-            let binding_path_display = format!(
-                "{}.{}",
-                data.reference.segments.join("."),
-                data.reference.name
-            );
+            let binding_path_display = format!("{}", data.reference);
 
             // Reject spec reference as binding value — spec injection is not supported
             if matches!(&data.value, ParsedDataValue::Import(_)) {
@@ -1351,16 +1554,18 @@ impl<'a> GraphBuilder<'a> {
             }
 
             // Reject non-literal Definition as binding value (explicit types / imports / constrained defs).
-            if let ParsedDataValue::Definition { .. } = &data.value {
-                if !data.value.is_definition_literal_only() {
-                    errors.push(self.engine_error(
-                        format!(
-                            "Data binding '{}' must provide a literal value, not a data definition",
-                            binding_path_display
-                        ),
-                        &data.source_location,
-                    ));
-                    continue;
+            if has_binding_lhs_segments {
+                if let ParsedDataValue::Definition { .. } = &data.value {
+                    if !data.value.is_definition_literal_only() {
+                        errors.push(self.engine_error(
+                            format!(
+                                "Data binding '{}' must provide a literal value, not a data definition",
+                                binding_path_display
+                            ),
+                            &data.source_location,
+                        ));
+                        continue;
+                    }
                 }
             }
 
@@ -1411,10 +1616,24 @@ impl<'a> GraphBuilder<'a> {
         };
 
         // Check for duplicates
-        if self.data.contains_key(&data_path) {
-            self.errors.push(self.engine_error(
-                format!("Duplicate data '{}'", data_path.data),
-                &data.source_location,
+        if let Some(existing) = self.data.get(&data_path) {
+            let (message, suggestion) = if is_uses_vs_data_clash(existing, &data.value) {
+                uses_vs_data_duplicate_message(&data_path.data, existing, &data.value)
+            } else {
+                (
+                    format!(
+                        "The name '{}' is already used for data in this spec.",
+                        data_path.data
+                    ),
+                    None,
+                )
+            };
+            self.errors.push(Error::validation_with_context(
+                message,
+                Some(data.source_location.clone()),
+                suggestion,
+                Some(Arc::clone(&self.main_spec)),
+                None,
             ));
             return;
         }
@@ -1429,35 +1648,49 @@ impl<'a> GraphBuilder<'a> {
         // A binding (if any) overrides the data's own RHS. We track the binding
         // separately from the data's own value because `BindingValue` (resolved)
         // and `ParsedDataValue` (raw AST) are different types.
+        //
+        // When `data here: T -> …` and `fill here: ref` coexist, the `data` row
+        // owns type/default; `fill` is applied in `materialize_local_fill_rows`.
         let binding_override: Option<(BindingValue, Source)> =
-            data_bindings.get(&binding_key).map(|(v, s)| {
+            data_bindings.get(&binding_key).and_then(|(v, s)| {
+                if matches!(v, BindingValue::Reference { .. })
+                    && Self::has_local_fill_reference_for_name(
+                        current_spec_arc.as_ref(),
+                        &data.reference.name,
+                    )
+                {
+                    return None;
+                }
                 used_binding_keys.insert(binding_key.clone());
-                (v.clone(), s.clone())
+                Some((v.clone(), s.clone()))
             });
 
-        let (original_schema_type, original_declared_default) =
-            if matches!(&data.value, ParsedDataValue::Definition { .. })
-                && data.value.definition_needs_type_resolution()
-            {
-                let resolved = self
-                    .local_types
-                    .iter()
-                    .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
-                    .map(|(_, _, t)| t)
-                    .expect("BUG: no resolved types for spec during add_local_data");
-                let lemma_type = resolved
-                    .named_types
+        let (original_schema_type, original_declared_default) = if matches!(
+            &data.value,
+            ParsedDataValue::Definition { .. }
+        ) && data
+            .value
+            .definition_needs_type_resolution()
+        {
+            let resolved = self
+                .local_types
+                .iter()
+                .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                .map(|(_, _, t)| t)
+                .expect("BUG: no resolved types for spec during add_local_data");
+            let lemma_type = resolved
+                    .resolved
                     .get(&data.reference.name)
-                    .expect("BUG: type not in named_types. TypeResolver should have registered it")
+                    .expect("BUG: type not in ResolvedSpecTypes.resolved. TypeResolver should have registered it")
                     .clone();
-                let declared = resolved
-                    .declared_defaults
-                    .get(&data.reference.name)
-                    .cloned();
-                (Some(lemma_type), declared)
-            } else {
-                (None, None)
-            };
+            let declared = resolved
+                .declared_defaults
+                .get(&data.reference.name)
+                .cloned();
+            (Some(lemma_type), declared)
+        } else {
+            (None, None)
+        };
 
         if let Some((binding_value, binding_source)) = binding_override {
             self.add_data_from_binding(
@@ -1489,23 +1722,123 @@ impl<'a> GraphBuilder<'a> {
                 );
             }
             ParsedDataValue::Definition { .. } => {
-                let resolved_type = original_schema_type.unwrap_or_else(|| {
+                let mut resolved_type = original_schema_type.unwrap_or_else(|| {
                     unreachable!(
                         "BUG: Definition without schema — TypeResolver should have registered it"
                     )
                 });
+                let mut declared_default = original_declared_default;
+
+                let is_generic_quantity_range = matches!(
+                    &resolved_type.specifications,
+                    TypeSpecification::QuantityRange {
+                        units,
+                        decomposition,
+                        canonical_unit,
+                        ..
+                    } if units.0.is_empty() && decomposition.is_empty() && canonical_unit.is_empty()
+                );
+
+                if is_generic_quantity_range {
+                    if let Some(ValueKind::Range(left, right)) = &declared_default {
+                        if let (
+                            ValueKind::Quantity(_, left_unit, _),
+                            ValueKind::Quantity(_, right_unit, _),
+                        ) = (&left.value, &right.value)
+                        {
+                            let resolved = self
+                                .local_types
+                                .iter()
+                                .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                                .map(|(_, _, t)| t)
+                                .expect("BUG: no resolved types for spec during add_local_data");
+
+                            let left_quantity_type = resolved.unit_index.get(left_unit);
+                            let right_quantity_type = resolved.unit_index.get(right_unit);
+
+                            match (left_quantity_type, right_quantity_type) {
+                                (Some(left_quantity_type), Some(right_quantity_type))
+                                    if left_quantity_type
+                                        .same_quantity_family(right_quantity_type) =>
+                                {
+                                    let specialized_range_type =
+                                        infer_range_type_from_endpoint_types(
+                                            left_quantity_type,
+                                            right_quantity_type,
+                                        );
+                                    let coerced_left = Graph::coerce_literal_to_schema_type(
+                                        left.as_ref(),
+                                        left_quantity_type,
+                                    )
+                                    .unwrap_or_else(|message| {
+                                        unreachable!(
+                                            "BUG: coercing quantity range default left endpoint failed: {}",
+                                            message
+                                        )
+                                    });
+                                    let coerced_right = Graph::coerce_literal_to_schema_type(
+                                        right.as_ref(),
+                                        right_quantity_type,
+                                    )
+                                    .unwrap_or_else(|message| {
+                                        unreachable!(
+                                            "BUG: coercing quantity range default right endpoint failed: {}",
+                                            message
+                                        )
+                                    });
+                                    let specialized_default = Graph::coerce_literal_to_schema_type(
+                                        &LiteralValue {
+                                            value: ValueKind::Range(
+                                                Box::new(coerced_left),
+                                                Box::new(coerced_right),
+                                            ),
+                                            lemma_type: specialized_range_type.clone(),
+                                        },
+                                        &specialized_range_type,
+                                    )
+                                    .unwrap_or_else(|message| {
+                                        unreachable!(
+                                            "BUG: specializing generic quantity range default failed: {}",
+                                            message
+                                        )
+                                    });
+                                    resolved_type = specialized_range_type;
+                                    declared_default = Some(specialized_default.value);
+                                }
+                                _ => {
+                                    self.errors.push(self.engine_error(
+                                        format!(
+                                            "Generic quantity range default must use units from one concrete local quantity family, got '{}' and '{}'",
+                                            left_unit, right_unit
+                                        ),
+                                        &effective_source,
+                                    ));
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 self.data.insert(
                     data_path,
                     DataDefinition::TypeDeclaration {
                         resolved_type,
-                        declared_default: original_declared_default,
+                        declared_default,
                         source: effective_source,
                     },
                 );
             }
             ParsedDataValue::Import(spec_ref) => {
-                let effective_spec_arc = match self.resolve_spec_ref(spec_ref, effective) {
+                let consumer_repository =
+                    discovery::lookup_owning_repository(self.context, current_spec_arc)
+                        .unwrap_or_else(|| Arc::clone(&self.main_repository));
+                let effective_spec_arc = match self.resolve_spec_ref(
+                    spec_ref,
+                    effective,
+                    current_spec_arc,
+                    &consumer_repository,
+                ) {
                     Ok((_, arc)) => arc,
                     Err(e) => {
                         self.errors.push(e);
@@ -1521,34 +1854,12 @@ impl<'a> GraphBuilder<'a> {
                     },
                 );
             }
-            ParsedDataValue::Reference {
-                target,
-                constraints,
-            } => {
-                let current_segment_names: Vec<String> =
-                    current_segments.iter().map(|s| s.data.clone()).collect();
-                let Some(resolved_target) = self.resolve_reference_target_in_spec(
-                    target,
+            ParsedDataValue::Fill(_) => {
+                self.errors.push(self.engine_error(
+                    "Internal planning error: a fill row reached add_data; fill rows must apply only through data_bindings"
+                        .to_string(),
                     &effective_source,
-                    current_spec_arc,
-                    &current_segment_names,
-                    effective,
-                ) else {
-                    return;
-                };
-                let provisional_type = original_schema_type
-                    .clone()
-                    .unwrap_or_else(LemmaType::undetermined_type);
-                self.data.insert(
-                    data_path,
-                    DataDefinition::Reference {
-                        target: resolved_target,
-                        resolved_type: provisional_type,
-                        local_constraints: constraints.clone(),
-                        local_default: None,
-                        source: effective_source,
-                    },
-                );
+                ));
             }
         }
     }
@@ -1564,17 +1875,51 @@ impl<'a> GraphBuilder<'a> {
         effective_source: Source,
         current_spec_arc: &Arc<LemmaSpec>,
     ) {
-        let semantic_value = match value_to_semantic(value) {
-            Ok(s) => s,
-            Err(e) => {
-                self.errors.push(self.engine_error(e, &effective_source));
-                return;
+        let semantic_value = if let Some(ref schema) = declared_schema_type {
+            match parser_value_to_value_kind(value, &schema.specifications) {
+                Ok(s) => s,
+                Err(e) => {
+                    self.errors.push(self.engine_error(e, &effective_source));
+                    return;
+                }
+            }
+        } else {
+            match value {
+                Value::NumberWithUnit(magnitude, unit) => {
+                    let Some(lt) = self
+                        .local_types
+                        .iter()
+                        .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                        .map(|(_, _, t)| t)
+                        .and_then(|dt| dt.unit_index.get(unit))
+                    else {
+                        self.errors.push(self.engine_error(
+                            format!("Unit '{}' is not in scope for this spec", unit),
+                            &effective_source,
+                        ));
+                        return;
+                    };
+                    match number_with_unit_to_value_kind(*magnitude, unit, lt) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            self.errors.push(self.engine_error(e, &effective_source));
+                            return;
+                        }
+                    }
+                }
+                _ => match value_to_semantic(value) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.errors.push(self.engine_error(e, &effective_source));
+                        return;
+                    }
+                },
             }
         };
         let inferred_type = match value {
             Value::Text(_) => primitive_text().clone(),
             Value::Number(_) => primitive_number().clone(),
-            Value::Scale(_, unit) => {
+            Value::NumberWithUnit(_, unit) => {
                 match self
                     .local_types
                     .iter()
@@ -1585,7 +1930,7 @@ impl<'a> GraphBuilder<'a> {
                     Some(lt) => lt.clone(),
                     None => {
                         self.errors.push(self.engine_error(
-                            format!("Scale literal uses unknown unit '{}' for this spec", unit),
+                            format!("Unit '{}' is not in scope for this spec", unit),
                             &effective_source,
                         ));
                         return;
@@ -1595,8 +1940,15 @@ impl<'a> GraphBuilder<'a> {
             Value::Boolean(_) => primitive_boolean().clone(),
             Value::Date(_) => primitive_date().clone(),
             Value::Time(_) => primitive_time().clone(),
-            Value::Duration(_, _) => primitive_duration().clone(),
-            Value::Ratio(_, _) => primitive_ratio().clone(),
+            Value::Calendar(_, _) => primitive_calendar().clone(),
+            Value::Range(_, _) => match &semantic_value {
+                ValueKind::Range(left, right) => {
+                    LiteralValue::range(left.as_ref().clone(), right.as_ref().clone()).lemma_type
+                }
+                _ => unreachable!(
+                    "BUG: semantic range literal conversion returned non-range value kind"
+                ),
+            },
         };
         let schema_type = declared_schema_type.unwrap_or(inferred_type);
         let literal_value = LiteralValue {
@@ -1659,6 +2011,7 @@ impl<'a> GraphBuilder<'a> {
         reference_source: &Source,
         mut current_data_map: HashMap<String, LemmaData>,
         mut path_segments: Vec<PathSegment>,
+        mut spec_context: Arc<LemmaSpec>,
         effective: &EffectiveDate,
     ) -> Option<(Vec<PathSegment>, Arc<LemmaSpec>)> {
         let mut last_arc: Option<Arc<LemmaSpec>> = None;
@@ -1677,13 +2030,22 @@ impl<'a> GraphBuilder<'a> {
                 };
 
             if let ParsedDataValue::Import(original_spec_ref) = &data_ref.value {
-                let arc = match self.resolve_spec_ref(original_spec_ref, effective) {
+                let context_repository =
+                    discovery::lookup_owning_repository(self.context, &spec_context)
+                        .unwrap_or_else(|| Arc::clone(&self.main_repository));
+                let arc = match self.resolve_spec_ref(
+                    original_spec_ref,
+                    effective,
+                    &spec_context,
+                    &context_repository,
+                ) {
                     Ok((_, a)) => a,
                     Err(e) => {
                         self.errors.push(e);
                         return None;
                     }
                 };
+                spec_context = Arc::clone(&arc);
 
                 path_segments.push(PathSegment {
                     data: segment.clone(),
@@ -1712,6 +2074,111 @@ impl<'a> GraphBuilder<'a> {
         Some((path_segments, final_arc))
     }
 
+    fn has_local_fill_reference_for_name(spec: &LemmaSpec, name: &str) -> bool {
+        spec.data.iter().any(|d| {
+            d.reference.segments.is_empty()
+                && d.reference.name == name
+                && matches!(&d.value, ParsedDataValue::Fill(FillRhs::Reference { .. }))
+        })
+    }
+
+    /// Insert graph entries for local `fill name: …` rows (empty LHS segments) that are not
+    /// already present after the `add_data` pass (`data` + `fill` override or type-only `data`).
+    fn materialize_local_fill_rows(
+        &mut self,
+        spec: &LemmaSpec,
+        current_segments: &[PathSegment],
+        effective_bindings: &DataBindings,
+        spec_arc: &Arc<LemmaSpec>,
+        used_binding_keys: &mut HashSet<Vec<String>>,
+    ) {
+        let current_segment_names: Vec<String> =
+            current_segments.iter().map(|s| s.data.clone()).collect();
+
+        for data in &spec.data {
+            if !data.reference.segments.is_empty() {
+                continue;
+            }
+            if !matches!(&data.value, ParsedDataValue::Fill(_)) {
+                continue;
+            }
+
+            let data_path = DataPath {
+                segments: current_segments.to_vec(),
+                data: data.reference.name.clone(),
+            };
+
+            let binding_key: Vec<String> = current_segment_names
+                .iter()
+                .cloned()
+                .chain(std::iter::once(data.reference.name.clone()))
+                .collect();
+
+            let Some((binding_value, binding_source)) = effective_bindings.get(&binding_key) else {
+                self.errors.push(self.engine_error(
+                    format!(
+                        "Internal planning error: fill '{}' has no resolved binding",
+                        data.reference.name
+                    ),
+                    &data.source_location,
+                ));
+                continue;
+            };
+
+            used_binding_keys.insert(binding_key);
+
+            if let Some(DataDefinition::TypeDeclaration {
+                resolved_type,
+                declared_default,
+                ..
+            }) = self.data.get(&data_path)
+            {
+                let BindingValue::Reference {
+                    target,
+                    constraints,
+                } = binding_value
+                else {
+                    continue;
+                };
+                if constraints.is_some() {
+                    self.errors.push(self.engine_error(
+                        format!(
+                            "Constraint chains (`-> ...`) on `fill` are not allowed; use `data {}: … -> …` for constraints",
+                            data.reference.name
+                        ),
+                        &data.source_location,
+                    ));
+                    continue;
+                }
+                let resolved_type = resolved_type.clone();
+                let declared_default = declared_default.clone();
+                self.data.insert(
+                    data_path.clone(),
+                    DataDefinition::Reference {
+                        target: target.clone(),
+                        resolved_type,
+                        local_constraints: None,
+                        local_default: declared_default,
+                        source: binding_source.clone(),
+                    },
+                );
+                continue;
+            }
+
+            if self.data.contains_key(&data_path) {
+                continue;
+            }
+
+            self.add_data_from_binding(
+                data_path,
+                binding_value.clone(),
+                binding_source.clone(),
+                None,
+                spec_arc,
+            );
+        }
+    }
+
     fn build_spec(
         &mut self,
         spec_arc: &Arc<LemmaSpec>,
@@ -1727,21 +2194,6 @@ impl<'a> GraphBuilder<'a> {
             self.process_meta_fields(spec);
         }
 
-        // Step 0: Cross-version self-reference check.
-        // A spec must not reference any version of itself (same repository name).
-        for data in spec.data.iter() {
-            if let ParsedDataValue::Import(spec_ref) = &data.value {
-                if spec_ref.name == spec.name {
-                    self.errors.push(self.engine_error(
-                        format!(
-                            "spec '{}' cannot reference '{}' (same repository name)",
-                            spec.name, spec_ref
-                        ),
-                        &data.source_location,
-                    ));
-                }
-            }
-        }
         let current_segment_names: Vec<String> =
             current_segments.iter().map(|s| s.data.clone()).collect();
 
@@ -1790,11 +2242,12 @@ impl<'a> GraphBuilder<'a> {
 
         for data in &spec.data {
             if let ParsedDataValue::Definition {
-                from: Some(from_ref),
+                base: Some(ParentType::Qualified { spec_alias, .. }),
                 ..
             } = &data.value
             {
-                match self.resolve_spec_ref(from_ref, effective) {
+                let from_ref = ast::SpecRef::same_repository(spec_alias.clone());
+                match self.resolve_spec_ref(&from_ref, effective, spec_arc, spec_repository) {
                     Ok((source_repo, source_arc)) => {
                         if !self
                             .local_types
@@ -1818,43 +2271,61 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        // Step 4: Add local data using caller's data_bindings
+        let mut effective_bindings = data_bindings.clone();
+        effective_bindings.extend(this_spec_bindings.clone());
+
+        // Step 4: Add local data using effective bindings (caller + this spec)
         let mut used_binding_keys: HashSet<Vec<String>> = HashSet::new();
         for data in &spec.data {
             if !data.reference.segments.is_empty() {
                 continue; // Skip binding data (processed in step 2)
             }
-            if let ParsedDataValue::Import(spec_ref) = &data.value {
-                if spec_ref.name == spec.name {
-                    continue; // Self-reference — error already reported in step 0
-                }
+            if matches!(&data.value, ParsedDataValue::Fill(_)) {
+                continue; // Fill rows apply only through data_bindings
+            }
+            if matches!(&data.value, ParsedDataValue::Import(_)) {
+                continue;
             }
             self.add_data(
                 data,
                 &current_segments,
-                &data_bindings,
+                &effective_bindings,
                 spec_arc,
                 &mut used_binding_keys,
                 effective,
             );
         }
 
+        self.materialize_local_fill_rows(
+            spec,
+            &current_segments,
+            &effective_bindings,
+            spec_arc,
+            &mut used_binding_keys,
+        );
+
         for data in &spec.data {
             if !data.reference.segments.is_empty() {
                 continue;
             }
             if let ParsedDataValue::Import(spec_ref) = &data.value {
-                if spec_ref.name == spec.name {
-                    continue; // Self-reference — error already reported in step 0
-                }
                 let nested_effective = spec_ref.at(effective);
-                let (nested_repo, nested_arc) = match self.resolve_spec_ref(spec_ref, effective) {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        self.errors.push(e);
-                        continue;
-                    }
-                };
+                let (nested_repo, nested_arc) =
+                    match self.resolve_spec_ref(spec_ref, effective, spec_arc, spec_repository) {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            self.errors.push(e);
+                            continue;
+                        }
+                    };
+                self.add_data(
+                    data,
+                    &current_segments,
+                    &effective_bindings,
+                    spec_arc,
+                    &mut used_binding_keys,
+                    effective,
+                );
                 let mut nested_segments = current_segments.clone();
                 nested_segments.push(PathSegment {
                     data: data.reference.name.clone(),
@@ -1863,7 +2334,7 @@ impl<'a> GraphBuilder<'a> {
 
                 let nested_segment_names: Vec<String> =
                     nested_segments.iter().map(|s| s.data.clone()).collect();
-                let mut combined_bindings = this_spec_bindings.clone();
+                let mut combined_bindings = effective_bindings.clone();
                 for (key, value_and_source) in &data_bindings {
                     if key.len() > nested_segment_names.len()
                         && key[..nested_segment_names.len()] == nested_segment_names[..]
@@ -1886,25 +2357,31 @@ impl<'a> GraphBuilder<'a> {
             }
         }
 
-        // Check for unused data bindings that targeted this spec's data
-        // Only check bindings at exactly this depth (deeper bindings are passed through)
+        // Path fills (LHS with segments) must match a declared slot in a nested spec.
         let expected_key_len = current_segments.len() + 1;
-        for (binding_key, (_, binding_source)) in &data_bindings {
-            if binding_key.len() == expected_key_len
-                && binding_key[..current_segments.len()]
-                    .iter()
-                    .zip(current_segments.iter())
-                    .all(|(a, b)| a == &b.data)
-                && !used_binding_keys.contains(binding_key)
-            {
-                self.errors.push(self.engine_error(
-                    format!(
-                        "Data binding targets a data that does not exist in the referenced spec: '{}'",
-                        binding_key.join(".")
-                    ),
-                    binding_source,
-                ));
+        for data in &spec.data {
+            if data.reference.segments.is_empty() {
+                continue;
             }
+            let mut binding_key: Vec<String> = current_segment_names.clone();
+            binding_key.extend(data.reference.segments.iter().cloned());
+            binding_key.push(data.reference.name.clone());
+            if binding_key.len() != expected_key_len {
+                continue;
+            }
+            if used_binding_keys.contains(&binding_key) {
+                continue;
+            }
+            let Some((_, binding_source)) = effective_bindings.get(&binding_key) else {
+                continue;
+            };
+            self.errors.push(self.engine_error(
+                format!(
+                    "No declared data matches fill or binding for '{}'",
+                    binding_key.join(".")
+                ),
+                binding_source,
+            ));
         }
 
         let rule_names: HashSet<&str> = spec.rules.iter().map(|r| r.name.as_str()).collect();
@@ -2065,6 +2542,7 @@ impl<'a> GraphBuilder<'a> {
                         expr_source,
                         data_map_owned,
                         current_segments.to_vec(),
+                        Arc::clone(current_spec_arc),
                         effective,
                     )?;
                     (segs, Some(arc))
@@ -2266,19 +2744,41 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::Literal(value) => {
-                // Convert AST Value to semantic ValueKind
-                let semantic_value = match value_to_semantic(value) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        self.errors.push(self.engine_error(e, expr_src));
-                        return None;
+                let semantic_value = match value {
+                    Value::NumberWithUnit(magnitude, unit) => {
+                        let Some(lt) = self
+                            .local_types
+                            .iter()
+                            .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                            .map(|(_, _, t)| t)
+                            .and_then(|dt| dt.unit_index.get(unit))
+                        else {
+                            self.errors.push(self.engine_error(
+                                format!("Unit '{}' is not in scope for this spec", unit),
+                                expr_src,
+                            ));
+                            return None;
+                        };
+                        match number_with_unit_to_value_kind(*magnitude, unit, lt) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.errors.push(self.engine_error(e, expr_src));
+                                return None;
+                            }
+                        }
                     }
+                    _ => match value_to_semantic(value) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.errors.push(self.engine_error(e, expr_src));
+                            return None;
+                        }
+                    },
                 };
-                // Create LiteralValue with inferred type from the Value
                 let lemma_type = match value {
                     Value::Text(_) => primitive_text().clone(),
                     Value::Number(_) => primitive_number().clone(),
-                    Value::Scale(_, unit) => {
+                    Value::NumberWithUnit(_, unit) => {
                         match self
                             .local_types
                             .iter()
@@ -2289,10 +2789,7 @@ impl<'a> GraphBuilder<'a> {
                             Some(lt) => lt.clone(),
                             None => {
                                 self.errors.push(self.engine_error(
-                                    format!(
-                                        "Scale literal uses unknown unit '{}' for this spec",
-                                        unit
-                                    ),
+                                    format!("Unit '{}' is not in scope for this spec", unit),
                                     expr_src,
                                 ));
                                 return None;
@@ -2302,8 +2799,16 @@ impl<'a> GraphBuilder<'a> {
                     Value::Boolean(_) => primitive_boolean().clone(),
                     Value::Date(_) => primitive_date().clone(),
                     Value::Time(_) => primitive_time().clone(),
-                    Value::Duration(_, _) => primitive_duration().clone(),
-                    Value::Ratio(_, _) => primitive_ratio().clone(),
+                    Value::Calendar(_, _) => primitive_calendar().clone(),
+                    Value::Range(_, _) => match &semantic_value {
+                        ValueKind::Range(left, right) => {
+                            LiteralValue::range(left.as_ref().clone(), right.as_ref().clone())
+                                .lemma_type
+                        }
+                        _ => unreachable!(
+                            "BUG: semantic range literal conversion returned non-range value kind"
+                        ),
+                    },
                 };
                 let literal_value = LiteralValue {
                     value: semantic_value,
@@ -2320,28 +2825,20 @@ impl<'a> GraphBuilder<'a> {
                 source_location: expr.source_location.clone(),
             }),
 
-            ast::ExpressionKind::UnresolvedUnitLiteral(value, unit) => {
-                if let Some(lt) = self
-                    .local_types
-                    .iter()
-                    .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
-                    .map(|(_, _, t)| t)
-                    .and_then(|dt| dt.unit_index.get(unit))
-                {
-                    let semantic_value = ValueKind::Scale(*value, unit.clone());
-                    let literal_value = LiteralValue {
-                        value: semantic_value,
-                        lemma_type: lt.clone(),
-                    };
-                    Some(Expression {
-                        kind: ExpressionKind::Literal(Box::new(literal_value)),
-                        source_location: expr.source_location.clone(),
-                    })
-                } else {
-                    self.errors
-                        .push(self.engine_error(format!("Unknown unit '{}'", unit), expr_src));
-                    None
-                }
+            ast::ExpressionKind::ResultIsVeto(operand) => {
+                let converted = self.convert_expression_and_extract_dependencies(
+                    operand,
+                    current_spec_arc,
+                    data_map,
+                    current_segments,
+                    depends_on_rules,
+                    rule_names,
+                    effective,
+                )?;
+                Some(Expression {
+                    kind: ExpressionKind::ResultIsVeto(Arc::new(converted)),
+                    source_location: expr.source_location.clone(),
+                })
             }
 
             ast::ExpressionKind::Now => Some(Expression {
@@ -2349,7 +2846,7 @@ impl<'a> GraphBuilder<'a> {
                 source_location: expr.source_location.clone(),
             }),
 
-            ast::ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+            ast::ExpressionKind::DateRelative(kind, date_expr) => {
                 let converted_date = self.convert_expression_and_extract_dependencies(
                     date_expr,
                     current_spec_arc,
@@ -2359,24 +2856,8 @@ impl<'a> GraphBuilder<'a> {
                     rule_names,
                     effective,
                 )?;
-                let converted_tolerance = match tolerance {
-                    Some(tol) => Some(Arc::new(self.convert_expression_and_extract_dependencies(
-                        tol,
-                        current_spec_arc,
-                        data_map,
-                        current_segments,
-                        depends_on_rules,
-                        rule_names,
-                        effective,
-                    )?)),
-                    None => None,
-                };
                 Some(Expression {
-                    kind: ExpressionKind::DateRelative(
-                        *kind,
-                        Arc::new(converted_date),
-                        converted_tolerance,
-                    ),
+                    kind: ExpressionKind::DateRelative(*kind, Arc::new(converted_date)),
                     source_location: expr.source_location.clone(),
                 })
             }
@@ -2396,6 +2877,59 @@ impl<'a> GraphBuilder<'a> {
                     source_location: expr.source_location.clone(),
                 })
             }
+
+            ast::ExpressionKind::RangeLiteral(left, right) => {
+                let (l, r) = self.convert_binary_operands(
+                    left,
+                    right,
+                    current_spec_arc,
+                    data_map,
+                    current_segments,
+                    depends_on_rules,
+                    rule_names,
+                    effective,
+                )?;
+                Some(Expression {
+                    kind: ExpressionKind::RangeLiteral(Arc::new(l), Arc::new(r)),
+                    source_location: expr.source_location.clone(),
+                })
+            }
+
+            ast::ExpressionKind::PastFutureRange(kind, offset_expr) => {
+                let converted_offset = self.convert_expression_and_extract_dependencies(
+                    offset_expr,
+                    current_spec_arc,
+                    data_map,
+                    current_segments,
+                    depends_on_rules,
+                    rule_names,
+                    effective,
+                )?;
+                Some(Expression {
+                    kind: ExpressionKind::PastFutureRange(*kind, Arc::new(converted_offset)),
+                    source_location: expr.source_location.clone(),
+                })
+            }
+
+            ast::ExpressionKind::RangeContainment(value, range) => {
+                let (converted_value, converted_range) = self.convert_binary_operands(
+                    value,
+                    range,
+                    current_spec_arc,
+                    data_map,
+                    current_segments,
+                    depends_on_rules,
+                    rule_names,
+                    effective,
+                )?;
+                Some(Expression {
+                    kind: ExpressionKind::RangeContainment(
+                        Arc::new(converted_value),
+                        Arc::new(converted_range),
+                    ),
+                    source_location: expr.source_location.clone(),
+                })
+            }
         }
     }
 }
@@ -2412,12 +2946,54 @@ fn find_types_by_spec<'b>(
         .map(|(_, _, t)| t)
 }
 
-fn compute_arithmetic_result_type(left_type: LemmaType, right_type: LemmaType) -> LemmaType {
-    compute_arithmetic_result_type_recursive(left_type, right_type, false)
+fn find_duration_type_in_spec(
+    resolved_types: &ResolvedTypesMap,
+    spec_arc: &Arc<LemmaSpec>,
+) -> Option<LemmaType> {
+    let spec_types = find_types_by_spec(resolved_types, spec_arc)?;
+    if let Some(named) = spec_types
+        .resolved
+        .values()
+        .find(|lemma_type| lemma_type.is_duration_like_quantity())
+    {
+        return Some(named.clone());
+    }
+    if let Some(from_units) = spec_types
+        .unit_index
+        .values()
+        .find(|lemma_type| lemma_type.is_duration_like_quantity())
+    {
+        return Some(from_units.clone());
+    }
+    for data in &spec_arc.data {
+        let ParsedDataValue::Import(spec_ref) = &data.value else {
+            continue;
+        };
+        let (_, _, imported_types) = resolved_types
+            .iter()
+            .find(|(_, s, _)| s.name == spec_ref.name)?;
+        if let Some(duration_type) = imported_types
+            .resolved
+            .get("duration")
+            .filter(|t| t.is_duration_like_quantity())
+        {
+            return Some(duration_type.clone());
+        }
+    }
+    None
+}
+
+fn compute_arithmetic_result_type(
+    left_type: LemmaType,
+    op: &ArithmeticComputation,
+    right_type: LemmaType,
+) -> LemmaType {
+    compute_arithmetic_result_type_recursive(left_type, op, right_type, false)
 }
 
 fn compute_arithmetic_result_type_recursive(
     left_type: LemmaType,
+    op: &ArithmeticComputation,
     right_type: LemmaType,
     swapped: bool,
 ) -> LemmaType {
@@ -2428,32 +3004,178 @@ fn compute_arithmetic_result_type_recursive(
         (TypeSpecification::Undetermined, _) => LemmaType::undetermined_type(),
 
         (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => {
-            primitive_duration().clone()
+            LemmaType::undetermined_type()
         }
         (TypeSpecification::Date { .. }, TypeSpecification::Time { .. }) => {
-            primitive_duration().clone()
+            LemmaType::anonymous_for_decomposition(duration_decomposition())
         }
         (TypeSpecification::Time { .. }, TypeSpecification::Time { .. }) => {
-            primitive_duration().clone()
+            LemmaType::anonymous_for_decomposition(duration_decomposition())
         }
 
-        _ if left_type == right_type => left_type,
-
-        (TypeSpecification::Date { .. }, TypeSpecification::Duration { .. }) => left_type,
-        (TypeSpecification::Time { .. }, TypeSpecification::Duration { .. }) => left_type,
-
-        (TypeSpecification::Scale { .. }, TypeSpecification::Ratio { .. }) => left_type,
-        (TypeSpecification::Scale { .. }, TypeSpecification::Number { .. }) => left_type,
-        (TypeSpecification::Scale { .. }, TypeSpecification::Duration { .. }) => {
-            primitive_number().clone()
+        // Quantity pairs must fall through to operator-specific arms below.
+        // The general equal-type guard must not short-circuit those.
+        _ if left_type == right_type
+            && !matches!(
+                &left_type.specifications,
+                TypeSpecification::Quantity { .. }
+                    | TypeSpecification::QuantityRange { .. }
+                    | TypeSpecification::NumberRange { .. }
+                    | TypeSpecification::DateRange { .. }
+                    | TypeSpecification::Calendar { .. }
+                    | TypeSpecification::RatioRange { .. }
+            ) =>
+        {
+            left_type
         }
-        (TypeSpecification::Scale { .. }, TypeSpecification::Scale { .. }) => left_type,
 
-        (TypeSpecification::Duration { .. }, TypeSpecification::Number { .. }) => left_type,
-        (TypeSpecification::Duration { .. }, TypeSpecification::Ratio { .. }) => left_type,
-        (TypeSpecification::Duration { .. }, TypeSpecification::Duration { .. }) => {
-            primitive_duration().clone()
+        (TypeSpecification::Date { .. }, TypeSpecification::Calendar { .. }) => left_type,
+        (TypeSpecification::Date { .. }, TypeSpecification::Quantity { .. })
+            if right_type.is_duration_like_quantity() =>
+        {
+            left_type
         }
+        (TypeSpecification::Time { .. }, TypeSpecification::Quantity { .. })
+            if right_type.is_duration_like_quantity() =>
+        {
+            left_type
+        }
+
+        (TypeSpecification::Quantity { .. }, TypeSpecification::Ratio { .. }) => left_type,
+        (TypeSpecification::Quantity { .. }, TypeSpecification::Number { .. }) => left_type,
+        (
+            TypeSpecification::Quantity {
+                decomposition: l_decomp,
+                ..
+            },
+            TypeSpecification::Calendar { .. },
+        ) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                LemmaType::undetermined_type()
+            }
+            ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
+                let cal_decomp = calendar_decomposition();
+                let combined = combine_decompositions(
+                    l_decomp,
+                    &cal_decomp,
+                    matches!(op, ArithmeticComputation::Multiply),
+                );
+                if combined.is_empty() {
+                    primitive_number().clone()
+                } else {
+                    LemmaType::anonymous_for_decomposition(combined)
+                }
+            }
+            _ => primitive_number().clone(),
+        },
+        (
+            TypeSpecification::Quantity {
+                decomposition: l_decomp,
+                ..
+            },
+            TypeSpecification::Quantity {
+                decomposition: r_decomp,
+                ..
+            },
+        ) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                if left_type.compatible_with_anonymous_quantity(&right_type)
+                    || right_type.compatible_with_anonymous_quantity(&left_type)
+                {
+                    let left_decomp = left_type.quantity_type_decomposition();
+                    let right_decomp = right_type.quantity_type_decomposition();
+                    if !left_decomp.is_empty() && left_decomp == right_decomp {
+                        if *left_decomp == duration_decomposition() {
+                            LemmaType::anonymous_for_decomposition(duration_decomposition())
+                        } else {
+                            LemmaType::anonymous_for_decomposition(left_decomp.clone())
+                        }
+                    } else if left_type.is_duration_like_quantity()
+                        && right_type.is_duration_like_quantity()
+                    {
+                        LemmaType::anonymous_for_decomposition(duration_decomposition())
+                    } else {
+                        left_type
+                    }
+                } else {
+                    left_type
+                }
+            }
+            ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
+                let combined = combine_decompositions(
+                    l_decomp,
+                    r_decomp,
+                    matches!(op, ArithmeticComputation::Multiply),
+                );
+                if combined.is_empty() {
+                    primitive_number().clone()
+                } else {
+                    LemmaType::anonymous_for_decomposition(combined)
+                }
+            }
+            _ => primitive_number().clone(),
+        },
+
+        (
+            TypeSpecification::Number { .. },
+            TypeSpecification::Quantity {
+                decomposition: r_decomp,
+                ..
+            },
+        ) => {
+            match op {
+                ArithmeticComputation::Multiply => right_type,
+                ArithmeticComputation::Divide => {
+                    // Number / anonymous_Quantity → negate decomp.
+                    // Number / named_Quantity (empty decomp in ValueKind, non-empty in TypeSpec)
+                    //   → for anonymous LemmaType (no name), negate; for named type, return Number.
+                    if right_type.is_anonymous_quantity() && !r_decomp.is_empty() {
+                        let negated: BaseQuantityVector =
+                            r_decomp.iter().map(|(k, &e)| (k.clone(), -e)).collect();
+                        LemmaType::anonymous_for_decomposition(negated)
+                    } else {
+                        primitive_number().clone()
+                    }
+                }
+                _ => primitive_number().clone(),
+            }
+        }
+
+        (
+            TypeSpecification::Calendar { .. },
+            TypeSpecification::Quantity {
+                decomposition: r_decomp,
+                ..
+            },
+        ) => match op {
+            ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
+                let cal_decomp = calendar_decomposition();
+                let combined = combine_decompositions(
+                    &cal_decomp,
+                    r_decomp,
+                    matches!(op, ArithmeticComputation::Multiply),
+                );
+                if combined.is_empty() {
+                    primitive_number().clone()
+                } else {
+                    LemmaType::anonymous_for_decomposition(combined)
+                }
+            }
+            _ => primitive_number().clone(),
+        },
+        (TypeSpecification::Calendar { .. }, TypeSpecification::Number { .. }) => left_type,
+        (TypeSpecification::Calendar { .. }, TypeSpecification::Ratio { .. }) => left_type,
+        (TypeSpecification::Calendar { .. }, TypeSpecification::Calendar { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                primitive_calendar().clone()
+            }
+            _ => primitive_number().clone(),
+        },
+
+        (TypeSpecification::Number { .. }, TypeSpecification::Calendar { .. }) => match op {
+            ArithmeticComputation::Multiply => right_type,
+            _ => primitive_number().clone(),
+        },
 
         (TypeSpecification::Number { .. }, TypeSpecification::Ratio { .. }) => {
             primitive_number().clone()
@@ -2463,14 +3185,361 @@ fn compute_arithmetic_result_type_recursive(
         }
 
         (TypeSpecification::Ratio { .. }, TypeSpecification::Ratio { .. }) => left_type,
+        (TypeSpecification::DateRange { .. }, TypeSpecification::DateRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_span_type(&left_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::NumberRange { .. }, TypeSpecification::NumberRange { .. }) => {
+            match op {
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                    range_span_type(&left_type)
+                }
+                _ => LemmaType::undetermined_type(),
+            }
+        }
+        (TypeSpecification::QuantityRange { .. }, TypeSpecification::QuantityRange { .. }) => {
+            match op {
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract
+                    if range_matches_range_quantity(&left_type, &right_type) =>
+                {
+                    range_span_type(&left_type)
+                }
+                _ => LemmaType::undetermined_type(),
+            }
+        }
+        (TypeSpecification::RatioRange { .. }, TypeSpecification::RatioRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_span_type(&left_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::CalendarRange { .. }, TypeSpecification::CalendarRange { .. }) => {
+            match op {
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                    range_span_type(&left_type)
+                }
+                _ => LemmaType::undetermined_type(),
+            }
+        }
+        (TypeSpecification::DateRange { .. }, TypeSpecification::CalendarRange { .. })
+        | (TypeSpecification::CalendarRange { .. }, TypeSpecification::DateRange { .. })
+        | (TypeSpecification::Date { .. }, TypeSpecification::CalendarRange { .. })
+        | (TypeSpecification::CalendarRange { .. }, TypeSpecification::Date { .. }) => {
+            LemmaType::undetermined_type()
+        }
+        (TypeSpecification::DateRange { .. }, TypeSpecification::Calendar { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => left_type,
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::Calendar { .. }, TypeSpecification::DateRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => right_type,
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::CalendarRange { .. }, TypeSpecification::Calendar { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_quantity_type_for_operand(&left_type, &right_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::Calendar { .. }, TypeSpecification::CalendarRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_quantity_type_for_operand(&right_type, &left_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::NumberRange { .. }, TypeSpecification::Number { .. })
+        | (TypeSpecification::RatioRange { .. }, TypeSpecification::Ratio { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_quantity_type_for_operand(&left_type, &right_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::QuantityRange { .. }, TypeSpecification::Quantity { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract
+                if range_matches_quantity_type(&left_type, &right_type) =>
+            {
+                range_quantity_type_for_operand(&left_type, &right_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::Number { .. }, TypeSpecification::NumberRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_quantity_type_for_operand(&right_type, &left_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::Quantity { .. }, TypeSpecification::QuantityRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract
+                if range_matches_quantity_type(&right_type, &left_type) =>
+            {
+                range_quantity_type_for_operand(&right_type, &left_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::Ratio { .. }, TypeSpecification::RatioRange { .. }) => match op {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                range_quantity_type_for_operand(&right_type, &left_type)
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::DateRange { .. }, TypeSpecification::Quantity { .. })
+            if right_type.is_duration_like_quantity() =>
+        {
+            match op {
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                    range_quantity_type_for_operand(&left_type, &right_type)
+                }
+                _ => LemmaType::undetermined_type(),
+            }
+        }
+        (TypeSpecification::Quantity { .. }, TypeSpecification::DateRange { .. })
+            if left_type.is_duration_like_quantity() =>
+        {
+            match op {
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                    range_quantity_type_for_operand(&right_type, &left_type)
+                }
+                _ => LemmaType::undetermined_type(),
+            }
+        }
+        (TypeSpecification::DateRange { .. }, TypeSpecification::Number { .. }) => match op {
+            ArithmeticComputation::Multiply => range_span_type(&left_type),
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::Number { .. }, TypeSpecification::DateRange { .. }) => match op {
+            ArithmeticComputation::Multiply => range_span_type(&right_type),
+            _ => LemmaType::undetermined_type(),
+        },
+        (
+            TypeSpecification::Quantity { decomposition, .. },
+            TypeSpecification::DateRange { .. },
+        ) => match (op, date_range_projection_axis(&left_type)) {
+            (ArithmeticComputation::Multiply, Ok(DateRangeProjectionAxis::Duration)) => {
+                let combined =
+                    combine_decompositions(decomposition, &duration_decomposition(), true);
+                if combined.is_empty() {
+                    primitive_number().clone()
+                } else {
+                    LemmaType::anonymous_for_decomposition(combined)
+                }
+            }
+            (ArithmeticComputation::Multiply, Ok(DateRangeProjectionAxis::Calendar)) => {
+                let combined =
+                    combine_decompositions(decomposition, &calendar_decomposition(), true);
+                if combined.is_empty() {
+                    primitive_number().clone()
+                } else {
+                    LemmaType::anonymous_for_decomposition(combined)
+                }
+            }
+            _ => LemmaType::undetermined_type(),
+        },
+        (TypeSpecification::DateRange { .. }, TypeSpecification::Quantity { .. }) => {
+            compute_arithmetic_result_type_recursive(right_type, op, left_type, true)
+        }
 
         _ => {
             if swapped {
                 LemmaType::undetermined_type()
             } else {
-                compute_arithmetic_result_type_recursive(right_type, left_type, true)
+                compute_arithmetic_result_type_recursive(right_type, op, left_type, true)
             }
         }
+    }
+}
+
+fn infer_range_type_from_endpoint_types(
+    left_type: &LemmaType,
+    right_type: &LemmaType,
+) -> LemmaType {
+    match (&left_type.specifications, &right_type.specifications) {
+        (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => {
+            primitive_date_range().clone()
+        }
+        (TypeSpecification::Number { .. }, TypeSpecification::Number { .. }) => {
+            primitive_number_range().clone()
+        }
+        (
+            TypeSpecification::Quantity {
+                units,
+                decomposition,
+                canonical_unit,
+                ..
+            },
+            TypeSpecification::Quantity { .. },
+        ) if left_type.same_quantity_family(right_type) => {
+            let mut spec = TypeSpecification::quantity_range();
+            if let TypeSpecification::QuantityRange {
+                units: range_units,
+                decomposition: range_decomposition,
+                canonical_unit: range_canonical_unit,
+                ..
+            } = &mut spec
+            {
+                *range_units = units.clone();
+                *range_decomposition = decomposition.clone();
+                *range_canonical_unit = canonical_unit.clone();
+            }
+            LemmaType::primitive(spec)
+        }
+        (TypeSpecification::Ratio { units, .. }, TypeSpecification::Ratio { .. }) => {
+            let mut spec = TypeSpecification::ratio_range();
+            if let TypeSpecification::RatioRange {
+                units: range_units, ..
+            } = &mut spec
+            {
+                *range_units = units.clone();
+            }
+            LemmaType::primitive(spec)
+        }
+        (TypeSpecification::Calendar { .. }, TypeSpecification::Calendar { .. }) => {
+            primitive_calendar_range().clone()
+        }
+        _ => LemmaType::undetermined_type(),
+    }
+}
+
+fn range_span_type(range_type: &LemmaType) -> LemmaType {
+    match &range_type.specifications {
+        TypeSpecification::DateRange { .. } => {
+            LemmaType::anonymous_for_decomposition(duration_decomposition())
+        }
+        TypeSpecification::NumberRange { .. } => primitive_number().clone(),
+        TypeSpecification::QuantityRange {
+            units,
+            canonical_unit,
+            ..
+        } => LemmaType::primitive(TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: units.clone(),
+            traits: Vec::new(),
+            // Span magnitude uses the unit table; empty decomposition avoids
+            // anonymous-intermediate rejection at rule boundaries.
+            decomposition: BaseQuantityVector::new(),
+            canonical_unit: canonical_unit.clone(),
+            help: String::new(),
+        }),
+        TypeSpecification::RatioRange { units, .. } => {
+            LemmaType::primitive(TypeSpecification::Ratio {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: units.clone(),
+                help: String::new(),
+            })
+        }
+        TypeSpecification::CalendarRange { .. } => primitive_calendar().clone(),
+        _ => LemmaType::undetermined_type(),
+    }
+}
+
+fn range_quantity_type_for_operand(range_type: &LemmaType, other_type: &LemmaType) -> LemmaType {
+    let _ = other_type;
+    if range_type.is_range() {
+        range_type.clone()
+    } else {
+        range_span_type(range_type)
+    }
+}
+
+fn range_matches_quantity_type(range_type: &LemmaType, measure_type: &LemmaType) -> bool {
+    match &range_type.specifications {
+        TypeSpecification::DateRange { .. } => {
+            measure_type.is_duration_like() || measure_type.is_calendar()
+        }
+        TypeSpecification::NumberRange { .. } => measure_type.is_number(),
+        TypeSpecification::QuantityRange { .. } => {
+            measure_type.is_quantity() && quantity_range_matches_quantity(range_type, measure_type)
+        }
+        TypeSpecification::RatioRange { .. } => measure_type.is_ratio(),
+        TypeSpecification::CalendarRange { .. } => measure_type.is_calendar(),
+        _ => false,
+    }
+}
+
+fn range_matches_range_quantity(left_range: &LemmaType, right_range: &LemmaType) -> bool {
+    let right_measure_type = range_span_type(right_range);
+    !right_measure_type.is_undetermined()
+        && range_matches_quantity_type(left_range, &right_measure_type)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DateRangeProjectionAxis {
+    Duration,
+    Calendar,
+}
+
+fn date_range_projection_axis(
+    quantity_type: &LemmaType,
+) -> Result<DateRangeProjectionAxis, String> {
+    let quantity_decomposition = match &quantity_type.specifications {
+        TypeSpecification::Quantity { decomposition, .. } => decomposition,
+        _ => {
+            return Err(format!(
+                "Cannot project date range through non-quantity type {}.",
+                quantity_type.name()
+            ));
+        }
+    };
+
+    let has_duration_axis = quantity_decomposition
+        .get(semantics::DURATION_DIMENSION)
+        .is_some_and(|exponent| *exponent != 0);
+    let has_calendar_axis = quantity_decomposition
+        .get(semantics::CALENDAR_DIMENSION)
+        .is_some_and(|exponent| *exponent != 0);
+
+    match (has_duration_axis, has_calendar_axis) {
+        (true, false) => Ok(DateRangeProjectionAxis::Duration),
+        (false, true) => Ok(DateRangeProjectionAxis::Calendar),
+        (false, false) => Err(format!(
+            "Cannot multiply {} by a date range because {} has no duration or calendar dimension.",
+            quantity_type.name(),
+            quantity_type.name()
+        )),
+        (true, true) => Err(format!(
+            "Cannot multiply {} by a date range because {} has both duration and calendar dimensions.",
+            quantity_type.name(),
+            quantity_type.name()
+        )),
+    }
+}
+
+fn quantity_range_matches_quantity(range_type: &LemmaType, quantity_type: &LemmaType) -> bool {
+    match (&range_type.specifications, &quantity_type.specifications) {
+        (
+            TypeSpecification::QuantityRange {
+                units: range_units,
+                decomposition: range_decomposition,
+                canonical_unit: range_canonical_unit,
+                ..
+            },
+            TypeSpecification::Quantity {
+                units: quantity_units,
+                decomposition: quantity_decomposition,
+                canonical_unit: quantity_canonical_unit,
+                ..
+            },
+        ) => {
+            if range_units.0.is_empty()
+                && range_decomposition.is_empty()
+                && range_canonical_unit.is_empty()
+            {
+                true
+            } else if quantity_decomposition.is_empty() {
+                range_units == quantity_units
+                    && range_canonical_unit.eq_ignore_ascii_case(quantity_canonical_unit)
+            } else {
+                range_units == quantity_units
+                    && range_decomposition == quantity_decomposition
+                    && range_canonical_unit.eq_ignore_ascii_case(quantity_canonical_unit)
+            }
+        }
+        _ => false,
     }
 }
 
@@ -2510,7 +3579,34 @@ fn infer_expression_type(
             if left_type.is_undetermined() || right_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
-            primitive_boolean().clone()
+            if !left_type.is_boolean() {
+                return LemmaType::undetermined_type();
+            }
+            if right_type.is_boolean() {
+                primitive_boolean().clone()
+            } else {
+                right_type
+            }
+        }
+
+        ExpressionKind::LogicalOr(left, right) => {
+            let left_type =
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
+            let right_type =
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
+            if left_type.vetoed() || right_type.vetoed() {
+                return LemmaType::veto_type();
+            }
+            if left_type.is_undetermined() || right_type.is_undetermined() {
+                return LemmaType::undetermined_type();
+            }
+            if left_type.is_boolean() && right_type.is_boolean() {
+                return primitive_boolean().clone();
+            }
+            if left_type == right_type {
+                return left_type;
+            }
+            LemmaType::undetermined_type()
         }
 
         ExpressionKind::LogicalNegation(operand, _) => {
@@ -2544,12 +3640,24 @@ fn infer_expression_type(
             primitive_boolean().clone()
         }
 
-        ExpressionKind::Arithmetic(left, _operator, right) => {
+        ExpressionKind::Arithmetic(left, operator, right) => {
             let left_type =
                 infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
             let right_type =
                 infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
-            compute_arithmetic_result_type(left_type, right_type)
+            let mut result =
+                compute_arithmetic_result_type(left_type.clone(), operator, right_type.clone());
+            if *operator == ArithmeticComputation::Subtract
+                && left_type.is_time()
+                && right_type.is_time()
+                && result.is_anonymous_quantity()
+                && *result.quantity_type_decomposition() == duration_decomposition()
+            {
+                if let Some(duration_type) = find_duration_type_in_spec(resolved_types, spec_arc) {
+                    result = duration_type;
+                }
+            }
+            result
         }
 
         ExpressionKind::UnitConversion(source_expression, target) => {
@@ -2566,10 +3674,34 @@ fn infer_expression_type(
             if source_type.is_undetermined() {
                 return LemmaType::undetermined_type();
             }
+            if source_type.is_range() {
+                let span_type = range_span_type(&source_type);
+                return match target {
+                    SemanticConversionTarget::Number => primitive_number().clone(),
+                    SemanticConversionTarget::Calendar(_) => primitive_calendar().clone(),
+                    SemanticConversionTarget::QuantityUnit(unit_name) => {
+                        find_types_by_spec(resolved_types, spec_arc)
+                            .and_then(|dt| dt.unit_index.get(unit_name))
+                            .cloned()
+                            .unwrap_or(span_type)
+                    }
+                    SemanticConversionTarget::RatioUnit(unit_name) => {
+                        find_types_by_spec(resolved_types, spec_arc)
+                            .and_then(|dt| dt.unit_index.get(unit_name))
+                            .cloned()
+                            .unwrap_or(span_type)
+                    }
+                };
+            }
             match target {
-                SemanticConversionTarget::Duration(_) => primitive_duration().clone(),
-                SemanticConversionTarget::ScaleUnit(unit_name) => {
-                    if source_type.is_number() {
+                SemanticConversionTarget::Number => primitive_number().clone(),
+                SemanticConversionTarget::Calendar(_) => primitive_calendar().clone(),
+                SemanticConversionTarget::QuantityUnit(unit_name) => {
+                    if source_type.is_number()
+                        || source_type.is_duration_like()
+                        || source_type.is_date_range()
+                        || source_type.is_anonymous_quantity()
+                    {
                         find_types_by_spec(resolved_types, spec_arc)
                             .and_then(|dt| dt.unit_index.get(unit_name))
                             .cloned()
@@ -2610,11 +3742,38 @@ fn infer_expression_type(
 
         ExpressionKind::Veto(_) => LemmaType::veto_type(),
 
-        ExpressionKind::Now => primitive_date().clone(),
-
-        ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => {
+        ExpressionKind::ResultIsVeto(operand) => {
+            let _ = infer_expression_type(
+                operand,
+                graph,
+                computed_rule_types,
+                resolved_types,
+                spec_arc,
+            );
             primitive_boolean().clone()
         }
+
+        ExpressionKind::Now => primitive_date().clone(),
+
+        ExpressionKind::DateRelative(..)
+        | ExpressionKind::DateCalendar(..)
+        | ExpressionKind::RangeContainment(..) => primitive_boolean().clone(),
+
+        ExpressionKind::RangeLiteral(left, right) => {
+            let left_type =
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
+            let right_type =
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
+            if left_type.vetoed() || right_type.vetoed() {
+                return LemmaType::veto_type();
+            }
+            if left_type.is_undetermined() || right_type.is_undetermined() {
+                return LemmaType::undetermined_type();
+            }
+            infer_range_type_from_endpoint_types(&left_type, &right_type)
+        }
+
+        ExpressionKind::PastFutureRange(..) => primitive_date_range().clone(),
     }
 }
 
@@ -2728,6 +3887,59 @@ fn check_logical_operands(
     }
 }
 
+fn check_logical_or_operands(
+    graph: &Graph,
+    left_type: &LemmaType,
+    right_type: &LemmaType,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
+    if left_type.vetoed() || right_type.vetoed() {
+        return Ok(());
+    }
+    if left_type.is_undetermined() || right_type.is_undetermined() {
+        return Ok(());
+    }
+    if left_type.is_boolean() && right_type.is_boolean() {
+        return check_logical_operands(graph, left_type, right_type, source);
+    }
+    if left_type == right_type {
+        return Ok(());
+    }
+    Err(vec![engine_error_at_graph(
+        graph,
+        source,
+        format!(
+            "Logical OR requires matching types (unless-chain / De Morgan), got {:?} and {:?}",
+            left_type, right_type
+        ),
+    )])
+}
+
+fn check_logical_and_operands(
+    graph: &Graph,
+    left_type: &LemmaType,
+    right_type: &LemmaType,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
+    if left_type.vetoed() || right_type.vetoed() {
+        return Ok(());
+    }
+    if !left_type.is_boolean() {
+        return Err(vec![engine_error_at_graph(
+            graph,
+            source,
+            format!(
+                "Logical AND requires boolean left operand, got {:?}",
+                left_type
+            ),
+        )]);
+    }
+    if right_type.is_boolean() {
+        return Ok(());
+    }
+    Ok(())
+}
+
 fn check_logical_operand(
     graph: &Graph,
     operand_type: &LemmaType,
@@ -2761,6 +3973,17 @@ fn check_comparison_types(
         return Ok(());
     }
     let is_equality_only = matches!(op, ComparisonComputation::Is | ComparisonComputation::IsNot);
+
+    if left_type.is_range() {
+        if range_matches_quantity_type(left_type, right_type) {
+            return Ok(());
+        }
+        return Err(vec![engine_error_at_graph(
+            graph,
+            source,
+            format!("Cannot compare {:?} with {:?}", left_type, right_type),
+        )]);
+    }
 
     if left_type.is_boolean() && right_type.is_boolean() {
         if !is_equality_only {
@@ -2800,13 +4023,15 @@ fn check_comparison_types(
         return Ok(());
     }
 
-    if left_type.is_scale() && right_type.is_scale() {
-        if !left_type.same_scale_family(right_type) {
+    if left_type.is_quantity() && right_type.is_quantity() {
+        if !left_type.same_quantity_family(right_type)
+            && !left_type.compatible_with_anonymous_quantity(right_type)
+        {
             return Err(vec![engine_error_at_graph(
                 graph,
                 source,
                 format!(
-                    "Cannot compare different scale types: {} and {}",
+                    "Cannot compare unrelated quantity types: {} and {}",
                     left_type.name(),
                     right_type.name()
                 ),
@@ -2815,13 +4040,16 @@ fn check_comparison_types(
         return Ok(());
     }
 
-    if left_type.is_duration() && right_type.is_duration() {
+    if left_type.is_duration_like() && right_type.is_duration_like() {
         return Ok(());
     }
-    if left_type.is_duration() && right_type.is_number() {
+    if left_type.is_calendar() && right_type.is_calendar() {
         return Ok(());
     }
-    if left_type.is_number() && right_type.is_duration() {
+    if left_type.is_calendar() && right_type.is_number() {
+        return Ok(());
+    }
+    if left_type.is_number() && right_type.is_calendar() {
         return Ok(());
     }
 
@@ -2830,6 +4058,113 @@ fn check_comparison_types(
         source,
         format!("Cannot compare {:?} with {:?}", left_type, right_type),
     )])
+}
+
+/// Literal zero on the right of `/` or `%` is rejected at planning time (runtime data divisors may Veto).
+fn arithmetic_literal_zero_divisor_planning_errors(
+    graph: &Graph,
+    right: &Expression,
+    operator: &ArithmeticComputation,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
+    if !matches!(
+        operator,
+        ArithmeticComputation::Divide | ArithmeticComputation::Modulo
+    ) {
+        return Ok(());
+    }
+
+    if let ExpressionKind::Literal(literal) = &right.kind {
+        if let ValueKind::Number(number) = &literal.value {
+            if crate::computation::rational::rational_is_zero(number) {
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!("Cannot apply '{}' with a zero divisor literal.", operator),
+                )]);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn arithmetic_power_exponent_planning_errors(
+    graph: &Graph,
+    _left: &Expression,
+    right: &Expression,
+    left_type: &LemmaType,
+    _right_type: &LemmaType,
+    operator: &ArithmeticComputation,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
+    if *operator != ArithmeticComputation::Power {
+        return Ok(());
+    }
+    // Quantity ^ non-integer-literal is rejected: fractional dimensions are undefined,
+    // and variable exponents cannot be statically verified to be integers at plan time.
+    if left_type.is_quantity() || left_type.is_duration_like() {
+        let is_integer_literal = if let ExpressionKind::Literal(lit) = &right.kind {
+            if let crate::planning::semantics::ValueKind::Number(n) = &lit.value {
+                *n.denom() == 1
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !is_integer_literal {
+            return Err(vec![engine_error_at_graph(
+                graph,
+                source,
+                "Cannot raise a quantity value to a fractional or variable exponent. Use a positive integer literal.".to_string(),
+            )]);
+        }
+    }
+    Ok(())
+}
+
+/// Discharges planning obligations for numeric arithmetic beyond type compatibility:
+/// literal zero divisors and integer power exponents where required.
+fn arithmetic_plan_time_exactness_planning_errors(
+    graph: &Graph,
+    left: &Expression,
+    right: &Expression,
+    left_type: &LemmaType,
+    right_type: &LemmaType,
+    operator: &ArithmeticComputation,
+    source: &Source,
+) -> Result<(), Vec<Error>> {
+    if left_type.vetoed() || right_type.vetoed() {
+        return Ok(());
+    }
+    if left_type.is_undetermined() || right_type.is_undetermined() {
+        return Ok(());
+    }
+
+    let mut errors = Vec::new();
+    let collect = |result: Result<(), Vec<Error>>, errors: &mut Vec<Error>| {
+        if let Err(mut errs) = result {
+            errors.append(&mut errs);
+        }
+    };
+
+    collect(
+        arithmetic_literal_zero_divisor_planning_errors(graph, right, operator, source),
+        &mut errors,
+    );
+    collect(
+        arithmetic_power_exponent_planning_errors(
+            graph, left, right, left_type, right_type, operator, source,
+        ),
+        &mut errors,
+    );
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 fn check_arithmetic_types(
@@ -2842,15 +4177,158 @@ fn check_arithmetic_types(
     if left_type.vetoed() || right_type.vetoed() {
         return Ok(());
     }
-    // Date/Time: only Add and Subtract with Duration (or Date/Time - Date/Time)
-    if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
-        let both_temporal = (left_type.is_date() || left_type.is_time())
-            && (right_type.is_date() || right_type.is_time());
-        let one_is_duration = left_type.is_duration() || right_type.is_duration();
-        let valid = matches!(
+
+    if left_type.is_date() && right_type.is_date() && *operator == ArithmeticComputation::Subtract {
+        return Err(vec![engine_error_at_graph(
+            graph,
+            source,
+            "Cannot subtract dates. Use dateA...dateB to create a date range.".to_string(),
+        )]);
+    }
+
+    if left_type.is_range() || right_type.is_range() {
+        let range_measure_allowed = matches!(
             operator,
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
-        ) && (both_temporal || one_is_duration);
+        ) && ((left_type.is_range()
+            && right_type.is_range()
+            && range_matches_range_quantity(left_type, right_type))
+            || (left_type.is_range()
+                && !right_type.is_range()
+                && range_matches_quantity_type(left_type, right_type))
+            || (right_type.is_range()
+                && !left_type.is_range()
+                && range_matches_quantity_type(right_type, left_type)));
+        let range_scalar_multiply_allowed = *operator == ArithmeticComputation::Multiply
+            && ((left_type.is_range() && right_type.is_number())
+                || (right_type.is_range() && left_type.is_number()));
+
+        let quantity_date_range_allowed = if *operator == ArithmeticComputation::Multiply {
+            if left_type.is_quantity() && right_type.is_date_range() {
+                match date_range_projection_axis(left_type) {
+                    Ok(_) => true,
+                    Err(message) => {
+                        return Err(vec![engine_error_at_graph(graph, source, message)]);
+                    }
+                }
+            } else if left_type.is_date_range() && right_type.is_quantity() {
+                match date_range_projection_axis(right_type) {
+                    Ok(_) => true,
+                    Err(message) => {
+                        return Err(vec![engine_error_at_graph(graph, source, message)]);
+                    }
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if range_measure_allowed || range_scalar_multiply_allowed || quantity_date_range_allowed {
+            return Ok(());
+        }
+
+        if (left_type.is_date_range()
+            && right_type.is_quantity()
+            && !right_type.is_duration_like_quantity())
+            || (right_type.is_date_range()
+                && left_type.is_quantity()
+                && !left_type.is_duration_like_quantity())
+        {
+            return Err(vec![engine_error_at_graph(
+                graph,
+                source,
+                format!(
+                    "Cannot apply '{}' to a date range and an unrelated quantity.",
+                    operator
+                ),
+            )]);
+        }
+
+        return Err(vec![engine_error_at_graph(
+            graph,
+            source,
+            format!(
+                "Cannot apply '{}' to {} and {}.",
+                operator,
+                left_type.name(),
+                right_type.name()
+            ),
+        )]);
+    }
+
+    // Date/Time arithmetic is limited to supported temporal combinations.
+    if left_type.is_date() || left_type.is_time() || right_type.is_date() || right_type.is_time() {
+        let left_is_duration_like = left_type.is_duration_like();
+        let right_is_duration_like = right_type.is_duration_like();
+        let valid = matches!(
+            (
+                left_type.is_date(),
+                left_type.is_time(),
+                right_type.is_date(),
+                right_type.is_time(),
+                left_is_duration_like,
+                right_is_duration_like,
+                left_type.is_calendar(),
+                right_type.is_calendar(),
+                operator
+            ),
+            (
+                true,
+                _,
+                _,
+                true,
+                _,
+                _,
+                _,
+                _,
+                ArithmeticComputation::Subtract
+            ) | (
+                _,
+                true,
+                _,
+                true,
+                _,
+                _,
+                _,
+                _,
+                ArithmeticComputation::Subtract
+            ) | (
+                true,
+                _,
+                _,
+                _,
+                _,
+                true,
+                _,
+                _,
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract
+            ) | (
+                true,
+                _,
+                _,
+                _,
+                _,
+                _,
+                _,
+                true,
+                ArithmeticComputation::Add | ArithmeticComputation::Subtract
+            ) | (_, _, true, _, true, _, _, _, ArithmeticComputation::Add)
+                | (_, _, true, _, _, _, true, _, ArithmeticComputation::Add)
+                | (
+                    _,
+                    true,
+                    _,
+                    _,
+                    _,
+                    true,
+                    _,
+                    _,
+                    ArithmeticComputation::Add | ArithmeticComputation::Subtract
+                )
+                | (_, _, _, true, true, _, _, _, ArithmeticComputation::Add)
+        );
         if !valid {
             return Err(vec![engine_error_at_graph(
                 graph,
@@ -2866,35 +4344,122 @@ fn check_arithmetic_types(
         return Ok(());
     }
 
-    // Different scale families: reject all operators
-    if left_type.is_scale() && right_type.is_scale() && !left_type.same_scale_family(right_type) {
+    // Quantity/Quantity rules:
+    //   +/- requires same quantity family (dimensionless addition is not meaningful otherwise).
+    //   *   requires different quantity families (same-family quantity*quantity is rejected; use `as number`).
+    //   /   is allowed for all families (same-family → scalar Number; cross-family → anonymous Quantity).
+    //   %   and ^ on two Quantities are always rejected.
+    if left_type.is_quantity() && right_type.is_quantity() {
+        return match operator {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
+                if left_type.same_quantity_family(right_type)
+                    || left_type.compatible_with_anonymous_quantity(right_type)
+                {
+                    Ok(())
+                } else {
+                    Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!(
+                            "Cannot {} unrelated quantity types: {} and {}.",
+                            if matches!(operator, ArithmeticComputation::Add) {
+                                "add"
+                            } else {
+                                "subtract"
+                            },
+                            left_type.name(),
+                            right_type.name()
+                        ),
+                    )])
+                }
+            }
+            ArithmeticComputation::Multiply => {
+                if left_type.same_quantity_family(right_type) {
+                    Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!(
+                            "Cannot multiply two '{}' quantity values of the same type. \
+                             Convert operands first: 'value as number'.",
+                            left_type.name()
+                        ),
+                    )])
+                } else {
+                    // Cross-family Quantity * Quantity → anonymous intermediate. Allowed.
+                    Ok(())
+                }
+            }
+            ArithmeticComputation::Divide => {
+                // Quantity / Quantity (any family) → scalar Number or anonymous intermediate. Allowed.
+                Ok(())
+            }
+            ArithmeticComputation::Modulo | ArithmeticComputation::Power => {
+                Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot apply '{}' to two quantity values ({} and {}).",
+                        operator,
+                        left_type.name(),
+                        right_type.name()
+                    ),
+                )])
+            }
+        };
+    }
+
+    // Duration * Duration (and power/modulo) rejected for same reason.
+    if left_type.is_duration_like() && right_type.is_duration_like() {
+        return match operator {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => Ok(()),
+            ArithmeticComputation::Divide => Ok(()),
+            _ => Err(vec![engine_error_at_graph(
+                graph,
+                source,
+                "Cannot multiply two duration values. Convert operands first: 'value as number'."
+                    .to_string(),
+            )]),
+        };
+    }
+
+    if left_type.is_calendar() && right_type.is_calendar() {
+        return match operator {
+            ArithmeticComputation::Add | ArithmeticComputation::Subtract => Ok(()),
+            ArithmeticComputation::Divide => Ok(()),
+            _ => Err(vec![engine_error_at_graph(
+                graph,
+                source,
+                "Cannot multiply two calendar values. Convert operands first: 'value as number'."
+                    .to_string(),
+            )]),
+        };
+    }
+
+    if (left_type.is_duration_like() && right_type.is_calendar())
+        || (left_type.is_calendar() && right_type.is_duration_like())
+    {
         return Err(vec![engine_error_at_graph(
             graph,
             source,
             format!(
-                "Cannot {} different scale types: {} and {}. Operations between different scale types produce ambiguous result units.",
-                match operator {
-                    ArithmeticComputation::Add => "add",
-                    ArithmeticComputation::Subtract => "subtract",
-                    ArithmeticComputation::Multiply => "multiply",
-                    ArithmeticComputation::Divide => "divide",
-                    ArithmeticComputation::Modulo => "modulo",
-                    ArithmeticComputation::Power => "power",
-                },
+                "Cannot apply '{}' to {} and {}. Duration and calendar are unrelated types.",
+                operator,
                 left_type.name(),
                 right_type.name()
             ),
         )]);
     }
 
-    // Only Scale, Number, Ratio, and Duration can participate in arithmetic
-    let left_valid = left_type.is_scale()
+    // Only Quantity, Number, Ratio, Duration, and Calendar can participate in arithmetic
+    let left_valid = left_type.is_quantity()
         || left_type.is_number()
-        || left_type.is_duration()
+        || left_type.is_duration_like()
+        || left_type.is_calendar()
         || left_type.is_ratio();
-    let right_valid = right_type.is_scale()
+    let right_valid = right_type.is_quantity()
         || right_type.is_number()
-        || right_type.is_duration()
+        || right_type.is_duration_like()
+        || right_type.is_calendar()
         || right_type.is_ratio();
 
     if !left_valid || !right_valid {
@@ -2921,36 +4486,68 @@ fn check_arithmetic_types(
 
     let allowed = match operator {
         ArithmeticComputation::Multiply => {
-            pair(LemmaType::is_scale, LemmaType::is_number)
-                || pair(LemmaType::is_scale, LemmaType::is_ratio)
-                || pair(LemmaType::is_scale, LemmaType::is_duration)
-                || pair(LemmaType::is_duration, LemmaType::is_number)
-                || pair(LemmaType::is_duration, LemmaType::is_ratio)
+            pair(LemmaType::is_quantity, LemmaType::is_number)
+                || pair(LemmaType::is_quantity, LemmaType::is_ratio)
+                || pair(LemmaType::is_quantity, LemmaType::is_duration_like_quantity)
+                || pair(LemmaType::is_quantity, LemmaType::is_calendar)
+                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_number)
+                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_ratio)
+                || pair(LemmaType::is_calendar, LemmaType::is_number)
+                || pair(LemmaType::is_calendar, LemmaType::is_ratio)
                 || pair(LemmaType::is_number, LemmaType::is_ratio)
         }
         ArithmeticComputation::Divide => {
-            pair(LemmaType::is_scale, LemmaType::is_number)
-                || pair(LemmaType::is_scale, LemmaType::is_ratio)
-                || pair(LemmaType::is_scale, LemmaType::is_duration)
-                || (left_type.is_duration() && right_type.is_number())
-                || (left_type.is_duration() && right_type.is_ratio())
+            pair(LemmaType::is_quantity, LemmaType::is_number)
+                || pair(LemmaType::is_quantity, LemmaType::is_ratio)
+                || pair(LemmaType::is_quantity, LemmaType::is_duration_like_quantity)
+                || pair(LemmaType::is_quantity, LemmaType::is_calendar)
+                || (left_type.is_duration_like() && right_type.is_number())
+                || (left_type.is_duration_like() && right_type.is_ratio())
+                || (left_type.is_calendar() && right_type.is_number())
+                || (left_type.is_calendar() && right_type.is_ratio())
+                || (left_type.is_number() && right_type.is_duration_like())
+                || (left_type.is_number() && right_type.is_calendar())
                 || pair(LemmaType::is_number, LemmaType::is_ratio)
         }
         ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-            pair(LemmaType::is_scale, LemmaType::is_number)
-                || pair(LemmaType::is_scale, LemmaType::is_ratio)
-                || pair(LemmaType::is_duration, LemmaType::is_number)
-                || pair(LemmaType::is_duration, LemmaType::is_ratio)
+            pair(LemmaType::is_quantity, LemmaType::is_number)
+                || pair(LemmaType::is_quantity, LemmaType::is_ratio)
+                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_number)
+                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_ratio)
+                || pair(LemmaType::is_calendar, LemmaType::is_number)
+                || pair(LemmaType::is_calendar, LemmaType::is_ratio)
                 || pair(LemmaType::is_number, LemmaType::is_ratio)
         }
         ArithmeticComputation::Power => {
-            (left_type.is_number()
-                || left_type.is_scale()
+            // Exponent must be a dimensionless integer for quantity left (enforced separately
+            // in arithmetic_power_exponent_planning_errors). Quantity ^ Ratio is rejected here.
+            // number ^ (number | ratio) is allowed; exact rational result or runtime Veto.
+            let left_ok = left_type.is_number()
+                || left_type.is_quantity()
                 || left_type.is_ratio()
-                || left_type.is_duration())
-                && (right_type.is_number() || right_type.is_ratio())
+                || left_type.is_duration_like();
+            let right_ok = if left_type.is_quantity() || left_type.is_duration_like() {
+                right_type.is_number()
+            } else {
+                right_type.is_number() || right_type.is_ratio()
+            };
+            left_ok && right_ok
         }
-        ArithmeticComputation::Modulo => right_type.is_number() || right_type.is_ratio(),
+        ArithmeticComputation::Modulo => {
+            // Quantity % Ratio is rejected: ratio is dimensionless-fractional, not a meaningful
+            // modulus for a dimensioned value.
+            if left_type.is_quantity() && right_type.is_ratio() {
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot apply modulo to {} with a ratio. Use a number divisor.",
+                        left_type.name()
+                    ),
+                )]);
+            }
+            right_type.is_number() || right_type.is_ratio()
+        }
     };
 
     if !allowed {
@@ -2969,6 +4566,152 @@ fn check_arithmetic_types(
     Ok(())
 }
 
+fn check_range_span_unit_conversion(
+    graph: &Graph,
+    source_type: &LemmaType,
+    target: &SemanticConversionTarget,
+    resolved_types: &ResolvedTypesMap,
+    source: &Source,
+    spec_arc: &Arc<LemmaSpec>,
+) -> Result<(), Vec<Error>> {
+    match target {
+        SemanticConversionTarget::Number => {
+            if source_type.is_number_range() {
+                Ok(())
+            } else {
+                Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!("Cannot convert {} to number.", source_type.name()),
+                )])
+            }
+        }
+        SemanticConversionTarget::QuantityUnit(unit_name) => {
+            if source_type.is_calendar_range() {
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot convert {} to quantity unit '{}'.",
+                        source_type.name(),
+                        unit_name
+                    ),
+                )]);
+            }
+            let target_type = find_types_by_spec(resolved_types, spec_arc)
+                .and_then(|dt| dt.unit_index.get(unit_name))
+                .cloned();
+            let target_type = match target_type {
+                Some(lemma_type) => lemma_type,
+                None => {
+                    return Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!(
+                            "Unknown unit '{}': no quantity type in spec '{}' owns this unit.",
+                            unit_name, spec_arc.name
+                        ),
+                    )]);
+                }
+            };
+            if !target_type.is_duration_like_quantity() {
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot convert {} to quantity unit '{}'.",
+                        source_type.name(),
+                        unit_name
+                    ),
+                )]);
+            }
+            if source_type.is_number_range() {
+                return Ok(());
+            }
+            if source_type.is_quantity_range() {
+                if let TypeSpecification::QuantityRange {
+                    decomposition,
+                    units,
+                    ..
+                } = &source_type.specifications
+                {
+                    if *decomposition == duration_decomposition() {
+                        return Ok(());
+                    }
+                    let all_duration_endpoints = !units.0.is_empty()
+                        && units.0.iter().all(|unit| {
+                            find_types_by_spec(resolved_types, spec_arc)
+                                .and_then(|dt| dt.unit_index.get(&unit.name))
+                                .is_some_and(|owner| owner.is_duration_like_quantity())
+                        });
+                    if all_duration_endpoints {
+                        return Ok(());
+                    }
+                }
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot convert {} to quantity unit '{}'.",
+                        source_type.name(),
+                        unit_name
+                    ),
+                )]);
+            }
+            Err(vec![engine_error_at_graph(
+                graph,
+                source,
+                format!(
+                    "Cannot convert {} to quantity unit '{}'.",
+                    source_type.name(),
+                    unit_name
+                ),
+            )])
+        }
+        SemanticConversionTarget::RatioUnit(unit_name) => {
+            if !source_type.is_ratio_range() {
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot convert {} to ratio unit '{}'.",
+                        source_type.name(),
+                        unit_name
+                    ),
+                )]);
+            }
+            let valid: Vec<&str> = match &source_type.specifications {
+                TypeSpecification::RatioRange { units, .. } => {
+                    units.iter().map(|u| u.name.as_str()).collect()
+                }
+                _ => unreachable!("BUG: is_ratio_range without RatioRange spec"),
+            };
+            if valid
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(unit_name))
+            {
+                Ok(())
+            } else {
+                Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Unknown unit '{}' for type {}. Valid units: {}",
+                        unit_name,
+                        source_type.name(),
+                        valid.join(", ")
+                    ),
+                )])
+            }
+        }
+        SemanticConversionTarget::Calendar(_) => Err(vec![engine_error_at_graph(
+            graph,
+            source,
+            format!("Cannot convert {} to calendar.", source_type.name()),
+        )]),
+    }
+}
+
 fn check_unit_conversion_types(
     graph: &Graph,
     source_type: &LemmaType,
@@ -2981,22 +4724,192 @@ fn check_unit_conversion_types(
         return Ok(());
     }
     match target {
-        SemanticConversionTarget::ScaleUnit(unit_name)
-        | SemanticConversionTarget::RatioUnit(unit_name) => {
-            let unit_check: Option<(bool, Vec<&str>)> = match (&source_type.specifications, target)
+        SemanticConversionTarget::Number => {
+            if source_type.is_date_range() || source_type.is_number_range() {
+                return Ok(());
+            }
+            if source_type.is_quantity_range()
+                || source_type.is_ratio_range()
+                || source_type.is_calendar_range()
             {
-                (
-                    TypeSpecification::Scale { units, .. },
-                    SemanticConversionTarget::ScaleUnit(_),
-                ) => {
-                    let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-                    let found = units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name));
-                    Some((found, valid))
+                return check_range_span_unit_conversion(
+                    graph,
+                    source_type,
+                    target,
+                    resolved_types,
+                    source,
+                    spec_arc,
+                );
+            }
+            // Prohibit stripping anonymous compound intermediates to number directly.
+            // Anonymous intermediates have unresolved dimensions that cannot be silently dropped;
+            // the user must cast to a named typedef first (e.g., `as mps`) or use `as number`
+            // only after all dimensions have cancelled.
+            if source_type.is_anonymous_quantity() {
+                let decomp = source_type.quantity_type_decomposition();
+                if !decomp.is_empty() {
+                    return Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!(
+                            "Cannot use 'as number' to strip an anonymous intermediate with unresolved \
+                             dimensions {:?}. Cast to a named quantity typedef first (e.g., 'as <unit>'), \
+                             or ensure all dimensions cancel before converting to number.",
+                            decomp
+                        ),
+                    )]);
                 }
-                (
-                    TypeSpecification::Ratio { units, .. },
-                    SemanticConversionTarget::RatioUnit(_),
-                ) => {
+            }
+            if source_type.is_quantity()
+                || source_type.is_number()
+                || source_type.is_duration_like()
+                || source_type.is_calendar()
+                || source_type.is_ratio()
+            {
+                Ok(())
+            } else {
+                Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!("Cannot convert {} to number.", source_type.name()),
+                )])
+            }
+        }
+        SemanticConversionTarget::QuantityUnit(unit_name) => {
+            if source_type.is_date_range() {
+                let target_type = find_types_by_spec(resolved_types, spec_arc)
+                    .and_then(|dt| dt.unit_index.get(unit_name))
+                    .cloned();
+
+                let target_type = match target_type {
+                    Some(lemma_type) => lemma_type,
+                    None => {
+                        return Err(vec![engine_error_at_graph(
+                            graph,
+                            source,
+                            format!(
+                                "Unknown unit '{}': no quantity type in spec '{}' owns this unit.",
+                                unit_name, spec_arc.name
+                            ),
+                        )]);
+                    }
+                };
+
+                if !target_type.is_duration_like_quantity() {
+                    return Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!(
+                            "Cannot convert date range to quantity unit '{}'.",
+                            unit_name
+                        ),
+                    )]);
+                }
+
+                return Ok(());
+            }
+
+            if source_type.is_number_range()
+                || source_type.is_quantity_range()
+                || source_type.is_calendar_range()
+            {
+                return check_range_span_unit_conversion(
+                    graph,
+                    source_type,
+                    target,
+                    resolved_types,
+                    source,
+                    spec_arc,
+                );
+            }
+            // Number can be cast to any quantity unit (interpreted as a value in that unit).
+            if source_type.is_number() {
+                return if find_types_by_spec(resolved_types, spec_arc)
+                    .and_then(|dt| dt.unit_index.get(unit_name))
+                    .is_some()
+                {
+                    Ok(())
+                } else {
+                    Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!("Unknown unit '{}' in spec '{}'.", unit_name, spec_arc.name),
+                    )])
+                };
+            }
+
+            // Anonymous intermediate: verify decomposition compatibility with the target quantity,
+            // then confirm the requested unit exists in that target quantity.
+            if source_type.is_anonymous_quantity() {
+                let target_type = find_types_by_spec(resolved_types, spec_arc)
+                    .and_then(|dt| dt.unit_index.get(unit_name))
+                    .cloned();
+
+                let target_type = match target_type {
+                    Some(lemma_type) => lemma_type,
+                    None => {
+                        return Err(vec![engine_error_at_graph(
+                            graph,
+                            source,
+                            format!(
+                                "Unknown unit '{}': no quantity type in spec '{}' owns this unit.",
+                                unit_name, spec_arc.name
+                            ),
+                        )]);
+                    }
+                };
+
+                let source_decomp = source_type.quantity_type_decomposition();
+                let target_quantity_family = target_type
+                    .quantity_family_name()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| target_type.name().to_string());
+
+                let target_decomp = match &target_type.specifications {
+                    TypeSpecification::Quantity { decomposition, .. } => decomposition.clone(),
+                    _ => {
+                        return Err(vec![engine_error_at_graph(
+                            graph,
+                            source,
+                            format!("Unit '{}' does not belong to a quantity type.", unit_name),
+                        )]);
+                    }
+                };
+
+                if *source_decomp != target_decomp {
+                    return Err(vec![engine_error_at_graph(
+                        graph,
+                        source,
+                        format!(
+                            "Cannot cast to '{}' (quantity '{}'): source dimensions {:?} do not \
+                             match target dimensions {:?}. The intermediate result has a different \
+                             physical quantity than the target type.",
+                            unit_name, target_quantity_family, source_decomp, target_decomp
+                        ),
+                    )]);
+                }
+
+                return Ok(());
+            }
+
+            match source_type.validate_quantity_result_unit(unit_name) {
+                Ok(()) => Ok(()),
+                Err(message) => Err(vec![engine_error_at_graph(graph, source, message)]),
+            }
+        }
+        SemanticConversionTarget::RatioUnit(unit_name) => {
+            if source_type.is_ratio_range() {
+                return check_range_span_unit_conversion(
+                    graph,
+                    source_type,
+                    target,
+                    resolved_types,
+                    source,
+                    spec_arc,
+                );
+            }
+            let unit_check: Option<(bool, Vec<&str>)> = match &source_type.specifications {
+                TypeSpecification::Ratio { units, .. } => {
                     let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
                     let found = units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name));
                     Some((found, valid))
@@ -3034,19 +4947,22 @@ fn check_unit_conversion_types(
                     graph,
                     source,
                     format!(
-                        "Cannot convert {} to unit '{}'.",
+                        "Cannot convert {} to ratio unit '{}'.",
                         source_type.name(),
                         unit_name
                     ),
                 )]),
             }
         }
-        SemanticConversionTarget::Duration(_) => {
-            if !source_type.is_duration() && !source_type.is_numeric() {
+        SemanticConversionTarget::Calendar(_) => {
+            if !source_type.is_calendar()
+                && !source_type.is_number()
+                && !source_type.is_date_range()
+            {
                 Err(vec![engine_error_at_graph(
                     graph,
                     source,
-                    format!("Cannot convert {} to duration.", source_type.name()),
+                    format!("Cannot convert {} to calendar.", source_type.name()),
                 )])
             } else {
                 Ok(())
@@ -3215,7 +5131,31 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_logical_operands(graph, &left_type, &right_type, expr_source),
+                check_logical_and_operands(graph, &left_type, &right_type, expr_source),
+                &mut errors,
+            );
+        }
+
+        ExpressionKind::LogicalOr(left, right) => {
+            collect(
+                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+            collect(
+                check_expression(right, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+
+            let left_type =
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
+            let right_type =
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+            collect(
+                check_logical_or_operands(graph, &left_type, &right_type, expr_source),
                 &mut errors,
             );
         }
@@ -3284,6 +5224,18 @@ fn check_expression(
                 check_arithmetic_types(graph, &left_type, &right_type, operator, expr_source),
                 &mut errors,
             );
+            collect(
+                arithmetic_plan_time_exactness_planning_errors(
+                    graph,
+                    left,
+                    right,
+                    &left_type,
+                    &right_type,
+                    operator,
+                    expr_source,
+                ),
+                &mut errors,
+            );
         }
 
         ExpressionKind::UnitConversion(source_expression, target) => {
@@ -3321,28 +5273,8 @@ fn check_expression(
                 &mut errors,
             );
 
-            if source_type.is_number() {
-                match target {
-                    SemanticConversionTarget::ScaleUnit(unit_name)
-                    | SemanticConversionTarget::RatioUnit(unit_name) => {
-                        if find_types_by_spec(resolved_types, spec_arc)
-                            .and_then(|dt| dt.unit_index.get(unit_name))
-                            .is_none()
-                        {
-                            errors.push(engine_error_at_graph(
-                                graph,
-                                expr_source,
-                                format!(
-                                    "Cannot resolve unit '{}' for spec '{}' (types may not have been resolved)",
-                                    unit_name,
-                                    spec_arc.name
-                                ),
-                            ));
-                        }
-                    }
-                    SemanticConversionTarget::Duration(_) => {}
-                }
-            }
+            // For number sources with QuantityUnit/RatioUnit targets, check_unit_conversion_types
+            // already validates the unit exists in the index. No additional check is needed here.
         }
 
         ExpressionKind::MathematicalComputation(_, operand) => {
@@ -3365,9 +5297,16 @@ fn check_expression(
 
         ExpressionKind::Veto(_) => {}
 
+        ExpressionKind::ResultIsVeto(operand) => {
+            collect(
+                check_expression(operand, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+        }
+
         ExpressionKind::Now => {}
 
-        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+        ExpressionKind::DateRelative(_, date_expr) => {
             collect(
                 check_expression(date_expr, graph, inferred_types, resolved_types, spec_arc),
                 &mut errors,
@@ -3388,30 +5327,6 @@ fn check_expression(
                         date_type
                     ),
                 ));
-            }
-
-            if let Some(tol) = tolerance {
-                collect(
-                    check_expression(tol, graph, inferred_types, resolved_types, spec_arc),
-                    &mut errors,
-                );
-
-                let tol_type =
-                    infer_expression_type(tol, graph, inferred_types, resolved_types, spec_arc);
-                if !tol_type.is_duration() {
-                    let expr_source = expression
-                        .source_location
-                        .as_ref()
-                        .expect("BUG: expression missing source in check_expression");
-                    errors.push(engine_error_at_graph(
-                        graph,
-                        expr_source,
-                        format!(
-                            "Tolerance in date sugar must be a duration, got type '{}'",
-                            tol_type
-                        ),
-                    ));
-                }
             }
         }
 
@@ -3436,6 +5351,113 @@ fn check_expression(
                         date_type
                     ),
                 ));
+            }
+        }
+
+        ExpressionKind::RangeLiteral(left, right) => {
+            collect(
+                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+            collect(
+                check_expression(right, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+
+            let left_type =
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
+            let right_type =
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+
+            let inferred_range_type = infer_range_type_from_endpoint_types(&left_type, &right_type);
+            if inferred_range_type.is_undetermined() {
+                errors.push(engine_error_at_graph(
+                    graph,
+                    expr_source,
+                    format!(
+                        "Cannot create a range from {} and {}.",
+                        left_type.name(),
+                        right_type.name()
+                    ),
+                ));
+            }
+        }
+
+        ExpressionKind::PastFutureRange(_, offset_expr) => {
+            collect(
+                check_expression(offset_expr, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+
+            let offset_type =
+                infer_expression_type(offset_expr, graph, inferred_types, resolved_types, spec_arc);
+            if !offset_type.is_duration_like() && !offset_type.is_calendar() {
+                let expr_source = expression
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: expression missing source in check_expression");
+                errors.push(engine_error_at_graph(
+                    graph,
+                    expr_source,
+                    format!(
+                        "Past/future range requires a duration or calendar expression, got type '{}'",
+                        offset_type.name()
+                    ),
+                ));
+            }
+        }
+
+        ExpressionKind::RangeContainment(value, range) => {
+            collect(
+                check_expression(value, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+            collect(
+                check_expression(range, graph, inferred_types, resolved_types, spec_arc),
+                &mut errors,
+            );
+
+            let value_type =
+                infer_expression_type(value, graph, inferred_types, resolved_types, spec_arc);
+            let range_type =
+                infer_expression_type(range, graph, inferred_types, resolved_types, spec_arc);
+            let expr_source = expression
+                .source_location
+                .as_ref()
+                .expect("BUG: expression missing source in check_expression");
+
+            if !range_type.is_range() {
+                errors.push(engine_error_at_graph(
+                    graph,
+                    expr_source,
+                    format!(
+                        "Right side of 'in' must be a range, got type '{}'",
+                        range_type.name()
+                    ),
+                ));
+            } else {
+                let compatible = (range_type.is_date_range() && value_type.is_date())
+                    || (range_type.is_number_range() && value_type.is_number())
+                    || (range_type.is_quantity_range()
+                        && value_type.is_quantity()
+                        && quantity_range_matches_quantity(&range_type, &value_type))
+                    || (range_type.is_ratio_range() && value_type.is_ratio())
+                    || (range_type.is_calendar_range() && value_type.is_calendar());
+                if !compatible {
+                    errors.push(engine_error_at_graph(
+                        graph,
+                        expr_source,
+                        format!(
+                            "Cannot test whether {} is in {}.",
+                            value_type.name(),
+                            range_type.name()
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -3497,6 +5519,27 @@ fn check_rule_types(
             spec_arc,
         );
 
+        // Anonymous intermediates with unresolved dimensions are forbidden at rule boundaries.
+        if default_type.is_anonymous_quantity() {
+            let decomp = default_type.quantity_type_decomposition();
+            if !decomp.is_empty() {
+                let default_source = default_result
+                    .source_location
+                    .as_ref()
+                    .expect("BUG: default branch result expression has no source location");
+                errors.push(engine_error_at_graph(
+                    graph,
+                    default_source,
+                    format!(
+                        "Rule '{}' in spec '{}' returns an anonymous intermediate with unresolved \
+                         dimensions {:?}. Cast the result with 'as <unit>' (e.g., 'as mps') \
+                         or ensure all dimensions cancel.",
+                        rule_path.rule, spec_arc.name, decomp
+                    ),
+                ));
+            }
+        }
+
         let mut non_veto_type: Option<LemmaType> = None;
         if !default_type.vetoed() && !default_type.is_undetermined() {
             non_veto_type = Some(default_type.clone());
@@ -3543,6 +5586,27 @@ fn check_rule_types(
             );
             let result_type =
                 infer_expression_type(result, graph, inferred_types, resolved_types, spec_arc);
+
+            // Anonymous intermediates with unresolved dimensions are forbidden at rule boundaries.
+            if result_type.is_anonymous_quantity() {
+                let decomp = result_type.quantity_type_decomposition();
+                if !decomp.is_empty() {
+                    let branch_source = result
+                        .source_location
+                        .as_ref()
+                        .expect("BUG: unless branch result expression has no source location");
+                    errors.push(engine_error_at_graph(
+                        graph,
+                        branch_source,
+                        format!(
+                            "Unless clause {} in rule '{}' (spec '{}') returns an anonymous \
+                             intermediate with unresolved dimensions {:?}. Cast the result with \
+                             'as <unit>' or ensure all dimensions cancel.",
+                            branch_index, rule_path.rule, spec_arc.name, decomp
+                        ),
+                    ));
+                }
+            }
 
             if !result_type.vetoed() && !result_type.is_undetermined() {
                 if non_veto_type.is_none() {
@@ -3668,6 +5732,730 @@ fn infer_rule_types(
     computed_types
 }
 
+type UnitDecompLookup = HashMap<
+    String,
+    (
+        String,
+        BaseQuantityVector,
+        crate::computation::rational::RationalInteger,
+    ),
+>;
+
+fn declared_quantity_decomposition(type_name: &str, lemma_type: &LemmaType) -> BaseQuantityVector {
+    match &lemma_type.specifications {
+        TypeSpecification::Quantity { traits, .. }
+            if traits.contains(&semantics::QuantityTrait::Duration) =>
+        {
+            duration_decomposition()
+        }
+        _ => {
+            let dimension_key = lemma_type
+                .quantity_family_name()
+                .unwrap_or(type_name)
+                .to_string();
+            [(dimension_key, 1i32)].into_iter().collect()
+        }
+    }
+}
+
+fn sync_unit_index_from_resolved(
+    resolved: &HashMap<String, LemmaType>,
+    unit_index: &mut HashMap<String, LemmaType>,
+) {
+    let unit_index_updates: Vec<(String, LemmaType)> = unit_index
+        .iter()
+        .filter_map(|(unit_name, pre_decomp_type)| {
+            let type_name = pre_decomp_type
+                .name
+                .as_deref()
+                .or_else(|| pre_decomp_type.quantity_family_name())?;
+            resolved
+                .get(type_name)
+                .or_else(|| {
+                    pre_decomp_type
+                        .quantity_family_name()
+                        .and_then(|family| resolved.get(family))
+                })
+                .map(|post_decomp_type| (unit_name.clone(), post_decomp_type.clone()))
+        })
+        .collect();
+    for (unit_name, post_decomp_type) in unit_index_updates {
+        unit_index.insert(unit_name, post_decomp_type);
+    }
+}
+
+/// `uses`-merged quantity rows in `unit_index` can still have empty `decomposition` until synced from
+/// `resolved`. Compound unit resolution consults `unit_index` first; fill simple base quantitys here
+/// before building [`UnitDecompLookup`].
+fn repair_empty_simple_quantity_decomposition_in_unit_index(
+    unit_index: &mut HashMap<String, LemmaType>,
+) {
+    for (_unit_key, lemma_type) in unit_index.iter_mut() {
+        let base_decomp = {
+            let TypeSpecification::Quantity {
+                units,
+                decomposition,
+                ..
+            } = &lemma_type.specifications
+            else {
+                continue;
+            };
+            if !decomposition.is_empty() {
+                continue;
+            }
+            if units.is_empty() || units.iter().any(|u| !u.derived_quantity_factors.is_empty()) {
+                continue;
+            }
+            let Some(ref type_name) = lemma_type.name else {
+                continue;
+            };
+            if type_name.is_empty() {
+                continue;
+            }
+            let candidate = declared_quantity_decomposition(type_name.as_str(), lemma_type);
+            if candidate.is_empty() {
+                continue;
+            }
+            Some(candidate)
+        };
+        let Some(base_decomp) = base_decomp else {
+            continue;
+        };
+        let TypeSpecification::Quantity {
+            units,
+            decomposition,
+            canonical_unit,
+            ..
+        } = &mut lemma_type.specifications
+        else {
+            continue;
+        };
+        let mut canonical = String::new();
+        for unit in units.0.iter_mut() {
+            unit.decomposition = base_decomp.clone();
+            if unit.is_canonical_factor() && canonical.is_empty() {
+                canonical = unit.name.clone();
+            }
+        }
+        *decomposition = base_decomp;
+        *canonical_unit = canonical;
+    }
+}
+
+fn owning_quantity_type_name_for_unit(
+    unit_name: &str,
+    lookup: &UnitDecompLookup,
+    unit_index: &HashMap<String, LemmaType>,
+) -> Option<String> {
+    if let Some((owning_quantity_name, _, _)) = lookup.get(unit_name) {
+        return Some(owning_quantity_name.clone());
+    }
+    unit_index.get(unit_name).and_then(|lemma_type| {
+        lemma_type
+            .name
+            .clone()
+            .or_else(|| lemma_type.quantity_family_name().map(str::to_string))
+    })
+}
+
+/// Order compound quantity types so every referenced unit from another compound type is resolved first.
+fn sort_derived_quantity_types_for_resolution(
+    spec_name: &str,
+    derived_quantity_type_names: Vec<String>,
+    resolved: &HashMap<String, LemmaType>,
+    lookup: &UnitDecompLookup,
+    unit_index: &HashMap<String, LemmaType>,
+    source_for: &dyn Fn(&str) -> Option<Source>,
+) -> Result<Vec<String>, Error> {
+    let derived_quantity_type_count = derived_quantity_type_names.len();
+    if derived_quantity_type_count == 0 {
+        return Ok(derived_quantity_type_names);
+    }
+
+    let type_index: HashMap<&str, usize> = derived_quantity_type_names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (name.as_str(), index))
+        .collect();
+
+    let mut dependency_sets: Vec<HashSet<usize>> =
+        vec![HashSet::new(); derived_quantity_type_count];
+
+    for (dependent_index, type_name) in derived_quantity_type_names.iter().enumerate() {
+        let TypeSpecification::Quantity { units, .. } = &resolved[type_name].specifications else {
+            continue;
+        };
+        for unit in units.iter() {
+            for (factor_unit_name, _) in &unit.derived_quantity_factors {
+                let Some(owning_quantity_name) =
+                    owning_quantity_type_name_for_unit(factor_unit_name, lookup, unit_index)
+                else {
+                    continue;
+                };
+                let Some(dependency_index) = type_index.get(owning_quantity_name.as_str()).copied()
+                else {
+                    continue;
+                };
+                if dependency_index == dependent_index {
+                    continue;
+                }
+                dependency_sets[dependent_index].insert(dependency_index);
+            }
+        }
+    }
+
+    let mut in_degree = vec![0usize; derived_quantity_type_count];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); derived_quantity_type_count];
+
+    for (dependent_index, dependencies) in dependency_sets.iter().enumerate() {
+        for &dependency_index in dependencies {
+            in_degree[dependent_index] += 1;
+            dependents[dependency_index].push(dependent_index);
+        }
+    }
+
+    let mut queue: VecDeque<usize> = (0..derived_quantity_type_count)
+        .filter(|&index| in_degree[index] == 0)
+        .collect();
+    let mut sorted_indices: Vec<usize> = Vec::with_capacity(derived_quantity_type_count);
+
+    while let Some(index) = queue.pop_front() {
+        sorted_indices.push(index);
+        for &dependent_index in &dependents[index] {
+            in_degree[dependent_index] -= 1;
+            if in_degree[dependent_index] == 0 {
+                queue.push_back(dependent_index);
+            }
+        }
+    }
+
+    if sorted_indices.len() != derived_quantity_type_count {
+        let mut cycle_type_names: Vec<String> = (0..derived_quantity_type_count)
+            .filter(|&index| in_degree[index] > 0)
+            .map(|index| derived_quantity_type_names[index].clone())
+            .collect();
+        cycle_type_names.sort();
+        return Err(Error::validation(
+            format!(
+                "In spec '{}': circular compound quantity type dependency among: {}",
+                spec_name,
+                cycle_type_names.join(", ")
+            ),
+            source_for(&cycle_type_names[0]),
+            None::<String>,
+        ));
+    }
+
+    Ok(sorted_indices
+        .into_iter()
+        .map(|index| derived_quantity_type_names[index].clone())
+        .collect())
+}
+
+fn resolve_quantity_decompositions(
+    spec_name: &str,
+    resolved: &mut HashMap<String, LemmaType>,
+    unit_index: &mut HashMap<String, LemmaType>,
+    type_sources: &HashMap<String, Source>,
+) -> Vec<Error> {
+    let mut errors: Vec<Error> = Vec::new();
+
+    let source_for = |type_name: &str| -> Option<Source> {
+        type_sources
+            .get(type_name)
+            .or_else(|| type_sources.values().next())
+            .cloned()
+    };
+
+    let base_type_names: Vec<String> = resolved
+        .iter()
+        .filter_map(|(name, lt)| {
+            if let TypeSpecification::Quantity { units, .. } = &lt.specifications {
+                if units.iter().all(|u| u.derived_quantity_factors.is_empty()) {
+                    return Some(name.clone());
+                }
+            }
+            None
+        })
+        .collect();
+
+    for type_name in &base_type_names {
+        let base_decomp = {
+            let lemma_type = resolved.get(type_name).unwrap();
+            declared_quantity_decomposition(type_name, lemma_type)
+        };
+
+        let lemma_type = resolved.get_mut(type_name).unwrap();
+        let TypeSpecification::Quantity {
+            units,
+            decomposition,
+            canonical_unit,
+            ..
+        } = &mut lemma_type.specifications
+        else {
+            continue;
+        };
+
+        let mut canonical = String::new();
+        for unit in units.0.iter_mut() {
+            unit.decomposition = base_decomp.clone();
+            if unit.is_canonical_factor() && canonical.is_empty() {
+                canonical = unit.name.clone();
+            }
+        }
+
+        *decomposition = base_decomp;
+        *canonical_unit = canonical;
+    }
+
+    repair_empty_simple_quantity_decomposition_in_unit_index(unit_index);
+
+    let mut lookup = UnitDecompLookup::new();
+
+    for (unit_name, lemma_type) in unit_index.iter() {
+        if let TypeSpecification::Quantity {
+            decomposition,
+            units,
+            ..
+        } = &lemma_type.specifications
+        {
+            if !decomposition.is_empty() {
+                let quantity_name = lemma_type.name.clone().unwrap_or_default();
+                let factor = units
+                    .iter()
+                    .find(|u| &u.name == unit_name)
+                    .map(|u| u.factor)
+                    .unwrap_or_else(crate::computation::rational::rational_one);
+                lookup.insert(
+                    unit_name.clone(),
+                    (quantity_name, decomposition.clone(), factor),
+                );
+            }
+        }
+    }
+
+    for (type_name, lemma_type) in resolved.iter() {
+        if let TypeSpecification::Quantity {
+            units,
+            decomposition,
+            ..
+        } = &lemma_type.specifications
+        {
+            if !decomposition.is_empty() {
+                let is_defining_type = lemma_type
+                    .quantity_family_name()
+                    .map(|family| family == type_name.as_str())
+                    .unwrap_or(false);
+                if !is_defining_type {
+                    continue;
+                }
+                for unit in units.iter() {
+                    lookup.insert(
+                        unit.name.clone(),
+                        (type_name.clone(), decomposition.clone(), unit.factor),
+                    );
+                }
+            }
+        }
+    }
+
+    let derived_quantity_type_names_unsorted: Vec<String> = resolved
+        .iter()
+        .filter_map(|(name, lemma_type)| {
+            if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
+                if units
+                    .iter()
+                    .any(|unit| !unit.derived_quantity_factors.is_empty())
+                {
+                    return Some(name.clone());
+                }
+            }
+            None
+        })
+        .collect();
+
+    let derived_quantity_type_names = match sort_derived_quantity_types_for_resolution(
+        spec_name,
+        derived_quantity_type_names_unsorted,
+        resolved,
+        &lookup,
+        unit_index,
+        &|type_name| source_for(type_name),
+    ) {
+        Ok(sorted) => sorted,
+        Err(error) => {
+            errors.push(error);
+            return errors;
+        }
+    };
+
+    for type_name in &derived_quantity_type_names {
+        let type_source = source_for(type_name);
+
+        let units_snapshot = match &resolved[type_name].specifications {
+            TypeSpecification::Quantity { units, .. } => units.clone(),
+            _ => continue,
+        };
+
+        let mut resolved_type_decomp: Option<BaseQuantityVector> = None;
+        let mut canonical = String::new();
+        let mut unit_errors: Vec<Error> = Vec::new();
+        let mut resolved_unit_factors: Vec<Option<crate::computation::rational::RationalInteger>> =
+            vec![None; units_snapshot.len()];
+
+        for (unit_idx, unit) in units_snapshot.iter().enumerate() {
+            if unit.derived_quantity_factors.is_empty() {
+                let simple_decomp =
+                    declared_quantity_decomposition(type_name, &resolved[type_name]);
+
+                if let Some(existing) = &resolved_type_decomp {
+                    if existing != &simple_decomp {
+                        unit_errors.push(Error::validation(
+                            format!(
+                                "In spec '{}': quantity type '{}' has inconsistent unit decompositions. \
+                                 Unit '{}' is a simple unit (decomposition {{{}: 1}}) but other units \
+                                 have decomposition {:?}.",
+                                spec_name, type_name, unit.name, type_name, existing
+                            ),
+                            type_source.clone(),
+                            None::<String>,
+                        ));
+                    }
+                } else {
+                    resolved_type_decomp = Some(simple_decomp);
+                }
+
+                resolved_unit_factors[unit_idx] = Some(unit.factor);
+
+                if unit.is_canonical_factor() && canonical.is_empty() {
+                    canonical = unit.name.clone();
+                }
+                continue;
+            }
+
+            match resolve_compound_unit(
+                spec_name,
+                type_name,
+                &unit.name,
+                unit.factor,
+                &unit.derived_quantity_factors,
+                &lookup,
+                type_source.as_ref(),
+            ) {
+                Ok((unit_decomp, derived_factor)) => {
+                    if let Some(existing) = &resolved_type_decomp {
+                        if existing != &unit_decomp {
+                            unit_errors.push(Error::validation(
+                                format!(
+                                    "In spec '{}': quantity type '{}' has inconsistent unit \
+                                     decompositions. Unit '{}' resolved to {:?} but other units \
+                                     resolved to {:?}. All units of a quantity must measure the same \
+                                     physical quantity.",
+                                    spec_name, type_name, unit.name, unit_decomp, existing
+                                ),
+                                type_source.clone(),
+                                None::<String>,
+                            ));
+                        }
+                    } else {
+                        resolved_type_decomp = Some(unit_decomp);
+                    }
+
+                    resolved_unit_factors[unit_idx] = Some(derived_factor);
+
+                    if derived_factor == crate::computation::rational::rational_one()
+                        && canonical.is_empty()
+                    {
+                        canonical = unit.name.clone();
+                    }
+                }
+                Err(err) => unit_errors.push(err),
+            }
+        }
+
+        if !unit_errors.is_empty() {
+            errors.extend(unit_errors);
+            continue;
+        }
+
+        let type_decomp = match resolved_type_decomp {
+            Some(d) => d,
+            None => continue,
+        };
+
+        if canonical.is_empty() {
+            use crate::computation::rational::{checked_div, rational_is_zero};
+
+            let Some((normalizer_unit_index, normalizer_factor)) = resolved_unit_factors
+                .iter()
+                .enumerate()
+                .find_map(|(unit_index, factor)| factor.map(|factor| (unit_index, factor)))
+            else {
+                errors.push(Error::validation(
+                    format!(
+                        "In spec '{}': quantity type '{}' has no unit with conversion factor 1. \
+                         Exactly one unit must have factor 1.",
+                        spec_name, type_name
+                    ),
+                    type_source.clone(),
+                    None::<String>,
+                ));
+                continue;
+            };
+
+            if rational_is_zero(&normalizer_factor) {
+                errors.push(Error::validation(
+                    format!(
+                        "In spec '{}': quantity type '{}' cannot normalize conversion factors because \
+                         unit '{}' has a zero conversion factor.",
+                        spec_name,
+                        type_name,
+                        units_snapshot.0[normalizer_unit_index].name
+                    ),
+                    type_source.clone(),
+                    None::<String>,
+                ));
+                continue;
+            }
+
+            let mut normalization_failed = false;
+            for (unit_index, resolved_factor) in resolved_unit_factors.iter_mut().enumerate() {
+                let Some(factor) = resolved_factor.as_ref() else {
+                    continue;
+                };
+                match checked_div(factor, &normalizer_factor) {
+                    Ok(normalized_factor) => {
+                        *resolved_factor = Some(normalized_factor);
+                    }
+                    Err(error) => {
+                        normalization_failed = true;
+                        errors.push(Error::validation(
+                            format!(
+                                "In spec '{}': quantity type '{}' overflowed while normalizing \
+                                 conversion factor for unit '{}': {}",
+                                spec_name, type_name, units_snapshot.0[unit_index].name, error
+                            ),
+                            type_source.clone(),
+                            None::<String>,
+                        ));
+                    }
+                }
+            }
+
+            if normalization_failed {
+                continue;
+            }
+
+            canonical = units_snapshot.0[normalizer_unit_index].name.clone();
+        }
+
+        let lemma_type = resolved.get_mut(type_name).unwrap();
+        let TypeSpecification::Quantity {
+            units,
+            decomposition,
+            canonical_unit,
+            ..
+        } = &mut lemma_type.specifications
+        else {
+            continue;
+        };
+
+        for (unit_idx, unit) in units.0.iter_mut().enumerate() {
+            unit.decomposition = type_decomp.clone();
+            if let Some(factor) = resolved_unit_factors[unit_idx] {
+                unit.factor = factor;
+            }
+        }
+        *decomposition = type_decomp.clone();
+        *canonical_unit = canonical;
+
+        for unit in units.0.iter() {
+            lookup.insert(
+                unit.name.clone(),
+                (type_name.clone(), type_decomp.clone(), unit.factor),
+            );
+        }
+    }
+
+    for type_name in &base_type_names {
+        let lemma_type = resolved.get(type_name).unwrap();
+        let TypeSpecification::Quantity {
+            units,
+            canonical_unit,
+            ..
+        } = &lemma_type.specifications
+        else {
+            continue;
+        };
+
+        if canonical_unit.is_empty() && !units.is_empty() {
+            errors.push(Error::validation(
+                format!(
+                    "In spec '{}': quantity type '{}' has no unit with conversion factor 1. \
+                     Exactly one unit must have factor 1.",
+                    spec_name, type_name
+                ),
+                source_for(type_name),
+                None::<String>,
+            ));
+        }
+    }
+
+    sync_unit_index_from_resolved(resolved, unit_index);
+    repair_empty_simple_quantity_decomposition_in_unit_index(unit_index);
+
+    errors
+}
+
+fn resolve_compound_unit(
+    spec_name: &str,
+    declaring_type_name: &str,
+    unit_name: &str,
+    prefix: crate::computation::rational::RationalInteger,
+    factors: &[(String, i32)],
+    lookup: &UnitDecompLookup,
+    source: Option<&Source>,
+) -> Result<
+    (
+        BaseQuantityVector,
+        crate::computation::rational::RationalInteger,
+    ),
+    Error,
+> {
+    use crate::computation::rational::{checked_mul, checked_pow_i32};
+
+    let mut result: BaseQuantityVector = BaseQuantityVector::new();
+    let mut derived_factor = prefix;
+
+    for (quantity_ref, exponent) in factors {
+        if let Some(calendar_unit) = CalendarUnit::from_keyword(quantity_ref) {
+            let calendar_factor = calendar_unit.canonical_factor();
+            let calendar_decomp = calendar_decomposition();
+            for (dim, &dim_exp) in &calendar_decomp {
+                accumulate(&mut result, dim, dim_exp * exponent);
+            }
+            let calendar_rational = calendar_factor;
+            let component_contribution =
+                checked_pow_i32(&calendar_rational, *exponent).map_err(|error| {
+                    overflow_to_validation_error(
+                        spec_name,
+                        unit_name,
+                        declaring_type_name,
+                        quantity_ref,
+                        error,
+                        source,
+                    )
+                })?;
+            derived_factor =
+                checked_mul(&derived_factor, &component_contribution).map_err(|error| {
+                    overflow_to_validation_error(
+                        spec_name,
+                        unit_name,
+                        declaring_type_name,
+                        quantity_ref,
+                        error,
+                        source,
+                    )
+                })?;
+            continue;
+        }
+
+        let (owning_quantity_name, owning_decomp, unit_factor) =
+            lookup.get(quantity_ref.as_str()).ok_or_else(|| {
+                Error::validation(
+                    format!(
+                        "In spec '{}': unit '{}' in quantity type '{}' references '{}' which is not a \
+                         known unit of any in-scope quantity type. Add `uses <spec>` (or declare the \
+                         owning quantity type in this spec) so its units are in scope.",
+                        spec_name, unit_name, declaring_type_name, quantity_ref
+                    ),
+                    source.cloned(),
+                    None::<String>,
+                )
+            })?;
+
+        if owning_quantity_name == declaring_type_name {
+            return Err(Error::validation(
+                format!(
+                    "In spec '{}': unit '{}' in quantity type '{}' references unit '{}' which \
+                     belongs to the same quantity type. A quantity cannot reference its own units \
+                     in a compound expression.",
+                    spec_name, unit_name, declaring_type_name, quantity_ref
+                ),
+                source.cloned(),
+                None::<String>,
+            ));
+        }
+
+        if owning_decomp.is_empty() {
+            return Err(Error::validation(
+                format!(
+                    "In spec '{}': unit '{}' in quantity type '{}' references '{}' whose owning \
+                     quantity type '{}' does not yet have a resolved decomposition. Ensure base \
+                     quantities are declared before derived quantities that depend on them.",
+                    spec_name, unit_name, declaring_type_name, quantity_ref, owning_quantity_name
+                ),
+                source.cloned(),
+                None::<String>,
+            ));
+        }
+
+        for (dim, &dim_exp) in owning_decomp {
+            accumulate(&mut result, dim, dim_exp * exponent);
+        }
+
+        let component_contribution = checked_pow_i32(unit_factor, *exponent).map_err(|error| {
+            overflow_to_validation_error(
+                spec_name,
+                unit_name,
+                declaring_type_name,
+                quantity_ref,
+                error,
+                source,
+            )
+        })?;
+        derived_factor =
+            checked_mul(&derived_factor, &component_contribution).map_err(|error| {
+                overflow_to_validation_error(
+                    spec_name,
+                    unit_name,
+                    declaring_type_name,
+                    quantity_ref,
+                    error,
+                    source,
+                )
+            })?;
+    }
+
+    Ok((result, derived_factor))
+}
+
+fn overflow_to_validation_error(
+    spec_name: &str,
+    unit_name: &str,
+    declaring_type_name: &str,
+    quantity_ref: &str,
+    failure: crate::computation::rational::NumericFailure,
+    source: Option<&Source>,
+) -> Error {
+    Error::validation(
+        format!(
+            "In spec '{}': unit '{}' in quantity type '{}' overflowed while combining '{}': {}",
+            spec_name, unit_name, declaring_type_name, quantity_ref, failure
+        ),
+        source.cloned(),
+        None::<String>,
+    )
+}
+
+fn accumulate(result: &mut BaseQuantityVector, dim: &str, value: i32) {
+    let entry = result.entry(dim.to_string()).or_insert(0);
+    *entry += value;
+    if *entry == 0 {
+        result.remove(dim);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3727,7 +6515,6 @@ mod tests {
             value: ParsedDataValue::Definition {
                 base: None,
                 constraints: None,
-                from: None,
                 value: Some(value),
             },
             source_location: test_source(),
@@ -3756,7 +6543,6 @@ mod tests {
             value: ParsedDataValue::Definition {
                 base: None,
                 constraints: None,
-                from: None,
                 value: Some(Value::Number(2.into())),
             },
             source_location: test_source(),
@@ -3807,9 +6593,10 @@ mod tests {
         assert!(result.is_err(), "Should detect duplicate data");
 
         let errors = result.unwrap_err();
-        assert!(errors
-            .iter()
-            .any(|e| e.to_string().contains("Duplicate data") && e.to_string().contains("age")));
+        assert!(errors.iter().any(|e| {
+            let s = e.to_string();
+            s.contains("already used") && s.contains("age")
+        }));
     }
 
     #[test]
@@ -4028,7 +6815,7 @@ mod tests {
         assert!(errors.len() >= 2, "Should have at least 2 errors");
         assert!(errors
             .iter()
-            .any(|e| e.to_string().contains("Duplicate data")));
+            .any(|e| e.to_string().contains("already used")));
         assert!(errors
             .iter()
             .any(|e| e.to_string().contains("Reference 'nonexistent' not found")));
@@ -4061,7 +6848,6 @@ mod tests {
                         primitive: PrimitiveKind::Number,
                     }),
                     constraints: None,
-                    from: None,
                     value: None,
                 },
                 source_location: type_source.clone(),
@@ -4073,7 +6859,6 @@ mod tests {
                         primitive: PrimitiveKind::Number,
                     }),
                     constraints: None,
-                    from: None,
                     value: None,
                 },
                 source_location: type_source,
@@ -4097,7 +6882,6 @@ mod tests {
                         primitive: PrimitiveKind::Number,
                     }),
                     constraints: None,
-                    from: None,
                     value: None,
                 },
                 source_location: type_source_b.clone(),
@@ -4109,7 +6893,6 @@ mod tests {
                         primitive: PrimitiveKind::Number,
                     }),
                     constraints: None,
-                    from: None,
                     value: None,
                 },
                 source_location: type_source_b,
@@ -4189,8 +6972,55 @@ rule result: m.x"#;
     }
 
     // =================================================================
-    // Versioned spec identifiers: self-reference check (section 6.4)
+    // Self-reference: same spec body via uses (planning)
     // =================================================================
+
+    #[test]
+    fn import_alias_registered_in_graph() {
+        let code = r#"
+spec inner
+data x: number -> default 1
+
+spec outer
+uses i: inner
+rule r: i.x
+"#;
+        let specs = crate::parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &crate::ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+        let outer = specs.iter().find(|s| s.name == "outer").unwrap();
+        let graph = build_graph(outer, &specs).expect("uses i: inner must plan");
+
+        let alias_path = DataPath {
+            segments: Vec::new(),
+            data: "i".to_string(),
+        };
+        match graph.data().get(&alias_path) {
+            Some(DataDefinition::Import { spec, .. }) => {
+                assert_eq!(spec.name, "inner");
+            }
+            other => panic!(
+                "alias path 'i' must be DataDefinition::Import, got {:?}",
+                other
+            ),
+        }
+
+        let nested_path = DataPath {
+            segments: vec![PathSegment {
+                data: "i".to_string(),
+                spec: "inner".to_string(),
+            }],
+            data: "x".to_string(),
+        };
+        assert!(
+            graph.data().contains_key(&nested_path),
+            "nested data i.x must exist after nested build_spec"
+        );
+    }
 
     #[test]
     fn self_reference_is_error() {
@@ -4205,12 +7035,14 @@ rule result: m.x"#;
         let result = build_graph(&specs[0], &specs);
         assert!(result.is_err(), "Self-reference should be an error");
         let errors = result.unwrap_err();
+        let joined: String = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
-            errors.iter().any(|e| {
-                let s = e.to_string();
-                s.contains("cycle") || s.contains("myspec")
-            }),
-            "Error should mention cycle or self-referencing spec: {:?}",
+            joined.contains("cannot reference itself") && joined.contains("myspec"),
+            "Error should name self-reference: {:?}",
             errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
         );
     }
@@ -4224,8 +7056,9 @@ rule result: m.x"#;
 /// After resolution, all imports are inlined — specs are independent.
 #[derive(Debug, Clone)]
 pub struct ResolvedSpecTypes {
-    /// Named types: type_name -> fully resolved type
-    pub named_types: HashMap<String, LemmaType>,
+    /// Resolved [`LemmaType`] for each **data type row name** declared in this spec (`data name: …`).
+    /// Planning-only: includes quantity units and post-`resolve_quantity_decompositions` decomposition.
+    pub resolved: HashMap<String, LemmaType>,
 
     /// Declared default per named type (e.g. `type rate: ratio -> default 0.5`).
     /// Only present for types that declared a `-> default ...` constraint anywhere
@@ -4243,20 +7076,12 @@ pub struct ResolvedSpecTypes {
 pub(crate) struct DataTypeDef {
     pub parent: ParentType,
     pub constraints: Option<Vec<Constraint>>,
-    pub from: Option<ast::SpecRef>,
     pub source: crate::parsing::source::Source,
     pub name: String,
     /// When the source row was `data N: <literal>` (no explicit parent type), the AST literal.
     pub bound_literal: Option<ast::Value>,
 }
 
-/// Resolved parent spec for a type reference (same spec or cross-spec import).
-#[derive(Debug, Clone)]
-pub(crate) struct ResolvedParentSpec {
-    pub spec: Arc<LemmaSpec>,
-}
-
-/// Per-slice type resolver. Constructed for each `Graph::build` call.
 ///
 /// Named types are extracted from [`DataValue::Definition`] data and keyed by pointer
 /// identity (`Arc::ptr_eq`) — no `Hash`/`Eq` on `LemmaSpec` required.
@@ -4285,15 +7110,34 @@ fn inferred_parent_type_from_literal(value: &ast::Value) -> ParentType {
         ast::Value::Time(_) => ParentType::Primitive {
             primitive: PrimitiveKind::Time,
         },
-        ast::Value::Duration(_, _) => ParentType::Primitive {
-            primitive: PrimitiveKind::Duration,
+        ast::Value::NumberWithUnit(_, _) => ParentType::Primitive {
+            primitive: PrimitiveKind::Quantity,
         },
-        ast::Value::Scale(_, _) => ParentType::Primitive {
-            primitive: PrimitiveKind::Scale,
+        ast::Value::Calendar(_, _) => ParentType::Primitive {
+            primitive: PrimitiveKind::Calendar,
         },
-        ast::Value::Ratio(_, _) => ParentType::Primitive {
-            primitive: PrimitiveKind::Ratio,
-        },
+        ast::Value::Range(left, right) => {
+            let primitive = match (left.as_ref(), right.as_ref()) {
+                (ast::Value::Number(_), ast::Value::Number(_)) => PrimitiveKind::NumberRange,
+                (ast::Value::Date(_), ast::Value::Date(_)) => PrimitiveKind::DateRange,
+                (
+                    ast::Value::NumberWithUnit(_, u1),
+                    ast::Value::NumberWithUnit(_, u2),
+                ) if u1 == u2 && matches!(u1.as_str(), "percent" | "permille") => {
+                    PrimitiveKind::RatioRange
+                }
+                (ast::Value::NumberWithUnit(_, _), ast::Value::NumberWithUnit(_, _)) => {
+                    PrimitiveKind::QuantityRange
+                }
+                (ast::Value::Calendar(_, _), ast::Value::Calendar(_, _)) => {
+                    PrimitiveKind::CalendarRange
+                }
+                _ => unreachable!(
+                    "BUG: inferred_parent_type_from_literal called on invalid range literal; planning must validate range endpoint types first"
+                ),
+            };
+            ParentType::Primitive { primitive }
+        }
     }
 }
 
@@ -4333,22 +7177,11 @@ impl<'a> TypeResolver<'a> {
                 ParsedDataValue::Definition {
                     base,
                     constraints,
-                    from,
                     value,
                 } => {
                     if matches!(
-                        (
-                            base.as_ref(),
-                            constraints.as_ref(),
-                            from.as_ref(),
-                            value.as_ref(),
-                        ),
-                        (
-                            None,
-                            None,
-                            None,
-                            Some(Value::Scale(_, _) | Value::Ratio(_, _)),
-                        )
+                        (base.as_ref(), constraints.as_ref(), value.as_ref()),
+                        (None, None, Some(Value::NumberWithUnit(_, _)),)
                     ) {
                         continue;
                     }
@@ -4373,7 +7206,6 @@ impl<'a> TypeResolver<'a> {
                     let ftd = DataTypeDef {
                         parent,
                         constraints: constraints.clone(),
-                        from: from.clone(),
                         source: data.source_location.clone(),
                         name: name.clone(),
                         bound_literal: value.clone(),
@@ -4382,7 +7214,7 @@ impl<'a> TypeResolver<'a> {
                         errors.push(e);
                     }
                 }
-                ParsedDataValue::Reference { .. } | ParsedDataValue::Import(_) => {}
+                ParsedDataValue::Fill(_) | ParsedDataValue::Import(_) => {}
             }
         }
         errors
@@ -4404,8 +7236,8 @@ impl<'a> TypeResolver<'a> {
         if spec_types.contains_key(&def.name) {
             return Err(Error::validation_with_context(
                 format!(
-                    "Duplicate data '{}' (already declared in spec '{}')",
-                    def.name, spec.name
+                    "The name '{}' is already used for data in this spec.",
+                    def.name
                 ),
                 Some(def.source.clone()),
                 None::<String>,
@@ -4424,22 +7256,141 @@ impl<'a> TypeResolver<'a> {
         spec: &Arc<LemmaSpec>,
         at: &EffectiveDate,
     ) -> Result<ResolvedSpecTypes, Vec<Error>> {
-        let resolved_types = self.resolve_types_internal(spec, at)?;
+        let mut resolved_types = self.resolve_types_internal(spec, at)?;
         let mut errors = Vec::new();
 
-        for (type_name, lemma_type) in &resolved_types.named_types {
-            let source = self
-                .data_types
-                .iter()
-                .find(|(s, _)| Arc::ptr_eq(s, spec))
-                .and_then(|(_, defs)| defs.get(type_name))
-                .map(|ftd| ftd.source.clone())
+        // Build the type-name → source map for precise error reporting.
+        let type_sources: std::collections::HashMap<String, Source> = resolved_types
+            .resolved
+            .keys()
+            .filter_map(|type_name| {
+                self.data_types
+                    .iter()
+                    .find(|(s, _)| Arc::ptr_eq(s, spec))
+                    .and_then(|(_, defs)| defs.get(type_name.as_str()))
+                    .map(|ftd| (type_name.clone(), ftd.source.clone()))
+            })
+            .collect();
+
+        // Run the decomposition pass to populate `BaseQuantityVector` on all Quantity types.
+        // The pass also syncs `unit_index` with the post-decomp types as its final phase.
+        let decomp_errors = resolve_quantity_decompositions(
+            &spec.name,
+            &mut resolved_types.resolved,
+            &mut resolved_types.unit_index,
+            &type_sources,
+        );
+        errors.extend(decomp_errors);
+
+        for (type_name, lemma_type) in resolved_types.resolved.iter_mut() {
+            let source = type_sources.get(type_name).cloned().unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: resolved type '{}' has no corresponding DataTypeDef in spec '{}'",
+                    type_name, spec.name
+                )
+            });
+            if let Err(message) = semantics::finalize_quantity_unit_constraint_magnitudes(
+                &mut lemma_type.specifications,
+                resolved_types.declared_defaults.get(type_name),
+                type_name,
+            ) {
+                errors.push(Error::validation_with_context(
+                    format!(
+                        "Type '{}' has invalid quantity unit constraints: {}",
+                        type_name, message
+                    ),
+                    Some(source),
+                    None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
+                ));
+            }
+        }
+
+        sync_unit_index_from_resolved(&resolved_types.resolved, &mut resolved_types.unit_index);
+
+        for lemma_type in resolved_types.unit_index.values_mut() {
+            let type_name = lemma_type
+                .name
+                .as_deref()
+                .or_else(|| lemma_type.quantity_family_name())
+                .map(str::to_string);
+            let Some(type_name) = type_name else {
+                continue;
+            };
+            if !lemma_type.is_quantity() {
+                continue;
+            }
+            if let Err(message) = semantics::finalize_quantity_unit_constraint_magnitudes(
+                &mut lemma_type.specifications,
+                resolved_types.declared_defaults.get(type_name.as_str()),
+                type_name.as_str(),
+            ) {
+                let source = type_sources
+                    .get(type_name.as_str())
+                    .cloned()
+                    .or_else(|| {
+                        self.data_types.iter().find_map(|(_, defs)| {
+                            defs.get(type_name.as_str()).map(|def| def.source.clone())
+                        })
+                    })
+                    .unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: quantity type '{}' in unit_index has no DataTypeDef source",
+                            type_name
+                        )
+                    });
+                errors.push(Error::validation_with_context(
+                    format!(
+                        "Type '{}' has invalid quantity unit constraints: {}",
+                        type_name, message
+                    ),
+                    Some(source),
+                    None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
+                ));
+            }
+        }
+
+        let mut validated_in_unit_index: HashSet<String> = HashSet::new();
+        for lemma_type in resolved_types.unit_index.values() {
+            let Some(type_name) = lemma_type.name.as_deref() else {
+                continue;
+            };
+            if !lemma_type.is_quantity() || !validated_in_unit_index.insert(type_name.to_string()) {
+                continue;
+            }
+            let source = type_sources
+                .get(type_name)
+                .cloned()
+                .or_else(|| {
+                    self.data_types
+                        .iter()
+                        .find_map(|(_, defs)| defs.get(type_name).map(|def| def.source.clone()))
+                })
                 .unwrap_or_else(|| {
                     unreachable!(
-                        "BUG: resolved type '{}' has no corresponding DataTypeDef in spec '{}'",
-                        type_name, spec.name
+                        "BUG: quantity type '{}' in unit_index has no DataTypeDef source",
+                        type_name
                     )
                 });
+            errors.extend(validate_type_specifications(
+                &lemma_type.specifications,
+                resolved_types.declared_defaults.get(type_name),
+                type_name,
+                &source,
+                Some(Arc::clone(spec)),
+            ));
+        }
+
+        for (type_name, lemma_type) in &resolved_types.resolved {
+            let source = type_sources.get(type_name).cloned().unwrap_or_else(|| {
+                unreachable!(
+                    "BUG: resolved type '{}' has no corresponding DataTypeDef in spec '{}'",
+                    type_name, spec.name
+                )
+            });
             let mut spec_errors = validate_type_specifications(
                 &lemma_type.specifications,
                 resolved_types.declared_defaults.get(type_name),
@@ -4466,7 +7417,7 @@ impl<'a> TypeResolver<'a> {
         spec: &Arc<LemmaSpec>,
         at: &EffectiveDate,
     ) -> Result<ResolvedSpecTypes, Vec<Error>> {
-        let mut named_types = HashMap::new();
+        let mut resolved = HashMap::new();
         let mut declared_defaults: HashMap<String, ValueKind> = HashMap::new();
         let mut visited: Vec<(Arc<LemmaSpec>, String)> = Vec::new();
 
@@ -4474,7 +7425,7 @@ impl<'a> TypeResolver<'a> {
             for type_name in spec_types.keys() {
                 match self.resolve_type_internal(spec, type_name, &mut visited, at) {
                     Ok(Some((resolved_type, declared_default))) => {
-                        named_types.insert(type_name.clone(), resolved_type);
+                        resolved.insert(type_name.clone(), resolved_type);
                         if let Some(dv) = declared_default {
                             declared_defaults.insert(type_name.clone(), dv);
                         }
@@ -4500,15 +7451,15 @@ impl<'a> TypeResolver<'a> {
             unit_index_tmp.insert(unit, (prim_ratio.clone(), None));
         }
 
-        for (type_name, resolved_type) in &named_types {
+        for (type_name, resolved_type) in &resolved {
             let data_type_def = self
                 .data_types
                 .iter()
                 .find(|(s, _)| Arc::ptr_eq(s, spec))
                 .and_then(|(_, defs)| defs.get(type_name.as_str()))
                 .expect("BUG: type was resolved but not in registry");
-            let e: Result<(), Error> = if resolved_type.is_scale() {
-                Self::add_scale_units_to_index(
+            let e: Result<(), Error> = if resolved_type.is_quantity() {
+                Self::add_quantity_units_to_index(
                     spec,
                     &mut unit_index_tmp,
                     resolved_type,
@@ -4529,6 +7480,70 @@ impl<'a> TypeResolver<'a> {
             }
         }
 
+        for data_row in &spec.data {
+            let ParsedDataValue::Import(spec_ref) = &data_row.value else {
+                continue;
+            };
+            let (_, imported_spec) =
+                match self.resolve_spec_for_import(spec, spec_ref, &data_row.source_location, at) {
+                    Ok(x) => x,
+                    Err(_) => {
+                        // Import validation runs again when the graph resolves `uses`; do not fail
+                        // `resolve_and_validate` here so other planning errors (bindings, fills, etc.)
+                        // are still collected in the same load.
+                        continue;
+                    }
+                };
+            let Some((_, imported_type_map)) = self
+                .data_types
+                .iter()
+                .find(|(s, _)| Arc::ptr_eq(s, &imported_spec))
+            else {
+                continue;
+            };
+
+            let mut import_visited: Vec<(Arc<LemmaSpec>, String)> = Vec::new();
+            for (type_name, def) in imported_type_map.iter() {
+                if matches!(def.parent, ParentType::Qualified { .. }) {
+                    continue;
+                }
+                match self.resolve_type_internal(
+                    &imported_spec,
+                    type_name.as_str(),
+                    &mut import_visited,
+                    at,
+                ) {
+                    Ok(Some((resolved_type, _))) => {
+                        if resolved_type.is_quantity() {
+                            if let Err(e) = Self::add_quantity_units_to_index(
+                                spec,
+                                &mut unit_index_tmp,
+                                &resolved_type,
+                                def,
+                            ) {
+                                errors.push(e);
+                            }
+                        } else if resolved_type.is_ratio() {
+                            if let Err(e) = Self::add_ratio_units_to_index(
+                                spec,
+                                &mut unit_index_tmp,
+                                &resolved_type,
+                                def,
+                            ) {
+                                errors.push(e);
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        // Skip merging units for this imported row; type resolution for the
+                        // exported spec is validated when that spec is planned.
+                    }
+                }
+                import_visited.clear();
+            }
+        }
+
         if !errors.is_empty() {
             return Err(errors);
         }
@@ -4539,7 +7554,7 @@ impl<'a> TypeResolver<'a> {
             .collect();
 
         Ok(ResolvedSpecTypes {
-            named_types,
+            resolved,
             declared_defaults,
             unit_index,
         })
@@ -4600,13 +7615,11 @@ impl<'a> TypeResolver<'a> {
         };
 
         let parent = ftd.parent.clone();
-        let from = ftd.from.clone();
         let constraints = ftd.constraints.clone();
 
         let (parent_specs, parent_declared_default) = match self.resolve_parent(
             spec,
             &parent,
-            &from,
             visited,
             &ftd.source,
             at,
@@ -4620,7 +7633,7 @@ impl<'a> TypeResolver<'a> {
                     visited.remove(pos);
                 }
                 return Err(vec![Error::validation_with_context(
-                        format!("Unknown parent '{}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
+                        format!("Unknown parent '{}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, quantity, number, ratio, text, date, time, duration, percent", parent),
                         Some(ftd.source.clone()),
                         None::<String>,
                         Some(Arc::clone(spec)),
@@ -4640,8 +7653,10 @@ impl<'a> TypeResolver<'a> {
 
         let mut declared_default = parent_declared_default;
         let final_specs = if let Some(constraints) = &constraints {
+            let constraint_type_name = constraint_application_type_name(&parent, name);
             match apply_constraints_to_spec(
                 spec,
+                &constraint_type_name,
                 parent_specs,
                 constraints,
                 &ftd.source,
@@ -4670,49 +7685,70 @@ impl<'a> TypeResolver<'a> {
         }
 
         let extends = {
-            let parent_name = parent.to_string();
-            let parent_spec = match self.get_spec_arc_for_parent(spec, &from, &ftd.source, at) {
-                Ok(x) => x,
-                Err(e) => return Err(vec![e]),
-            };
-            let family = match &parent_spec {
-                Some(r) => {
-                    if matches!(parent, ParentType::Primitive { .. }) {
-                        name.to_string()
-                    } else {
-                        match self.resolve_type_internal(&r.spec, &parent_name, visited, at) {
-                            Ok(Some((parent_type, _))) => parent_type
-                                .scale_family_name()
-                                .map(String::from)
-                                .unwrap_or_else(|| name.to_string()),
-                            Ok(None) => name.to_string(),
-                            Err(es) => return Err(es),
+            let parent_display = parent.to_string();
+            let import_target: Option<Arc<LemmaSpec>> =
+                if let ParentType::Qualified { spec_alias, .. } = &parent {
+                    let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
+                    match self.resolve_spec_for_import(spec, &spec_ref, &ftd.source, at) {
+                        Ok((_, arc)) => Some(arc),
+                        Err(e) => return Err(vec![e]),
+                    }
+                } else {
+                    None
+                };
+
+            let lookup_for_family: Option<(Arc<LemmaSpec>, String)> = match &parent {
+                ParentType::Primitive { .. } => None,
+                ParentType::Custom { name } => Some((Arc::clone(spec), name.clone())),
+                ParentType::Qualified { inner, .. } => {
+                    let target = import_target.as_ref().expect(
+                        "BUG: qualified parent missing resolved import target for family lookup",
+                    );
+                    match inner.as_ref() {
+                        ParentType::Custom { name } => Some((Arc::clone(target), name.clone())),
+                        ParentType::Primitive { .. } => None,
+                        ParentType::Qualified { .. } => {
+                            return Err(vec![Error::validation_with_context(
+                                "Nested qualified parent types are invalid",
+                                Some(ftd.source.clone()),
+                                None::<String>,
+                                Some(Arc::clone(spec)),
+                                None,
+                            )]);
                         }
                     }
                 }
-                None => name.to_string(),
             };
-            let defining_spec = if from.is_some() {
-                match &parent_spec {
-                    Some(r) => TypeDefiningSpec::Import {
-                        spec: Arc::clone(&r.spec),
-                    },
-                    None => unreachable!(
-                        "BUG: from.is_some() but get_spec_arc_for_parent returned Ok(None)"
-                    ),
+
+            let family = match &lookup_for_family {
+                None => name.to_string(),
+                Some((r, pn)) => match self.resolve_type_internal(r, pn.as_str(), visited, at) {
+                    Ok(Some((parent_type, _))) => parent_type
+                        .quantity_family_name()
+                        .map(String::from)
+                        .unwrap_or_else(|| name.to_string()),
+                    Ok(None) => name.to_string(),
+                    Err(es) => return Err(es),
+                },
+            };
+
+            let defining_spec = if let Some(ref arc) = import_target {
+                TypeDefiningSpec::Import {
+                    spec: Arc::clone(arc),
                 }
             } else {
                 TypeDefiningSpec::Local
             };
+
             TypeExtends::Custom {
-                parent: parent_name,
+                parent: parent_display,
                 family,
                 defining_spec,
             }
         };
 
         let declared_default = match &ftd.bound_literal {
-            Some(lit) => match semantics::value_to_semantic(lit) {
+            Some(lit) => match semantics::parser_value_to_value_kind(lit, &final_specs) {
                 Ok(vk) => Some(vk),
                 Err(message) => {
                     return Err(vec![Error::validation_with_context(
@@ -4729,7 +7765,7 @@ impl<'a> TypeResolver<'a> {
 
         Ok(Some((
             LemmaType {
-                name: Some(parent.to_string()),
+                name: Some(name.to_string()),
                 specifications: final_specs,
                 extends,
             },
@@ -4741,114 +7777,112 @@ impl<'a> TypeResolver<'a> {
         &self,
         spec: &Arc<LemmaSpec>,
         parent: &ParentType,
-        from: &Option<crate::parsing::ast::SpecRef>,
         visited: &mut Vec<(Arc<LemmaSpec>, String)>,
         source: &crate::parsing::source::Source,
         at: &EffectiveDate,
     ) -> Result<Option<(TypeSpecification, Option<ValueKind>)>, Vec<Error>> {
-        if let ParentType::Primitive { primitive: kind } = parent {
-            return Ok(Some((semantics::type_spec_for_primitive(*kind), None)));
-        }
-
-        let parent_name = match parent {
-            ParentType::Custom { name } => name.as_str(),
-            ParentType::Primitive { .. } => unreachable!("already returned above"),
-        };
-
-        let parent_spec = match self.get_spec_arc_for_parent(spec, from, source, at) {
-            Ok(x) => x,
-            Err(e) => return Err(vec![e]),
-        };
-        let result = match &parent_spec {
-            Some(r) => self.resolve_type_internal(&r.spec, parent_name, visited, at),
-            None => Ok(None),
-        };
-        match result {
-            Ok(Some((t, declared_default))) => Ok(Some((t.specifications, declared_default))),
-            Ok(None) => {
-                let type_exists = parent_spec
-                    .as_ref()
-                    .and_then(|r| {
-                        self.data_types
-                            .iter()
-                            .find(|(s, _)| Arc::ptr_eq(s, &r.spec))
-                            .map(|(_, m)| m)
-                    })
-                    .map(|spec_types| spec_types.contains_key(parent_name))
-                    .unwrap_or(false);
-
-                if !type_exists {
-                    if from.is_none()
-                        && spec.data.iter().any(|d| {
-                            d.reference.is_local()
-                                && d.reference.name == parent_name
-                                && matches!(&d.value, ParsedDataValue::Import(_))
-                        })
-                    {
-                        return Err(vec![Error::validation_with_context(
-                            format!(
-                                "'{}' is a spec reference and cannot carry a value: a spec reference is not a type and cannot be referenced from a data declaration",
-                                parent_name
-                            ),
-                            Some(source.clone()),
-                            Some(format!(
-                                "To reference data inside the spec, use a dotted path like '{}.<data_name>'",
-                                parent_name
-                            )),
-                            Some(Arc::clone(spec)),
-                            None,
-                        )]);
+        match parent {
+            ParentType::Primitive { primitive: kind } => {
+                Ok(Some((semantics::type_spec_for_primitive(*kind), None)))
+            }
+            ParentType::Custom { name } => {
+                let parent_name = name.as_str();
+                let result = self.resolve_type_internal(spec, parent_name, visited, at);
+                match result {
+                    Ok(Some((t, declared_default))) => {
+                        Ok(Some((t.specifications, declared_default)))
                     }
-                    let suggestion = if parent_spec.is_some() {
-                        from.as_ref().map(|r| {
-                            let qualifier = r.repository.as_ref()
-                                .map(|q| format!(" from {}", q.name))
-                                .unwrap_or_default();
-                            format!(
-                                "Data '{}' is not defined in spec '{}'{qualifier}. Only data declarations (not rules) can be imported with `from`.",
-                                parent_name, r.name,
-                            )
-                        })
-                    } else {
-                        from.as_ref()
-                            .and_then(|r| r.repository.as_ref())
-                            .filter(|q| q.is_registry())
-                            .map(|q| {
-                                format!(
-                                    "Run `lemma fetch --all` or `lemma fetch {}` to fetch this dependency.",
-                                    q.name
-                                )
-                            })
-                    };
-                    Err(vec![Error::validation_with_context(
-                        format!("Unknown parent '{}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, scale, number, ratio, text, date, time, duration, percent", parent),
-                        Some(source.clone()),
-                        suggestion,
-                        Some(Arc::clone(spec)),
-                        None,
-                    )])
-                } else {
-                    Ok(None)
+                    Ok(None) => {
+                        let type_exists = self
+                            .data_types
+                            .iter()
+                            .find(|(s, _)| Arc::ptr_eq(s, spec))
+                            .map(|(_, m)| m.contains_key(parent_name))
+                            .unwrap_or(false);
+
+                        if !type_exists {
+                            if spec.data.iter().any(|d| {
+                                d.reference.is_local()
+                                    && d.reference.name == parent_name
+                                    && matches!(&d.value, ParsedDataValue::Import(_))
+                            }) {
+                                return Err(vec![Error::validation_with_context(
+                                    format!(
+                                        "'{}' names a spec import alias, not a type: use `data x: {}.TypeName` after `uses`",
+                                        parent_name, parent_name
+                                    ),
+                                    Some(source.clone()),
+                                    None::<String>,
+                                    Some(Arc::clone(spec)),
+                                    None,
+                                )]);
+                            }
+                            Err(vec![Error::validation_with_context(
+                                format!("Unknown parent '{}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, quantity, number, ratio, text, date, time, duration, percent", parent),
+                                Some(source.clone()),
+                                None::<String>,
+                                Some(Arc::clone(spec)),
+                                None,
+                            )])
+                        } else {
+                            Ok(None)
+                        }
+                    }
+                    Err(es) => Err(es),
                 }
             }
-            Err(es) => Err(es),
-        }
-    }
-
-    fn get_spec_arc_for_parent(
-        &self,
-        spec: &Arc<LemmaSpec>,
-        from: &Option<crate::parsing::ast::SpecRef>,
-        import_site: &crate::parsing::source::Source,
-        at: &EffectiveDate,
-    ) -> Result<Option<ResolvedParentSpec>, Error> {
-        match from {
-            Some(from_ref) => self
-                .resolve_spec_for_import(spec, from_ref, import_site, at)
-                .map(|(_, arc)| Some(ResolvedParentSpec { spec: arc })),
-            None => Ok(Some(ResolvedParentSpec {
-                spec: Arc::clone(spec),
-            })),
+            ParentType::Qualified { spec_alias, inner } => {
+                let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
+                let (_, target_arc) =
+                    match self.resolve_spec_for_import(spec, &spec_ref, source, at) {
+                        Ok(x) => x,
+                        Err(e) => return Err(vec![e]),
+                    };
+                match inner.as_ref() {
+                    ParentType::Primitive { primitive } => {
+                        Ok(Some((semantics::type_spec_for_primitive(*primitive), None)))
+                    }
+                    ParentType::Custom { name } => {
+                        let result =
+                            self.resolve_type_internal(&target_arc, name.as_str(), visited, at);
+                        match result {
+                            Ok(Some((t, declared_default))) => {
+                                Ok(Some((t.specifications, declared_default)))
+                            }
+                            Ok(None) => {
+                                let type_exists = self
+                                    .data_types
+                                    .iter()
+                                    .find(|(s, _)| Arc::ptr_eq(s, &target_arc))
+                                    .map(|(_, m)| m.contains_key(name.as_str()))
+                                    .unwrap_or(false);
+                                if !type_exists {
+                                    Err(vec![Error::validation_with_context(
+                                        format!(
+                                            "Type '{}' is not defined in spec '{}' (via import '{}')",
+                                            name, target_arc.name, spec_alias
+                                        ),
+                                        Some(source.clone()),
+                                        None::<String>,
+                                        Some(Arc::clone(spec)),
+                                        None,
+                                    )])
+                                } else {
+                                    Ok(None)
+                                }
+                            }
+                            Err(es) => Err(es),
+                        }
+                    }
+                    ParentType::Qualified { .. } => Err(vec![Error::validation_with_context(
+                        "Nested qualified parent types are invalid",
+                        Some(source.clone()),
+                        None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
+                    )]),
+                }
+            }
         }
     }
 
@@ -4869,10 +7903,9 @@ impl<'a> TypeResolver<'a> {
             self.context,
             from,
             &consumer_repository,
+            spec,
             at,
-            &spec.name,
             Some(import_site.clone()),
-            Some(Arc::clone(spec)),
         )
     }
 
@@ -4880,7 +7913,7 @@ impl<'a> TypeResolver<'a> {
     // Static helpers (no &self)
     // =========================================================================
 
-    fn add_scale_units_to_index(
+    fn add_quantity_units_to_index(
         spec: &Arc<LemmaSpec>,
         unit_index: &mut HashMap<String, (LemmaType, Option<DataTypeDef>)>,
         resolved_type: &LemmaType,
@@ -4919,7 +7952,7 @@ impl<'a> TypeResolver<'a> {
                     .map(|p| p == defined_by.name.as_str())
                     .unwrap_or(false);
 
-                if existing_type.is_scale()
+                if existing_type.is_quantity()
                     && (current_extends_existing || existing_extends_current)
                 {
                     if current_extends_existing {
@@ -4928,7 +7961,7 @@ impl<'a> TypeResolver<'a> {
                     continue;
                 }
 
-                if existing_type.same_scale_family(resolved_type) {
+                if existing_type.same_quantity_family(resolved_type) {
                     continue;
                 }
 
@@ -4958,7 +7991,30 @@ impl<'a> TypeResolver<'a> {
         for unit in units {
             if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
                 if existing_type.is_ratio() {
-                    continue;
+                    if existing_def.is_none() {
+                        unit_index.insert(
+                            unit.clone(),
+                            (resolved_type.clone(), Some(defined_by.clone())),
+                        );
+                        continue;
+                    }
+                    if existing_type.name() == resolved_type.name() {
+                        continue;
+                    }
+                    let existing_name: String = existing_def
+                        .as_ref()
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| existing_type.name());
+                    return Err(Error::validation_with_context(
+                        format!(
+                            "Ambiguous unit '{}'. Defined in multiple ratio types: '{}' and '{}'",
+                            unit, existing_name, defined_by.name
+                        ),
+                        Some(defined_by.source.clone()),
+                        None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
+                    ));
                 }
                 let existing_name: String = existing_def
                     .as_ref()
@@ -4982,7 +8038,7 @@ impl<'a> TypeResolver<'a> {
 
     fn extract_units_from_type(specs: &TypeSpecification) -> Vec<String> {
         match specs {
-            TypeSpecification::Scale { units, .. } => {
+            TypeSpecification::Quantity { units, .. } => {
                 units.iter().map(|unit| unit.name.clone()).collect()
             }
             TypeSpecification::Ratio { units, .. } => {
@@ -4996,6 +8052,7 @@ impl<'a> TypeResolver<'a> {
 #[cfg(test)]
 mod type_resolution_tests {
     use super::*;
+    use crate::computation::rational::RationalInteger;
     use crate::parse;
     use crate::parsing::ast::{
         CommandArg, LemmaSpec, ParentType, PrimitiveKind, TypeConstraintCommand,
@@ -5057,14 +8114,19 @@ mod type_resolution_tests {
 
         for kind in [
             PrimitiveKind::Boolean,
-            PrimitiveKind::Scale,
+            PrimitiveKind::Quantity,
+            PrimitiveKind::QuantityRange,
             PrimitiveKind::Number,
+            PrimitiveKind::NumberRange,
             PrimitiveKind::Percent,
             PrimitiveKind::Ratio,
+            PrimitiveKind::RatioRange,
             PrimitiveKind::Text,
             PrimitiveKind::Date,
+            PrimitiveKind::DateRange,
             PrimitiveKind::Time,
-            PrimitiveKind::Duration,
+            PrimitiveKind::Calendar,
+            PrimitiveKind::CalendarRange,
         ] {
             let spec = type_spec_for_primitive(kind);
             assert!(
@@ -5101,7 +8163,6 @@ mod type_resolution_tests {
                     ))],
                 ),
             ]),
-            from: None,
             source: crate::parsing::source::Source::new(
                 crate::parsing::source::SourceType::Volatile,
                 crate::parsing::ast::Span {
@@ -5120,7 +8181,7 @@ mod type_resolution_tests {
         let resolved = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        assert!(resolved.named_types.contains_key("age"));
+        assert!(resolved.resolved.contains_key("age"));
     }
 
     #[test]
@@ -5133,7 +8194,6 @@ mod type_resolution_tests {
                 primitive: PrimitiveKind::Number,
             },
             constraints: None,
-            from: None,
             source: crate::parsing::source::Source::new(
                 crate::parsing::source::SourceType::Volatile,
                 crate::parsing::ast::Span {
@@ -5161,7 +8221,6 @@ mod type_resolution_tests {
                 primitive: PrimitiveKind::Number,
             },
             constraints: None,
-            from: None,
             source: crate::parsing::source::Source::new(
                 crate::parsing::source::SourceType::Volatile,
                 crate::parsing::ast::Span {
@@ -5180,9 +8239,37 @@ mod type_resolution_tests {
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
 
-        assert!(resolved.named_types.contains_key("money"));
-        let money_type = resolved.named_types.get("money").unwrap();
-        assert_eq!(money_type.name, Some("number".to_string()));
+        assert!(resolved.resolved.contains_key("money"));
+        let money_type = resolved.resolved.get("money").unwrap();
+        assert_eq!(money_type.name, Some("money".to_string()));
+    }
+
+    #[test]
+    fn test_child_quantity_type_keeps_declared_name_and_child_units() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data length: quantity
+  -> unit meter 1
+data road_length: length
+  -> unit kilometer 1000"#,
+        );
+
+        let resolved_types = resolver
+            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .unwrap();
+
+        let road_length_type = resolved_types.resolved.get("road_length").unwrap();
+        assert_eq!(road_length_type.name.as_deref(), Some("road_length"));
+
+        match &road_length_type.specifications {
+            TypeSpecification::Quantity { units, .. } => {
+                assert!(units.iter().any(|unit| unit.name == "kilometer"));
+            }
+            _ => panic!("Expected Quantity type specifications"),
+        }
+
+        let kilometer_owner = resolved_types.unit_index.get("kilometer").unwrap();
+        assert_eq!(kilometer_owner.name.as_deref(), Some("road_length"));
     }
 
     #[test]
@@ -5195,14 +8282,14 @@ data dice: number -> minimum 0 -> maximum 6"#,
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let dice_type = resolved_types.named_types.get("dice").unwrap();
+        let dice_type = resolved_types.resolved.get("dice").unwrap();
 
         match &dice_type.specifications {
             TypeSpecification::Number {
                 minimum, maximum, ..
             } => {
-                assert_eq!(*minimum, Some(Decimal::from(0)));
-                assert_eq!(*maximum, Some(Decimal::from(6)));
+                assert_eq!(*minimum, Some(RationalInteger::new(0, 1)));
+                assert_eq!(*maximum, Some(RationalInteger::new(6, 1)));
             }
             _ => panic!("Expected Number type specifications"),
         }
@@ -5212,16 +8299,16 @@ data dice: number -> minimum 0 -> maximum 6"#,
     fn test_type_definition_with_multiple_commands() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
+data money: quantity -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
         );
 
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let money_type = resolved_types.named_types.get("money").unwrap();
+        let money_type = resolved_types.resolved.get("money").unwrap();
 
         match &money_type.specifications {
-            TypeSpecification::Scale {
+            TypeSpecification::Quantity {
                 decimals, units, ..
             } => {
                 assert_eq!(*decimals, Some(2));
@@ -5229,7 +8316,7 @@ data money: scale -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
                 assert!(units.iter().any(|u| u.name == "eur"));
                 assert!(units.iter().any(|u| u.name == "usd"));
             }
-            _ => panic!("Expected Scale type specifications"),
+            _ => panic!("Expected Quantity type specifications"),
         }
     }
 
@@ -5243,14 +8330,14 @@ data price: number -> decimals 2 -> minimum 0"#,
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let price_type = resolved_types.named_types.get("price").unwrap();
+        let price_type = resolved_types.resolved.get("price").unwrap();
 
         match &price_type.specifications {
             TypeSpecification::Number {
                 decimals, minimum, ..
             } => {
                 assert_eq!(*decimals, Some(2));
-                assert_eq!(*minimum, Some(Decimal::from(0)));
+                assert_eq!(*minimum, Some(RationalInteger::new(0, 1)));
             }
             _ => panic!("Expected Number type specifications with decimals"),
         }
@@ -5266,7 +8353,7 @@ data precise_number: number -> decimals 4"#,
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let precise_type = resolved_types.named_types.get("precise_number").unwrap();
+        let precise_type = resolved_types.resolved.get("precise_number").unwrap();
 
         match &precise_type.specifications {
             TypeSpecification::Number { decimals, .. } => {
@@ -5277,22 +8364,22 @@ data precise_number: number -> decimals 4"#,
     }
 
     #[test]
-    fn test_scale_type_decimals_only() {
+    fn test_quantity_type_decimals_only() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data weight: scale -> unit kg 1 -> decimals 3"#,
+data weight: quantity -> unit kg 1 -> decimals 3"#,
         );
 
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let weight_type = resolved_types.named_types.get("weight").unwrap();
+        let weight_type = resolved_types.resolved.get("weight").unwrap();
 
         match &weight_type.specifications {
-            TypeSpecification::Scale { decimals, .. } => {
+            TypeSpecification::Quantity { decimals, .. } => {
                 assert_eq!(*decimals, Some(3));
             }
-            _ => panic!("Expected Scale type with decimals 3"),
+            _ => panic!("Expected Quantity type with decimals 3"),
         }
     }
 
@@ -5306,7 +8393,7 @@ data ratio_type: ratio -> decimals 2"#,
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let ratio_type = resolved_types.named_types.get("ratio_type").unwrap();
+        let ratio_type = resolved_types.resolved.get("ratio_type").unwrap();
 
         match &ratio_type.specifications {
             TypeSpecification::Ratio { decimals, .. } => {
@@ -5324,13 +8411,13 @@ data ratio_type: ratio -> decimals 2"#,
     fn test_ratio_type_with_default_command() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#,
+data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
         );
 
         let resolved_types = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let percentage_type = resolved_types.named_types.get("percentage").unwrap();
+        let percentage_type = resolved_types.resolved.get("percentage").unwrap();
 
         match &percentage_type.specifications {
             TypeSpecification::Ratio {
@@ -5338,12 +8425,12 @@ data percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#,
             } => {
                 assert_eq!(
                     *minimum,
-                    Some(Decimal::from(0)),
+                    Some(RationalInteger::new(0, 1)),
                     "ratio type should have minimum 0"
                 );
                 assert_eq!(
                     *maximum,
-                    Some(Decimal::from(1)),
+                    Some(RationalInteger::new(1, 1)),
                     "ratio type should have maximum 1"
                 );
             }
@@ -5355,23 +8442,26 @@ data percentage: ratio -> minimum 0 -> maximum 1 -> default 0.5"#,
             .get("percentage")
             .expect("declared default must be tracked for percentage");
         match declared {
-            ValueKind::Ratio(v, _) => assert_eq!(*v, Decimal::from_i128_with_scale(5, 1)),
+            ValueKind::Ratio(v, unit) => {
+                assert_eq!(*v, RationalInteger::new(1, 2));
+                assert_eq!(unit.as_deref(), Some("percent"));
+            }
             other => panic!("expected Ratio declared default, got {:?}", other),
         }
     }
 
     #[test]
-    fn test_scale_extension_chain_same_family_units_allowed() {
+    fn test_quantity_extension_chain_same_family_units_allowed() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: scale -> unit eur 1
+data money: quantity -> unit eur 1
 data money2: money -> unit usd 1.24"#,
         );
 
         let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
         assert!(
             result.is_ok(),
-            "Scale extension chain should resolve: {:?}",
+            "Quantity extension chain should resolve: {:?}",
             result.err()
         );
 
@@ -5388,13 +8478,13 @@ data money2: money -> unit usd 1.24"#,
         let usd_type = resolved.unit_index.get("usd").unwrap();
         assert_eq!(
             eur_type.name.as_deref(),
-            Some("money"),
-            "more derived type (money2) should own eur; its parent name is 'money'"
+            Some("money2"),
+            "more derived type (money2) should own inherited eur"
         );
         assert_eq!(
             usd_type.name.as_deref(),
-            Some("money"),
-            "usd defined on money2 whose parent is 'money'"
+            Some("money2"),
+            "usd defined on money2 should be owned by money2"
         );
     }
 
@@ -5439,12 +8529,12 @@ data invalid: choice -> option "a""#,
     }
 
     #[test]
-    fn test_scale_extension_overrides_parent_unit_factors() {
+    fn test_quantity_extension_overwrites_parent_units() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.84
 
 data money2: money
   -> unit eur 1.20
@@ -5454,29 +8544,28 @@ data money2: money
 
         let resolved = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
-            .expect("child constraints override inherited scale units");
-        let money2 = resolved.named_types.get("money2").expect("money2");
-
+            .unwrap();
+        let money2 = resolved.resolved.get("money2").unwrap();
         match &money2.specifications {
-            TypeSpecification::Scale { units, .. } => {
+            TypeSpecification::Quantity { units, .. } => {
                 assert_eq!(units.len(), 3);
-                let eur = units.iter().find(|u| u.name == "eur").expect("eur");
-                let usd = units.iter().find(|u| u.name == "usd").expect("usd");
-                let gbp = units.iter().find(|u| u.name == "gbp").expect("gbp");
+                let eur = units.iter().find(|u| u.name == "eur").unwrap();
+                let usd = units.iter().find(|u| u.name == "usd").unwrap();
+                let gbp = units.iter().find(|u| u.name == "gbp").unwrap();
                 assert_eq!(
-                    eur.value,
-                    Decimal::from_str_exact("1.20").expect("BUG: test literal decimal")
+                    crate::commit_rational_to_decimal(&eur.factor).unwrap(),
+                    Decimal::from_str_exact("1.20").unwrap()
                 );
                 assert_eq!(
-                    usd.value,
-                    Decimal::from_str_exact("1.21").expect("BUG: test literal decimal")
+                    crate::commit_rational_to_decimal(&usd.factor).unwrap(),
+                    Decimal::from_str_exact("1.21").unwrap()
                 );
                 assert_eq!(
-                    gbp.value,
-                    Decimal::from_str_exact("1.30").expect("BUG: test literal decimal")
+                    crate::commit_rational_to_decimal(&gbp.factor).unwrap(),
+                    Decimal::from_str_exact("1.30").unwrap()
                 );
             }
-            other => panic!("Expected Scale type specifications, got {:?}", other),
+            other => panic!("Expected Quantity type specifications, got {:?}", other),
         }
     }
 
@@ -5484,18 +8573,18 @@ data money2: money
     fn test_spec_level_unit_ambiguity_errors_are_reported() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money_a: scale
+data money_a: quantity
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.84
 
-data money_b: scale
+data money_b: quantity
   -> unit eur 1.00
   -> unit usd 1.20
 
-data length_a: scale
+data length_a: quantity
   -> unit meter 1.0
 
-data length_b: scale
+data length_b: quantity
   -> unit meter 1.0"#,
         );
 
@@ -5515,6 +8604,64 @@ data length_b: scale
         assert!(
             error_msg.contains("eur") || error_msg.contains("usd") || error_msg.contains("meter"),
             "Error should mention at least one ambiguous unit. Got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_ratio_unit_cross_family_collision_errors() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data q: quantity
+  -> unit foo 1
+
+data r: ratio
+  -> unit foo 100"#,
+        );
+
+        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        assert!(
+            result.is_err(),
+            "quantity and ratio must not share a unit name"
+        );
+        let error_msg = result
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_msg.contains("foo"),
+            "expected cross-family collision on 'foo', got: {}",
+            error_msg
+        );
+    }
+
+    #[test]
+    fn test_duplicate_ratio_unit_across_unrelated_types_errors() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data spread_a: ratio
+  -> unit basis_points 10000
+
+data spread_b: ratio
+  -> unit basis_points 10000"#,
+        );
+
+        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        assert!(
+            result.is_err(),
+            "unrelated ratio types must not define the same unit name"
+        );
+        let error_msg = result
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_msg.contains("spread_a") && error_msg.contains("spread_b"),
+            "expected duplicate ratio unit between types, got: {}",
             error_msg
         );
     }
@@ -5544,9 +8691,9 @@ data price: number
     fn test_extending_type_inherits_units() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.84
 
 data my_money: money
   -> unit gbp 1.30"#,
@@ -5555,71 +8702,70 @@ data my_money: money
         let resolved = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
             .unwrap();
-        let my_money_type = resolved.named_types.get("my_money").unwrap();
+        let my_money_type = resolved.resolved.get("my_money").unwrap();
 
         match &my_money_type.specifications {
-            TypeSpecification::Scale { units, .. } => {
+            TypeSpecification::Quantity { units, .. } => {
                 assert_eq!(units.len(), 3);
                 assert!(units.iter().any(|u| u.name == "eur"));
                 assert!(units.iter().any(|u| u.name == "usd"));
                 assert!(units.iter().any(|u| u.name == "gbp"));
             }
-            other => panic!("Expected Scale type specifications, got {:?}", other),
+            other => panic!("Expected Quantity type specifications, got {:?}", other),
         }
     }
 
     #[test]
-    fn test_value_copy_scale_binding_can_override_unit_factor() {
+    fn test_value_copy_quantity_binding_overwrites_unit_factor() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data source_scale: scale
+data source_quantity: quantity
   -> unit usd 1.00
 
-data z: source_scale
-  -> unit usd 1.19"#,
+data z: source_quantity
+  -> unit usd 0.84"#,
         );
 
         let resolved = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
-            .expect("value-copy binding may refine inherited scale units");
-        let z = resolved.named_types.get("z").expect("data z");
-
+            .unwrap();
+        let z = resolved.resolved.get("z").unwrap();
         match &z.specifications {
-            TypeSpecification::Scale { units, .. } => {
-                let usd = units.iter().find(|u| u.name == "usd").expect("usd unit");
+            TypeSpecification::Quantity { units, .. } => {
+                assert_eq!(units.len(), 1);
+                let usd = units.iter().find(|u| u.name == "usd").unwrap();
                 assert_eq!(
-                    usd.value,
-                    Decimal::from_str_exact("1.19").expect("BUG: test literal decimal")
+                    crate::commit_rational_to_decimal(&usd.factor).unwrap(),
+                    Decimal::from_str_exact("0.84").unwrap()
                 );
             }
-            other => panic!("Expected Scale type specifications, got {:?}", other),
+            other => panic!("Expected Quantity type specifications, got {:?}", other),
         }
     }
 
     #[test]
-    fn test_duplicate_unit_in_same_type_last_factor_wins() {
+    fn test_duplicate_unit_in_same_type_last_wins() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
   -> unit eur 1.19"#,
         );
 
         let resolved = resolver
             .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
-            .expect("second unit constraint overrides conversion factor");
-        let money = resolved.named_types.get("money").unwrap();
-
+            .unwrap();
+        let money = resolved.resolved.get("money").unwrap();
         match &money.specifications {
-            TypeSpecification::Scale { units, .. } => {
+            TypeSpecification::Quantity { units, .. } => {
                 assert_eq!(units.len(), 1);
-                let eur = units.iter().find(|u| u.name == "eur").expect("eur unit");
+                let eur = units.iter().find(|u| u.name == "eur").unwrap();
                 assert_eq!(
-                    eur.value,
-                    Decimal::from_str_exact("1.19").expect("BUG: test literal decimal")
+                    crate::commit_rational_to_decimal(&eur.factor).unwrap(),
+                    Decimal::from_str_exact("1.19").unwrap()
                 );
             }
-            other => panic!("Expected Scale type specifications, got {:?}", other),
+            other => panic!("Expected Quantity type specifications, got {:?}", other),
         }
     }
 }
@@ -5630,7 +8776,7 @@ data money: scale
 
 /// Validate that TypeSpecification constraints are internally consistent.
 ///
-/// Checks range, decimals/precision, length, unit, and option constraints, and
+/// Checks range, decimals, length, unit, and option constraints, and
 /// validates the `declared_default` (when present) against those constraints.
 /// The default lives outside the type specification (on the data binding or
 /// typedef entry); callers thread it in explicitly so this function can verify
@@ -5647,27 +8793,98 @@ pub fn validate_type_specifications(
     let mut errors = Vec::new();
 
     match specs {
-        TypeSpecification::Scale {
+        TypeSpecification::Quantity {
             minimum,
             maximum,
             decimals,
-            precision,
             units,
             ..
         } => {
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
-                if min > max {
-                    errors.push(Error::validation_with_context(
-                        format!(
-                            "Type '{}' has invalid range: minimum {} is greater than maximum {}",
-                            type_name, min, max
-                        ),
-                        Some(source.clone()),
-                        None::<String>,
-                        spec_context.clone(),
-                        None,
-                    ));
+                match (
+                    semantics::quantity_declared_bound_canonical(min, units, type_name, "minimum"),
+                    semantics::quantity_declared_bound_canonical(max, units, type_name, "maximum"),
+                ) {
+                    (Ok(min_canonical), Ok(max_canonical)) => {
+                        if min_canonical > max_canonical {
+                            errors.push(Error::validation_with_context(
+                                format!(
+                                    "Type '{}' has invalid range: minimum {} {} is greater than maximum {} {}",
+                                    type_name,
+                                    min.0,
+                                    min.1,
+                                    max.0,
+                                    max.1
+                                ),
+                                Some(source.clone()),
+                                None::<String>,
+                                spec_context.clone(),
+                                None,
+                            ));
+                        }
+                    }
+                    (Err(message), _) | (_, Err(message)) => {
+                        errors.push(Error::validation_with_context(
+                            format!(
+                                "Type '{}' has invalid quantity bound: {}",
+                                type_name, message
+                            ),
+                            Some(source.clone()),
+                            None::<String>,
+                            spec_context.clone(),
+                            None,
+                        ));
+                    }
+                }
+            }
+
+            if minimum.is_some() {
+                for unit in units.iter() {
+                    if unit.minimum.is_none() {
+                        errors.push(Error::validation_with_context(
+                            format!(
+                                "Type '{}' has minimum bound but unit '{}' is missing per-unit minimum after planning",
+                                type_name, unit.name
+                            ),
+                            Some(source.clone()),
+                            None::<String>,
+                            spec_context.clone(),
+                            None,
+                        ));
+                    }
+                }
+            }
+            if maximum.is_some() {
+                for unit in units.iter() {
+                    if unit.maximum.is_none() {
+                        errors.push(Error::validation_with_context(
+                            format!(
+                                "Type '{}' has maximum bound but unit '{}' is missing per-unit maximum after planning",
+                                type_name, unit.name
+                            ),
+                            Some(source.clone()),
+                            None::<String>,
+                            spec_context.clone(),
+                            None,
+                        ));
+                    }
+                }
+            }
+            if declared_default.is_some() {
+                for unit in units.iter() {
+                    if unit.default_magnitude.is_none() {
+                        errors.push(Error::validation_with_context(
+                            format!(
+                                "Type '{}' has default but unit '{}' is missing per-unit default after planning",
+                                type_name, unit.name
+                            ),
+                            Some(source.clone()),
+                            None::<String>,
+                            spec_context.clone(),
+                            None,
+                        ));
+                    }
                 }
             }
 
@@ -5687,23 +8904,7 @@ pub fn validate_type_specifications(
                 }
             }
 
-            // Validate precision is positive if set
-            if let Some(prec) = precision {
-                if *prec <= Decimal::ZERO {
-                    errors.push(Error::validation_with_context(
-                        format!(
-                            "Type '{}' has invalid precision: {}. Must be positive",
-                            type_name, prec
-                        ),
-                        Some(source.clone()),
-                        None::<String>,
-                        spec_context.clone(),
-                        None,
-                    ));
-                }
-            }
-
-            if let Some(ValueKind::Scale(def_value, def_unit)) = declared_default {
+            if let Some(ValueKind::Quantity(_def_value, def_unit, _def_decomp)) = declared_default {
                 if !units.iter().any(|u| u.name == *def_unit) {
                     errors.push(Error::validation_with_context(
                         format!(
@@ -5722,41 +8923,13 @@ pub fn validate_type_specifications(
                         None,
                     ));
                 }
-                if let Some(min) = minimum {
-                    if *def_value < *min {
-                        errors.push(Error::validation_with_context(
-                            format!(
-                                "Type '{}' default value {} {} is less than minimum {}",
-                                type_name, def_value, def_unit, min
-                            ),
-                            Some(source.clone()),
-                            None::<String>,
-                            spec_context.clone(),
-                            None,
-                        ));
-                    }
-                }
-                if let Some(max) = maximum {
-                    if *def_value > *max {
-                        errors.push(Error::validation_with_context(
-                            format!(
-                                "Type '{}' default value {} {} is greater than maximum {}",
-                                type_name, def_value, def_unit, max
-                            ),
-                            Some(source.clone()),
-                            None::<String>,
-                            spec_context.clone(),
-                            None,
-                        ));
-                    }
-                }
             }
 
-            // Scale types must have at least one unit (required for parsing and conversion)
+            // Quantity types must have at least one unit (required for parsing and conversion)
             if units.is_empty() {
                 errors.push(Error::validation_with_context(
                     format!(
-                        "Type '{}' is a scale type but has no units. Scale types must define at least one unit (e.g. -> unit eur 1).",
+                        "Type '{}' is a quantity type but has no units. Quantity types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
                     ),
                     Some(source.clone()),
@@ -5801,10 +8974,10 @@ pub fn validate_type_specifications(
                         seen_names.push(unit.name.clone());
                     }
 
-                    // Validate unit values are positive (conversion factors relative to type base of 1)
-                    if unit.value <= Decimal::ZERO {
+                    if !unit.is_positive_factor() {
+                        let factor = unit.factor.reduced();
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
+                            format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, factor.numer(), factor.denom()),
                             Some(source.clone()),
                             None::<String>,
                             spec_context.clone(),
@@ -5818,7 +8991,6 @@ pub fn validate_type_specifications(
             minimum,
             maximum,
             decimals,
-            precision,
             ..
         } => {
             // Validate range consistency
@@ -5844,22 +9016,6 @@ pub fn validate_type_specifications(
                         format!(
                             "Type '{}' has invalid decimals value: {}. Must be between 0 and 28",
                             type_name, d
-                        ),
-                        Some(source.clone()),
-                        None::<String>,
-                        spec_context.clone(),
-                        None,
-                    ));
-                }
-            }
-
-            // Validate precision is positive if set
-            if let Some(prec) = precision {
-                if *prec <= Decimal::ZERO {
-                    errors.push(Error::validation_with_context(
-                        format!(
-                            "Type '{}' has invalid precision: {}. Must be positive",
-                            type_name, prec
                         ),
                         Some(source.clone()),
                         None::<String>,
@@ -6009,10 +9165,10 @@ pub fn validate_type_specifications(
                         seen_names.push(unit.name.clone());
                     }
 
-                    // Validate unit values are positive (conversion factors relative to type base of 1)
-                    if unit.value <= Decimal::ZERO {
+                    if *unit.value.numer() <= 0 {
+                        let factor = unit.value.reduced();
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' has unit '{}' with invalid value {}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value),
+                            format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, factor.numer(), factor.denom()),
                             Some(source.clone()),
                             None::<String>,
                             spec_context.clone(),
@@ -6169,7 +9325,13 @@ pub fn validate_type_specifications(
             }
         }
 
-        TypeSpecification::Boolean { .. } | TypeSpecification::Duration { .. } => {
+        TypeSpecification::NumberRange { .. }
+        | TypeSpecification::DateRange { .. }
+        | TypeSpecification::QuantityRange { .. }
+        | TypeSpecification::RatioRange { .. }
+        | TypeSpecification::CalendarRange { .. }
+        | TypeSpecification::Boolean { .. }
+        | TypeSpecification::Calendar { .. } => {
             // No constraint validation needed for these types
         }
         TypeSpecification::Veto { .. } => {
@@ -6187,6 +9349,7 @@ pub fn validate_type_specifications(
 #[cfg(test)]
 mod validation_tests {
     use super::*;
+    use crate::computation::rational::RationalInteger;
     use crate::parsing::ast::{CommandArg, TypeConstraintCommand};
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
@@ -6209,7 +9372,9 @@ mod validation_tests {
         args: &[CommandArg],
     ) -> TypeSpecification {
         let mut default = None;
-        specs.apply_constraint(command, args, &mut default).unwrap()
+        specs
+            .apply_constraint("test", command, args, &mut default)
+            .unwrap()
     }
 
     fn number_arg(n: i64) -> CommandArg {
@@ -6243,13 +9408,12 @@ mod validation_tests {
     #[test]
     fn validate_number_default_below_minimum() {
         let specs = TypeSpecification::Number {
-            minimum: Some(Decimal::from(10)),
+            minimum: Some(RationalInteger::new(10, 1)),
             maximum: None,
             decimals: None,
-            precision: None,
             help: String::new(),
         };
-        let default = ValueKind::Number(Decimal::from(5));
+        let default = ValueKind::Number(RationalInteger::new(5, 1));
 
         let src = test_source();
         let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
@@ -6263,12 +9427,11 @@ mod validation_tests {
     fn validate_number_default_above_maximum() {
         let specs = TypeSpecification::Number {
             minimum: None,
-            maximum: Some(Decimal::from(100)),
+            maximum: Some(RationalInteger::new(100, 1)),
             decimals: None,
-            precision: None,
             help: String::new(),
         };
-        let default = ValueKind::Number(Decimal::from(150));
+        let default = ValueKind::Number(RationalInteger::new(150, 1));
 
         let src = test_source();
         let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
@@ -6281,13 +9444,12 @@ mod validation_tests {
     #[test]
     fn validate_number_default_valid() {
         let specs = TypeSpecification::Number {
-            minimum: Some(Decimal::from(0)),
-            maximum: Some(Decimal::from(100)),
+            minimum: Some(RationalInteger::new(0, 1)),
+            maximum: Some(RationalInteger::new(100, 1)),
             decimals: None,
-            precision: None,
             help: String::new(),
         };
-        let default = ValueKind::Number(Decimal::from(50));
+        let default = ValueKind::Number(RationalInteger::new(50, 1));
 
         let src = test_source();
         let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
@@ -6297,8 +9459,12 @@ mod validation_tests {
     #[test]
     fn text_minimum_command_is_rejected() {
         let specs = TypeSpecification::text();
-        let res =
-            specs.apply_constraint(TypeConstraintCommand::Minimum, &[number_arg(5)], &mut None);
+        let res = specs.apply_constraint(
+            "test",
+            TypeConstraintCommand::Minimum,
+            &[number_arg(5)],
+            &mut None,
+        );
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
@@ -6308,8 +9474,12 @@ mod validation_tests {
     #[test]
     fn text_maximum_command_is_rejected() {
         let specs = TypeSpecification::text();
-        let res =
-            specs.apply_constraint(TypeConstraintCommand::Maximum, &[number_arg(5)], &mut None);
+        let res = specs.apply_constraint(
+            "test",
+            TypeConstraintCommand::Maximum,
+            &[number_arg(5)],
+            &mut None,
+        );
         assert!(res.is_err());
         assert!(res
             .unwrap_err()
@@ -6336,8 +9506,8 @@ mod validation_tests {
     #[test]
     fn validate_ratio_minimum_greater_than_maximum() {
         let specs = TypeSpecification::Ratio {
-            minimum: Some(Decimal::from(2)),
-            maximum: Some(Decimal::from(1)),
+            minimum: Some(RationalInteger::new(2, 1)),
+            maximum: Some(RationalInteger::new(1, 1)),
             decimals: None,
             units: crate::planning::semantics::RatioUnits::new(),
             help: String::new(),

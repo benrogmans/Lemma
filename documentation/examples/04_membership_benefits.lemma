@@ -7,20 +7,16 @@ This spec can be referenced by other specs.
 """
 
 data discount_ratio: ratio
-  -> minimum 0
-  -> maximum 1
+  -> minimum 0 percent
+  -> maximum 100 percent
 
-rule discount_rate:
-  10%
+rule discount_rate: 10%
 
-rule free_shipping_threshold:
-  50
+rule free_shipping_threshold: 50
 
-rule points_multiplier:
-  1.5
+rule points_multiplier: 1.5
 
-rule monthly_bonus_points:
-  100
+rule monthly_bonus_points: 100
 
 
 spec membership_benefits
@@ -31,26 +27,23 @@ Shows how specs can reference other specs.
 Membership levels have different benefits.
 """
 
-data monthly_spend : number -> minimum 0 -> default 150
-
 uses membership: premium_membership
 
-rule discount:
-  monthly_spend * membership.discount_rate
+data monthly_spend: number
+  -> minimum 0
+  -> default 150
 
-rule shipping_cost:
-  10
+rule discount: monthly_spend * membership.discount_rate
+
+rule shipping_cost: 10
   unless monthly_spend >= membership.free_shipping_threshold
     then 0
 
 rule base_points:
   monthly_spend * membership.points_multiplier
 
-rule bonus_points:
-  membership.monthly_bonus_points
+rule bonus_points: membership.monthly_bonus_points
 
-rule total_points:
-  base_points + bonus_points
+rule total_points: base_points + bonus_points
 
-rule total_savings:
-  discount + shipping_cost
+rule total_savings: discount + shipping_cost

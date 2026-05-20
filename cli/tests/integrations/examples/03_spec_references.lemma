@@ -6,7 +6,7 @@ Defines basic employee data that can be referenced and extended.
 """
 
 data department          : "Engineering"
-data employment_duration : duration -> default 0 years
+data employment_duration : calendar -> default 0 years
 data is_full_time        : true
 data name                : "John Doe"
 data monthly_salary      : number -> minimum 0 -> default 5_000
@@ -28,9 +28,9 @@ Demonstrates spec composition, data binding, and rule references.
 """
 
 uses employee: base_employee
-data employee.employment_duration : 3 years
-data employee.monthly_salary      : 7_500
-data employee.name                : "Alice Smith"
+fill employee.employment_duration : 3 years
+fill employee.monthly_salary      : 7_500
+fill employee.name                : "Alice Smith"
 
 rule salary_with_bonus:
   employee.annual_salary
@@ -48,17 +48,23 @@ Contractor Page
 Shows a different employment model using spec references.
 """
 
-data money: scale
+uses lemma si
+
+data money: quantity
   -> unit eur 1.00
 
+data wage_rate: quantity
+  -> unit eur_per_second eur/second
+  -> unit eur_per_hour eur/hour
+
 data hours_worked : 120 hours
-data hourly_rate  : money -> minimum 0 -> default 85 eur
+data hourly_rate  : wage_rate -> minimum 0 eur_per_hour -> default 85 eur_per_hour
 
 uses person: base_employee
-data person.is_full_time : false
+fill person.is_full_time : false
 
 rule total_payment:
-  hourly_rate * hours_worked
+  (hourly_rate * hours_worked) as eur
 
 rule annual_hours:
   hours_worked * 12

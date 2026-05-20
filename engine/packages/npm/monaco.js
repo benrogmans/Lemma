@@ -105,7 +105,7 @@ export function registerLemmaLanguage(monaco) {
 
   monaco.languages.setLanguageConfiguration('lemma', {
     comments: { blockComment: ['"""', '"""'] },
-    brackets: [['(', ')'], ['[', ']']],
+    // brackets: [['(', ')'], ['[', ']']],
     autoClosingPairs: [
       { open: '(', close: ')' },
       { open: '[', close: ']' },

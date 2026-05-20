@@ -1,36 +1,16 @@
 //! Serialization: Lemma values ↔ JSON.
 //!
-//! **Input (deserialization):** JSON → string data values for evaluation.
+//! **Input:** [`from_json`] / [`data_values_from_map`] produce `serde_json::Value` maps for
+//! [`ExecutionPlan::set_data_values`]. Convenience strings, JSON numbers, and serialized objects
+//! are accepted on input. Use [`data_values_from_strings`] for CLI-style string maps. Output
+//! keeps numbers as JSON strings.
 //!
-//! - [`from_json`] parses JSON and converts each value to a string for
-//!   `ExecutionPlan::with_values()`.
-//! - null values are skipped (treated as "data not provided").
-//!
-//! **Output (serialization):** Lemma evaluation results → JSON.
-//!
-//! - [`literal_value_to_json`] converts a `LiteralValue` to `(serde_json::Value, Option<unit>)`
-//!   for use in API/CLI responses.
-//!
-//! # Example (input)
-//!
-//! ```ignore
-//! use lemma::serialization::from_json;
-//!
-//! let json = br#"{"discount": 21, "config": {"key": "value"}, "name": null}"#;
-//! let values = from_json(json)?;
-//! let plan = execution_plan.with_values(values, &limits)?;
-//! ```
-//!
-//! # Example (output)
-//!
-//! ```ignore
-//! use lemma::serialization::literal_value_to_json;
-//!
-//! let (json_value, unit) = literal_value_to_json(&literal_value);
-//! ```
+//! **Output:** [`ValueKind`] serialization (in `planning::semantics`) is used everywhere, including
+//! evaluation responses.
 
 mod json;
 
-pub use json::literal_value_to_json;
-pub use json::{data_values_from_map, from_json};
-pub use json::{deserialize_resolved_data_value_map, serialize_resolved_data_value_map};
+pub use json::{
+    data_values_from_map, data_values_from_strings, deserialize_resolved_data_value_map, from_json,
+    serialize_resolved_data_value_map,
+};

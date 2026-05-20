@@ -22,7 +22,7 @@ rule final_total: total_before_discount
     let main_spec = r#"
 spec rules_and_unless
 uses rules: private_rules
-data rules.base_price: 500
+fill rules.base_price: 500
 rule total: rules.final_total
 "#;
 
@@ -44,7 +44,14 @@ rule total: rules.final_total
     let now = DateTimeValue::now();
     // Evaluate with missing quantity data
     let response = engine
-        .run(None, "rules_and_unless", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "rules_and_unless",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let total_rule = response
@@ -85,19 +92,21 @@ rule subtotal: price * quantity
 rule message: "Order processed"
 "#;
 
-    engine
-        .load(
-            spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
 
     let mut data = std::collections::HashMap::new();
     data.insert("price".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_spec", Some(&now), data, false)
+        .run(
+            None,
+            "test_spec",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     // subtotal should fail due to missing quantity
@@ -143,7 +152,7 @@ data slot: number
 
 spec outer
 uses i: inner
-data here: i.slot
+fill here: i.slot
 rule r: here
 "#;
     let mut engine = Engine::new();
@@ -158,7 +167,14 @@ rule r: here
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
 
     let rr = resp.results.get("r").expect("rule 'r'");
@@ -189,7 +205,7 @@ rule divided: 10 / denom
 
 spec top
 uses i: inner
-data x: i.divided
+fill x: i.divided
 rule out: x
 "#;
     let mut engine = Engine::new();
@@ -204,7 +220,14 @@ rule out: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = resp.results.get("out").expect("rule 'out'");

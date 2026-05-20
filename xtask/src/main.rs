@@ -3,7 +3,6 @@ mod lsp;
 mod versions;
 mod versions_diff;
 
-use std::path::Path;
 use std::process::Command;
 
 fn cargo_bin() -> String {
@@ -32,31 +31,51 @@ fn run_versions_verify() {
     );
 }
 
-/// True if the working tree has staged, unstaged, or untracked paths under `pathspec` (git pathspec, repo-relative).
-fn git_has_changes_under(repo_root: &Path, pathspec: &str) -> bool {
-    let output = Command::new("git")
-        .current_dir(repo_root)
-        .args(["status", "--porcelain", pathspec])
-        .output()
-        .unwrap_or_else(|e| panic!("failed to run git status --porcelain {pathspec}: {e}"));
-    if !output.status.success() {
-        panic!(
-            "git status --porcelain {pathspec} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+const HEX_PACKAGE_DIR: &str = "engine/packages/hex";
+const NPM_WASM_DIR: &str = "engine/packages/npm";
+
+fn require_command(name: &str, install_hint: &str) {
+    let ok = Command::new(name)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        panic!("{name} not found on PATH. {install_hint}");
     }
-    !output.stdout.trim_ascii().is_empty()
 }
 
-const HEX_PACKAGE_DIR: &str = "engine/packages/hex";
+fn run_npm_wasm_precommit() {
+    require_command("node", "Install Node.js (https://nodejs.org/).");
+    require_command(
+        "wasm-pack",
+        "Install wasm-pack: cargo install wasm-pack --version 0.14.0 --locked",
+    );
+    let root = versions::workspace_root();
+    let npm_dir = root.join(NPM_WASM_DIR);
+    for script in ["build.js", "test.js"] {
+        eprintln!("xtask: npm wasm (node {script})");
+        let status = Command::new("node")
+            .arg(script)
+            .current_dir(&npm_dir)
+            .status()
+            .unwrap_or_else(|e| {
+                panic!("failed to run node {script} in {}: {e}", npm_dir.display())
+            });
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+    }
+}
 
 fn run_mix_precommit() {
-    let root = versions::workspace_root();
-    if !git_has_changes_under(&root, HEX_PACKAGE_DIR) {
-        eprintln!("xtask: mix precommit (skipped, no changes under {HEX_PACKAGE_DIR})");
-        return;
-    }
-    let hex_dir = root.join(HEX_PACKAGE_DIR);
+    require_command(
+        "mix",
+        "Install Elixir and Mix (https://elixir-lang.org/install.html).",
+    );
+    let hex_dir = versions::workspace_root().join(HEX_PACKAGE_DIR);
     let status = Command::new("mix")
         .current_dir(&hex_dir)
         .arg("precommit")
@@ -68,20 +87,26 @@ fn run_mix_precommit() {
 }
 
 fn run_vscode_precommit() {
-    let root = versions::workspace_root();
-    if !git_has_changes_under(&root, lsp::VSCODE_EXTENSION_REL) {
-        eprintln!(
-            "xtask: vscode npm precommit (skipped, no changes under {})",
-            lsp::VSCODE_EXTENSION_REL
-        );
-        return;
-    }
-    let dir = root.join(lsp::VSCODE_EXTENSION_REL);
+    require_command("npm", "Install Node.js (https://nodejs.org/).");
+    let dir = versions::workspace_root().join(lsp::VSCODE_EXTENSION_REL);
     let status = Command::new("npm")
         .current_dir(&dir)
         .args(["run", "precommit"])
         .status()
         .unwrap_or_else(|e| panic!("failed to run npm run precommit in {}: {e}", dir.display()));
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
+fn run_deny_precommit() {
+    let config = versions::workspace_root().join(".cargo/deny.toml");
+    eprintln!("xtask: deny ({})", config.display());
+    let status = Command::new(cargo_bin())
+        .args(["deny", "check", "--config"])
+        .arg(&config)
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run cargo deny: {e}"));
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -115,8 +140,9 @@ fn precommit() {
         "--run-ignored",
         "all",
     ]);
-    eprintln!("xtask: deny");
-    run(&["deny", "check", "--config", ".cargo/deny.toml"]);
+    eprintln!("xtask: npm wasm package");
+    run_npm_wasm_precommit();
+    run_deny_precommit();
     eprintln!("xtask: done");
 }
 

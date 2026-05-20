@@ -2,8 +2,6 @@ use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-use std::str::FromStr;
-
 /// Rule references work through one level of spec reference.
 #[test]
 fn test_single_level_spec_ref_with_rule_reference() {
@@ -42,7 +40,14 @@ rule line_total: pricing.final_price * quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "line_item", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "line_item",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let line_total = response
         .results
@@ -53,7 +58,10 @@ rule line_total: pricing.final_price * quantity
     // Should be: (100 * 1.21) * 10 = 1210
     match &line_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("1210").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(1210)
+            ),
             other => panic!("Expected Number for line_total, got {:?}", other),
         },
         other => panic!("Expected Value for line_total, got {:?}", other),
@@ -85,28 +93,22 @@ uses middle_ref: middle
 rule top_calc: middle_ref.middle_calc
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(middle_spec, lemma::SourceType::Volatile)
         .unwrap();
-    engine
-        .load(
-            middle_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            top_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(top_spec, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let top_calc = response
@@ -117,16 +119,19 @@ rule top_calc: middle_ref.middle_calc
 
     match &top_calc.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("250").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(250)
+            ),
             other => panic!("Expected Number for top_calc, got {:?}", other),
         },
         other => panic!("Expected Value for top_calc, got {:?}", other),
     }
 }
 
-/// The old shorthand `data X: spec Y` RHS is rejected with a helpful error.
+/// `data X: spec Y` RHS is rejected; spec imports use `uses`.
 #[test]
-fn test_old_data_spec_shorthand_rejected() {
+fn test_data_spec_shorthand_rejected() {
     let mut engine = Engine::new();
 
     let specs = r#"
@@ -134,20 +139,16 @@ spec a
 data x: spec other
 "#;
 
-    let errs = engine
-        .load(
-            specs,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap_err();
+    let errs = engine.load(specs, lemma::SourceType::Volatile).unwrap_err();
     let msg = errs
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<_>>()
         .join("; ");
     assert!(
-        msg.contains("syntax has been removed"),
-        "expected old syntax rejection, got: {msg}"
+        (msg.contains("uses") && msg.contains("spec"))
+            || msg.contains("Dotted paths require `fill`"),
+        "expected spec-import or dotted-LHS rejection, got: {msg}"
     );
 }
 
@@ -164,7 +165,7 @@ data value: 50
     let middle_spec = r#"
 spec middle
 uses config: base
-data config.value: 100
+fill config.value: 100
 "#;
 
     let top_spec = r#"
@@ -173,28 +174,22 @@ uses settings: middle
 rule final_value: settings.config.value * 2
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(middle_spec, lemma::SourceType::Volatile)
         .unwrap();
-    engine
-        .load(
-            middle_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            top_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(top_spec, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let final_value = response
         .results
@@ -205,7 +200,10 @@ rule final_value: settings.config.value * 2
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
     match &final_value.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("200").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(200)
+            ),
             other => panic!("Expected Number for final_value, got {:?}", other),
         },
         other => panic!("Expected Value for final_value, got {:?}", other),
@@ -235,33 +233,31 @@ rule line_total: pricing.final_price * quantity
     let order_spec = r#"
 spec order
 uses line: line_item
-data line.pricing.tax_rate: 10%
-data line.quantity: 5
+fill line.pricing.tax_rate: 10%
+fill line.quantity: 5
 rule order_total: line.line_total
 "#;
 
     engine
-        .load(
-            pricing_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(pricing_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            line_item_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(line_item_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            order_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(order_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "order",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let order_total = response
@@ -274,7 +270,10 @@ rule order_total: line.line_total
     // (100 * 1.10) * 5 = 550
     match &order_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("550").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(550)
+            ),
             other => panic!("Expected Number for order_total, got {:?}", other),
         },
         other => panic!("Expected Value for order_total, got {:?}", other),
@@ -303,34 +302,30 @@ uses base
 spec comparison
 uses path1: wrapper
 uses path2: wrapper
-data path2.base.price: 75
+fill path2.base.price: 75
 rule total1: path1.base.total
 rule total2: path2.base.total
 rule difference: total2 - total1
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(wrapper_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            wrapper_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            comparison_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(comparison_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "comparison", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "comparison",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let total1 = response
@@ -352,7 +347,10 @@ rule difference: total2 - total1
     // path1: 100 * 1.21 = 121
     match &total1.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("121").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(121)
+            ),
             other => panic!("Expected Number for total1, got {:?}", other),
         },
         other => panic!("Expected Value for total1, got {:?}", other),
@@ -360,7 +358,10 @@ rule difference: total2 - total1
     // path2: 75 * 1.21 = 90.75
     match &total2.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("90.75").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::new(9075, 2)
+            ),
             other => panic!("Expected Number for total2, got {:?}", other),
         },
         other => panic!("Expected Value for total2, got {:?}", other),
@@ -368,7 +369,10 @@ rule difference: total2 - total1
     // difference: 90.75 - 121 = -30.25
     match &difference.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("-30.25").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::new(-3025, 2)
+            ),
             other => panic!("Expected Number for difference, got {:?}", other),
         },
         other => panic!("Expected Value for difference, got {:?}", other),
@@ -402,27 +406,25 @@ rule product: c1.value * c2.value
 "#;
 
     engine
-        .load(
-            config1_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(config1_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            config2_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(config2_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            combined_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(combined_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "combined", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "combined",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let sum = response
@@ -439,7 +441,10 @@ rule product: c1.value * c2.value
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
     match &sum.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("350").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(350)
+            ),
             other => panic!("Expected Number for sum, got {:?}", other),
         },
         other => panic!("Expected Value for sum, got {:?}", other),
@@ -447,7 +452,10 @@ rule product: c1.value * c2.value
     // product: 100 * 50 = 5000
     match &product.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("5000").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(5000)
+            ),
             other => panic!("Expected Number for product, got {:?}", other),
         },
         other => panic!("Expected Value for product, got {:?}", other),
@@ -469,7 +477,7 @@ rule x_squared: x * x
     let middle_spec = r#"
 spec middle
 uses base_config: base
-data base_config.x: 20
+fill base_config.x: 20
 rule x_squared_plus_ten: base_config.x_squared + 10
 "#;
 
@@ -502,7 +510,14 @@ rule final_result: middle_config.x_squared_plus_ten * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let final_result = response
@@ -514,7 +529,10 @@ rule final_result: middle_config.x_squared_plus_ten * 2
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
     match &final_result.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("820").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(820)
+            ),
             other => panic!("Expected Number for final_result, got {:?}", other),
         },
         other => panic!("Expected Value for final_result, got {:?}", other),
@@ -537,11 +555,11 @@ rule final_price: price * (1 - discount)
     let scenario_spec = r#"
 spec scenarios
 uses retail: pricing
-data retail.discount: 5%
+fill retail.discount: 5%
 
 uses wholesale: pricing
-data wholesale.discount: 15%
-data wholesale.price: 80
+fill wholesale.discount: 15%
+fill wholesale.price: 80
 
 rule retail_final: retail.final_price
 rule wholesale_final: wholesale.final_price
@@ -549,21 +567,22 @@ rule price_difference: retail_final - wholesale_final
 "#;
 
     engine
-        .load(
-            pricing_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(pricing_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            scenario_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(scenario_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "scenarios", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "scenarios",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let retail_final = response
@@ -585,7 +604,10 @@ rule price_difference: retail_final - wholesale_final
     // retail: 100 * (1 - 0.05) = 95
     match &retail_final.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("95").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(95)
+            ),
             other => panic!("Expected Number for retail_final, got {:?}", other),
         },
         other => panic!("Expected Value for retail_final, got {:?}", other),
@@ -593,7 +615,10 @@ rule price_difference: retail_final - wholesale_final
     // wholesale: 80 * (1 - 0.15) = 68
     match &wholesale_final.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("68").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(68)
+            ),
             other => panic!("Expected Number for wholesale_final, got {:?}", other),
         },
         other => panic!("Expected Value for wholesale_final, got {:?}", other),
@@ -601,16 +626,19 @@ rule price_difference: retail_final - wholesale_final
     // difference: 95 - 68 = 27
     match &price_difference.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("27").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                Decimal::from(27)
+            ),
             other => panic!("Expected Number for price_difference, got {:?}", other),
         },
         other => panic!("Expected Value for price_difference, got {:?}", other),
     }
 }
 
-/// The old shorthand `data …: spec …` RHS is rejected even with dotted LHS.
+/// `data …: spec …` RHS is rejected even when the LHS is dotted (use `fill`).
 #[test]
-fn test_old_data_spec_shorthand_rejected_with_dotted_lhs() {
+fn test_data_spec_shorthand_rejected_with_dotted_lhs() {
     let mut engine = Engine::new();
 
     let specs = r#"
@@ -627,19 +655,15 @@ data cc.aa: spec a
 rule yy: cc.y
 "#;
 
-    let errs = engine
-        .load(
-            specs,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap_err();
+    let errs = engine.load(specs, lemma::SourceType::Volatile).unwrap_err();
     let msg = errs
         .iter()
         .map(|e| e.to_string())
         .collect::<Vec<_>>()
         .join("; ");
     assert!(
-        msg.contains("syntax has been removed"),
-        "expected old syntax rejection, got: {msg}"
+        (msg.contains("uses") && msg.contains("spec"))
+            || msg.contains("Dotted paths require `fill`"),
+        "expected spec-import or dotted-LHS rejection, got: {msg}"
     );
 }

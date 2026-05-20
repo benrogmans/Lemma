@@ -16,11 +16,13 @@ To compile the NIF from source (contributors), set `LEMMA_BUILD_NIF=1` and have 
 LEMMA_BUILD_NIF=1 mix compile
 ```
 
-Pre-commit check:
+Pre-commit check (format, locked deps, compile, ExUnit):
 
 ```bash
-LEMMA_BUILD_NIF=1 mix precommit
+mix precommit
 ```
+
+Builds the NIF from source when no checksum file is present (typical in this repo).
 
 ## Installation
 
@@ -79,7 +81,8 @@ rule discount: 0
 | `Lemma.new/1` | Create engine (optional limits map) |
 | `Lemma.load/3` | Load spec from string |
 | `Lemma.load_from_paths/2` | Load specs from file paths |
-| `Lemma.list/1` | List loaded specs |
+| `Lemma.list/1` | List loaded specs (includes embedded `lemma` / `spec si`) |
+| `Lemma.format_repository/2` | Formatted Lemma source for a repository (e.g. `"lemma"`) |
 | `Lemma.schema/3` | Get spec schema (data, rules, types) |
 | `Lemma.run/3` | Evaluate a spec with data |
 | `Lemma.remove_spec/3` | Remove a spec from the engine |

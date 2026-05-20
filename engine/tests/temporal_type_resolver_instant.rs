@@ -1,4 +1,4 @@
-//! Adversarial: data imports under a qualified parent must resolve the imported
+//! Adversarial: qualified parent types under `uses` must resolve the dependency
 //! spec at the same instant as the rest of that parent's body (not only the root slice).
 
 use lemma::{DateTimeValue, Engine, SourceType};
@@ -24,8 +24,8 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
 }
 
 /// `child` gains `usd` only from 2025-07. `dep` uses `1.00 usd` which requires that unit.
-/// Consumer pins `dep` at 2025-07-01; data `money from child` must use child@2025-07 (usd),
-/// not child@2025-01 (eur-only) from the consumer's slice instant.
+/// Consumer pins `dep` at 2025-07-01; `data money: child.money` must use child@2025-07 (usd),
+/// not child@2025-01 (eur-only) at the consumer's slice instant.
 #[test]
 fn qualified_parent_data_import_resolves_child_at_qualifier_not_root_slice() {
     let mut engine = Engine::new();
@@ -33,18 +33,19 @@ fn qualified_parent_data_import_resolves_child_at_qualifier_not_root_slice() {
         .load(
             r#"
 spec child 2025-01-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 
 spec child 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 
 spec dep 2025-07-01
-data money: money from child
+uses child
+data money: child.money
 data price: money
 rule val: 1.00 usd
 
@@ -57,7 +58,14 @@ rule out: d.val
         .expect("planning must resolve money type with usd when dep is pinned to 2025-07");
 
     let r = engine
-        .run(None, "app", Some(&date(2025, 3, 1)), HashMap::new(), false)
+        .run(
+            None,
+            "app",
+            Some(&date(2025, 3, 1)),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run");
     assert_rule_value(&r, "out", "1.00 usd");
 }

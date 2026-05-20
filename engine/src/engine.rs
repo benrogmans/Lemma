@@ -1,4 +1,4 @@
-use crate::evaluation::Evaluator;
+use crate::evaluation::{EvaluationRequest, Evaluator};
 use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::parsing::source::SourceType;
 use crate::parsing::EffectiveDate;
@@ -26,6 +26,10 @@ impl Errors {
         self.errors.iter()
     }
 }
+
+/// Repository name reserved for the embedded standard library (`repo lemma`, `spec si`).
+/// User [`Engine::load`] / [`Engine::load_batch`] must not target this name.
+pub const EMBEDDED_STDLIB_REPOSITORY: &str = "lemma";
 
 /// Collect `.lemma` source texts from filesystem paths (paths and one-level directories).
 /// Does not touch an [`Engine`]; pair with [`Engine::load`] / [`Engine::load_batch`].
@@ -133,13 +137,37 @@ impl Default for Context {
 }
 
 impl Context {
+    /// Empty workspace plus embedded `repo lemma` / `spec si` from [`crate::stdlib::SI_LEMMA`]
+    /// under repository [`EMBEDDED_STDLIB_REPOSITORY`] (dependency `lemma`).
+    /// User [`Engine::load`] / [`Engine::load_batch`] cannot replace that repository.
     pub fn new() -> Self {
         let workspace = Arc::new(LemmaRepository::new(None));
         let mut repositories = IndexMap::new();
         repositories.insert(Arc::clone(&workspace), IndexMap::new());
-        Self {
+        let mut ctx = Self {
             repositories,
             workspace,
+        };
+        ctx.insert_embedded_stdlib();
+        ctx
+    }
+
+    fn insert_embedded_stdlib(&mut self) {
+        let result = parse(
+            crate::stdlib::SI_LEMMA,
+            SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .expect("BUG: stdlib source must parse");
+        let repo = Arc::new(
+            LemmaRepository::new(Some(EMBEDDED_STDLIB_REPOSITORY.to_string()))
+                .with_dependency("lemma"),
+        );
+        for (_parsed_repo, specs) in result.repositories {
+            for spec in specs {
+                self.insert_spec(Arc::clone(&repo), Arc::new(spec))
+                    .expect("BUG: stdlib spec insertion must not fail");
+            }
         }
     }
 
@@ -360,6 +388,18 @@ impl Engine {
         }
     }
 
+    /// Re-run planning for all loaded specs (stdlib on [`Self::new`], workspace after load/remove).
+    pub fn replan(&mut self) -> Result<(), Error> {
+        let pr = crate::planning::plan(&self.specs);
+        let planning_errs: Vec<Error> = pr
+            .results
+            .iter()
+            .flat_map(|r| r.errors().cloned())
+            .collect();
+        self.apply_planning_result(pr);
+        planning_errs.into_iter().next().map_or(Ok(()), Err)
+    }
+
     /// Load one Lemma source (workspace; not a tagged dependency).
     pub fn load(&mut self, code: impl Into<String>, source: SourceType) -> Result<(), Errors> {
         self.load_batch(HashMap::from([(source, code.into())]), None)
@@ -402,6 +442,22 @@ impl Engine {
                 }
             }
             _ => Ok(()),
+        }
+    }
+
+    fn reject_reserved_stdlib_repository(repository: &Arc<LemmaRepository>) -> Option<Error> {
+        if repository.name.as_deref() == Some(EMBEDDED_STDLIB_REPOSITORY) {
+            Some(Error::validation_with_context(
+                format!(
+                    "Repository '{EMBEDDED_STDLIB_REPOSITORY}' is reserved for the embedded standard library and cannot be loaded via load or load_batch; use '@lemma/std' for registry packages such as finance"
+                ),
+                None,
+                Some("Load registry dependencies as '@lemma/std', not the reserved 'lemma' stdlib repository".to_string()),
+                None,
+                None,
+            ))
+        } else {
+            None
         }
     }
 
@@ -497,6 +553,25 @@ impl Engine {
                         } else {
                             Arc::clone(parsed_repo)
                         };
+                        if let Some(reserved_err) =
+                            Self::reject_reserved_stdlib_repository(&repository_arc)
+                        {
+                            let source = crate::parsing::source::Source::new(
+                                source_id.clone(),
+                                crate::parsing::ast::Span {
+                                    start: 0,
+                                    end: 0,
+                                    line: parsed_repo.start_line,
+                                    col: 0,
+                                },
+                            );
+                            errors.push(Error::validation(
+                                reserved_err.to_string(),
+                                Some(source),
+                                reserved_err.suggestion().map(str::to_string),
+                            ));
+                            continue;
+                        }
                         for spec in specs {
                             match self
                                 .specs
@@ -568,10 +643,11 @@ impl Engine {
             .ok_or_else(|| self.spec_not_found_error(name, &effective_dt))
     }
 
-    /// Every loaded repository in insertion order (includes workspace and dependencies).
+    /// Every loaded repository in insertion order (workspace, embedded stdlib [`EMBEDDED_STDLIB_REPOSITORY`], dependencies).
     ///
     /// Each [`ResolvedRepository::repository`] and every [`LemmaSpec`] under [`ResolvedRepository::specs`]
     /// includes source metadata (`start_line`, `source_type`) from load.
+    /// Inspectable stdlib text: [`Self::format_repository`] with `"lemma"`.
     #[must_use]
     pub fn list(&self) -> Vec<ResolvedRepository> {
         self.specs
@@ -623,6 +699,31 @@ impl Engine {
         }
     }
 
+    /// Canonical Lemma source for every spec in `repository`, formatted from the in-engine AST.
+    pub fn format_repository(&self, repository: &str) -> Result<String, Error> {
+        let resolved = self.get_repository(repository)?;
+        let mut specs: Vec<Arc<LemmaSpec>> = resolved
+            .specs
+            .iter()
+            .flat_map(|ss| ss.iter_specs())
+            .collect();
+        specs.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.effective_from.cmp(&b.effective_from))
+        });
+        let spec_refs: Vec<&LemmaSpec> = specs.iter().map(AsRef::as_ref).collect();
+        let body = crate::formatting::format_spec_refs(&spec_refs);
+        let mut out = String::new();
+        if let Some(name) = resolved.repository.name.as_deref() {
+            out.push_str("repo ");
+            out.push_str(name);
+            out.push_str("\n\n");
+        }
+        out.push_str(&body);
+        Ok(out)
+    }
+
     /// Planning schema for `name`. When `repo` is `None`, the spec must be
     /// unambiguous across all loaded repositories; when `Some`, scoped to that
     /// repository qualifier (e.g. `"@org/pkg"`).
@@ -645,10 +746,18 @@ impl Engine {
         effective: Option<&DateTimeValue>,
         data_values: HashMap<String, String>,
         record_operations: bool,
+        request: EvaluationRequest,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
         let plan = self.get_plan(repo, spec, Some(&effective))?;
-        self.run_plan(plan, Some(&effective), data_values, record_operations)
+        let data_values = crate::serialization::data_values_from_strings(data_values);
+        self.run_plan(
+            plan,
+            Some(&effective),
+            data_values,
+            record_operations,
+            request,
+        )
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
@@ -666,7 +775,10 @@ impl Engine {
         let effective = self.effective_or_now(effective);
         let base_plan = self.get_plan(None, name, Some(&effective))?;
 
-        let plan = base_plan.clone().set_data_values(values, &self.limits)?;
+        let plan = base_plan.clone().set_data_values(
+            crate::serialization::data_values_from_strings(values),
+            &self.limits,
+        )?;
         let provided_data: std::collections::HashSet<_> = plan
             .data
             .iter()
@@ -734,15 +846,16 @@ impl Engine {
         &self,
         plan: &crate::planning::ExecutionPlan,
         effective: Option<&DateTimeValue>,
-        data_values: HashMap<String, String>,
+        data_values: HashMap<String, serde_json::Value>,
         record_operations: bool,
+        request: EvaluationRequest,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
         let plan = plan
             .clone()
             .with_defaults()
             .set_data_values(data_values, &self.limits)?;
-        self.evaluate_plan(plan, &effective, record_operations)
+        self.evaluate_plan(plan, &effective, record_operations, request)
     }
 
     /// Evaluate after [`ExecutionPlan::set_data_values`] without [`ExecutionPlan::with_defaults`].
@@ -751,12 +864,13 @@ impl Engine {
         &self,
         plan: &crate::planning::ExecutionPlan,
         effective: Option<&DateTimeValue>,
-        data_values: HashMap<String, String>,
+        data_values: HashMap<String, serde_json::Value>,
         record_operations: bool,
+        request: EvaluationRequest,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
         let plan = plan.clone().set_data_values(data_values, &self.limits)?;
-        self.evaluate_plan(plan, &effective, record_operations)
+        self.evaluate_plan(plan, &effective, record_operations, request)
     }
 
     pub fn remove(&mut self, name: &str, effective: Option<&DateTimeValue>) -> Result<(), Error> {
@@ -833,6 +947,7 @@ impl Engine {
         plan: crate::planning::ExecutionPlan,
         effective: &DateTimeValue,
         record_operations: bool,
+        request: EvaluationRequest,
     ) -> Result<Response, Error> {
         let now_semantic = crate::planning::semantics::date_time_to_semantic(effective);
         let now_literal = crate::planning::semantics::LiteralValue {
@@ -841,7 +956,7 @@ impl Engine {
         };
         Ok(self
             .evaluator
-            .evaluate(&plan, now_literal, record_operations))
+            .evaluate(&plan, now_literal, record_operations, &request))
     }
 
     /// Effective datetime for a request: `explicit` or now.
@@ -886,7 +1001,11 @@ mod tests {
             .unwrap();
         ctx.insert_spec(Arc::clone(&repository), Arc::clone(&s_2025))
             .unwrap();
-        let listed: Vec<_> = ctx.iter().collect();
+        let listed: Vec<_> = ctx
+            .spec_set(&repository, "mortgage")
+            .expect("mortgage set")
+            .iter_specs()
+            .collect();
         assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].effective_from(), Some(&date(2025, 1, 1)));
         assert_eq!(listed[1].effective_from(), Some(&date(2026, 1, 1)));
@@ -1126,7 +1245,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(response.results.len(), 2);
 
@@ -1161,7 +1287,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(
@@ -1194,7 +1327,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(
             response.results.values().next().unwrap().result,
@@ -1219,7 +1359,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(
             response
@@ -1239,7 +1386,14 @@ mod tests {
     fn test_spec_not_found() {
         let engine = Engine::new();
         let now = DateTimeValue::now();
-        let result = engine.run(None, "nonexistent", Some(&now), HashMap::new(), false);
+        let result = engine.run(
+            None,
+            "nonexistent",
+            Some(&now),
+            HashMap::new(),
+            false,
+            EvaluationRequest::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -1271,7 +1425,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response1 = engine
-            .run(None, "spec1", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "spec1",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(
             response1.results[0].result.value().unwrap().to_string(),
@@ -1279,7 +1440,14 @@ mod tests {
         );
 
         let response2 = engine
-            .run(None, "spec2", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "spec2",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(
             response2.results[0].result.value().unwrap().to_string(),
@@ -1303,7 +1471,14 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let result = engine.run(None, "test", Some(&now), HashMap::new(), false);
+        let result = engine.run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            EvaluationRequest::default(),
+        );
         // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
@@ -1346,7 +1521,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         assert_eq!(response.results.len(), 3);
 
@@ -1403,7 +1585,14 @@ mod tests {
         let now = DateTimeValue::now();
         let rules = vec!["total".to_string()];
         let mut response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .unwrap();
         response.filter_rules(&rules);
 
@@ -1446,7 +1635,14 @@ rule value: external.quantity"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "main_spec", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "main_spec",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .expect("evaluate should succeed");
 
         let value_result = response
@@ -1500,7 +1696,14 @@ rule doubled: price * 2"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "local_only", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "local_only",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .expect("evaluate should succeed");
 
         let doubled = response
@@ -1551,7 +1754,7 @@ rule value: external.quantity"#,
             .load_batch(
                 HashMap::from([(
                     SourceType::Volatile,
-                    "repo @lemma/std\nspec finance\ndata money: scale\n -> unit eur 1.00\n -> decimals 2".to_string(),
+                    "repo @lemma/std\nspec finance\ndata money: quantity\n -> unit eur 1.00\n -> decimals 2".to_string(),
                 )]),
                 Some("@lemma/std"),
             )
@@ -1560,7 +1763,8 @@ rule value: external.quantity"#,
         engine
             .load(
                 r#"spec registry_demo
-data money: money from @lemma/std finance
+uses @lemma/std finance
+data money: finance.money
 data unit_price: 5 eur
 uses @org/example helper
 rule helper_value: helper.value
@@ -1572,7 +1776,14 @@ rule formatted: helper_value + 0"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "registry_demo", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "registry_demo",
+                Some(&now),
+                HashMap::new(),
+                false,
+                EvaluationRequest::default(),
+            )
             .expect("evaluate should succeed");
 
         assert_eq!(
@@ -1635,6 +1846,47 @@ rule formatted: helper_value + 0"#,
                 Some("@org/my"),
             )
             .expect("dependency bundle specs should be accepted");
+    }
+
+    #[test]
+    fn user_load_rejects_reserved_embedded_stdlib_repository() {
+        let mut engine = Engine::new();
+        let batch = engine.load_batch(
+            HashMap::from([(
+                SourceType::Volatile,
+                "spec finance\ndata money: ratio -> decimals 2".to_string(),
+            )]),
+            Some(EMBEDDED_STDLIB_REPOSITORY),
+        );
+        assert!(
+            batch.is_err(),
+            "load_batch must not write reserved lemma stdlib repo"
+        );
+        let msg = batch
+            .unwrap_err()
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            msg.contains(EMBEDDED_STDLIB_REPOSITORY) && msg.contains("reserved"),
+            "expected reserved-repo error, got: {msg}"
+        );
+
+        let workspace = engine.load("repo lemma\nspec x\ndata a: 1", SourceType::Volatile);
+        assert!(workspace.is_err(), "workspace repo lemma must be rejected");
+        let msg = workspace
+            .unwrap_err()
+            .errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            msg.contains(EMBEDDED_STDLIB_REPOSITORY) && msg.contains("reserved"),
+            "expected reserved-repo error, got: {msg}"
+        );
     }
 
     #[test]
@@ -1713,7 +1965,7 @@ rule formatted: helper_value + 0"#,
 
         let result = engine.load(
             r#"spec demo
-data money: nonexistent_type_source.amount
+fill money: nonexistent_type_source.amount
 uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#,
@@ -1825,11 +2077,11 @@ rule total: helper.value + price"#,
             .expect("second file should load");
 
         // Both specs should land under the same repo entry.
-        // main_repository is always present, plus the "shared" repo.
+        // Workspace, embedded stdlib (`lemma`), plus the "shared" repo.
         assert_eq!(
             engine.specs.repositories().len(),
-            2,
-            "should have main repository and one named repository"
+            3,
+            "should have workspace, stdlib repository, and one named user repository"
         );
 
         let shared_repo = engine

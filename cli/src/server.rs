@@ -44,6 +44,9 @@ pub mod http {
     #[derive(Deserialize, Default)]
     struct SpecQuery {
         rules: Option<String>,
+        /// Comma-separated `rule:unit` quantity conversions (for example `total:usd`).
+        #[serde(default)]
+        as_units: Option<String>,
     }
 
     fn resolve_effective(
@@ -445,8 +448,32 @@ pub mod http {
             )
         })?;
 
+        let evaluation_request = crate::evaluation_request::build_evaluation_request_from_query(
+            &engine,
+            None,
+            &spec_name,
+            &effective,
+            q.as_units.as_deref(),
+            &rule_names,
+        )
+        .map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: err.to_string(),
+                }),
+            )
+        })?;
+
         let mut response = engine
-            .run(None, &spec_name, Some(&effective), data_values, false)
+            .run(
+                None,
+                &spec_name,
+                Some(&effective),
+                data_values,
+                false,
+                evaluation_request,
+            )
             .map_err(|err| {
                 (
                     lemma_error_to_status(&err),

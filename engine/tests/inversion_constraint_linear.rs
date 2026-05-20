@@ -1,7 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::SemanticDurationUnit;
 use lemma::{Bound, DataPath, Domain, Engine, Error, LiteralValue, Target, ValueKind};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
@@ -14,12 +12,7 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -33,7 +26,7 @@ rule r: 0
         .unwrap();
 
     let x = DataPath::local("x".to_string());
-    let nine = LiteralValue::number(Decimal::from(9));
+    let nine = LiteralValue::number_from_decimal(rust_decimal::Decimal::from(9));
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
 
@@ -61,12 +54,7 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -80,7 +68,7 @@ rule r: 0
         .unwrap();
 
     let x = DataPath::local("x".to_string());
-    let four = LiteralValue::number(Decimal::from(4));
+    let four = LiteralValue::number_from_decimal(rust_decimal::Decimal::from(4));
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
 
@@ -108,12 +96,7 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -127,7 +110,7 @@ rule r: 0
         .unwrap();
 
     let x = DataPath::local("x".to_string());
-    let minus_two = LiteralValue::number(Decimal::from(-2));
+    let minus_two = LiteralValue::number_from_decimal(rust_decimal::Decimal::from(-2));
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
 
@@ -146,22 +129,17 @@ rule r: 0
 }
 
 #[test]
-fn invert_unless_scale_unit_conversion_wrapper() {
+fn invert_unless_quantity_unit_conversion_wrapper() {
     let code = r#"
 spec t
-data money: scale -> unit eur 1.0 -> unit usd 1.18
+data money: quantity -> unit eur 1.0 -> unit usd 1.18
 data price: money
 rule r: 0
-  unless (price in eur) > 100 eur then veto "too expensive"
+  unless (price as eur) > 100 eur then veto "too expensive"
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -178,7 +156,7 @@ rule r: 0
 
     assert!(!inv.is_empty(), "expected at least one inversion solution");
 
-    // We don't assert exact scale type identity here; just that the derived lower bound is 100 eur.
+    // We don't assert exact quantity type identity here; just that the derived lower bound is 100 eur.
     let mut saw_expected = false;
     for domains in inv.domains.iter() {
         let Some(d) = domains.get(&price) else {
@@ -189,8 +167,10 @@ rule r: 0
             max: Bound::Unbounded,
         } = d
         {
-            if let ValueKind::Scale(n, unit) = &v.value {
-                if *n == Decimal::from(100) && unit == "eur" {
+            if let ValueKind::Quantity(n, unit, _decomp) = &v.value {
+                if lemma::commit_rational_to_decimal(n).unwrap() == rust_decimal::Decimal::from(100)
+                    && unit == "eur"
+                {
                     saw_expected = true;
                 }
             }
@@ -206,18 +186,15 @@ rule r: 0
 fn invert_unless_duration_unit_conversion_wrapper() {
     let code = r#"
 spec t
+uses lemma si
+data duration: si.duration
 data d: duration
 rule r: 0
-  unless (d in hours) >= 2 hours then veto "long"
+  unless (d as hours) >= 2 hours then veto "long"
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let inv = engine
@@ -242,8 +219,10 @@ rule r: 0
             max: Bound::Unbounded,
         } = dom
         {
-            if let ValueKind::Duration(n, unit) = &v.value {
-                if *n == Decimal::from(2) && *unit == SemanticDurationUnit::Hour {
+            if let ValueKind::Quantity(n, unit, _) = &v.value {
+                if lemma::commit_rational_to_decimal(n).unwrap() == rust_decimal::Decimal::from(2)
+                    && unit.eq_ignore_ascii_case("hours")
+                {
                     saw_expected = true;
                 }
             }
@@ -263,12 +242,7 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let err = engine
@@ -294,12 +268,7 @@ rule r: 0
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let err = engine

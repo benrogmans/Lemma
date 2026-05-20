@@ -1,6 +1,12 @@
-use lemma::evaluation::explanation::{ExplanationNode, NonMatchedBranch, ValueSource};
-use lemma::planning::semantics::{DataPath, DataValue, TypeSpecification, ValueKind};
-use lemma::{ExecutionPlan, LiteralValue, OperationResult, Response, RuleResult, SpecSchema};
+use lemma::evaluation::explanation::{
+    ConversionExplanationStep, ExplanationNode, NonMatchedBranch, ValueSource,
+};
+use lemma::evaluation::operations::ComputationKind;
+use lemma::planning::semantics::{DataPath, DataValue, ValueKind};
+use lemma::{
+    commit_rational_to_decimal, rational_to_display_str, ExecutionPlan, LiteralValue,
+    OperationResult, RationalInteger, Response, RuleResult, SpecSchema,
+};
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
 
@@ -362,13 +368,20 @@ impl Formatter {
                 self.render_rule_reference(rule_path, result, expansion, Connector::Last, &mut ctx);
             }
             ExplanationNode::Computation {
+                kind,
+                conversion_steps,
                 expression,
                 original_expression,
                 operands,
                 ..
-            } => {
-                self.render_computation(expression, original_expression, operands, &mut ctx);
-            }
+            } => match kind {
+                ComputationKind::UnitConversion { .. } => {
+                    self.render_unit_conversion_computation(conversion_steps, operands, &mut ctx);
+                }
+                _ => {
+                    self.render_computation(expression, original_expression, operands, &mut ctx);
+                }
+            },
             ExplanationNode::Branches {
                 matched,
                 non_matched,
@@ -475,6 +488,58 @@ impl Formatter {
         }
     }
 
+    fn render_unit_conversion_computation(
+        &self,
+        conversion_steps: &[ConversionExplanationStep],
+        operands: &[ExplanationNode],
+        ctx: &mut RenderContext,
+    ) {
+        assert!(
+            !conversion_steps.is_empty(),
+            "BUG: UnitConversion computation must have conversion_steps"
+        );
+        let steps_count = conversion_steps.len();
+        for (index, step) in conversion_steps.iter().enumerate() {
+            if index == 0 {
+                ctx.rows.push(format!("{}{}", ctx.indent, step.text));
+            } else {
+                let step_indent = format!("{}{}", "   ".repeat(index), ctx.indent);
+                let connector = if index + 1 == steps_count && operands.is_empty() {
+                    Connector::Last
+                } else {
+                    Connector::Branch
+                };
+                ctx.rows.push(format!(
+                    "{}{} {}",
+                    step_indent,
+                    self.connector_str(connector),
+                    step.text
+                ));
+            }
+        }
+
+        if operands.is_empty() {
+            return;
+        }
+
+        let operand_indent = format!("{}   ", "   ".repeat(steps_count) + ctx.indent);
+        let len = operands.len();
+        for (index, child) in operands.iter().enumerate() {
+            let connector = if index == len - 1 {
+                Connector::Last
+            } else {
+                Connector::Branch
+            };
+            self.render_node_with_connector(
+                child,
+                &operand_indent,
+                connector,
+                ctx.rows,
+                ctx.expanded,
+            );
+        }
+    }
+
     fn render_computation(
         &self,
         expression: &str,
@@ -510,7 +575,11 @@ impl Formatter {
         let mut result = Vec::new();
         for op in operands {
             match op {
-                ExplanationNode::Value { .. } => {}
+                ExplanationNode::Value { source, .. } => {
+                    if matches!(source, ValueSource::Data { .. }) {
+                        result.push(op);
+                    }
+                }
                 ExplanationNode::Computation {
                     operands: nested, ..
                 } => {
@@ -705,47 +774,32 @@ impl Formatter {
         match &lit.value {
             ValueKind::Number(n) => {
                 let decimals_opt = lit.lemma_type.decimal_places();
-                format_decimal(n, decimals_opt)
+                format_rational(n, decimals_opt)
             }
-            ValueKind::Scale(n, unit) => {
+            ValueKind::Quantity(n, unit, _decomposition) => {
                 let decimals_opt = lit.lemma_type.decimal_places();
-                format!("{} {}", format_decimal(n, decimals_opt), unit)
+                format!("{} {}", format_rational(n, decimals_opt), unit)
             }
             ValueKind::Ratio(r, unit_opt) => {
-                let decimals_opt = lit.lemma_type.decimal_places();
-                match unit_opt.as_deref() {
-                    Some(unit_name) => {
-                        let display_value = if let TypeSpecification::Ratio { units, .. } =
-                            &lit.lemma_type.specifications
-                        {
-                            if let Ok(unit) = units.get(unit_name) {
-                                *r * unit.value
-                            } else {
-                                *r
-                            }
-                        } else {
-                            *r
-                        };
-                        let display_unit = if unit_name == "percent" {
-                            "%"
-                        } else {
-                            unit_name
-                        };
-                        format!(
-                            "{}{}",
-                            format_decimal(&display_value, decimals_opt),
-                            display_unit
-                        )
-                    }
-                    None => format_decimal(r, decimals_opt),
+                if unit_opt.is_some() {
+                    lit.display_value()
+                } else {
+                    format_rational(r, lit.lemma_type.decimal_places())
                 }
             }
             ValueKind::Text(s) => format!("\"{}\"", s),
             ValueKind::Boolean(b) => b.to_string(),
             ValueKind::Date(d) => d.to_string(),
             ValueKind::Time(t) => t.to_string(),
-            ValueKind::Duration(value, unit) => {
-                format!("{} {}", format_decimal(value, None), unit)
+            ValueKind::Calendar(value, unit) => {
+                format!("{} {}", format_rational(value, None), unit)
+            }
+            ValueKind::Range(left, right) => {
+                format!(
+                    "{}...{}",
+                    self.format_literal_inline(left.as_ref()),
+                    self.format_literal_inline(right.as_ref())
+                )
             }
         }
     }
@@ -793,6 +847,13 @@ fn push_expression_header_lines(
     } else {
         rows.push(format!("{}├─ {}", indent, expression));
         rows.push(format!("{}└─ {}", indent, original_expression));
+    }
+}
+
+fn format_rational(rational: &RationalInteger, decimals: Option<u8>) -> String {
+    match commit_rational_to_decimal(rational) {
+        Ok(decimal) => format_decimal(&decimal, decimals),
+        Err(_) => rational_to_display_str(rational),
     }
 }
 

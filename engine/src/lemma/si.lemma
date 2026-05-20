@@ -1,0 +1,73 @@
+repo lemma
+
+spec si
+"""
+SI base units.
+Duration units are canonical `second` (not `hour`).
+Length units are canonical `metre` (not `kilometer`).
+"""
+
+data duration: quantity
+  -> unit second 1
+  -> unit seconds 1
+  -> unit millisecond 0.001
+  -> unit milliseconds 0.001
+  -> unit microsecond 0.000001
+  -> unit microseconds 0.000001
+  -> unit minute 60
+  -> unit minutes 60
+  -> unit hour 3600
+  -> unit hours 3600
+  -> unit day 86400
+  -> unit days 86400
+  -> unit week 604800
+  -> unit weeks 604800
+  -> trait duration
+
+data length: quantity
+  -> unit metre 1
+  -> unit metres 1
+  -> unit meter 1
+  -> unit meters 1
+  -> unit millimetre 0.001
+  -> unit millimetres 0.001
+  -> unit millimeter 0.001
+  -> unit millimeters 0.001
+  -> unit centimetre 0.01
+  -> unit centimetres 0.01
+  -> unit centimeter 0.01
+  -> unit centimeters 0.01
+  -> unit kilometre 1000
+  -> unit kilometres 1000
+  -> unit kilometer 1000
+  -> unit kilometers 1000
+
+data mass: quantity
+  -> unit kilogram 1
+  -> unit kilograms 1
+  -> unit gram 0.001
+  -> unit grams 0.001
+  -> unit milligram 0.000001
+  -> unit milligrams 0.000001
+  -> unit tonne 1000
+  -> unit tonnes 1000
+
+data current: quantity
+  -> unit ampere 1
+  -> unit amperes 1
+  -> unit milliampere 0.001
+  -> unit milliamperes 0.001
+
+data temperature: quantity
+  -> unit kelvin 1
+  -> unit kelvins 1
+
+data substance: quantity
+  -> unit mole 1
+  -> unit moles 1
+  -> unit millimole 0.001
+  -> unit millimoles 0.001
+
+data luminous_intensity: quantity
+  -> unit candela 1
+  -> unit candelas 1

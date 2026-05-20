@@ -8,6 +8,7 @@
 //! Includes BDD-based simplification for contradiction detection.
 //! For semantic analysis (e.g., `x is A and x is not B`), use domain extraction.
 
+use crate::computation::units::UnitResolutionContext;
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, DataPath, Expression, ExpressionKind,
     LiteralValue, SemanticConversionTarget, ValueKind,
@@ -133,6 +134,7 @@ impl Constraint {
         enum WorkItem {
             Process(usize),
             BuildAnd,
+            BuildOr,
             ApplyNot,
         }
 
@@ -189,6 +191,16 @@ impl Constraint {
                             work_stack.push(WorkItem::Process(right_idx));
                             work_stack.push(WorkItem::Process(left_idx));
                         }
+                        ExpressionKind::LogicalOr(left, right) => {
+                            let left_idx = expr_pool.len();
+                            expr_pool.push((*left).clone());
+                            let right_idx = expr_pool.len();
+                            expr_pool.push((*right).clone());
+
+                            work_stack.push(WorkItem::BuildOr);
+                            work_stack.push(WorkItem::Process(right_idx));
+                            work_stack.push(WorkItem::Process(left_idx));
+                        }
                         ExpressionKind::LogicalNegation(inner, _) => {
                             let inner_idx = expr_pool.len();
                             expr_pool.push((*inner).clone());
@@ -216,6 +228,15 @@ impl Constraint {
                         .pop()
                         .expect("Internal error: missing left constraint for And");
                     constraint_stack.push(left.and(right));
+                }
+                WorkItem::BuildOr => {
+                    let right = constraint_stack
+                        .pop()
+                        .expect("Internal error: missing right constraint for Or");
+                    let left = constraint_stack
+                        .pop()
+                        .expect("Internal error: missing left constraint for Or");
+                    constraint_stack.push(left.or(right));
                 }
                 WorkItem::ApplyNot => {
                     let inner = constraint_stack
@@ -398,7 +419,7 @@ fn try_rewrite_comparison_to_atomic(
     let right = constant_fold_expression(right).unwrap_or_else(|| right.clone());
 
     // Strip a top-level unit conversion wrapper when comparing against a literal.
-    // This is safe because scale/duration comparisons are unit-normalized during evaluation/domain checks.
+    // This is safe because quantity/duration comparisons are unit-normalized during evaluation/domain checks.
     let (left, right) = match (&left.kind, &right.kind) {
         (ExpressionKind::UnitConversion(inner, target), ExpressionKind::Literal(_)) => {
             if is_monotone_unit_conversion_target(target) {
@@ -452,8 +473,8 @@ fn try_rewrite_comparison_to_atomic(
 fn is_monotone_unit_conversion_target(target: &SemanticConversionTarget) -> bool {
     matches!(
         target,
-        SemanticConversionTarget::Duration(_)
-            | SemanticConversionTarget::ScaleUnit(_)
+        SemanticConversionTarget::Calendar(_)
+            | SemanticConversionTarget::QuantityUnit(_)
             | SemanticConversionTarget::RatioUnit(_)
     )
 }
@@ -466,20 +487,22 @@ fn collect_data_paths(expr: &Expression, out: &mut Vec<DataPath>) {
             ExpressionKind::DataPath(fp) => out.push(fp.clone()),
             ExpressionKind::Arithmetic(l, _, r)
             | ExpressionKind::Comparison(l, _, r)
-            | ExpressionKind::LogicalAnd(l, r) => {
+            | ExpressionKind::LogicalAnd(l, r)
+            | ExpressionKind::LogicalOr(l, r)
+            | ExpressionKind::RangeLiteral(l, r)
+            | ExpressionKind::RangeContainment(l, r) => {
                 stack.push(l.as_ref());
                 stack.push(r.as_ref());
             }
             ExpressionKind::LogicalNegation(inner, _)
             | ExpressionKind::UnitConversion(inner, _)
-            | ExpressionKind::MathematicalComputation(_, inner) => {
+            | ExpressionKind::MathematicalComputation(_, inner)
+            | ExpressionKind::ResultIsVeto(inner)
+            | ExpressionKind::PastFutureRange(_, inner) => {
                 stack.push(inner.as_ref());
             }
-            ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+            ExpressionKind::DateRelative(_, date_expr) => {
                 stack.push(date_expr.as_ref());
-                if let Some(tol) = tolerance {
-                    stack.push(tol.as_ref());
-                }
             }
             ExpressionKind::DateCalendar(_, _, date_expr) => {
                 stack.push(date_expr.as_ref());
@@ -508,7 +531,11 @@ fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
         ExpressionKind::UnitConversion(inner, target) => {
             let folded_inner = constant_fold_expression(inner)?;
             if let ExpressionKind::Literal(lit) = &folded_inner.kind {
-                match crate::computation::convert_unit(lit.as_ref(), target) {
+                match crate::computation::convert_unit(
+                    lit.as_ref(),
+                    target,
+                    UnitResolutionContext::NamedQuantityOnly,
+                ) {
                     OperationResult::Value(v) => Some(Expression::with_source(
                         ExpressionKind::Literal(Box::new(v.as_ref().clone())),
                         expr.source_location.clone(),
@@ -521,24 +548,37 @@ fn constant_fold_expression(expr: &Expression) -> Option<Expression> {
         }
 
         ExpressionKind::Arithmetic(left, op, right) => {
-            let left_folded = constant_fold_expression(left)?;
-            let right_folded = constant_fold_expression(right)?;
-            match (&left_folded.kind, &right_folded.kind) {
-                (ExpressionKind::Literal(l), ExpressionKind::Literal(r)) => {
-                    match crate::computation::arithmetic_operation(l.as_ref(), op, r.as_ref()) {
-                        OperationResult::Value(v) => Some(Expression::with_source(
-                            ExpressionKind::Literal(Box::new(v.as_ref().clone())),
-                            expr.source_location.clone(),
-                        )),
-                        _ => None,
-                    }
+            let left_folded = constant_fold_expression(left).unwrap_or_else(|| (**left).clone());
+            let right_folded = constant_fold_expression(right).unwrap_or_else(|| (**right).clone());
+            if let (ExpressionKind::Literal(left_val), ExpressionKind::Literal(right_val)) =
+                (&left_folded.kind, &right_folded.kind)
+            {
+                if let Some(result) =
+                    fold_arithmetic_literals(left_val.as_ref(), op, right_val.as_ref())
+                {
+                    return Some(Expression::with_source(
+                        ExpressionKind::Literal(Box::new(result)),
+                        expr.source_location.clone(),
+                    ));
                 }
-                _ => None,
             }
+            None
         }
 
-        // We only need folding for arithmetic/unit conversion for Option B.
         _ => None,
+    }
+}
+
+fn fold_arithmetic_literals(
+    left: &LiteralValue,
+    op: &ArithmeticComputation,
+    right: &LiteralValue,
+) -> Option<LiteralValue> {
+    use crate::computation::arithmetic_operation;
+
+    match arithmetic_operation(left, op, right) {
+        OperationResult::Value(lit) => Some(lit.as_ref().clone()),
+        OperationResult::Veto(_) => None,
     }
 }
 
@@ -629,27 +669,33 @@ fn isolate_through_arithmetic_left(
         ArithmeticComputation::Multiply => {
             // (x * c) op b  =>  x op' (b / c)
             let c = constant_as_number(constant)?;
-            if c.is_zero() {
+            if crate::computation::rational::rational_is_zero(&c) {
                 return None;
             }
             let mut new_op = op.clone();
-            if c.is_sign_negative() && !op.is_equal() && !op.is_not_equal() {
+            if c < crate::computation::rational::rational_zero()
+                && !op.is_equal()
+                && !op.is_not_equal()
+            {
                 new_op = flip_inequality(&new_op);
             }
-            let new_bound = lit_div_number(bound, c)?;
+            let new_bound = lit_div_number(bound, &c)?;
             isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
         }
         ArithmeticComputation::Divide => {
             // (x / c) op b  =>  x op' (b * c)
             let c = constant_as_number(constant)?;
-            if c.is_zero() {
+            if crate::computation::rational::rational_is_zero(&c) {
                 return None;
             }
             let mut new_op = op.clone();
-            if c.is_sign_negative() && !op.is_equal() && !op.is_not_equal() {
+            if c < crate::computation::rational::rational_zero()
+                && !op.is_equal()
+                && !op.is_not_equal()
+            {
                 new_op = flip_inequality(&new_op);
             }
-            let new_bound = lit_mul_number(bound, c)?;
+            let new_bound = lit_mul_number(bound, &c)?;
             isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
         }
         _ => None,
@@ -683,14 +729,17 @@ fn isolate_through_arithmetic_right(
         ArithmeticComputation::Multiply => {
             // (c * x) op b  =>  x op' (b / c)
             let c = constant_as_number(constant)?;
-            if c.is_zero() {
+            if crate::computation::rational::rational_is_zero(&c) {
                 return None;
             }
             let mut new_op = op.clone();
-            if c.is_sign_negative() && !op.is_equal() && !op.is_not_equal() {
+            if c < crate::computation::rational::rational_zero()
+                && !op.is_equal()
+                && !op.is_not_equal()
+            {
                 new_op = flip_inequality(&new_op);
             }
-            let new_bound = lit_div_number(bound, c)?;
+            let new_bound = lit_div_number(bound, &c)?;
             isolate_linear_comparison(inner_with_unknown, unknown, &new_op, &new_bound)
         }
         // (c / x) is non-linear (reciprocal)
@@ -699,7 +748,7 @@ fn isolate_through_arithmetic_right(
     }
 }
 
-fn constant_as_number(lit: &LiteralValue) -> Option<rust_decimal::Decimal> {
+fn constant_as_number(lit: &LiteralValue) -> Option<crate::computation::rational::RationalInteger> {
     match &lit.value {
         ValueKind::Number(n) => Some(*n),
         _ => None,
@@ -707,54 +756,38 @@ fn constant_as_number(lit: &LiteralValue) -> Option<rust_decimal::Decimal> {
 }
 
 fn lit_add(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
+    use crate::computation::arithmetic::number_arithmetic;
+    use crate::planning::semantics::ArithmeticComputation;
     match (&a.value, &b.value) {
-        (ValueKind::Number(la), ValueKind::Number(lb)) => Some(LiteralValue::number_with_type(
-            *la + *lb,
-            a.lemma_type.clone(),
-        )),
-        (ValueKind::Scale(la, lua), ValueKind::Scale(lb, lub))
-            if a.lemma_type == b.lemma_type && lua == lub =>
-        {
-            Some(LiteralValue::scale_with_type(
-                *la + *lb,
-                lua.clone(),
-                a.lemma_type.clone(),
-            ))
-        }
-        (ValueKind::Duration(la, lua), ValueKind::Duration(lb, lub))
-            if a.lemma_type == b.lemma_type && lua == lub =>
-        {
-            Some(LiteralValue::duration_with_type(
-                *la + *lb,
-                lua.clone(),
-                a.lemma_type.clone(),
-            ))
+        (ValueKind::Number(la), ValueKind::Number(lb)) => {
+            let sum = number_arithmetic(*la, &ArithmeticComputation::Add, *lb).unwrap_or_else(
+                |failure| {
+                    unreachable!(
+                        "BUG: inversion lit_add on numbers failed: {}",
+                        failure.message()
+                    )
+                },
+            );
+            Some(LiteralValue::number_with_type(sum, a.lemma_type.clone()))
         }
         _ => None,
     }
 }
 
 fn lit_sub(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
+    use crate::computation::arithmetic::number_arithmetic;
+    use crate::planning::semantics::ArithmeticComputation;
     match (&a.value, &b.value) {
-        (ValueKind::Number(la), ValueKind::Number(lb)) => Some(LiteralValue::number_with_type(
-            *la - *lb,
-            a.lemma_type.clone(),
-        )),
-        (ValueKind::Scale(la, lua), ValueKind::Scale(lb, lub))
-            if a.lemma_type == b.lemma_type && lua == lub =>
-        {
-            Some(LiteralValue::scale_with_type(
-                *la - *lb,
-                lua.clone(),
-                a.lemma_type.clone(),
-            ))
-        }
-        (ValueKind::Duration(la, lua), ValueKind::Duration(lb, lub))
-            if a.lemma_type == b.lemma_type && lua == lub =>
-        {
-            Some(LiteralValue::duration_with_type(
-                *la - *lb,
-                lua.clone(),
+        (ValueKind::Number(la), ValueKind::Number(lb)) => {
+            let difference = number_arithmetic(*la, &ArithmeticComputation::Subtract, *lb)
+                .unwrap_or_else(|failure| {
+                    unreachable!(
+                        "BUG: inversion lit_sub on numbers failed: {}",
+                        failure.message()
+                    )
+                });
+            Some(LiteralValue::number_with_type(
+                difference,
                 a.lemma_type.clone(),
             ))
         }
@@ -762,39 +795,48 @@ fn lit_sub(a: &LiteralValue, b: &LiteralValue) -> Option<LiteralValue> {
     }
 }
 
-fn lit_mul_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralValue> {
+fn lit_mul_number(
+    a: &LiteralValue,
+    c: &crate::computation::rational::RationalInteger,
+) -> Option<LiteralValue> {
+    use crate::computation::arithmetic::number_arithmetic;
+    use crate::planning::semantics::ArithmeticComputation;
     match &a.value {
-        ValueKind::Number(n) => Some(LiteralValue::number_with_type(*n * c, a.lemma_type.clone())),
-        ValueKind::Scale(n, u) => Some(LiteralValue::scale_with_type(
-            *n * c,
-            u.clone(),
-            a.lemma_type.clone(),
-        )),
-        ValueKind::Duration(n, u) => Some(LiteralValue::duration_with_type(
-            *n * c,
-            u.clone(),
-            a.lemma_type.clone(),
-        )),
+        ValueKind::Number(n) => {
+            let product = number_arithmetic(*n, &ArithmeticComputation::Multiply, *c)
+                .unwrap_or_else(|failure| {
+                    unreachable!(
+                        "BUG: inversion lit_mul_number on number failed: {}",
+                        failure.message()
+                    )
+                });
+            Some(LiteralValue::number_with_type(
+                product,
+                a.lemma_type.clone(),
+            ))
+        }
         _ => None,
     }
 }
 
-fn lit_div_number(a: &LiteralValue, c: rust_decimal::Decimal) -> Option<LiteralValue> {
-    if c.is_zero() {
+fn lit_div_number(
+    a: &LiteralValue,
+    c: &crate::computation::rational::RationalInteger,
+) -> Option<LiteralValue> {
+    use crate::computation::arithmetic::number_arithmetic;
+    use crate::computation::rational::rational_is_zero;
+    use crate::planning::semantics::ArithmeticComputation;
+    if rational_is_zero(c) {
         return None;
     }
     match &a.value {
-        ValueKind::Number(n) => Some(LiteralValue::number_with_type(*n / c, a.lemma_type.clone())),
-        ValueKind::Scale(n, u) => Some(LiteralValue::scale_with_type(
-            *n / c,
-            u.clone(),
-            a.lemma_type.clone(),
-        )),
-        ValueKind::Duration(n, u) => Some(LiteralValue::duration_with_type(
-            *n / c,
-            u.clone(),
-            a.lemma_type.clone(),
-        )),
+        ValueKind::Number(n) => {
+            let quotient = number_arithmetic(*n, &ArithmeticComputation::Divide, *c).ok()?;
+            Some(LiteralValue::number_with_type(
+                quotient,
+                a.lemma_type.clone(),
+            ))
+        }
         _ => None,
     }
 }
@@ -873,6 +915,24 @@ fn build_numeric_theory_closure(
     Ok(theory)
 }
 
+fn compare_rational_pair_exact(
+    left: &crate::computation::rational::RationalInteger,
+    op: &ComparisonComputation,
+    right: &crate::computation::rational::RationalInteger,
+) -> Option<bool> {
+    use std::cmp::Ordering;
+
+    let ordering = left.cmp(right);
+    Some(match op {
+        ComparisonComputation::Is => ordering == Ordering::Equal,
+        ComparisonComputation::IsNot => ordering != Ordering::Equal,
+        ComparisonComputation::LessThan => ordering == Ordering::Less,
+        ComparisonComputation::LessThanOrEqual => ordering != Ordering::Greater,
+        ComparisonComputation::GreaterThan => ordering == Ordering::Greater,
+        ComparisonComputation::GreaterThanOrEqual => ordering != Ordering::Less,
+    })
+}
+
 /// Evaluate a comparison between two literals, returning the boolean result
 fn evaluate_literal_comparison(
     left: &LiteralValue,
@@ -900,24 +960,8 @@ fn evaluate_literal_comparison(
                 None
             }
         }
-        // Number comparisons
-        (ValueKind::Number(l), ValueKind::Number(r)) => match op {
-            ComparisonComputation::Is => Some(l == r),
-            ComparisonComputation::IsNot => Some(l != r),
-            ComparisonComputation::LessThan => Some(l < r),
-            ComparisonComputation::LessThanOrEqual => Some(l <= r),
-            ComparisonComputation::GreaterThan => Some(l > r),
-            ComparisonComputation::GreaterThanOrEqual => Some(l >= r),
-        },
-        // Ratio comparisons
-        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => match op {
-            ComparisonComputation::Is => Some(l == r),
-            ComparisonComputation::IsNot => Some(l != r),
-            ComparisonComputation::LessThan => Some(l < r),
-            ComparisonComputation::LessThanOrEqual => Some(l <= r),
-            ComparisonComputation::GreaterThan => Some(l > r),
-            ComparisonComputation::GreaterThanOrEqual => Some(l >= r),
-        },
+        (ValueKind::Number(l), ValueKind::Number(r)) => compare_rational_pair_exact(l, op, r),
+        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => compare_rational_pair_exact(l, op, r),
         _ => None,
     }
 }
@@ -1216,10 +1260,10 @@ impl Serialize for Constraint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
-
     fn num(n: i64) -> LiteralValue {
-        LiteralValue::number(Decimal::from(n))
+        LiteralValue::number(crate::computation::rational::RationalInteger::new(
+            n as i128, 1,
+        ))
     }
 
     fn data(name: &str) -> DataPath {

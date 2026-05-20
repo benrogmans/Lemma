@@ -36,7 +36,7 @@ data other: number -> default 42
 
 spec license
 uses l: law
-data license2: l.other
+fill license2: l.other
 rule check: license2 > 10
 "#;
 
@@ -52,7 +52,14 @@ rule check: license2 > 10
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "license", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "license",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("should run");
 
     assert_eq!(rule_value(&result, "check"), "true");
@@ -71,7 +78,7 @@ data slot: number
 spec top
 uses lic: inner
 uses lw: law
-data lic.slot: lw.other
+fill lic.slot: lw.other
 rule answer: lic.slot
 "#;
 
@@ -87,7 +94,14 @@ rule answer: lic.slot
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("should run");
 
     assert_eq!(rule_value(&result, "answer"), "99");
@@ -101,7 +115,7 @@ data other: number -> default 42
 
 spec license
 uses l: law
-data license2: l.other
+fill license2: l.other
 rule check: license2
 "#;
 
@@ -120,7 +134,14 @@ rule check: license2
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "license", Some(&now), data, false)
+        .run(
+            None,
+            "license",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("should run");
 
     assert_eq!(rule_value(&result, "check"), "777");
@@ -134,11 +155,11 @@ data other: number -> default 5
 
 spec mid
 uses b: base
-data m2: b.other
+fill m2: b.other
 
 spec top
 uses mm: mid
-data t2: mm.m2
+fill t2: mm.m2
 rule result: t2
 "#;
 
@@ -154,7 +175,14 @@ rule result: t2
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("should run");
 
     assert_eq!(rule_value(&result, "result"), "5");
@@ -174,8 +202,8 @@ data b: number
 
 spec outer
 uses i: inner
-data i.a: i.b
-data i.b: i.a
+fill i.a: i.b
+fill i.b: i.a
 "#;
 
     let mut engine = Engine::new();
@@ -192,7 +220,7 @@ data i.b: i.a
     );
 }
 
-/// Self-referential reference: `data x: outer.x` where outer.x resolves back
+/// Self-referential reference: `fill x: outer.x` where outer.x resolves back
 /// to itself. A 1-node cycle must still be rejected.
 #[test]
 fn self_referential_reference_is_rejected() {
@@ -202,7 +230,7 @@ data x: number
 
 spec outer
 uses i: inner
-data i.x: i.x
+fill i.x: i.x
 "#;
 
     let mut engine = Engine::new();
@@ -224,7 +252,7 @@ fn unknown_reference_target_is_rejected_with_exact_error() {
     let code = r#"
 spec test
 data a: number -> default 1
-data b: a.nonexistent
+fill b: a.nonexistent
 rule r: b
 "#;
 
@@ -254,7 +282,7 @@ data x: number -> default 1
 
 spec outer
 uses i: inner
-data copy_of_i: i
+fill copy_of_i: i
 rule r: copy_of_i
 "#;
 
@@ -283,7 +311,7 @@ rule conflict: 2
 
 spec outer
 uses i: inner
-data c: i.conflict
+fill c: i.conflict
 rule r: c
 "#;
 
@@ -317,7 +345,7 @@ data s: text -> default "hello"
 spec outer
 uses i: inner
 uses src: source_spec
-data i.n: src.s
+fill i.n: src.s
 rule r: i.n
 "#;
 
@@ -336,7 +364,7 @@ rule r: i.n
     );
 }
 
-/// RULE-TARGET REFERENCE, value case. `data x: i.my_r` where `my_r` is a
+/// RULE-TARGET REFERENCE, value case. `fill x: i.my_r` where `my_r` is a
 /// rule in inner spec returning `42`. The reference MUST copy the rule's
 /// evaluated result into the reference path so that downstream rules see
 /// the value.
@@ -348,7 +376,7 @@ rule my_r: 42
 
 spec top
 uses i: inner
-data x: i.my_r
+fill x: i.my_r
 rule out: x
 "#;
 
@@ -364,7 +392,14 @@ rule out: x
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("must evaluate without error");
 
     assert_eq!(rule_value(&result, "out"), "42");
@@ -382,7 +417,7 @@ rule divided: 10 / denom
 
 spec top
 uses i: inner
-data x: i.divided
+fill x: i.divided
 rule out: x
 "#;
 
@@ -398,7 +433,14 @@ rule out: x
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = result
@@ -432,7 +474,7 @@ data slot: number
 
 spec outer
 uses i: inner
-data i.slot: r
+fill i.slot: r
 rule r: i.slot
 "#;
 
@@ -467,7 +509,7 @@ rule greeting: "hello"
 spec outer
 uses i: inner
 uses src: source_spec
-data i.v: src.greeting
+fill i.v: src.greeting
 rule r: i.v
 "#;
 
@@ -492,8 +534,8 @@ rule r: i.v
 /// Reading `y` must transitively resolve through `mid.x` to the rule's
 /// value, yielding 42 at `y`.
 ///
-/// Each hop uses a dotted RHS so the parser treats both as `Reference`
-/// (typedef references are reserved for non-dotted local RHS like
+/// Each hop uses a dotted RHS so the parser treats both as `DataValue::Fill` with a
+/// reference payload (typedef references are reserved for non-dotted local RHS like
 /// `data y: x`).
 #[test]
 fn rule_target_reference_in_chain_resolves_value() {
@@ -503,11 +545,11 @@ rule my_r: 42
 
 spec mid
 uses i: inner
-data x: i.my_r
+fill x: i.my_r
 
 spec top
 uses m: mid
-data y: m.x
+fill y: m.x
 rule out: y
 "#;
 
@@ -523,7 +565,14 @@ rule out: y
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("must evaluate without error");
 
     assert_eq!(rule_value(&result, "out"), "42");
@@ -542,7 +591,7 @@ rule my_r: 42
 
 spec top
 uses i: inner
-data x: i.my_r
+fill x: i.my_r
 rule out: x
 "#;
 
@@ -560,7 +609,14 @@ rule out: x
     let mut overrides = HashMap::new();
     overrides.insert("x".to_string(), "99".to_string());
     let result = engine
-        .run(None, "top", Some(&now), overrides, false)
+        .run(
+            None,
+            "top",
+            Some(&now),
+            overrides,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("must evaluate without error");
 
     assert_eq!(
@@ -587,7 +643,7 @@ data v: number -> default 10
 spec outer
 uses i: inner
 uses src: source_spec
-data i.limited: src.v
+fill i.limited: src.v
 rule r: i.limited
 "#;
 
@@ -602,7 +658,14 @@ rule r: i.limited
     match load_result {
         Ok(()) => {
             let now = DateTimeValue::now();
-            let run_result = engine.run(None, "outer", Some(&now), HashMap::new(), false);
+            let run_result = engine.run(
+                None,
+                "outer",
+                Some(&now),
+                HashMap::new(),
+                false,
+                lemma::EvaluationRequest::default(),
+            );
 
             match run_result {
                 Ok(resp) => {
@@ -658,7 +721,8 @@ data maybe: number
 
 spec outer
 uses i: inner
-data here: i.maybe -> default 77
+data here: number -> default 77
+fill here: i.maybe
 rule r: here
 "#;
 
@@ -674,18 +738,25 @@ rule r: here
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("must evaluate");
 
     assert_eq!(
         rule_value(&result, "r"),
         "77",
-        "reference-local default must fill in when target is missing"
+        "data-local default must apply when fill target is missing"
     );
 }
 
 /// PARSER PIN: `data x: notdotted` in local (non-binding) context MUST remain
-/// `DataValue::Definition` (schema RHS), NOT be parsed as a `Reference`. The AST doc claims
+/// `DataValue::Definition` (schema RHS), NOT be parsed as `DataValue::Fill`. The AST doc claims
 /// this; the parser agrees. This test pins that behavior so a future refactor
 /// does not silently change it.
 #[test]
@@ -709,7 +780,14 @@ rule r: person
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "s", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates; `person` is typed 'age' and inherits its default");
 
     assert_eq!(
@@ -720,8 +798,8 @@ rule r: person
     );
 }
 
-/// PARSER+PLANNER PIN: `data x.y: notdotted` in binding context IS parsed as
-/// a Reference (value-copy). When the referenced name `src` exists in the
+/// PARSER+PLANNER PIN: `fill x.y: notdotted` in binding context IS parsed as
+/// `DataValue::Fill` with a reference payload (value-copy). When the referenced name `src` exists in the
 /// SAME (outer) spec where the binding lives, the reference must resolve and
 /// copy the source's value to the bound child data.
 #[test]
@@ -733,7 +811,7 @@ data slot: number
 spec outer
 uses i: inner
 data src: number -> default 123
-data i.slot: src
+fill i.slot: src
 rule r: i.slot
 "#;
 
@@ -749,7 +827,14 @@ rule r: i.slot
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(
         rule_value(&result, "r"),
@@ -758,11 +843,8 @@ rule r: i.slot
     );
 }
 
-/// SCHEMA SURFACE: a reference's `-> default N` tail must appear on the
-/// schema's `default` field, just like `data x: number -> default N` does.
-/// Both forms are user-equivalent ways to declare a default — the schema
-/// surface (HTTP `/schema/{name}`, OpenAPI, WASM/Hex `list`) must not
-/// silently drop one of them.
+/// SCHEMA SURFACE: `data here: number -> default N` must appear on the
+/// schema's `default` field when `fill here: …` copies from another slot.
 #[test]
 fn reference_local_default_appears_in_schema() {
     let code = r#"
@@ -771,7 +853,8 @@ data maybe: number
 
 spec outer
 uses i: inner
-data here: i.maybe -> default 77
+data here: number -> default 77
+fill here: i.maybe
 rule r: here
 "#;
 
@@ -798,7 +881,7 @@ rule r: here
     let default = here_entry
         .default
         .as_ref()
-        .expect("schema must surface the reference's `-> default 77` value");
+        .expect("schema must surface `data here` `-> default 77`");
 
     let rendered = default.to_string();
     assert!(
@@ -808,30 +891,30 @@ rule r: here
 }
 
 /// HEURISTIC TIGHTENING: a discriminant-only kind compatibility check
-/// treats two scale types in different families as compatible (both are
-/// `TypeSpecification::Scale`). Per `error-model.mdc`, a temperature-scale
-/// reference whose target is a money-scale value is invalid Lemma and
+/// treats two quantity types in different families as compatible (both are
+/// `TypeSpecification::Quantity`). Per `error-model.mdc`, a temperature-quantity
+/// reference whose target is a money-quantity value is invalid Lemma and
 /// must be rejected at planning, not silently propagated.
 ///
-/// The LHS-side scale family is established by the binding's child-spec
+/// The LHS-side quantity family is established by the binding's child-spec
 /// type declaration (`inner.payment` extends a money family); the RHS
-/// reference target is in a temperature family. Same `Scale` discriminant,
+/// reference target is in a temperature family. Same `Quantity` discriminant,
 /// different families. Planning must reject.
 #[test]
-fn binding_reference_scale_family_mismatch_is_rejected() {
+fn binding_reference_quantity_family_mismatch_is_rejected() {
     let code = r#"
 spec inner
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data payment: money
 
 spec source_spec
-data temp_unit: scale -> unit celsius 1.0
+data temp_unit: quantity -> unit celsius 1.0
 data temperature: temp_unit
 
 spec outer
 uses i: inner
 uses src: source_spec
-data i.payment: src.temperature
+fill i.payment: src.temperature
 rule r: i.payment
 "#;
 
@@ -844,10 +927,96 @@ rule r: i.payment
     );
     let joined = load_err_joined(res);
     assert!(
-        joined.contains("scale family")
-            || joined.contains("scale_family")
+        joined.contains("quantity family")
+            || joined.contains("quantity_family")
             || joined.contains("family")
             || joined.contains("type mismatch"),
-        "expected scale-family-mismatch error, got: {joined}"
+        "expected quantity-family-mismatch error, got: {joined}"
+    );
+}
+
+#[test]
+fn local_fill_literal_assigns_into_declared_slot() {
+    let code = r#"
+spec s
+data x: number -> default 0
+fill x: 42
+rule r: x
+"#;
+
+    let mut engine = Engine::new();
+    engine
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
+        .expect("local fill literal with declared slot must plan");
+
+    let now = DateTimeValue::now();
+    let result = engine
+        .run(
+            None,
+            "s",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect("should run");
+    assert_eq!(rule_value(&result, "r"), "42");
+}
+
+#[test]
+fn local_fill_literal_defines_slot_without_data_row() {
+    let code = r#"
+spec s
+fill y: 1
+rule r: y
+"#;
+
+    let mut engine = Engine::new();
+    engine
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+        )
+        .expect("fill literal without prior data row defines the slot");
+
+    let now = DateTimeValue::now();
+    let result = engine
+        .run(
+            None,
+            "s",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect("should run");
+    assert_eq!(rule_value(&result, "r"), "1");
+}
+
+#[test]
+fn fill_with_arrow_syntax_is_rejected_at_parse() {
+    let code = r#"
+spec s
+fill y: number -> minimum 0
+rule r: y
+"#;
+
+    let mut engine = Engine::new();
+    let joined = load_err_joined(engine.load(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
+    assert!(
+        joined.contains("fill") && joined.contains("data"),
+        "fill with -> must be rejected at parse; got: {joined}"
     );
 }

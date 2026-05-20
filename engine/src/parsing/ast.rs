@@ -75,7 +75,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 pub use crate::literals::{
-    BooleanValue, DateTimeValue, DurationUnit, TimeValue, TimezoneValue, Value,
+    BooleanValue, CalendarUnit, DateTimeValue, TimeValue, TimezoneValue, Value,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -221,9 +221,9 @@ impl Hash for LemmaRepository {
     }
 }
 
-/// Qualifier in references (`uses …`, `from …`, spec targets).
-/// `name` includes the `@` prefix when present. The planner resolves
-/// a `RepositoryQualifier` to an `Arc<LemmaRepository>` against the active context.
+/// Textual repository qualifier as written in source (for example `@lemma/std`).
+/// `name` stores the qualifier verbatim, including a leading `@` when present. The planner
+/// resolves a [`RepositoryQualifier`] to an `Arc<LemmaRepository>` against the active context.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct RepositoryQualifier {
     pub name: String,
@@ -380,10 +380,22 @@ pub enum DateCalendarKind {
 /// Granularity of a calendar-period check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CalendarUnit {
+pub enum CalendarPeriodUnit {
     Year,
     Month,
     Week,
+}
+
+impl CalendarPeriodUnit {
+    #[must_use]
+    pub fn from_keyword(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "year" | "years" => Some(Self::Year),
+            "month" | "months" => Some(Self::Month),
+            "week" | "weeks" => Some(Self::Week),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for DateRelativeKind {
@@ -406,12 +418,12 @@ impl fmt::Display for DateCalendarKind {
     }
 }
 
-impl fmt::Display for CalendarUnit {
+impl fmt::Display for CalendarPeriodUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CalendarUnit::Year => write!(f, "year"),
-            CalendarUnit::Month => write!(f, "month"),
-            CalendarUnit::Week => write!(f, "week"),
+            CalendarPeriodUnit::Year => write!(f, "year"),
+            CalendarPeriodUnit::Month => write!(f, "month"),
+            CalendarPeriodUnit::Week => write!(f, "week"),
         }
     }
 }
@@ -424,17 +436,20 @@ pub enum ExpressionKind {
     Literal(Value),
     /// Unresolved reference (identifier or dot path). Resolved during planning to DataPath or RulePath.
     Reference(Reference),
-    /// Unresolved unit literal from parser (resolved during planning)
-    /// Contains (number, unit_name) - the unit name will be resolved to its type during semantic analysis
-    UnresolvedUnitLiteral(Decimal, String),
     /// The `now` keyword — resolves to the evaluation datetime (= effective).
     Now,
-    /// Date-relative sugar: `<date_expr> in past [<duration_expr>]` / `<date_expr> in future [<duration_expr>]`
-    /// Fields: (kind, date_expression, optional_tolerance_expression)
-    DateRelative(DateRelativeKind, Arc<Expression>, Option<Arc<Expression>>),
+    /// Date-relative sugar: `<date_expr> in past` / `<date_expr> in future`
+    /// Fields: (kind, date_expression)
+    DateRelative(DateRelativeKind, Arc<Expression>),
     /// Calendar-period sugar: `<date_expr> in [past|future] calendar year|month|week`
     /// Fields: (kind, unit, date_expression)
-    DateCalendar(DateCalendarKind, CalendarUnit, Arc<Expression>),
+    DateCalendar(DateCalendarKind, CalendarPeriodUnit, Arc<Expression>),
+    /// Range literal: `{left_expr}...{right_expr}`
+    RangeLiteral(Arc<Expression>, Arc<Expression>),
+    /// Relative date range: `past 7 days` / `future 30 days`
+    PastFutureRange(DateRelativeKind, Arc<Expression>),
+    /// Range containment: `{value_expr} in {range_expr}`
+    RangeContainment(Arc<Expression>, Arc<Expression>),
     LogicalAnd(Arc<Expression>, Arc<Expression>),
     Arithmetic(Arc<Expression>, ArithmeticComputation, Arc<Expression>),
     Comparison(Arc<Expression>, ComparisonComputation, Arc<Expression>),
@@ -442,6 +457,8 @@ pub enum ExpressionKind {
     LogicalNegation(Arc<Expression>, NegationType),
     MathematicalComputation(MathematicalComputation, Arc<Expression>),
     Veto(VetoExpression),
+    /// `expr is veto` / `veto is expr` — boolean: whether evaluating `expr` yields `OperationResult::Veto`.
+    ResultIsVeto(Arc<Expression>),
 }
 
 /// Unresolved reference from parser
@@ -544,12 +561,15 @@ impl ComparisonComputation {
 }
 
 /// The target unit for unit conversion expressions.
-/// Non-duration units (e.g. "percent", "eur") are stored as Unit and resolved to ratio or scale during planning via the unit index.
+/// Non-calendar units (for example `percent`, `eur`, `hours`) are stored as [`ConversionTarget::Unit`]
+/// and resolved to ratio or quantity during planning via the unit index.
+/// Type targets (for example `number`) strip units and return a bare value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionTarget {
-    Duration(DurationUnit),
+    Calendar(CalendarUnit),
     Unit(String),
+    Type(PrimitiveKind),
 }
 
 /// Types of logical negation
@@ -593,14 +613,13 @@ pub enum MathematicalComputation {
 /// A spec reference written in source.
 ///
 /// `name` is the bare spec name (no `@`, no dots, no slashes).
-/// [`SpecRef::repository`] is `None` when no `from <qualifier>` clause was written
-/// (same-repository reference) or `Some(RepositoryQualifier)` carrying the textual
-/// qualifier the parser observed.
+/// [`SpecRef::repository`] is `None` for same-repository references, or
+/// `Some(RepositoryQualifier)` when a repository qualifier was written before the spec name.
 /// `effective` carries an optional explicit pin written next to the spec name.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpecRef {
-    /// Optional explicit `from <repository_qualifier>` clause. `None` means the
-    /// reference resolves against the consumer spec's own repository.
+    /// Optional explicit repository qualifier. `None` means the reference resolves against
+    /// the consumer spec's own repository.
     pub repository: Option<RepositoryQualifier>,
     /// The spec name.
     pub name: String,
@@ -628,7 +647,7 @@ impl std::fmt::Display for SpecRef {
 }
 
 impl SpecRef {
-    /// Same-repository reference (no `from` clause): resolution uses the consumer's repository.
+    /// Same-repository reference: resolution uses the consumer's repository.
     pub fn same_repository(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -639,7 +658,7 @@ impl SpecRef {
         }
     }
 
-    /// Cross-repository reference with an explicit `from` qualifier.
+    /// Cross-repository reference with an explicit repository qualifier.
     pub fn cross_repository(name: impl Into<String>, qualifier: RepositoryQualifier) -> Self {
         Self {
             name: name.into(),
@@ -659,16 +678,90 @@ impl SpecRef {
     }
 }
 
+/// A single factor in a compound unit expression.
+///
+/// `quantity_ref` is the name of the referenced unit (e.g. `"meter"`, `"second"`).
+/// `exp` is the integer exponent, positive for numerator and negative for denominator.
+/// For example `meter/second^2` produces:
+/// - `UnitFactor { quantity_ref: "meter", exp: 1 }`
+/// - `UnitFactor { quantity_ref: "second", exp: -2 }`
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UnitFactor {
+    pub quantity_ref: String,
+    pub exp: i32,
+}
+
+/// The argument to a `-> unit <name> ...` command, either a plain numeric
+/// conversion factor or a compound unit expression.
+///
+/// - `Factor(v)` — simple unit: `-> unit meter 1`, `-> unit kilometer 1000`
+/// - `Expr(prefix, factors)` — compound unit: `-> unit mps meter/second`,
+///   `-> unit kmh 3.6 meter/second`
+///   The `prefix` is an additional scalar multiplier beyond what the unit
+///   factor references contribute; it defaults to `1` when omitted.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum UnitArg {
+    Factor(Decimal),
+    Expr(Decimal, Vec<UnitFactor>),
+}
+
+impl fmt::Display for UnitArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnitArg::Factor(v) => write!(f, "{}", v),
+            UnitArg::Expr(prefix, factors) => {
+                if *prefix != Decimal::ONE {
+                    write!(f, "{} ", prefix)?;
+                }
+                for (index, factor) in factors.iter().enumerate() {
+                    if factor.exp == 0 {
+                        unreachable!("BUG: unit factor exponent cannot be zero");
+                    }
+                    if factor.exp > 0 {
+                        if index > 0 {
+                            write!(f, " * ")?;
+                        }
+                        write!(f, "{}", factor.quantity_ref)?;
+                        if factor.exp != 1 {
+                            write!(f, "^{}", factor.exp)?;
+                        }
+                    } else {
+                        let denominator_started =
+                            factors[..index].iter().any(|prior| prior.exp < 0);
+                        if denominator_started {
+                            write!(f, " * ")?;
+                        } else {
+                            write!(f, "/")?;
+                        }
+                        write!(f, "{}", factor.quantity_ref)?;
+                        let positive_exp = factor
+                            .exp
+                            .checked_neg()
+                            .expect("BUG: negative unit factor exponent");
+                        if positive_exp != 1 {
+                            write!(f, "^{}", positive_exp)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// A parsed constraint command argument, preserving the literal kind from the
 /// grammar rule `command_arg: { number_literal | boolean_literal | text_literal | label }`.
 ///
-/// Two grammatical kinds appear after a constraint command:
+/// Three grammatical kinds appear after a constraint command:
 /// - **Literal** — a fully-typed value carrying the literal kind the parser
-///   recognised (`Number`, `Ratio`, `Scale`, `Duration`, `Date`, `Time`,
+///   recognised (`Number`, `Ratio`, `Quantity`, `Date`, `Time`,
 ///   `Boolean`, `Text`). Stored as the canonical [`crate::literals::Value`]
 ///   so downstream consumers match on the variant rather than re-parsing strings.
 /// - **Label** — a bare identifier used as a name (e.g. the unit name `eur`
 ///   in `unit eur 1.00`, or a primitive type keyword used as an option label).
+/// - **UnitExpr** — compound unit expression produced by the parser for
+///   `-> unit <name> ...` commands. Only appears as the second argument of a
+///   `Unit` command; the first argument is always the unit name as `Label`.
 ///
 /// Planning validates each command's args against the variant kinds it accepts
 /// and rejects mismatches without coercion (a `Text` literal is never a `Number`,
@@ -680,6 +773,8 @@ pub enum CommandArg {
     Literal(crate::literals::Value),
     /// An identifier used as a name (unit name, option keyword, etc.).
     Label(String),
+    /// A unit argument produced by the parser for `-> unit <name> ...` commands.
+    UnitExpr(UnitArg),
 }
 
 impl fmt::Display for CommandArg {
@@ -687,6 +782,7 @@ impl fmt::Display for CommandArg {
         match self {
             CommandArg::Literal(v) => write!(f, "{}", v),
             CommandArg::Label(s) => write!(f, "{}", s),
+            CommandArg::UnitExpr(unit_arg) => write!(f, "{}", unit_arg),
         }
     }
 }
@@ -698,10 +794,10 @@ pub enum TypeConstraintCommand {
     Help,
     Default,
     Unit,
+    Trait,
     Minimum,
     Maximum,
     Decimals,
-    Precision,
     Option,
     Options,
     Length,
@@ -713,10 +809,10 @@ impl fmt::Display for TypeConstraintCommand {
             TypeConstraintCommand::Help => "help",
             TypeConstraintCommand::Default => "default",
             TypeConstraintCommand::Unit => "unit",
+            TypeConstraintCommand::Trait => "trait",
             TypeConstraintCommand::Minimum => "minimum",
             TypeConstraintCommand::Maximum => "maximum",
             TypeConstraintCommand::Decimals => "decimals",
-            TypeConstraintCommand::Precision => "precision",
             TypeConstraintCommand::Option => "option",
             TypeConstraintCommand::Options => "options",
             TypeConstraintCommand::Length => "length",
@@ -732,10 +828,10 @@ pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintComman
         "help" => Some(TypeConstraintCommand::Help),
         "default" => Some(TypeConstraintCommand::Default),
         "unit" => Some(TypeConstraintCommand::Unit),
+        "trait" => Some(TypeConstraintCommand::Trait),
         "minimum" => Some(TypeConstraintCommand::Minimum),
         "maximum" => Some(TypeConstraintCommand::Maximum),
         "decimals" => Some(TypeConstraintCommand::Decimals),
-        "precision" => Some(TypeConstraintCommand::Precision),
         "option" => Some(TypeConstraintCommand::Option),
         "options" => Some(TypeConstraintCommand::Options),
         "length" => Some(TypeConstraintCommand::Length),
@@ -746,47 +842,40 @@ pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintComman
 /// A single constraint command and its typed arguments.
 pub type Constraint = (TypeConstraintCommand, Vec<CommandArg>);
 
+/// Right-hand side of a `fill` statement: literal value or reference to copy.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillRhs {
+    Literal(Value),
+    Reference { target: Reference },
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Parse-time data value (before type resolution)
 pub enum DataValue {
     /// Declares data: optional explicit parent type, optional constraints (`-> ...`),
-    /// optional `from <spec>` repository qualifier, and optional literal value.
+    /// and optional literal value.
     ///
     /// Examples:
     /// - `data x: 3.14` → `base: None`, `value: Some(Number)`
     /// - `data x: number -> minimum 0` → `base: Some(Number)`, `constraints: Some(...)`
-    /// - `data x: money from @lemma/std finance` → `base: Some(Custom("money"))`, `from: Some(...)`
+    /// - `data x: finance.money` → `base: Some(Qualified { spec_alias: "finance", inner: Custom("money") })`
     Definition {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<ParentType>,
         constraints: Option<Vec<Constraint>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        from: Option<SpecRef>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         value: Option<Value>,
     },
     /// Import from another spec (surface syntax is `uses`; alias is [`LemmaData::reference`]).
     Import(SpecRef),
-    /// A value-copy reference to another data or rule, with optional additional constraints.
-    ///
-    /// Two surface forms produce this variant:
-    /// 1. **Dotted RHS** in any position — e.g. `data license2: law.other` or
-    ///    `data license2: law.other -> minimum 5`. A dotted RHS is never a
-    ///    typedef name, so it unambiguously means "copy from this data or rule."
-    /// 2. **Non-dotted RHS in a binding LHS** — e.g. `data license.other: src`.
-    ///    When the LHS has segments (a binding path into another spec) the RHS
-    ///    is read as a value-copy reference to a name in the enclosing spec,
-    ///    not as a typedef.
+    /// Value assignment into an existing data slot (surface syntax is `fill`). Planning folds
+    /// this into resolved slot values; it does not declare a new type row.
     ///
     /// `data x: someident` (LHS without segments, RHS without dots) uses [`DataValue::Definition`]
     /// with `someident` as the parent type name. See parser [`crate::parsing::parser::Parser::parse_data_value`].
-    ///
-    /// The target is resolved during planning to either a [`DataPath`] or a [`RulePath`].
-    Reference {
-        target: Reference,
-        constraints: Option<Vec<Constraint>>,
-    },
+    Fill(FillRhs),
 }
 
 impl DataValue {
@@ -798,7 +887,6 @@ impl DataValue {
             DataValue::Definition {
                 base: None,
                 constraints: None,
-                from: None,
                 value: Some(_),
             }
         )
@@ -809,7 +897,6 @@ impl DataValue {
     pub fn definition_needs_type_resolution(&self) -> bool {
         match self {
             DataValue::Definition { base: Some(_), .. }
-            | DataValue::Definition { from: Some(_), .. }
             | DataValue::Definition {
                 constraints: Some(_),
                 ..
@@ -817,18 +904,15 @@ impl DataValue {
             DataValue::Definition {
                 base: None,
                 constraints: None,
-                from: None,
                 value: Some(v),
-            } => !matches!(v, Value::Scale(_, _) | Value::Ratio(_, _)),
-            DataValue::Import(_) | DataValue::Reference { .. } | DataValue::Definition { .. } => {
-                false
-            }
+            } => !matches!(v, Value::NumberWithUnit(_, _)),
+            DataValue::Import(_) | DataValue::Fill(_) | DataValue::Definition { .. } => false,
         }
     }
 }
 
 /// Render a chain of `-> command args ...` constraints for display purposes.
-/// Shared between [`DataValue::Definition`] and [`DataValue::Reference`].
+/// Shared between [`DataValue::Definition`] and [`DataValue::Fill`] reference payloads.
 fn format_constraint_chain(constraints: &[Constraint]) -> String {
     constraints
         .iter()
@@ -851,20 +935,17 @@ impl fmt::Display for DataValue {
             DataValue::Definition {
                 base,
                 constraints,
-                from,
                 value,
             } => {
-                if base.is_none() && from.is_none() && constraints.is_none() {
+                if base.is_none() && constraints.is_none() {
                     return match value {
                         Some(v) => write!(f, "{}", v),
                         None => Ok(()),
                     };
                 }
-                let base_str = match (base.as_ref(), from.as_ref()) {
-                    (Some(b), Some(spec)) => format!("{b} from {spec}"),
-                    (Some(b), None) => format!("{b}"),
-                    (None, Some(spec)) => format!("<type> from {spec}"),
-                    (None, None) => match value {
+                let base_str = match base.as_ref() {
+                    Some(b) => format!("{b}"),
+                    None => match value {
                         Some(v) => {
                             if let Some(ref constraints_vec) = constraints {
                                 let constraint_str = format_constraint_chain(constraints_vec);
@@ -885,17 +966,10 @@ impl fmt::Display for DataValue {
             DataValue::Import(spec_ref) => {
                 write!(f, "with {}", spec_ref)
             }
-            DataValue::Reference {
-                target,
-                constraints,
-            } => {
-                write!(f, "{}", target)?;
-                if let Some(ref constraints_vec) = constraints {
-                    let constraint_str = format_constraint_chain(constraints_vec);
-                    write!(f, " -> {}", constraint_str)?;
-                }
-                Ok(())
-            }
+            DataValue::Fill(fill_rhs) => match fill_rhs {
+                FillRhs::Literal(v) => write!(f, "{v}"),
+                FillRhs::Reference { target } => write!(f, "{target}"),
+            },
         }
     }
 }
@@ -1035,12 +1109,16 @@ impl fmt::Display for LemmaRule {
 ///
 /// Higher values bind tighter. Used by `Expression::Display` and the formatter
 /// to insert parentheses only where needed.
+///
+/// `RangeLiteral` (type construction via `...`) binds above all arithmetic; only atoms bind
+/// above range. Parser climb in [`crate::parsing::parser::Parser`] must match this table.
 pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
     match kind {
         ExpressionKind::LogicalAnd(..) => 2,
         ExpressionKind::LogicalNegation(..) => 3,
-        ExpressionKind::Comparison(..) => 4,
-        ExpressionKind::UnitConversion(..) => 4,
+        ExpressionKind::Comparison(..) | ExpressionKind::ResultIsVeto(..) => 4,
+        ExpressionKind::RangeContainment(..) => 4,
+        ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => 4,
         ExpressionKind::Arithmetic(_, op, _) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => 5,
             ArithmeticComputation::Multiply
@@ -1048,11 +1126,12 @@ pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
             | ArithmeticComputation::Modulo => 6,
             ArithmeticComputation::Power => 7,
         },
-        ExpressionKind::MathematicalComputation(..) => 8,
-        ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => 4,
+        ExpressionKind::UnitConversion(..) => 8,
+        ExpressionKind::RangeLiteral(..) => 9,
+        ExpressionKind::MathematicalComputation(..) => 10,
+        ExpressionKind::PastFutureRange(..) => 10,
         ExpressionKind::Literal(..)
         | ExpressionKind::Reference(..)
-        | ExpressionKind::UnresolvedUnitLiteral(..)
         | ExpressionKind::Now
         | ExpressionKind::Veto(..) => 10,
     }
@@ -1091,12 +1170,25 @@ impl fmt::Display for Expression {
             ExpressionKind::UnitConversion(value, target) => {
                 let my_prec = expression_precedence(&self.kind);
                 write_expression_child(f, value, my_prec)?;
-                write!(f, " in {}", target)
+                write!(f, " as {}", target)
             }
-            ExpressionKind::LogicalNegation(expr, _) => {
+            ExpressionKind::LogicalNegation(expr, negation) => {
+                if let (NegationType::Not, ExpressionKind::ResultIsVeto(operand)) =
+                    (negation, &expr.kind)
+                {
+                    let my_prec = expression_precedence(&self.kind);
+                    write_expression_child(f, operand, my_prec)?;
+                    write!(f, " is not veto")
+                } else {
+                    let my_prec = expression_precedence(&self.kind);
+                    write!(f, "not ")?;
+                    write_expression_child(f, expr, my_prec)
+                }
+            }
+            ExpressionKind::ResultIsVeto(operand) => {
                 let my_prec = expression_precedence(&self.kind);
-                write!(f, "not ")?;
-                write_expression_child(f, expr, my_prec)
+                write_expression_child(f, operand, my_prec)?;
+                write!(f, " is veto")
             }
             ExpressionKind::LogicalAnd(left, right) => {
                 let my_prec = expression_precedence(&self.kind);
@@ -1113,19 +1205,30 @@ impl fmt::Display for Expression {
                 Some(msg) => write!(f, "veto {}", quote_lemma_text(msg)),
                 None => write!(f, "veto"),
             },
-            ExpressionKind::UnresolvedUnitLiteral(number, unit_name) => {
-                write!(f, "{} {}", format_decimal_source(number), unit_name)
-            }
             ExpressionKind::Now => write!(f, "now"),
-            ExpressionKind::DateRelative(kind, date_expr, tolerance) => {
+            ExpressionKind::DateRelative(kind, date_expr) => {
                 write!(f, "{} {}", date_expr, kind)?;
-                if let Some(tol) = tolerance {
-                    write!(f, " {}", tol)?;
-                }
                 Ok(())
             }
             ExpressionKind::DateCalendar(kind, unit, date_expr) => {
                 write!(f, "{} {} {}", date_expr, kind, unit)
+            }
+            ExpressionKind::RangeLiteral(left, right) => {
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, left, my_prec)?;
+                write!(f, "...")?;
+                write_expression_child(f, right, my_prec)
+            }
+            ExpressionKind::PastFutureRange(kind, offset_expr) => {
+                write!(f, "{} ", kind)?;
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, offset_expr, my_prec)
+            }
+            ExpressionKind::RangeContainment(value, range) => {
+                let my_prec = expression_precedence(&self.kind);
+                write_expression_child(f, value, my_prec)?;
+                write!(f, " in ")?;
+                write_expression_child(f, range, my_prec)
             }
         }
     }
@@ -1134,8 +1237,9 @@ impl fmt::Display for Expression {
 impl fmt::Display for ConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConversionTarget::Duration(unit) => write!(f, "{}", unit),
+            ConversionTarget::Calendar(unit) => write!(f, "{}", unit),
             ConversionTarget::Unit(unit) => write!(f, "{}", unit),
+            ConversionTarget::Type(kind) => write!(f, "{:?}", kind),
         }
     }
 }
@@ -1195,28 +1299,38 @@ impl fmt::Display for MathematicalComputation {
 #[serde(rename_all = "snake_case")]
 pub enum PrimitiveKind {
     Boolean,
-    Scale,
+    Quantity,
+    QuantityRange,
     Number,
+    NumberRange,
     Percent,
     Ratio,
+    RatioRange,
     Text,
     Date,
+    DateRange,
     Time,
-    Duration,
+    Calendar,
+    CalendarRange,
 }
 
 impl std::fmt::Display for PrimitiveKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             PrimitiveKind::Boolean => "boolean",
-            PrimitiveKind::Scale => "scale",
+            PrimitiveKind::Quantity => "quantity",
+            PrimitiveKind::QuantityRange => "quantity range",
             PrimitiveKind::Number => "number",
+            PrimitiveKind::NumberRange => "number range",
             PrimitiveKind::Percent => "percent",
             PrimitiveKind::Ratio => "ratio",
+            PrimitiveKind::RatioRange => "ratio range",
             PrimitiveKind::Text => "text",
             PrimitiveKind::Date => "date",
+            PrimitiveKind::DateRange => "date range",
             PrimitiveKind::Time => "time",
-            PrimitiveKind::Duration => "duration",
+            PrimitiveKind::Calendar => "calendar",
+            PrimitiveKind::CalendarRange => "calendar range",
         };
         write!(f, "{}", s)
     }
@@ -1225,12 +1339,22 @@ impl std::fmt::Display for PrimitiveKind {
 /// Parent type in a type definition: built-in primitive or custom type name.
 ///
 /// `name` is the declared type name (the data name that introduces this type).
-/// For `data temperature: scale`, name = "temperature", primitive = Scale.
+/// For `data temperature: quantity`, name = "temperature", primitive = Quantity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParentType {
-    Primitive { primitive: PrimitiveKind },
-    Custom { name: String },
+    Primitive {
+        primitive: PrimitiveKind,
+    },
+    Custom {
+        name: String,
+    },
+    /// Parent type defined in another spec: `spec_alias.inner` (e.g. `data x: finance.money`).
+    /// `inner` must be [`ParentType::Primitive`] or [`ParentType::Custom`], not nested [`ParentType::Qualified`].
+    Qualified {
+        spec_alias: String,
+        inner: Box<ParentType>,
+    },
 }
 
 impl std::fmt::Display for ParentType {
@@ -1238,6 +1362,9 @@ impl std::fmt::Display for ParentType {
         match self {
             ParentType::Primitive { primitive } => write!(f, "{}", primitive),
             ParentType::Custom { name } => write!(f, "{}", name),
+            ParentType::Qualified { spec_alias, inner } => {
+                write!(f, "{spec_alias}.{inner}")
+            }
         }
     }
 }
@@ -1309,16 +1436,19 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
                 write!(f, "{}", group_digits(&d.to_string()))
             }
             CommandArg::Literal(Value::Boolean(bv)) => write!(f, "{}", bv),
-            CommandArg::Literal(Value::Scale(d, unit)) => {
+            CommandArg::Literal(Value::NumberWithUnit(d, unit)) => {
                 write!(f, "{} {}", group_digits(&d.to_string()), unit)
             }
-            CommandArg::Literal(Value::Duration(d, unit)) => {
+            CommandArg::Literal(Value::Calendar(d, unit)) => {
                 write!(f, "{} {}", group_digits(&d.to_string()), unit)
             }
-            CommandArg::Literal(value @ Value::Ratio(_, _)) => write!(f, "{}", value),
+            CommandArg::Literal(value @ Value::Range(_, _)) => {
+                write!(f, "{}", AsLemmaSource(value))
+            }
             CommandArg::Literal(Value::Date(dt)) => write!(f, "{}", dt),
             CommandArg::Literal(Value::Time(t)) => write!(f, "{}", t),
             CommandArg::Label(s) => write!(f, "{}", s),
+            CommandArg::UnitExpr(unit_arg) => write!(f, "{}", unit_arg),
         }
     }
 }
@@ -1381,20 +1511,20 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
                 Ok(())
             }
             Value::Boolean(b) => write!(f, "{}", b),
-            Value::Scale(n, u) => write!(f, "{} {}", format_decimal_source(n), u),
-            Value::Duration(n, u) => write!(f, "{} {}", format_decimal_source(n), u),
-            Value::Ratio(n, unit) => match unit.as_deref() {
-                Some("percent") => {
-                    let display_value = *n * Decimal::from(100);
-                    write!(f, "{}%", format_decimal_source(&display_value))
-                }
-                Some("permille") => {
-                    let display_value = *n * Decimal::from(1000);
-                    write!(f, "{}%%", format_decimal_source(&display_value))
-                }
-                Some(unit_name) => write!(f, "{} {}", format_decimal_source(n), unit_name),
-                None => write!(f, "{}", format_decimal_source(n)),
+            Value::NumberWithUnit(n, u) => match u.as_str() {
+                "percent" => write!(f, "{}%", format_decimal_source(n)),
+                "permille" => write!(f, "{}%%", format_decimal_source(n)),
+                unit => write!(f, "{} {}", format_decimal_source(n), unit),
             },
+            Value::Calendar(n, u) => write!(f, "{} {}", format_decimal_source(n), u),
+            Value::Range(left, right) => {
+                write!(
+                    f,
+                    "{}...{}",
+                    AsLemmaSource(left.as_ref()),
+                    AsLemmaSource(right.as_ref())
+                )
+            }
         }
     }
 }
@@ -1416,19 +1546,16 @@ impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
             DataValue::Definition {
                 base,
                 constraints,
-                from,
                 value,
             } => {
-                if base.is_none() && from.is_none() && constraints.is_none() {
+                if base.is_none() && constraints.is_none() {
                     if let Some(v) = value {
                         return write!(f, "{}", AsLemmaSource(v));
                     }
                 }
-                let base_str = match (base.as_ref(), from.as_ref()) {
-                    (Some(b), Some(spec)) => format!("{} from {}", b, spec),
-                    (Some(b), None) => format!("{}", b),
-                    (None, Some(spec)) => format!("<type> from {}", spec),
-                    (None, None) => match value {
+                let base_str = match base.as_ref() {
+                    Some(b) => format!("{}", b),
+                    None => match value {
                         Some(v) => {
                             if let Some(ref constraints_vec) = constraints {
                                 let constraint_str =
@@ -1450,17 +1577,10 @@ impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
             DataValue::Import(spec_ref) => {
                 write!(f, "with {}", spec_ref)
             }
-            DataValue::Reference {
-                target,
-                constraints,
-            } => {
-                write!(f, "{}", target)?;
-                if let Some(ref constraints_vec) = constraints {
-                    let constraint_str = format_constraints_as_source(constraints_vec, " -> ");
-                    write!(f, " -> {}", constraint_str)?;
-                }
-                Ok(())
-            }
+            DataValue::Fill(fill_rhs) => match fill_rhs {
+                FillRhs::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
+                FillRhs::Reference { target } => write!(f, "{target}"),
+            },
         }
     }
 }
@@ -1470,20 +1590,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_duration_unit_display() {
-        assert_eq!(format!("{}", DurationUnit::Second), "seconds");
-        assert_eq!(format!("{}", DurationUnit::Minute), "minutes");
-        assert_eq!(format!("{}", DurationUnit::Hour), "hours");
-        assert_eq!(format!("{}", DurationUnit::Day), "days");
-        assert_eq!(format!("{}", DurationUnit::Week), "weeks");
-        assert_eq!(format!("{}", DurationUnit::Millisecond), "milliseconds");
-        assert_eq!(format!("{}", DurationUnit::Microsecond), "microseconds");
-    }
-
-    #[test]
     fn test_conversion_target_display() {
         assert_eq!(
-            format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
+            format!("{}", ConversionTarget::Unit("hours".to_string())),
             "hours"
         );
         assert_eq!(
@@ -1493,18 +1602,14 @@ mod tests {
     }
 
     #[test]
-    fn test_value_ratio_display() {
+    fn test_value_number_with_unit_ratio_display() {
         use rust_decimal::Decimal;
         use std::str::FromStr;
-        let percent = Value::Ratio(
-            Decimal::from_str("0.10").unwrap(),
-            Some("percent".to_string()),
-        );
+        let percent =
+            Value::NumberWithUnit(Decimal::from_str("10").unwrap(), "percent".to_string());
         assert_eq!(format!("{}", percent), "10%");
-        let permille = Value::Ratio(
-            Decimal::from_str("0.005").unwrap(),
-            Some("permille".to_string()),
-        );
+        let permille =
+            Value::NumberWithUnit(Decimal::from_str("5").unwrap(), "permille".to_string());
         assert_eq!(format!("{}", permille), "5%%");
     }
 
@@ -1628,14 +1733,14 @@ mod tests {
         CommandArg::Literal(crate::literals::Value::Boolean(b))
     }
 
-    fn scale_arg(value: &str, unit: &str) -> CommandArg {
+    fn quantity_arg(value: &str, unit: &str) -> CommandArg {
         let d: rust_decimal::Decimal = value.parse().expect("decimal");
-        CommandArg::Literal(crate::literals::Value::Scale(d, unit.to_string()))
+        CommandArg::Literal(crate::literals::Value::NumberWithUnit(d, unit.to_string()))
     }
 
-    fn duration_arg(value: &str, unit: DurationUnit) -> CommandArg {
+    fn duration_arg(value: &str, unit: &str) -> CommandArg {
         let d: rust_decimal::Decimal = value.parse().expect("decimal");
-        CommandArg::Literal(crate::literals::Value::Duration(d, unit))
+        CommandArg::Literal(crate::literals::Value::NumberWithUnit(d, unit.to_string()))
     }
 
     #[test]
@@ -1648,7 +1753,6 @@ mod tests {
                 TypeConstraintCommand::Default,
                 vec![text_arg("single")],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(
@@ -1667,7 +1771,6 @@ mod tests {
                 TypeConstraintCommand::Default,
                 vec![number_arg("10")],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(format!("{}", AsLemmaSource(&fv)), "number -> default 10");
@@ -1683,7 +1786,6 @@ mod tests {
                 TypeConstraintCommand::Help,
                 vec![text_arg("Enter a quantity")],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(
@@ -1702,7 +1804,6 @@ mod tests {
                 (TypeConstraintCommand::Option, vec![text_arg("active")]),
                 (TypeConstraintCommand::Option, vec![text_arg("inactive")]),
             ]),
-            from: None,
             value: None,
         };
         assert_eq!(
@@ -1712,10 +1813,10 @@ mod tests {
     }
 
     #[test]
-    fn as_lemma_source_scale_unit_not_quoted() {
+    fn as_lemma_source_quantity_unit_not_quoted() {
         let fv = DataValue::Definition {
             base: Some(ParentType::Primitive {
-                primitive: PrimitiveKind::Scale,
+                primitive: PrimitiveKind::Quantity,
             }),
             constraints: Some(vec![
                 (
@@ -1724,32 +1825,33 @@ mod tests {
                 ),
                 (
                     TypeConstraintCommand::Unit,
-                    vec![CommandArg::Label("usd".to_string()), number_arg("1.10")],
+                    vec![CommandArg::Label("usd".to_string()), number_arg("0.91")],
                 ),
             ]),
-            from: None,
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "scale -> unit eur 1.00 -> unit usd 1.10"
+            "quantity -> unit eur 1.00 -> unit usd 0.91"
         );
     }
 
     #[test]
-    fn as_lemma_source_scale_minimum_with_unit() {
+    fn as_lemma_source_quantity_minimum_with_unit() {
         let fv = DataValue::Definition {
             base: Some(ParentType::Primitive {
-                primitive: PrimitiveKind::Scale,
+                primitive: PrimitiveKind::Quantity,
             }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Minimum,
-                vec![scale_arg("0", "eur")],
+                vec![quantity_arg("0", "eur")],
             )]),
-            from: None,
             value: None,
         };
-        assert_eq!(format!("{}", AsLemmaSource(&fv)), "scale -> minimum 0 eur");
+        assert_eq!(
+            format!("{}", AsLemmaSource(&fv)),
+            "quantity -> minimum 0 eur"
+        );
     }
 
     #[test]
@@ -1762,7 +1864,6 @@ mod tests {
                 TypeConstraintCommand::Default,
                 vec![boolean_arg(BooleanValue::True)],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(format!("{}", AsLemmaSource(&fv)), "boolean -> default true");
@@ -1771,14 +1872,13 @@ mod tests {
     #[test]
     fn as_lemma_source_duration_default() {
         let fv = DataValue::Definition {
-            base: Some(ParentType::Primitive {
-                primitive: PrimitiveKind::Duration,
+            base: Some(ParentType::Custom {
+                name: "duration".to_string(),
             }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Default,
-                vec![duration_arg("40", DurationUnit::Hour)],
+                vec![duration_arg("40", "hours")],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(
@@ -1799,7 +1899,6 @@ mod tests {
                 TypeConstraintCommand::Default,
                 vec![text_arg("single")],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(
@@ -1818,12 +1917,66 @@ mod tests {
                 TypeConstraintCommand::Help,
                 vec![text_arg("say \"hello\"")],
             )]),
-            from: None,
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
             "text -> help \"say \\\"hello\\\"\""
         );
+    }
+
+    fn unit_arg_expr(prefix: Decimal, factors: &[(&str, i32)]) -> UnitArg {
+        UnitArg::Expr(
+            prefix,
+            factors
+                .iter()
+                .map(|(quantity_ref, exp)| UnitFactor {
+                    quantity_ref: (*quantity_ref).to_string(),
+                    exp: *exp,
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn unit_arg_display_metre_per_second() {
+        let arg = unit_arg_expr(Decimal::ONE, &[("metre", 1), ("second", -1)]);
+        assert_eq!(format!("{arg}"), "metre/second");
+        assert!(
+            !format!("{arg}").contains("second^-1"),
+            "must not print denominator as negative exponent"
+        );
+    }
+
+    #[test]
+    fn unit_arg_display_meter_per_second_squared() {
+        let arg = unit_arg_expr(Decimal::ONE, &[("meter", 1), ("second", -2)]);
+        assert_eq!(format!("{arg}"), "meter/second^2");
+    }
+
+    #[test]
+    fn unit_arg_display_kg_times_mps2() {
+        let arg = unit_arg_expr(Decimal::ONE, &[("kg", 1), ("mps2", 1)]);
+        assert_eq!(format!("{arg}"), "kg * mps2");
+    }
+
+    #[test]
+    fn unit_arg_display_numeric_prefix_metre_per_second() {
+        use std::str::FromStr;
+        let prefix = Decimal::from_str("3.6").expect("decimal");
+        let arg = unit_arg_expr(prefix, &[("metre", 1), ("second", -1)]);
+        assert_eq!(format!("{arg}"), "3.6 metre/second");
+    }
+
+    #[test]
+    fn unit_arg_display_metre_per_second_times_kg() {
+        let arg = unit_arg_expr(Decimal::ONE, &[("metre", 1), ("second", -1), ("kg", 1)]);
+        assert_eq!(format!("{arg}"), "metre/second * kg");
+    }
+
+    #[test]
+    fn unit_arg_display_kg_meter_per_second_squared() {
+        let arg = unit_arg_expr(Decimal::ONE, &[("kg", 1), ("meter", 1), ("second", -2)]);
+        assert_eq!(format!("{arg}"), "kg * meter/second^2");
     }
 }

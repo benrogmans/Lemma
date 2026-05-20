@@ -1,4 +1,5 @@
 mod error_formatter;
+mod evaluation_request;
 mod formatter;
 mod interactive;
 mod mcp;
@@ -56,6 +57,9 @@ enum Commands {
         /// Rules to evaluate (comma-separated); omit to evaluate all rules
         #[arg(long, value_name = "RULES")]
         rules: Option<String>,
+        /// Convert a quantity rule result to another unit on that rule's type (repeatable `rule:unit`)
+        #[arg(long = "as", value_name = "RULE:UNIT")]
+        rule_result_units: Vec<String>,
         /// Output format: table (human-readable) or json (machine-readable)
         #[arg(
             short = 'o',
@@ -280,6 +284,7 @@ fn main() {
             args,
             prefix,
             rules,
+            rule_result_units,
             output,
             explain,
             interactive,
@@ -291,6 +296,7 @@ fn main() {
                 source: workdir,
                 positionals: &parsed_run.positionals,
                 rules: rules.as_ref(),
+                rule_result_units,
                 data: &parsed_run.data,
                 output: *output,
                 explain: *explain,
@@ -358,6 +364,7 @@ struct RunOptions<'a> {
     source: &'a Path,
     positionals: &'a [String],
     rules: Option<&'a String>,
+    rule_result_units: &'a [String],
     data: &'a [String],
     output: OutputFormat,
     explain: bool,
@@ -409,70 +416,87 @@ fn run_command(options: RunOptions<'_>) -> Result<()> {
     let resolved_spec_name =
         resolve_spec(&engine, spec_name_optional.as_deref(), options.interactive)?;
 
-    let (repository_qualifier_for_run, spec_set_identifier, rule_names, evaluation_inputs) =
-        if options.interactive {
-            let (interactive_spec_preset, interactive_rules_preset) = if resolved_spec_name
-                .is_empty()
-            {
-                (None, None)
-            } else {
-                let preset_identifier = lemma::spec_set_id::parse_spec_set_id(&resolved_spec_name)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-                (
-                    Some(preset_identifier),
-                    options
-                        .rules
-                        .map(|rules_fragment| parse_rule_names(rules_fragment.as_str())),
-                )
-            };
+    if options.interactive && !options.rule_result_units.is_empty() {
+        anyhow::bail!("--as is not supported with --interactive");
+    }
 
-            let command_line_data: HashMap<String, String> = parse_data_strings(options.data);
-
-            let interactive_outcome = interactive::run_interactive(
-                &engine,
-                interactive_spec_preset,
-                interactive_rules_preset,
-                &command_line_data,
-                &now,
-                repository_qualifier_optional.as_deref(),
-            )?;
-
-            let (
-                chosen_repository_qualifier,
-                chosen_specification_name,
-                interactive_rules_selection,
-                prompted_data,
-            ) = interactive_outcome;
-
-            println!();
-
-            let mut merged_inputs = command_line_data;
-            merged_inputs.extend(prompted_data);
-            let interactive_spec_id =
-                lemma::spec_set_id::parse_spec_set_id(&chosen_specification_name)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-            (
-                chosen_repository_qualifier,
-                interactive_spec_id,
-                interactive_rules_selection.unwrap_or_default(),
-                merged_inputs,
-            )
+    let (
+        repository_qualifier_for_run,
+        spec_set_identifier,
+        rule_names,
+        evaluation_inputs,
+        rule_result_units,
+    ) = if options.interactive {
+        let (interactive_spec_preset, interactive_rules_preset) = if resolved_spec_name.is_empty() {
+            (None, None)
         } else {
-            let non_interactive_spec_id =
-                lemma::spec_set_id::parse_spec_set_id(&resolved_spec_name)
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
-            let rule_names: Vec<String> = options
-                .rules
-                .map(|rules_fragment| parse_rule_names(rules_fragment.as_str()))
-                .unwrap_or_default();
-            let evaluation_inputs = parse_data_strings(options.data);
+            let preset_identifier = lemma::spec_set_id::parse_spec_set_id(&resolved_spec_name)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
             (
-                repository_qualifier_optional,
-                non_interactive_spec_id,
-                rule_names,
-                evaluation_inputs,
+                Some(preset_identifier),
+                options
+                    .rules
+                    .map(|rules_fragment| parse_rule_names(rules_fragment.as_str())),
             )
         };
+
+        let command_line_data: HashMap<String, String> = parse_data_strings(options.data);
+
+        let interactive_outcome = interactive::run_interactive(
+            &engine,
+            interactive_spec_preset,
+            interactive_rules_preset,
+            &command_line_data,
+            &now,
+            repository_qualifier_optional.as_deref(),
+        )?;
+
+        let (
+            chosen_repository_qualifier,
+            chosen_specification_name,
+            interactive_rules_selection,
+            prompted_data,
+        ) = interactive_outcome;
+
+        println!();
+
+        let mut merged_inputs = command_line_data;
+        merged_inputs.extend(prompted_data);
+        let interactive_spec_id = lemma::spec_set_id::parse_spec_set_id(&chosen_specification_name)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        (
+            chosen_repository_qualifier,
+            interactive_spec_id,
+            interactive_rules_selection.unwrap_or_default(),
+            merged_inputs,
+            Vec::new(),
+        )
+    } else {
+        let non_interactive_spec_id = lemma::spec_set_id::parse_spec_set_id(&resolved_spec_name)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let rule_names: Vec<String> = options
+            .rules
+            .map(|rules_fragment| parse_rule_names(rules_fragment.as_str()))
+            .unwrap_or_default();
+        let evaluation_inputs = parse_data_strings(options.data);
+        (
+            repository_qualifier_optional,
+            non_interactive_spec_id,
+            rule_names,
+            evaluation_inputs,
+            options.rule_result_units.to_vec(),
+        )
+    };
+
+    let evaluation_request = evaluation_request::build_evaluation_request(
+        &engine,
+        repository_qualifier_for_run.as_deref(),
+        &spec_set_identifier,
+        &now,
+        &rule_result_units,
+        &rule_names,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let mut response = engine
         .run(
@@ -481,6 +505,7 @@ fn run_command(options: RunOptions<'_>) -> Result<()> {
             Some(&now),
             evaluation_inputs,
             false,
+            evaluation_request,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     if !rule_names.is_empty() {
@@ -684,7 +709,17 @@ fn print_repo_spec_list(
     let mut output = format!("Repository: {}\n", repository_label);
     let paths = repository_file_paths(target_repo);
     if paths.is_empty() {
-        output.push_str("  (no file path recorded for this repository)\n");
+        if repo_q == Some(lemma::engine::EMBEDDED_STDLIB_REPOSITORY) {
+            output.push_str("  embedded:lemma\n\n");
+            output.push_str(
+                &engine
+                    .format_repository(lemma::engine::EMBEDDED_STDLIB_REPOSITORY)
+                    .map_err(|e| anyhow::anyhow!("{}", e))?,
+            );
+            output.push('\n');
+        } else {
+            output.push_str("  (no file path recorded for this repository)\n");
+        }
     } else {
         for path_component in paths {
             let canonical_display_string = path_component
@@ -734,6 +769,9 @@ fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {
     if let Some(path) = workdir {
         let _: usize = load_workspace(&mut engine, path)?;
     }
+    engine
+        .replan()
+        .map_err(|e| anyhow::anyhow!("Planning failed: {e}"))?;
 
     let config = mcp::McpConfig { admin };
 

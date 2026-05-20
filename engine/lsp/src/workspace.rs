@@ -357,7 +357,7 @@ mod tests {
         );
         workspace.update_file(
             url_b.clone(),
-            "spec company\nuses employee: person\ndata employee.name: \"Bob\"".to_string(),
+            "spec company\nuses employee: person\nfill employee.name: \"Bob\"".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -425,7 +425,7 @@ mod tests {
         let url_ok = url_from_path("/tmp/lsp_clean.lemma");
         workspace.update_file(
             url_bad.clone(),
-            "spec consumer\ndata money: no_such_dep.money\ndata x: 1".to_string(),
+            "spec consumer\nfill money: no_such_dep.money\ndata x: 1".to_string(),
         );
         workspace.update_file(url_ok.clone(), "spec other\ndata y: 2".to_string());
 
@@ -460,7 +460,7 @@ mod tests {
         let main_path = root.join("main.lemma");
         std::fs::write(
             &main_path,
-            "spec demo\nuses @lemma/std finance 2026\ndata z: finance.z\n",
+            "spec demo\nuses @lemma/std finance 2026\nfill z: finance.z\n",
         )
         .expect("write main");
 
@@ -560,5 +560,72 @@ mod tests {
                 result.errors
             );
         }
+    }
+
+    #[test]
+    fn validate_workspace_uses_lemma_duration_compound_units() {
+        let mut workspace = WorkspaceModel::new();
+        let url = url_from_path("/tmp/contractor.lemma");
+        workspace.update_file(
+            url,
+            r#"spec contractor
+uses lemma si
+
+data money: quantity
+  -> unit eur 1.00
+
+data wage_rate: quantity
+  -> unit eur_per_second eur/second
+  -> unit eur_per_hour eur/hour
+
+rule smoke: true
+"#
+            .to_string(),
+        );
+
+        let results = workspace.validate_workspace();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].errors.is_empty(),
+            "uses lemma si must resolve stdlib duration units: {:?}",
+            results[0].errors
+        );
+    }
+
+    #[test]
+    fn validate_workspace_rejects_forward_pin_same_name_import() {
+        let mut workspace = WorkspaceModel::new();
+        let url = url_from_path("/tmp/finance_consumer.lemma");
+        workspace.update_file(
+            url.clone(),
+            r#"spec finance
+data rate: number -> default 0
+
+spec finance 2026-05-20
+uses fin: finance 2027
+"#
+            .to_string(),
+        );
+
+        let results = workspace.validate_workspace();
+        let consumer = results
+            .iter()
+            .find(|r| r.url == url)
+            .expect("consumer file diagnostics");
+        assert!(
+            !consumer.errors.is_empty(),
+            "forward pin without exact slice must produce diagnostics: {:?}",
+            consumer.errors
+        );
+        let joined: String = consumer
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined.contains("active at that instant") || joined.contains("cannot reference itself"),
+            "expected planning import error, got: {joined}"
+        );
     }
 }

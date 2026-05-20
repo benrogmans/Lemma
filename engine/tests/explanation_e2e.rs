@@ -1,7 +1,38 @@
+use lemma::evaluation::ComputationKind;
+use lemma::explanation::ConversionExplanationRole;
 use lemma::parsing::ast::DateTimeValue;
+use lemma::planning::semantics::SemanticConversionTarget;
 use lemma::{Engine, LiteralValue, OperationResult, VetoType};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
+
+fn conversion_tree(
+    tree: &lemma::explanation::ExplanationNode,
+) -> (
+    ComputationKind,
+    &[lemma::explanation::ConversionExplanationStep],
+    &[lemma::explanation::ExplanationNode],
+) {
+    let lemma::explanation::ExplanationNode::Computation {
+        kind,
+        conversion_steps,
+        expression,
+        original_expression,
+        operands,
+        ..
+    } = tree
+    else {
+        panic!("expected Computation at root, got {tree:?}");
+    };
+    assert!(
+        expression.is_empty() && original_expression.is_empty(),
+        "UnitConversion must not use expression fields; expression={expression:?} original={original_expression:?}"
+    );
+    (
+        kind.clone(),
+        conversion_steps.as_slice(),
+        operands.as_slice(),
+    )
+}
 
 #[test]
 fn test_explanation_generated_during_evaluation() {
@@ -15,15 +46,17 @@ data base_value: 100
 rule doubled: base_value * 2
 "#;
 
-    engine
-        .load(
-            spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_explanation", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_explanation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let doubled_result = response
@@ -72,12 +105,7 @@ rule doubled: base_value * 2
 rule quadruple: doubled * 2
 "#;
 
-    engine
-        .load(
-            spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
         .run(
@@ -86,6 +114,7 @@ rule quadruple: doubled * 2
             Some(&now),
             HashMap::new(),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
@@ -159,15 +188,17 @@ rule discount_percentage: 0%
   unless is_premium then 15%
 "#;
 
-    engine
-        .load(
-            spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_unless", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_unless",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let discount_result = response
@@ -181,7 +212,7 @@ rule discount_percentage: 0%
     assert_eq!(
         discount_result.result,
         OperationResult::Value(Box::new(LiteralValue::ratio(
-            Decimal::from(0),
+            lemma::RationalInteger::new(0, 1),
             Some("percent".to_string())
         )))
     );
@@ -232,15 +263,17 @@ rule age_validation: accept
   unless age < 18 then veto "Must be 18 or older"
 "#;
 
-    engine
-        .load(
-            spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_veto", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_veto",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let validation_result = response
@@ -303,7 +336,14 @@ rule result: base_ref.doubled + 50
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "main", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "main",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let result = response
@@ -391,7 +431,14 @@ rule use_cross_spec: base_ref.doubled + 1
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "main", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "main",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let main_rule = response
@@ -472,7 +519,14 @@ rule use_doubled: base_ref.doubled + 10
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "main", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "main",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let main_rule = response
@@ -584,15 +638,17 @@ rule out: true
  unless 5 < 3 then false
 "#;
 
-    engine
-        .load(
-            spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let result = response
@@ -641,4 +697,325 @@ rule out: true
         &LiteralValue::from_bool(true),
         "normalized condition should have result true"
     );
+}
+
+#[test]
+fn date_range_as_days_conversion_steps() {
+    let mut engine = Engine::new();
+
+    let spec = r#"
+spec test_conversion_explanation
+uses lemma si
+data age: date range -> default 2024-06-01...2024-06-15
+rule a: age as days
+"#;
+
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test_conversion_explanation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "a")
+        .expect("rule a should exist");
+
+    assert!(
+        rule_result
+            .result
+            .value()
+            .unwrap()
+            .to_string()
+            .contains("14"),
+        "expected 14-day span"
+    );
+
+    let explanation = rule_result
+        .explanation
+        .as_ref()
+        .expect("explanation should exist");
+
+    let (kind, steps, operands) = conversion_tree(explanation.tree.as_ref());
+    let ComputationKind::UnitConversion { target } = kind else {
+        panic!("expected UnitConversion kind, got {kind:?}");
+    };
+    assert!(
+        matches!(
+            target,
+            SemanticConversionTarget::QuantityUnit(ref unit) if unit == "days"
+        ),
+        "expected days target, got {target:?}"
+    );
+    assert_eq!(steps.len(), 3);
+    assert!(matches!(steps[0].role, ConversionExplanationRole::Outcome));
+    assert!(steps[0].text.contains("14") && steps[0].text.contains("day"));
+    assert!(matches!(steps[1].role, ConversionExplanationRole::Rule));
+    assert!(steps[1].text.contains('−'));
+    assert!(steps[1].text.contains("2024-06-01") && steps[1].text.contains("2024-06-15"));
+    assert!(matches!(steps[2].role, ConversionExplanationRole::Source));
+    assert!(steps[2].text.contains("The date range of age is"));
+    assert_eq!(operands.len(), 1);
+    assert!(matches!(
+        &operands[0],
+        lemma::explanation::ExplanationNode::Value {
+            source: lemma::explanation::ValueSource::Data { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
+fn scalar_quantity_conversion_steps() {
+    let mut engine = Engine::new();
+
+    let spec = r#"
+spec test_quantity_conversion_explanation
+data mass: quantity
+    -> unit kilogram 1.0
+    -> unit gram 0.001
+    -> default 2 kilogram
+rule result: mass as gram
+"#;
+
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test_quantity_conversion_explanation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "result")
+        .expect("result rule should exist");
+
+    let explanation = rule_result
+        .explanation
+        .as_ref()
+        .expect("explanation should exist");
+
+    let (kind, steps, operands) = conversion_tree(explanation.tree.as_ref());
+    assert!(matches!(kind, ComputationKind::UnitConversion { .. }));
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0].text, "2000 gram");
+    assert_eq!(steps[1].text, "1 kilogram is 1000 gram");
+    assert_eq!(steps[2].text, "The quantity of mass is 2 kilogram");
+    assert_eq!(
+        steps[2].data_ref.as_ref().map(|path| path.data.as_str()),
+        Some("mass")
+    );
+    let steps_json = serde_json::to_string(steps).expect("serialize steps");
+    assert!(!steps_json.contains('×'));
+    assert_eq!(operands.len(), 1);
+}
+
+#[test]
+fn duration_scalar_conversion_steps() {
+    let mut engine = Engine::new();
+    let spec = r#"
+spec test_duration_conversion_explanation
+uses lemma si
+data age: si.duration
+rule hours: age as hours"#;
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "90 minutes".to_string());
+    let response = engine
+        .run(
+            None,
+            "test_duration_conversion_explanation",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+    let rule_result = response
+        .results
+        .get("hours")
+        .expect("hours rule should exist");
+    let explanation = rule_result
+        .explanation
+        .as_ref()
+        .expect("explanation should exist");
+    let (kind, steps, _) = conversion_tree(explanation.tree.as_ref());
+    assert!(matches!(kind, ComputationKind::UnitConversion { .. }));
+    assert_eq!(steps.len(), 3);
+    assert!(matches!(steps[1].role, ConversionExplanationRole::Rule));
+    assert!(steps[1].text.contains(" is "));
+    assert!(!steps[1].text.contains('×'));
+    assert_eq!(steps[2].text, "The quantity of age is 90 minutes");
+}
+
+#[test]
+fn quantity_range_as_hours_conversion_steps() {
+    let mut engine = Engine::new();
+    let spec = r#"
+spec test_quantity_range_conversion_explanation
+uses lemma si
+data span: quantity range -> default 7 days...14 days
+rule result: span as hours"#;
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test_quantity_range_conversion_explanation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "result")
+        .expect("result rule should exist");
+    let explanation = rule_result
+        .explanation
+        .as_ref()
+        .expect("explanation should exist");
+    let (_, steps, _) = conversion_tree(explanation.tree.as_ref());
+    assert_eq!(steps.len(), 3);
+    assert!(steps[0].text.contains("168") && steps[0].text.contains("hour"));
+    assert_eq!(steps[1].text, "14 days − 7 days = 168 hours");
+    assert!(!steps[1].text.contains(';'));
+    assert!(!steps[1].text.contains('×'));
+}
+
+#[test]
+fn nested_operand_arithmetic_conversion_steps() {
+    let mut engine = Engine::new();
+    let spec = r#"
+spec test_nested_conversion_explanation
+data mass: quantity
+    -> unit kilogram 1.0
+    -> unit gram 0.001
+    -> default 2 kilogram
+rule result: (mass * 2) as gram"#;
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test_nested_conversion_explanation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "result")
+        .expect("result rule should exist");
+    let explanation = rule_result
+        .explanation
+        .as_ref()
+        .expect("explanation should exist");
+    let (_, steps, operands) = conversion_tree(explanation.tree.as_ref());
+    assert_eq!(steps.len(), 3);
+    assert!(matches!(
+        &operands[0],
+        lemma::explanation::ExplanationNode::Computation {
+            kind: ComputationKind::Arithmetic(_),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn unless_wraps_unit_conversion_steps() {
+    let mut engine = Engine::new();
+    let spec = r#"
+spec test_unless_conversion_explanation
+data mass: quantity
+    -> unit kilogram 1.0
+    -> unit gram 0.001
+    -> default 2 kilogram
+data flag: false
+rule total: mass as gram
+  unless flag then 0 gram"#;
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test_unless_conversion_explanation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+    let rule_result = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "total")
+        .expect("total rule should exist");
+    let explanation = rule_result
+        .explanation
+        .as_ref()
+        .expect("explanation should exist");
+    let lemma::explanation::ExplanationNode::Branches { matched, .. } = explanation.tree.as_ref()
+    else {
+        panic!("expected Branches at root, got {:?}", explanation.tree);
+    };
+    let (_, steps, _) = conversion_tree(matched.result.as_ref());
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0].text, "2000 gram");
+}
+
+#[test]
+fn conversion_steps_in_response_json() {
+    let mut engine = Engine::new();
+    let spec = r#"
+spec test_conversion_json
+data mass: quantity
+    -> unit kilogram 1.0
+    -> unit gram 0.001
+    -> default 2 kilogram
+rule result: mass as gram"#;
+    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test_conversion_json",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .unwrap();
+    let json_value = serde_json::to_value(&response).expect("serialize response");
+    let result = json_value["results"]["result"]
+        .as_object()
+        .expect("result object");
+    let steps = result["explanation"]["tree"]["computation"]["conversion_steps"]
+        .as_array()
+        .expect("conversion_steps array");
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0]["role"], "outcome");
+    assert_eq!(steps[1]["role"], "rule");
+    assert_eq!(steps[2]["role"], "source");
 }

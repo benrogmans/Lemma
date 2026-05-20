@@ -24,6 +24,13 @@ pub const MAX_COLS: usize = 56;
 /// The result ends with a single newline.
 #[must_use]
 pub fn format_specs(specs: &[LemmaSpec]) -> String {
+    let refs: Vec<&LemmaSpec> = specs.iter().collect();
+    format_spec_refs(&refs)
+}
+
+/// Like [`format_specs`] for borrowed specs (e.g. from [`Arc<LemmaSpec>`](crate::parsing::ast::LemmaSpec)).
+#[must_use]
+pub fn format_spec_refs(specs: &[&LemmaSpec]) -> String {
     let mut out = String::new();
     for (index, spec) in specs.iter().enumerate() {
         if index > 0 {
@@ -143,9 +150,8 @@ fn data_constraints_nonempty(constraints: &Option<Vec<Constraint>>) -> bool {
 
 fn data_value_has_arrow_constraints(value: &DataValue) -> bool {
     match value {
-        DataValue::Definition { constraints, .. } | DataValue::Reference { constraints, .. } => {
-            data_constraints_nonempty(constraints)
-        }
+        DataValue::Definition { constraints, .. } => data_constraints_nonempty(constraints),
+        DataValue::Fill(_) => false,
         _ => false,
     }
 }
@@ -155,23 +161,20 @@ fn data_value_rhs_for_spec_body(value: &DataValue, continuation_prefix: &str) ->
         DataValue::Definition {
             base,
             constraints,
-            from,
             value,
         } if data_constraints_nonempty(constraints) => {
             let cs = constraints
                 .as_ref()
                 .expect("BUG: constraints checked above");
-            let head: String = if base.is_none() && from.is_none() {
+            let head: String = if base.is_none() {
                 match value {
                     Some(v) => format!("{}", AsLemmaSource(v)),
                     None => String::new(),
                 }
             } else {
-                match (base.as_ref(), from.as_ref()) {
-                    (Some(b), Some(spec)) => format!("{} from {}", b, spec),
-                    (Some(b), None) => format!("{}", b),
-                    (None, Some(spec)) => format!("<type> from {}", spec),
-                    (None, None) => String::new(),
+                match base.as_ref() {
+                    Some(b) => format!("{}", b),
+                    None => String::new(),
                 }
             };
             let mut out = head;
@@ -183,41 +186,34 @@ fn data_value_rhs_for_spec_body(value: &DataValue, continuation_prefix: &str) ->
             }
             out
         }
-        DataValue::Reference {
-            target,
-            constraints,
-        } if data_constraints_nonempty(constraints) => {
-            let cs = constraints
-                .as_ref()
-                .expect("BUG: constraints checked above");
-            let mut out = target.to_string();
-            for (cmd, args) in cs {
-                out.push('\n');
-                out.push_str(continuation_prefix);
-                out.push_str("-> ");
-                out.push_str(&crate::parsing::ast::format_constraint_as_source(cmd, args));
-            }
-            out
-        }
+        DataValue::Fill(crate::parsing::ast::FillRhs::Reference { target }) => target.to_string(),
         _ => format!("{}", AsLemmaSource(value)),
     }
 }
 
+fn data_declaration_keyword(data: &LemmaData) -> &'static str {
+    match &data.value {
+        DataValue::Import(_) => unreachable!("BUG: format_data called on Import row"),
+        DataValue::Fill(_) => "fill",
+        DataValue::Definition { .. } => "data",
+    }
+}
+
 fn format_data(data: &LemmaData, line_prefix: &str) -> String {
+    let kw = data_declaration_keyword(data);
     let ref_str = format!("{}", data.reference);
     let continuation = format!("{line_prefix}{DATA_CONSTRAINT_INDENT}");
     let rhs = data_value_rhs_for_spec_body(&data.value, &continuation);
     if let Some((first, rest)) = rhs.split_once('\n') {
-        format!("data {}: {}\n{}", ref_str, first, rest)
+        format!("{kw} {}: {}\n{}", ref_str, first, rest)
     } else {
-        format!("data {}: {}", ref_str, rhs)
+        format!("{kw} {}: {}", ref_str, rhs)
     }
 }
 
-/// Byte length from start of `data ` through the single space after `:` (same layout as [`format_data`]).
-fn data_line_prefix_len_before_rhs(ref_str: &str) -> usize {
-    // "data " + ref + ": "
-    5 + ref_str.len() + 2
+/// Byte length from start of `data ` or `fill ` through the single space after `:` (same layout as [`format_data`]).
+fn data_line_prefix_len_before_rhs(keyword: &str, ref_str: &str) -> usize {
+    keyword.len() + 1 + ref_str.len() + 2
 }
 
 fn data_is_simple_single_line(data: &LemmaData, line_prefix: &str) -> bool {
@@ -235,13 +231,15 @@ fn push_formatted_simple_data_line_padded(
     line_prefix: &str,
     target_prefix_len_before_rhs: usize,
 ) {
+    let kw = data_declaration_keyword(data);
     let ref_str = format!("{}", data.reference);
     let continuation = format!("{line_prefix}{DATA_CONSTRAINT_INDENT}");
     let rhs = data_value_rhs_for_spec_body(&data.value, &continuation);
-    let base = data_line_prefix_len_before_rhs(&ref_str);
+    let base = data_line_prefix_len_before_rhs(kw, &ref_str);
     let gap = 1 + target_prefix_len_before_rhs.saturating_sub(base);
     out.push_str(line_prefix);
-    out.push_str("data ");
+    out.push_str(kw);
+    out.push(' ');
     out.push_str(&ref_str);
     out.push(':');
     out.push_str(&" ".repeat(gap));
@@ -259,7 +257,12 @@ fn emit_data_row_group(rows: &[&LemmaData], line_prefix: &str, out: &mut String)
             }
             let run_end = i;
             let target = (run_start..run_end)
-                .map(|k| data_line_prefix_len_before_rhs(&format!("{}", rows[k].reference)))
+                .map(|k| {
+                    let row = rows[k];
+                    let kw = data_declaration_keyword(row);
+                    let ref_str = format!("{}", row.reference);
+                    data_line_prefix_len_before_rhs(kw, &ref_str)
+                })
                 .max()
                 .expect("BUG: non-empty run");
             for row in rows[run_start..run_end].iter().copied() {
@@ -576,7 +579,7 @@ fn format_expr_wrapped(
 mod tests {
     use super::*;
     use crate::parsing::ast::{
-        AsLemmaSource, BooleanValue, DateTimeValue, DurationUnit, TimeValue, TimezoneValue, Value,
+        AsLemmaSource, BooleanValue, DateTimeValue, TimeValue, TimezoneValue, Value,
     };
     use rust_decimal::prelude::FromStr;
     use rust_decimal::Decimal;
@@ -620,39 +623,42 @@ mod tests {
     }
 
     #[test]
-    fn test_format_value_scale() {
-        let v = Value::Scale(Decimal::from_str("99.50").unwrap(), "eur".to_string());
+    fn test_format_value_quantity() {
+        let v = Value::NumberWithUnit(Decimal::from_str("99.50").unwrap(), "eur".to_string());
         assert_eq!(fmt_value(&v), "99.50 eur");
     }
 
     #[test]
-    fn test_format_value_duration() {
-        let v = Value::Duration(Decimal::from(40), DurationUnit::Hour);
+    fn test_format_value_duration_as_quantity() {
+        let v = Value::NumberWithUnit(Decimal::from(40), "hours".to_string());
         assert_eq!(fmt_value(&v), "40 hours");
     }
 
     #[test]
+    fn test_format_value_calendar() {
+        let v = Value::Calendar(Decimal::from(6), crate::literals::CalendarUnit::Month);
+        assert_eq!(fmt_value(&v), "6 months");
+    }
+
+    #[test]
     fn test_format_value_ratio_percent() {
-        let v = Value::Ratio(
-            Decimal::from_str("0.10").unwrap(),
-            Some("percent".to_string()),
-        );
+        let v = Value::NumberWithUnit(Decimal::from_str("10").unwrap(), "percent".to_string());
         assert_eq!(fmt_value(&v), "10%");
     }
 
     #[test]
     fn test_format_value_ratio_permille() {
-        let v = Value::Ratio(
-            Decimal::from_str("0.005").unwrap(),
-            Some("permille".to_string()),
-        );
+        let v = Value::NumberWithUnit(Decimal::from_str("5").unwrap(), "permille".to_string());
         assert_eq!(fmt_value(&v), "5%%");
     }
 
     #[test]
-    fn test_format_value_ratio_bare() {
-        let v = Value::Ratio(Decimal::from_str("0.25").unwrap(), None);
-        assert_eq!(fmt_value(&v), "0.25");
+    fn test_format_value_number_with_unit_named() {
+        let v = Value::NumberWithUnit(
+            Decimal::from_str("500").unwrap(),
+            "basis_points".to_string(),
+        );
+        assert_eq!(fmt_value(&v), "500 basis_points");
     }
 
     #[test]
@@ -694,6 +700,7 @@ mod tests {
             hour: 14,
             minute: 30,
             second: 45,
+            microsecond: 0,
             timezone: None,
         });
         assert_eq!(fmt_value(&v), "14:30:45");
@@ -769,10 +776,10 @@ rule total: income
     fn test_format_groups_spec_refs_with_overrides() {
         let source = r#"spec test
 
-data retail.quantity: 5
+fill retail.quantity: 5
 uses order wholesale
 uses order retail
-data wholesale.quantity: 100
+fill wholesale.quantity: 100
 data base_price: 50
 
 rule total: base_price
@@ -788,9 +795,9 @@ rule total: base_price
             .unwrap();
         let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lines[0], "uses order wholesale");
-        assert_eq!(lines[1], "data wholesale.quantity: 100");
+        assert_eq!(lines[1], "fill wholesale.quantity: 100");
         assert_eq!(lines[2], "uses order retail");
-        assert_eq!(lines[3], "data retail.quantity: 5");
+        assert_eq!(lines[3], "fill retail.quantity: 5");
         assert_eq!(lines[4], "data base_price: 50");
     }
 
@@ -874,12 +881,12 @@ rule total: quantity
     }
 
     #[test]
-    fn test_format_scale_type_def_round_trips() {
+    fn test_format_quantity_type_def_round_trips() {
         let source = r#"spec test
 
-data money: scale
+data money: quantity
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit usd 0.91
   -> decimals 2
   -> minimum 0
 
@@ -891,7 +898,7 @@ rule total: price
             format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
         assert!(
             formatted.contains("unit eur 1.00"),
-            "scale unit should not be quoted, got: {}",
+            "quantity unit should not be quoted, got: {}",
             formatted
         );
         // Round-trip

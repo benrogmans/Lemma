@@ -88,20 +88,22 @@ fn collect_unknown_data(
         }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right)
+        | ExpressionKind::RangeLiteral(left, right)
+        | ExpressionKind::RangeContainment(left, right) => {
             collect_unknown_data(left, provided_data, result);
             collect_unknown_data(right, provided_data, result);
         }
         ExpressionKind::LogicalNegation(inner, _)
         | ExpressionKind::UnitConversion(inner, _)
-        | ExpressionKind::MathematicalComputation(_, inner) => {
+        | ExpressionKind::MathematicalComputation(_, inner)
+        | ExpressionKind::ResultIsVeto(inner)
+        | ExpressionKind::PastFutureRange(_, inner) => {
             collect_unknown_data(inner, provided_data, result);
         }
-        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+        ExpressionKind::DateRelative(_, date_expr) => {
             collect_unknown_data(date_expr, provided_data, result);
-            if let Some(tol) = tolerance {
-                collect_unknown_data(tol, provided_data, result);
-            }
         }
         ExpressionKind::DateCalendar(_, _, date_expr) => {
             collect_unknown_data(date_expr, provided_data, result);
@@ -312,7 +314,7 @@ fn invert_operation(
         (ArithmeticComputation::Power, true) => {
             let one = Expression {
                 kind: ExpressionKind::Literal(Box::new(LiteralValue::number(
-                    rust_decimal::Decimal::ONE,
+                    crate::computation::rational::rational_one(),
                 ))),
                 source_location: None,
             };
@@ -357,7 +359,8 @@ fn contains_data(expression: &Expression, data_path: &DataPath) -> bool {
         ExpressionKind::DataPath(fp) => fp == data_path,
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right) => {
             contains_data(left, data_path) || contains_data(right, data_path)
         }
         ExpressionKind::LogicalNegation(inner, _)
@@ -379,7 +382,8 @@ fn count_data_occurrences(expression: &Expression, data_path: &DataPath) -> usiz
         }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right) => {
             count_data_occurrences(left, data_path) + count_data_occurrences(right, data_path)
         }
         ExpressionKind::LogicalNegation(inner, _)
@@ -397,12 +401,14 @@ fn contains_rule_reference(expression: &Expression) -> bool {
         ExpressionKind::RulePath(_) => true,
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right) => {
             contains_rule_reference(left) || contains_rule_reference(right)
         }
         ExpressionKind::LogicalNegation(inner, _)
         | ExpressionKind::UnitConversion(inner, _)
-        | ExpressionKind::MathematicalComputation(_, inner) => contains_rule_reference(inner),
+        | ExpressionKind::MathematicalComputation(_, inner)
+        | ExpressionKind::ResultIsVeto(inner) => contains_rule_reference(inner),
         _ => false,
     }
 }
@@ -434,11 +440,15 @@ fn has_supported_operations(expression: &Expression) -> bool {
 
         ExpressionKind::UnitConversion(inner, _) => has_supported_operations(inner),
 
-        ExpressionKind::Comparison(left, _, right) | ExpressionKind::LogicalAnd(left, right) => {
+        ExpressionKind::Comparison(left, _, right)
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right) => {
             has_supported_operations(left) && has_supported_operations(right)
         }
 
         ExpressionKind::LogicalNegation(inner, _) => has_supported_operations(inner),
+
+        ExpressionKind::ResultIsVeto(inner) => has_supported_operations(inner),
 
         _ => false,
     }
@@ -497,7 +507,6 @@ pub(super) fn solve_arithmetic_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
 
     fn literal_expression(value: LiteralValue) -> Expression {
         Expression {
@@ -514,7 +523,9 @@ mod tests {
     }
 
     fn number(n: i64) -> LiteralValue {
-        LiteralValue::number(Decimal::from(n))
+        LiteralValue::number(crate::computation::rational::RationalInteger::new(
+            n as i128, 1,
+        ))
     }
 
     #[test]
@@ -661,7 +672,12 @@ mod tests {
             kind: ExpressionKind::Arithmetic(
                 Arc::new(inner),
                 ArithmeticComputation::Multiply,
-                Arc::new(literal_expression(LiteralValue::number(Decimal::new(8, 1)))),
+                Arc::new(literal_expression(LiteralValue::number(
+                    crate::computation::rational::decimal_to_rational(rust_decimal::Decimal::new(
+                        8, 1,
+                    ))
+                    .unwrap(),
+                ))),
             ),
             source_location: None,
         };

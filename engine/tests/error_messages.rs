@@ -19,7 +19,7 @@ fn test_duplicate_data_definition_error() {
         data salary: 50000
         data salary: 60000
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -32,12 +32,58 @@ fn test_duplicate_data_definition_error() {
         .expect("expected at least one Validation error");
     let msg = &details.message;
     assert!(
-        msg.to_lowercase().contains("duplicate") && msg.to_lowercase().contains("data"),
-        "Error should mention duplicate data, got: {msg}"
+        msg.contains("already used") && msg.contains("salary"),
+        "Error should mention duplicate data name, got: {msg}"
+    );
+}
+
+#[test]
+fn test_uses_and_data_same_name_error() {
+    let mut engine = Engine::new();
+
+    engine
+        .load(
+            r#"
+spec age
+data age: number
+"#,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("age.lemma"))),
+        )
+        .expect("age spec");
+
+    let errs = engine
+        .load(
+            r#"
+spec test
+uses age
+data age: age.age
+"#,
+            lemma::SourceType::Volatile,
+        )
+        .unwrap_err();
+
+    let details = errs
+        .iter()
+        .find_map(|e| match e {
+            Error::Validation(d) => Some(d),
+            _ => None,
+        })
+        .expect("validation error");
+
+    assert!(
+        details.message.contains("uses age") && details.message.contains("data age"),
+        "message should name both declarations, got: {}",
+        details.message
     );
     assert!(
-        msg.contains("salary"),
-        "Error should mention data name, got: {msg}"
+        details.message.contains("`data` definition"),
+        "message should say data definition, got: {}",
+        details.message
+    );
+    let suggestion = details.suggestion.as_deref().expect("expected suggestion");
+    assert!(
+        suggestion.contains("age_spec"),
+        "suggestion should show renamed import, got: {suggestion}"
     );
 }
 
@@ -52,7 +98,7 @@ fn test_duplicate_rule_definition_error() {
         rule total: x * 2
         rule total: x * 3
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -85,7 +131,7 @@ fn test_duplicate_data_shows_name() {
         data age: 30
         data name: "Bob"
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -98,7 +144,7 @@ fn test_duplicate_data_shows_name() {
         .expect("expected at least one Validation error");
     let msg = &details.message;
     assert!(
-        msg.contains("Duplicate"),
+        msg.contains("already used"),
         "Error should mention duplicate, got: {msg}"
     );
     assert!(
@@ -123,13 +169,20 @@ fn test_runtime_error_division_by_zero() {
         data denominator: 0
         rule result: numerator / denominator
     "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Division by zero should return Veto, not Error");
 
     let result_rule = response
@@ -171,7 +224,7 @@ fn test_transpile_error_self_referencing_rule() {
         spec test
         rule x: x + 1
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -214,7 +267,7 @@ fn test_duplicate_error_contains_data_name() {
             _ => None,
         })
         .expect("expected at least one Validation error");
-    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("already used"));
     assert!(details.message.contains("price"));
 }
 
@@ -228,7 +281,7 @@ fn test_duplicate_error_is_reported() {
         data x: 10
         data x: 20
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -239,7 +292,7 @@ fn test_duplicate_error_is_reported() {
             _ => None,
         })
         .expect("expected at least one Validation error");
-    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("already used"));
     assert!(details.message.contains("x"));
 }
 
@@ -267,7 +320,7 @@ fn test_duplicate_in_second_spec_is_caught() {
             _ => None,
         })
         .expect("expected at least one Validation error");
-    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("already used"));
     assert!(details.message.contains("b"));
 }
 
@@ -285,7 +338,7 @@ fn test_error_display_contains_duplicate_info() {
         data value: 100
         data value: 200
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -296,7 +349,7 @@ fn test_error_display_contains_duplicate_info() {
             _ => None,
         })
         .expect("expected at least one Validation error");
-    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("already used"));
     assert!(details.message.contains("value"));
 }
 
@@ -316,13 +369,20 @@ fn test_division_by_zero_returns_veto_with_message() {
         data y: 0
         rule result: x / y
     "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should return Veto, not Error");
 
     let result_rule = response
@@ -354,7 +414,7 @@ fn test_circular_dependency_has_helpful_suggestion() {
         rule x: y
         rule y: x
     "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+        lemma::SourceType::Volatile,
     );
 
     let errs = result.unwrap_err();
@@ -384,10 +444,7 @@ data line3: 2
 data line4: 3
 data line4: 4"#;
 
-    let result = engine.load(
-        lemma_code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+    let result = engine.load(lemma_code, lemma::SourceType::Volatile);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -397,7 +454,7 @@ data line4: 4"#;
             _ => None,
         })
         .expect("expected at least one Validation error");
-    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("already used"));
     assert!(details.message.contains("line4"));
 }
 
@@ -428,7 +485,7 @@ fn test_duplicate_detected_from_database_source() {
             _ => None,
         })
         .expect("expected at least one Validation error");
-    assert!(details.message.contains("Duplicate"));
+    assert!(details.message.contains("already used"));
     assert!(details.message.contains("amount"));
 }
 
@@ -448,9 +505,9 @@ fn test_multiple_error_phases_reported_together() {
         r#"
         spec pricing
 
-        data money: scale
+        data money: quantity
           -> unit eur 1
-          -> unit usd 1.19
+          -> unit usd 0.84
 
         data price    : money
         data quantity : number -> minimum 0

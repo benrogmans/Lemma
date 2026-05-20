@@ -3,12 +3,14 @@
 //! Ensures all example files in cli/tests/integrations/examples/ are valid and can be evaluated
 
 use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::SemanticDurationUnit;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+fn decimal_lit(d: &str) -> Decimal {
+    Decimal::from_str(d).unwrap()
+}
 fn load_examples() -> Engine {
     let mut engine = Engine::new();
 
@@ -62,7 +64,14 @@ fn test_02_rules_and_unless() {
     data.insert("customer_age".to_string(), "17".to_string());
 
     let response = engine
-        .run(None, "rules_and_unless", Some(&now), data, false)
+        .run(
+            None,
+            "rules_and_unless",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rules_and_unless");
@@ -70,7 +79,10 @@ fn test_02_rules_and_unless() {
     let final_total = response.results.get("final_total").unwrap();
     match &final_total.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("800").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                decimal_lit("800")
+            ),
             other => panic!("Expected Number for final_total, got {:?}", other),
         },
         other => panic!("Expected Value for final_total, got {:?}", other),
@@ -92,14 +104,24 @@ fn test_03_spec_references() {
 
     // specific_employee (references base_employee)
     let response = engine
-        .run(None, "specific_employee", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "specific_employee",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "specific_employee");
     let salary_with_bonus = response.results.get("salary_with_bonus").unwrap();
     match &salary_with_bonus.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("99000").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                decimal_lit("99000")
+            ),
             other => panic!("Expected Number for salary_with_bonus, got {:?}", other),
         },
         other => panic!("Expected Value for salary_with_bonus, got {:?}", other),
@@ -122,7 +144,14 @@ fn test_04_unit_conversions() {
 
     // Spec has all data defined, no type annotations needed
     let response = engine
-        .run(None, "unit_conversions", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "unit_conversions",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "unit_conversions");
@@ -130,11 +159,14 @@ fn test_04_unit_conversions() {
     let duration_hours = response.results.get("duration_hours").unwrap();
     match &duration_hours.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Duration(v, unit) => {
-                assert_eq!(*v, Decimal::from_str("1.5").unwrap());
-                assert_eq!(*unit, SemanticDurationUnit::Hour);
+            lemma::ValueKind::Quantity(v, unit, _) => {
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(v).unwrap(),
+                    decimal_lit("1.5")
+                );
+                assert!(unit.eq_ignore_ascii_case("hours"), "unit={unit:?}");
             }
-            other => panic!("Expected Duration for duration_hours, got {:?}", other),
+            other => panic!("Expected Quantity for duration_hours, got {:?}", other),
         },
         other => panic!("Expected Value for duration_hours, got {:?}", other),
     }
@@ -142,11 +174,14 @@ fn test_04_unit_conversions() {
     let duration_seconds = response.results.get("duration_seconds").unwrap();
     match &duration_seconds.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Duration(v, unit) => {
-                assert_eq!(*v, Decimal::from_str("5400").unwrap());
-                assert_eq!(*unit, SemanticDurationUnit::Second);
+            lemma::ValueKind::Quantity(v, unit, _) => {
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(v).unwrap(),
+                    decimal_lit("5400")
+                );
+                assert!(unit.eq_ignore_ascii_case("seconds"), "unit={unit:?}");
             }
-            other => panic!("Expected Duration for duration_seconds, got {:?}", other),
+            other => panic!("Expected Quantity for duration_seconds, got {:?}", other),
         },
         other => panic!("Expected Value for duration_seconds, got {:?}", other),
     }
@@ -167,7 +202,14 @@ fn test_05_date_handling() {
     data.insert("current_date".to_string(), "2024-06-15".to_string());
 
     let response = engine
-        .run(None, "date_handling", Some(&now), data, false)
+        .run(
+            None,
+            "date_handling",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     // Spec evaluates successfully
@@ -200,7 +242,14 @@ fn test_08_rule_references() {
 
     // Test examples/rule_references spec
     let response = engine
-        .run(None, "rule_references", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "rule_references",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rule_references");
@@ -227,7 +276,14 @@ fn test_08_rule_references() {
 
     // Test examples/eligibility_check spec (also in the same file)
     let response = engine
-        .run(None, "eligibility_check", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "eligibility_check",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "eligibility_check");

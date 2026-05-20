@@ -355,8 +355,10 @@ fn compare_values(a: &LiteralValue, b: &LiteralValue) -> Option<std::cmp::Orderi
     match (&a.value, &b.value) {
         (ValueKind::Number(a_val), ValueKind::Number(b_val)) => Some(a_val.cmp(b_val)),
         (ValueKind::Ratio(a_val, _), ValueKind::Ratio(b_val, _)) => Some(a_val.cmp(b_val)),
-        (ValueKind::Scale(a_val, _), ValueKind::Scale(b_val, _)) => Some(a_val.cmp(b_val)),
-        (ValueKind::Duration(a_val, unit_a), ValueKind::Duration(b_val, unit_b)) => {
+        (ValueKind::Quantity(a_val, _, _), ValueKind::Quantity(b_val, _, _)) => {
+            Some(a_val.cmp(b_val))
+        }
+        (ValueKind::Calendar(a_val, unit_a), ValueKind::Calendar(b_val, unit_b)) => {
             if unit_a == unit_b {
                 Some(a_val.cmp(b_val))
             } else {
@@ -431,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_format_target_eq() {
-        let target = Target::value(LiteralValue::number(Decimal::from(42)));
+        let target = Target::value(LiteralValue::number_from_decimal(Decimal::from(42)));
         let formatted = target.format();
         assert_eq!(formatted, "= 42");
     }
@@ -455,7 +457,9 @@ mod tests {
         let mut domain_map = HashMap::new();
         domain_map.insert(
             DataPath::new(vec![], "age".to_string()),
-            Domain::Enumeration(Arc::new(vec![LiteralValue::number(Decimal::from(25))])),
+            Domain::Enumeration(Arc::new(vec![LiteralValue::number_from_decimal(
+                Decimal::from(25),
+            )])),
         );
         let domains = vec![domain_map];
         let undetermined = compute_undetermined_data(&domains);
@@ -468,7 +472,9 @@ mod tests {
         domain_map.insert(
             DataPath::new(vec![], "age".to_string()),
             Domain::Range {
-                min: Bound::Exclusive(Arc::new(LiteralValue::number(Decimal::from(18)))),
+                min: Bound::Exclusive(Arc::new(LiteralValue::number_from_decimal(Decimal::from(
+                    18,
+                )))),
                 max: Bound::Unbounded,
             },
         );
@@ -488,7 +494,9 @@ mod tests {
         let mut domain_map = HashMap::new();
         domain_map.insert(
             DataPath::new(vec![], "age".to_string()),
-            Domain::Enumeration(Arc::new(vec![LiteralValue::number(Decimal::from(25))])),
+            Domain::Enumeration(Arc::new(vec![LiteralValue::number_from_decimal(
+                Decimal::from(25),
+            )])),
         );
         let domains = vec![domain_map];
         assert!(compute_is_determined(&domains));
@@ -500,7 +508,9 @@ mod tests {
         domain_map.insert(
             DataPath::new(vec![], "age".to_string()),
             Domain::Range {
-                min: Bound::Exclusive(Arc::new(LiteralValue::number(Decimal::from(18)))),
+                min: Bound::Exclusive(Arc::new(LiteralValue::number_from_decimal(Decimal::from(
+                    18,
+                )))),
                 max: Bound::Unbounded,
             },
         );

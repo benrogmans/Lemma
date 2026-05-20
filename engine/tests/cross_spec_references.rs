@@ -1,3 +1,4 @@
+use lemma::evaluation::OperationResult;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
@@ -19,22 +20,21 @@ uses base_data: base
 rule total: base_data.price * base_data.quantity
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let total = response
         .results
@@ -62,22 +62,21 @@ uses base_data: base
 rule derived_value: base_data.doubled + 10
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let derived_value = response
         .results
@@ -106,22 +105,21 @@ uses employee: base_employee
 rule manager_bonus: employee.annual_salary * 0.15
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "manager", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "manager",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let bonus = response
         .results
@@ -147,27 +145,26 @@ rule total: price * quantity
     let derived_spec = r#"
 spec derived
 uses config: base
-data config.price: 200
-data config.quantity: 3
+fill config.price: 200
+fill config.quantity: 3
 rule derived_total: config.total
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let total = response
         .results
@@ -204,27 +201,25 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
 "#;
 
     engine
-        .load(
-            config_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(config_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            order_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(order_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let total = response
         .results
@@ -254,22 +249,21 @@ rule status: "invalid"
   unless base_data.is_valid then "valid"
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let status = response
         .results
@@ -297,22 +291,21 @@ uses base_data: base
 rule combined: base_data.input + base_data.calculated
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let combined = response
         .results
@@ -338,27 +331,26 @@ data z: 30
     let derived_spec = r#"
 spec derived
 uses b: base
-data b.x: 100
-data b.y: 200
+fill b.x: 100
+fill b.y: 200
 rule sum: b.x + b.y + b.z
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let sum = response
         .results
@@ -385,27 +377,26 @@ data quantity: 5
     let derived_spec = r#"
 spec derived
 uses config: base
-data config.price: 200
-data config.quantity: 3
+fill config.price: 200
+fill config.quantity: 3
 rule total: config.price * config.quantity
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "derived",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let total = response
         .results
@@ -440,32 +431,30 @@ uses base: example2
 rule total1: base.base.total
 
 uses base2: example2
-data base2.base.price: 79
+fill base2.base.price: 79
 rule total2: base2.base.total
 "#;
 
     engine
-        .load(
-            example1_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(example1_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            example2_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(example2_spec, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            example3_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(example3_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "example3", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "example3",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let total1 = response
@@ -500,16 +489,18 @@ uses p: pricing
 rule total: p.base_price
 "#;
 
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "order",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let total = response
         .results
@@ -545,22 +536,21 @@ rule salary_with_bonus: employee.annual_salary
 rule employee_summary: employee.monthly_salary
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            derived_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(derived_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "specific_employee", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "specific_employee",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let mut result_names: Vec<&str> = response.results.keys().map(|k| k.as_str()).collect();
@@ -598,16 +588,18 @@ uses p: pricing
 rule total: p.base_price
 "#;
 
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "order",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let total = response
         .results
@@ -620,4 +612,96 @@ rule total: p.base_price
         "150",
         "Spec ref should evaluate against the referenced pricing spec"
     );
+}
+
+#[test]
+fn cross_spec_lemma_duration_unless_short_is_yes_when_one_hour() {
+    let code = r#"
+spec t
+uses lemma si
+rule short: yes
+  unless si.duration >= 2 hours then no
+"#;
+
+    let mut engine = Engine::new();
+    engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect("spec must load");
+    let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("si.duration".to_string(), "1 hour".to_string());
+
+    let resp = engine
+        .run(
+            None,
+            "t",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect("evaluation must run");
+
+    let short = resp
+        .results
+        .get("short")
+        .expect("rule 'short' must be present");
+    match &short.result {
+        OperationResult::Value(v) => {
+            let out = v.to_string();
+            assert!(
+                out == "yes" || out == "true",
+                "expected short = yes when si.duration is 1 hour, got: {out}"
+            );
+        }
+        OperationResult::Veto(v) => {
+            panic!("expected short = yes when si.duration is 1 hour, got veto: {v}");
+        }
+    }
+}
+
+#[test]
+fn cross_spec_lemma_duration_unless_short_is_no_when_three_hours() {
+    let code = r#"
+spec t
+uses lemma si
+rule short: yes
+  unless si.duration >= 2 hours then no
+"#;
+
+    let mut engine = Engine::new();
+    engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect("spec must load");
+    let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("si.duration".to_string(), "3 hours".to_string());
+
+    let resp = engine
+        .run(
+            None,
+            "t",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect("evaluation must run");
+
+    let short = resp
+        .results
+        .get("short")
+        .expect("rule 'short' must be present");
+    match &short.result {
+        OperationResult::Value(v) => {
+            let out = v.to_string();
+            assert!(
+                out == "no" || out == "false",
+                "expected short = no when si.duration is 3 hours, got: {out}"
+            );
+        }
+        OperationResult::Veto(v) => {
+            panic!("expected short = no when si.duration is 3 hours, got veto: {v}");
+        }
+    }
 }

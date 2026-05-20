@@ -118,12 +118,7 @@ rule result: x
         "response should include explanation when x-explanations header sent: {:?}",
         body
     );
-    assert_eq!(
-        rule_result
-            .get("value")
-            .and_then(|v: &serde_json::Value| v.as_i64()),
-        Some(42)
-    );
+    assert_eq!(rule_result["value"]["number"].as_str(), Some("42"));
     assert!(body.get("spec").is_some(), "envelope should include spec");
 }
 
@@ -182,18 +177,14 @@ rule total: base
     let _ = child.kill();
     let _ = child.wait();
 
-    let v2025 = j2025["result"]["total"]["value"]
-        .as_i64()
-        .expect("total 2025");
-    let v2026 = j2026["result"]["total"]["value"]
-        .as_i64()
-        .expect("total 2026");
     assert_eq!(
-        v2025, 10,
+        j2025["result"]["total"]["value"]["number"].as_str(),
+        Some("10"),
         "Accept-Datetime 2025 should resolve pricing v1: {j2025:?}"
     );
     assert_eq!(
-        v2026, 99,
+        j2026["result"]["total"]["value"]["number"].as_str(),
+        Some("99"),
         "Accept-Datetime 2026 should resolve pricing v2: {j2026:?}"
     );
 }

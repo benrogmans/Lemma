@@ -1,4 +1,4 @@
-use crate::parsing::ast::DataValue;
+use crate::parsing::ast::{DataValue, FillRhs};
 use crate::parsing::parse;
 
 #[test]
@@ -32,9 +32,9 @@ uses contract: employment_contract"#;
 fn test_parse_with_and_data_bindings() {
     let input = r#"spec person
 uses contract: employment_contract
-data contract.start_date: 2024-02-01
-data contract.end_date: date
-data contract.employment_type: "contractor"
+fill contract.start_date: 2024-02-01
+data declaration_probe: date
+fill contract.employment_type: "contractor"
 uses base: base_contract"#;
     let result = parse(
         input,
@@ -65,26 +65,18 @@ uses base: base_contract"#;
         ])
     );
     match &result[0].data[1].value {
-        DataValue::Definition {
-            value: Some(lit),
-            base: None,
-            constraints: None,
-            from: None,
-        } => {
+        DataValue::Fill(FillRhs::Literal(lit)) => {
             assert!(
                 matches!(lit, crate::parsing::ast::Value::Date(_)),
-                "Expected Date literal"
+                "Expected Date literal in fill"
             );
         }
-        _ => panic!("Expected Date literal Definition"),
+        other => panic!("Expected fill with date literal, got {:?}", other),
     }
 
     assert_eq!(
         result[0].data[2].reference,
-        crate::parsing::ast::Reference::from_path(vec![
-            "contract".to_string(),
-            "end_date".to_string()
-        ])
+        crate::parsing::ast::Reference::local("declaration_probe".to_string())
     );
     assert!(
         matches!(
@@ -107,20 +99,11 @@ uses base: base_contract"#;
             "employment_type".to_string()
         ])
     );
-    if let DataValue::Definition {
-        value: Some(lit),
-        base: None,
-        constraints: None,
-        from: None,
-    } = &result[0].data[3].value
-    {
-        if let crate::parsing::ast::Value::Text(s) = lit {
+    match &result[0].data[3].value {
+        DataValue::Fill(FillRhs::Literal(crate::parsing::ast::Value::Text(s))) => {
             assert_eq!(s, "contractor");
-        } else {
-            panic!("Expected Text literal");
         }
-    } else {
-        panic!("Expected literal-only Definition data");
+        other => panic!("Expected fill with text literal, got {:?}", other),
     }
 
     assert_eq!(
@@ -146,6 +129,6 @@ data contract: spec employment_contract"#;
     );
     assert!(
         result.is_err(),
-        "'data ... : spec ...' syntax should be rejected"
+        "`data ... : spec ...` must be rejected; use `uses` to import specs"
     );
 }

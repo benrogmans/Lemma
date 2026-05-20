@@ -1,4 +1,4 @@
-//! Integration tests for Scale/Number arithmetic behavior.
+//! Integration tests for Quantity/Number arithmetic behavior.
 //!
 //! Unit-resolution and PerSliceTypeResolver behavior tests live in `src/planning/types.rs`.
 
@@ -23,27 +23,24 @@ fn rule_value_str(response: &Response, name: &str) -> String {
 }
 
 #[test]
-fn test_scale_op_scale_same_type_allowed() {
-    // Test that Scale op Scale with same type is allowed
+fn test_quantity_op_quantity_same_type_allowed() {
+    // Quantity +/- Quantity (same type) -> Quantity; Quantity / Quantity (same type) -> Number.
+    // Quantity * Quantity is rejected at plan time (use `(a as number) * (b as number)` instead).
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.84
 
 data price1: money
 data price2: money
 
 rule total: price1 + price2
 rule difference: price1 - price2
-rule product: price1 * price2
 rule quotient: price1 / price2"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -52,22 +49,45 @@ rule quotient: price1 / price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
-    for name in ["total", "difference", "product", "quotient"] {
+    for name in ["total", "difference"] {
         let r = response.results.get(name).expect(name);
         assert!(
             !r.result.vetoed(),
-            "{name} must not veto for valid scale inputs"
+            "{name} must not veto for valid quantity inputs"
         );
         let v = r
             .result
             .value()
             .unwrap_or_else(|| panic!("{name} must produce a value"));
         assert!(
-            v.get_type().is_scale(),
-            "{name} result must stay in scale money type"
+            v.get_type().is_quantity(),
+            "{name} result must stay in quantity money type"
+        );
+    }
+    {
+        let name = "quotient";
+        let r = response.results.get(name).expect(name);
+        assert!(
+            !r.result.vetoed(),
+            "{name} must not veto for valid quantity inputs"
+        );
+        let v = r
+            .result
+            .value()
+            .unwrap_or_else(|| panic!("{name} must produce a value"));
+        assert!(
+            v.get_type().is_number(),
+            "{name} result must be dimensionless number"
         );
     }
     let total_s = response
@@ -94,18 +114,6 @@ rule quotient: price1 / price2"#;
         diff_s.contains("5") && diff_s.to_lowercase().contains("eur"),
         "10 eur - 5 eur => ~5 eur, got {diff_s}"
     );
-    let prod_s = response
-        .results
-        .get("product")
-        .unwrap()
-        .result
-        .value()
-        .unwrap()
-        .to_string();
-    assert!(
-        prod_s.contains("50"),
-        "10 eur * 5 eur => numeric product 50 in display, got {prod_s}"
-    );
     let quot_s = response
         .results
         .get("quotient")
@@ -121,10 +129,10 @@ rule quotient: price1 / price2"#;
 }
 
 #[test]
-fn test_scale_op_number_allowed() {
-    // Test that Scale op Number is allowed
+fn test_quantity_op_number_allowed() {
+    // Test that Quantity op Number is allowed
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data price: money
@@ -135,10 +143,7 @@ rule divided: price / multiplier"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -147,7 +152,14 @@ rule divided: price / multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -163,10 +175,10 @@ rule divided: price / multiplier"#;
 }
 
 #[test]
-fn test_number_op_scale_allowed() {
-    // Test that Number op Scale is allowed
+fn test_number_op_quantity_allowed() {
+    // Test that Number op Quantity is allowed
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data multiplier: number
@@ -177,10 +189,7 @@ rule divided: multiplier / price"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -189,7 +198,14 @@ rule divided: multiplier / price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -215,19 +231,23 @@ rule result: ratio_value * multiplier"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
-    data.insert("ratio_value".to_string(), "0.5".to_string());
+    data.insert("ratio_value".to_string(), "50%".to_string());
     data.insert("multiplier".to_string(), "2".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -235,10 +255,10 @@ rule result: ratio_value * multiplier"#;
 }
 
 #[test]
-fn test_ratio_op_scale_allowed() {
-    // Test that Ratio op Scale is allowed (result is Scale)
+fn test_ratio_op_quantity_allowed() {
+    // Test that Ratio op Quantity is allowed (result is Quantity)
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data ratio_value: ratio
@@ -248,19 +268,23 @@ rule result: ratio_value * price"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
-    data.insert("ratio_value".to_string(), "0.5".to_string());
+    data.insert("ratio_value".to_string(), "50%".to_string());
     data.insert("price".to_string(), "10 eur".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -271,10 +295,10 @@ rule result: ratio_value * price"#;
 }
 
 #[test]
-fn test_scale_op_ratio_allowed() {
-    // Test that Scale op Ratio is allowed (result is Scale)
+fn test_quantity_op_ratio_allowed() {
+    // Test that Quantity op Ratio is allowed (result is Quantity)
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data price: money
@@ -284,19 +308,23 @@ rule result: price * ratio_value"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "10 eur".to_string());
-    data.insert("ratio_value".to_string(), "0.5".to_string());
+    data.insert("ratio_value".to_string(), "50%".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -307,10 +335,10 @@ rule result: price * ratio_value"#;
 }
 
 #[test]
-fn test_scale_comparison_same_type_allowed() {
-    // Test that comparing same Scale types is allowed
+fn test_quantity_comparison_same_type_allowed() {
+    // Test that comparing same Quantity types is allowed
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data price1: money
@@ -321,10 +349,7 @@ rule is_equal: price1 is price2"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -333,7 +358,14 @@ rule is_equal: price1 is price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "is_greater"), "true");
@@ -341,42 +373,44 @@ rule is_equal: price1 is price2"#;
 }
 
 #[test]
-fn test_all_arithmetic_operators_scale_same_type() {
-    // Test all arithmetic operators with same Scale type
-    // Note: Modulo requires Number divisor, so we test it separately
+fn test_all_arithmetic_operators_quantity_same_type() {
+    // Quantity * Quantity is rejected at plan time.
+    // All other Quantity op Quantity/Number combinations compile and run correctly.
+    // Note: Quantity ^ Number requires an integer literal exponent (Step 8 rule).
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data a: money
 data b: money
 data divisor: number
-data exponent: number
 
 rule add: a + b
 rule subtract: a - b
-rule multiply: a * b
 rule divide: a / b
 rule modulo: a % divisor
-rule power: a ^ exponent"#;
+rule power: a ^ 2"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
     data.insert("a".to_string(), "10 eur".to_string());
     data.insert("b".to_string(), "3 eur".to_string());
     data.insert("divisor".to_string(), "3".to_string());
-    data.insert("exponent".to_string(), "2".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let add = rule_value_str(&response, "add");
@@ -389,12 +423,11 @@ rule power: a ^ exponent"#;
         sub.contains('7') && sub.to_lowercase().contains("eur"),
         "subtract: {sub}"
     );
-    let mul = rule_value_str(&response, "multiply");
-    assert!(mul.contains("30"), "multiply: {mul}");
     let div = rule_value_str(&response, "divide");
+    assert!(div.contains('3'), "divide: {div}");
     assert!(
-        div.contains('3') && div.to_lowercase().contains("eur"),
-        "divide: {div}"
+        !div.to_lowercase().contains("eur"),
+        "quantity / quantity should be dimensionless: {div}"
     );
     let modulo = rule_value_str(&response, "modulo");
     assert!(
@@ -403,6 +436,21 @@ rule power: a ^ exponent"#;
     );
     let pow = rule_value_str(&response, "power");
     assert!(pow.contains("100"), "power 10^2: {pow}");
+
+    // Quantity * Quantity must be rejected at plan time
+    let mut engine2 = Engine::new();
+    let result = engine2.load(
+        r#"spec test2
+data money: quantity -> unit eur 1.00
+data a: money
+data b: money
+rule multiply: a * b"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Quantity * Quantity must fail at plan time"
+    );
 }
 
 #[test]
@@ -421,10 +469,7 @@ rule power: a ^ b"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
@@ -433,7 +478,14 @@ rule power: a ^ b"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "add"), "13");
@@ -452,7 +504,7 @@ rule power: a ^ b"#;
 fn test_complex_mixed_operations() {
     // Test complex expressions with mixed types
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 data base_price: money
@@ -466,21 +518,25 @@ rule total: with_tax * quantity"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
     data.insert("base_price".to_string(), "100 eur".to_string());
-    data.insert("discount_ratio".to_string(), "0.9".to_string());
+    data.insert("discount_ratio".to_string(), "90%".to_string());
     data.insert("tax_multiplier".to_string(), "1.2".to_string());
     data.insert("quantity".to_string(), "5".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let disc = rule_value_str(&response, "discounted");
@@ -501,34 +557,38 @@ rule total: with_tax * quantity"#;
 }
 
 #[test]
-fn test_primitive_scale_and_number_types() {
-    // Scale types must declare at least one unit; scale values are unitful.
-    // This test uses a proper scale type (money) and unitful data value.
+fn test_primitive_quantity_and_number_types() {
+    // Quantity types must declare at least one unit; quantity values are unitful.
+    // This test uses a proper quantity type (money) and unitful data value.
     let code = r#"spec test
-data money: scale
+data money: quantity
   -> unit eur 1.00
   -> minimum 0 eur
 
-data scale_value: money
+data quantity_value: money
 data number_value: number
 
-rule result: scale_value * number_value"#;
+rule result: quantity_value * number_value"#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Should parse");
 
     let mut data = HashMap::new();
-    data.insert("scale_value".to_string(), "10 eur".to_string());
+    data.insert("quantity_value".to_string(), "10 eur".to_string());
     data.insert("number_value".to_string(), "2".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");

@@ -55,11 +55,11 @@ fn dependency_batch_get_plan_and_schema_via_repo_qualifier() {
     let mut engine = Engine::new();
     let bundle = r#"
 spec finance
-data money: ratio -> decimals 2 -> minimum 0
+data money: ratio -> decimals 2
 
 spec cashier
 uses F: finance
-data till: F.money
+fill till: F.money
 rule total: till
 "#;
     engine
@@ -92,19 +92,21 @@ fn workspace_consumer_after_dependency_batch_resolves_money_type() {
             HashMap::from([(
                 path_source("deps/stdlib.lemma"),
                 r#"spec finance
-data money: ratio -> decimals 2 -> minimum 0
+data money: quantity
+  -> unit eur 1
+  -> decimals 2
 "#
                 .to_string(),
             )]),
-            Some("@lemma/stdlib"),
+            Some("@lemma/std"),
         )
-        .expect("anonymous dependency bundle (repo name `@lemma/stdlib`) loads");
+        .expect("registry dependency bundle loads under @lemma/std");
 
     engine
         .load(
             r#"spec kiosk
-uses @lemma/stdlib finance
-data drawer: money from finance -> minimum 0
+uses @lemma/std finance
+data drawer: finance.money
 rule tally: drawer
 "#,
             path_source("kiosk.lemma"),

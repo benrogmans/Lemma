@@ -9,6 +9,8 @@ This example demonstrates:
 - Duration-aware arithmetic
 """
 
+uses lemma si
+
 data container_volume    : 5
 data contract_term       : 52 weeks
 data data_size           : 500
@@ -20,19 +22,19 @@ data review_period       : 2 hours
 data temperature         : 20
 
 rule duration_hours:
-  processing_duration in hours
+  processing_duration as hours
 
 rule duration_seconds:
-  processing_duration in seconds
+  processing_duration as seconds
 
 rule review_in_minutes:
-  review_period in minutes
+  review_period as minutes
 
 rule project_in_hours:
-  project_length in hours
+  project_length as hours
 
 rule contract_in_days:
-  contract_term in days
+  contract_term as days
 
 rule weight_limit:
   50

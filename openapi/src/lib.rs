@@ -441,11 +441,7 @@ fn build_rule_result_schema(explanations_enabled: bool) -> Value {
         "required": ["vetoed", "rule_type"],
         "properties": {
             "value": {
-                "description": "Native JSON value when not vetoed (boolean, number, string, array, object)"
-            },
-            "unit": {
-                "type": "string",
-                "description": "Unit for scale/duration results (e.g. currency code, hours)"
+                "description": "Serialized ValueKind when not vetoed (numeric magnitudes as strings; quantity/ratio/calendar as {value, unit})"
             },
             "display": {
                 "type": "string",
@@ -653,13 +649,18 @@ fn build_spec_path_item(
 fn type_help(lemma_type: &LemmaType) -> String {
     match &lemma_type.specifications {
         TypeSpecification::Boolean { help, .. } => help.clone(),
-        TypeSpecification::Scale { help, .. } => help.clone(),
+        TypeSpecification::Quantity { help, .. } => help.clone(),
+        TypeSpecification::QuantityRange { help, .. } => help.clone(),
         TypeSpecification::Number { help, .. } => help.clone(),
+        TypeSpecification::NumberRange { help, .. } => help.clone(),
         TypeSpecification::Ratio { help, .. } => help.clone(),
+        TypeSpecification::RatioRange { help, .. } => help.clone(),
         TypeSpecification::Text { help, .. } => help.clone(),
         TypeSpecification::Date { help, .. } => help.clone(),
+        TypeSpecification::DateRange { help, .. } => help.clone(),
         TypeSpecification::Time { help, .. } => help.clone(),
-        TypeSpecification::Duration { help, .. } => help.clone(),
+        TypeSpecification::Calendar { help, .. } => help.clone(),
+        TypeSpecification::CalendarRange { help, .. } => help.clone(),
         TypeSpecification::Veto { .. } => String::new(),
         TypeSpecification::Undetermined => unreachable!(
             "BUG: type_help called with Undetermined sentinel type; this type must never reach OpenAPI generation"

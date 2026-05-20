@@ -10,8 +10,8 @@ use crate::limits::MAX_SPEC_NAME_LENGTH;
 ///
 /// Trims whitespace and rejects empty input, embedded whitespace, and the
 /// version sigils `~` / `^` (which once denoted revisions and are now reserved).
-/// Evaluation entry points use the workspace main base only, so `from` qualifiers
-/// are not accepted here.
+/// Evaluation entry points use the workspace main base only, so temporal or version
+/// sigils on the spec set name are not accepted here.
 pub fn parse_spec_set_id(s: &str) -> Result<String, Error> {
     let s = s.trim();
     if s.is_empty() {

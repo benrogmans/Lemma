@@ -291,40 +291,41 @@ fn idempotency_precedence_expressions() {
 }
 
 // =============================================================================
-// Data import round-trip tests
+// `uses` / qualified-parent round-trip tests
 // =============================================================================
 
 #[test]
-fn round_trip_value_copy_reference_with_effective() {
-    let source = "spec consumer data money: money from finance 2026-01-15 data p: money";
+fn round_trip_qualified_type_import_with_effective_on_uses() {
+    let source = "spec consumer uses finance 2026-01-15 data money: finance.money data p: money";
     let formatted = format_source(source, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert!(
-        formatted.contains("money from finance 2026-01-15"),
-        "expected reference + effective datetime in formatted output: {}",
+        formatted.contains("finance.money") && formatted.contains("uses"),
+        "expected uses + qualified parent type in formatted output: {}",
         formatted
     );
     let reformatted =
         format_source(&formatted, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert_eq!(
         formatted, reformatted,
-        "value-copy reference with effective is not idempotent"
+        "qualified type import with effective on uses is not idempotent"
     );
 }
 
 #[test]
-fn round_trip_value_copy_reference_registry_with_effective() {
-    let source = "spec consumer data money: money from @lemma/std finance 2026-01-15 data p: money";
+fn round_trip_qualified_type_import_registry_with_effective_on_uses() {
+    let source =
+        "spec consumer uses @lemma/std finance 2026-01-15 data money: finance.money data p: money";
     let formatted = format_source(source, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert!(
-        formatted.contains("money from @lemma/std finance 2026-01-15"),
-        "expected registry base + effective in formatted output: {}",
+        formatted.contains("finance.money") && formatted.contains("@lemma/std"),
+        "expected registry uses + qualified type in formatted output: {}",
         formatted
     );
     let reformatted =
         format_source(&formatted, lemma::parsing::source::SourceType::Volatile).unwrap();
     assert_eq!(
         formatted, reformatted,
-        "registry value-copy reference with effective is not idempotent"
+        "registry qualified type import with effective is not idempotent"
     );
 }
 
@@ -382,4 +383,24 @@ fn format_repo_sections_idempotent_under_format_parse_result_roundtrip() {
         once, twice,
         "format_parse_result must be stable when reapplied"
     );
+}
+
+#[test]
+fn format_compound_unit_metre_per_second_idempotent() {
+    let source = r#"spec test
+data velocity: quantity
+  -> unit mps metre/second
+"#;
+    let st = lemma::parsing::source::SourceType::Volatile;
+    let once = format_source(source, st.clone()).expect("format");
+    assert!(
+        once.contains("metre/second"),
+        "formatted unit must use slash notation, got:\n{once}"
+    );
+    assert!(
+        !once.contains("second^-1"),
+        "must not format denominator as negative exponent, got:\n{once}"
+    );
+    let twice = format_source(&once, st).expect("reformat");
+    assert_eq!(once, twice, "compound unit format must be idempotent");
 }

@@ -29,7 +29,7 @@ These are the outcomes Lemma is designed to enable—not a feature checklist, bu
 - **As a product owner**, I want **deterministic** outcomes: same spec, same data, same effective time → same result (or the same explicit "no value"), not model drift or hidden defaults.
 - **As an engineer**, I want **invalid rules rejected before execution**, and **no surprise type or operator errors at runtime** after a successful plan—so invalidity is an **error** at plan time; domain-level "no value" is a **veto** at evaluation time (see below).
 
-  **Rule results (`OperationResult`)** are either a **value** (a typed literal) or a **veto**. A **veto** is not a bug and not a planning error: it means the rule has **no value** for domain reasons the spec allows—e.g. missing data, division by zero, date overflow, or `veto "reason"` in the source. Vetoes can be **optional** (no message) or carry a **string**; callers and APIs surface them as **first-class results** alongside values. Downstream rules that **need** a vetoed operand may veto in turn; branches that avoid needing that value (e.g. a matching `unless`) can still succeed. See [veto_semantics.md](veto_semantics.md).
+  **Rule results (`OperationResult`)** are either a **value** (a typed literal) or a **veto**. A **veto** is not a bug and not a planning error: it means the rule has **no value** for domain reasons the spec allows—e.g. missing data, runtime division by zero, date overflow, or `veto "reason"` in the source. Literal division by zero in a rule body (e.g. `1 / 0`) is a **planning error** instead. Vetoes can be **optional** (no message) or carry a **string**; callers and APIs surface them as **first-class results** alongside values. Downstream rules that **need** a vetoed operand may veto in turn; branches that avoid needing that value (e.g. a matching `unless`) can still succeed. See [veto_semantics.md](veto_semantics.md).
 
 ### 1.4 Composition and reuse
 
@@ -51,7 +51,7 @@ Lemma is not "interpret rules line by line in order." It is a **compiled pipelin
 
 ### 2.1 Temporality, composition, and dependency interfaces (cornerstone)
 
-A **spec** is a namespace of **data** (inputs / parameters), **rules** (derived values), and **user-defined types**. **Data imports** (`data money from dep_spec`, or from a registry bundle) tie the consumer to another spec's **type definitions**; they follow the same **temporal range** and **reference** rules as `uses` references (see below). **Slice-interface** validation ensures the **data, referenced rules, and named types** the consumer actually uses stay **compatible** across the consumer's temporal slices.
+A **spec** is a namespace of **data** (inputs / parameters), **rules** (derived values), and **user-defined types**. **`uses`** dependencies and **qualified parent types** (`data x: dep.TypeName`) tie the consumer to another spec's type definitions; they follow the same **temporal range** and **reference** rules as other spec references (see below). **Slice-interface** validation ensures the **data, referenced rules, and named types** the consumer actually uses stay **compatible** across the consumer's temporal slices.
 
 Lemma's approach to **time** and **composition** is one story: every context has a **temporal range** that decides which temporal versions of dependencies are visible; composable references (data, rules, **and** imported types) express that wiring; the engine checks **contract stability** across slices when an **unqualified** reference spans multiple dependency versions.
 
@@ -65,11 +65,11 @@ Every planning / evaluation context carries a **temporal range**. It bounds **wh
 #### Temporality (only versioning scheme)
 
 - The same spec **name** may appear **multiple times** with different **`effective_from`** datetimes (`spec Name YYYY-MM-DD`, etc.). Each declaration is **immutable**; you add a new body on the timeline rather than editing history in place.
-- At a given **instant**, **which** declaration applies for a name is determined by **effective datetime**. There is no separate parallel "version tag" track beside this timeline.
+- At a given **instant**, **which** declaration applies for a name is determined by **effective datetime** on each `spec` row.
 
 #### Composability and how references resolve
 
-- Specs **reference** other specs (`uses dep: other`) and **import types** from them (`data name from dep_spec`) or from registry sources. **Hierarchical** names (e.g. `company/policies/pricing`) organize namespaces; they are not a second versioning mechanism.
+- Specs **reference** other specs (`uses dep: other`) and declare data whose parent type is **qualified** through that alias (`data name: dep.TypeName`), including registry-backed targets. **Hierarchical** names (e.g. `company/policies/pricing`) organize namespaces; they are not a second versioning mechanism.
 
 **Unqualified reference** (`uses dep` with **no** datetime on the reference): the consumer sees **every** temporal version of **`dep`** whose **temporal range** **intersects** the **consumer's** temporal range (§2.1 **Temporal range**). That intersection is what can yield **multiple** resolved bodies over the consumer's lifetime.
 
@@ -79,7 +79,7 @@ Every planning / evaluation context carries a **temporal range**. It bounds **wh
 
 When the consumer uses **unqualified** spec or type references, planning may see **several** dependency **`effective_from`** boundaries inside the consumer's range. **Temporal slices** are the **partition** of the consumer's **`[effective_from, superseded)`** at those boundaries:
 
-- A **boundary** is inserted at every **`effective_from`** of an **implicitly referenced** dependency (spec ref or data import—**transitively**) that falls **strictly inside** the consumer's range, for references resolved **per slice** (unqualified form).
+- A **boundary** is inserted at every **`effective_from`** of an **implicitly referenced** dependency (spec ref via `uses`, or type parent resolved through `uses`) that falls **strictly inside** the consumer's range, for references resolved **per slice** (unqualified form).
 - Between boundaries, the **transitive dependency tree** resolves to one **consistent set** of effective-dated bodies; with **no** such references or **no** boundaries in range, there is **one** slice covering the full consumer range. (See `LemmaSpecSet::effective_dates` in `engine/src/planning/spec_set.rs` and the per-slice plan loop in `engine/src/planning/mod.rs::plan`.)
 
 **Per slice:** For each slice, the engine builds a **dependency graph and execution plan** using the slice's **start instant** (`slice.from`) as the resolution time for **unqualified** links. **Values** of data and rules can **change from slice to slice** while the **logical links** stay the same—**interface** sameness is what `validate_dependency_interfaces` checks when there is more than one dep slice. **Qualified** references do not expand the consumer's slice structure from that edge: they fix resolution to their written instant.
@@ -88,7 +88,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
 - Each referenced spec exposes its **interface schema** (data with types, rules with result types, named types) via `ExecutionPlan::interface_schema`. For every consumer slice, planning checks that all dep slices intersecting the consumer's range expose **type-compatible** schemas — see `validate_dependency_interfaces` in `engine/src/planning/discovery.rs` and `SpecSchema::is_type_compatible` in `engine/src/planning/execution_plan.rs`.
 - **Compatible:** every overlapping pair of dep slices agrees on the type of every name they both expose; either slice may add new names that the other lacks (added rules / data / named types are unused-by-default and do not break the contract).
-- **Incompatible:** the same name has different types in different slices (type change, scale-family retargeting, options change, …). Planning **fails** with a validation error naming the dependency and consumer; the remedy is to introduce a **new temporal version of the consumer** whose rules explicitly align with the dependency's evolution. Note: a name **removed** in one slice but **used** by the consumer surfaces as a per-slice graph-build error (missing data/rule), not as the cross-slice interface check.
+- **Incompatible:** the same name has different types in different slices (type change, quantity-family retargeting, options change, …). Planning **fails** with a validation error naming the dependency and consumer; the remedy is to introduce a **new temporal version of the consumer** whose rules explicitly align with the dependency's evolution. Note: a name **removed** in one slice but **used** by the consumer surfaces as a per-slice graph-build error (missing data/rule), not as the cross-slice interface check.
 
 #### Temporal coverage (separate check)
 
@@ -98,10 +98,14 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
   ```lemma
   spec app 2025-01-01
+
   uses d: dep
+
   rule x: d.rate
 
+
   spec dep 2025-07-01
+
   data rate: 10
   ```
 
@@ -118,8 +122,8 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
 ### 2.3 Strict typing and static planning
 
-- Data and rules carry **types**: primitives (`number`, `text`, `boolean`, `date`, `time`, `duration`, `ratio`, `scale`) and **user-defined types** (units, constraints, options).
-- **Data imports** and **registry-backed types** integrate shared definitions.
+- Data and rules carry **types**: primitives (`number`, `text`, `boolean`, `date`, `time`, `ratio`, `quantity`) and **user-defined types** (units, constraints, options). Time periods are **`quantity`** values whose type declares `-> trait duration` (and canonical **second**), not a separate primitive.
+- **`uses` dependencies**, **qualified parent types**, and **registry-backed types** integrate shared definitions.
 - **Planning** builds a dependency graph, runs **semantic validation**, resolves **spec references** under each context's **temporal range** (§2.1), builds **temporal slices** where **unqualified** references warrant them, validates **temporal coverage** and (when a spec has multiple slices) **per-dependency slice interfaces**, and produces an **execution plan**. **Type mismatches and invalid operations are errors at plan time**, not surprise runtime failures after planning.
 
 ### 2.4 Immutability on the timeline (conceptual)
@@ -130,7 +134,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 ### 2.5 Evaluation: values, vetoes, explanations
 
 - **OperationResult** is either a **value** or a **veto** (domain-level "no result"), not a generic planning error.
-- **Veto** covers user `veto "reason"`, division by zero, missing data, etc.; propagation follows documented [veto semantics](veto_semantics.md).
+- **Veto** covers user `veto "reason"`, runtime division by zero, missing data, etc.; propagation follows documented [veto semantics](veto_semantics.md). Literal zero divisors in rule bodies fail at planning time.
 - Optional **explanations** expose **why** a result was produced (operation records), supporting audit narratives.
 
 ### 2.6 Registry vs engine boundary
@@ -140,7 +144,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 ### 2.7 Implementation stack (codebase)
 
 - **Core engine (Rust):** parsing, planning, evaluation, formatting, serialization, **inversion** APIs, WASM surface.
-- **CLI:** `run`, `schema`, `list`, `format`, `get`, `server`, `mcp`, etc. ([CLI.md](CLI.md)).
+- **CLI:** `run`, `schema`, `list`, `fetch`, `format`, `server`, `mcp`, etc. ([CLI.md](CLI.md)).
 - **OpenAPI** for HTTP evaluation and discovery.
 - **LSP** for diagnostics, formatting, and workspace-aware validation.
 - **npm / WASM** package for browser and Node ([wasm.md](wasm.md)).
@@ -165,18 +169,18 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 - **Comparisons:** `>`, `<`, `>=`, `<=`, `is`, `is not`.
 - **Logical:** `and`, `not` ([reference.md](reference.md)). Note that there is no `or` keyword as unless clauses accommodate such logic.
 - **Math:** `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round` (prefix; parentheses optional).
-- **`in` for unit conversion** (durations, scale units, number↔ratio where defined).
+- **`as` for unit conversion** (quantity units, including trait-duration quantities; number↔ratio where defined).
 
 ### 3.3 Types
 
-- **Primitives:** boolean, number, scale, text, date, time, duration, ratio.
+- **Primitives:** boolean, number, quantity, text, date, time, ratio.
 - **User-defined types** with **commands** (`unit`, `decimals`, `minimum`, `maximum`, `option`/`options`, `default`, `help`, etc.—see [reference.md](reference.md)).
-- **Data imports** from other specs or registry bundles (`data money from @…`).
+- **Cross-spec types** via `uses` and qualified parents (`data money: fin.Money` with `uses fin: @…`).
 - **Inline type constraints** on data where supported.
 
 ### 3.4 Dates, times, and calendars
 
-- **ISO 8601** dates and datetimes; **duration** literals with built-in units.
+- **ISO 8601** dates and datetimes; **time-period** values are `number` + unit as **quantity** literals against a trait-duration quantity (see `quantity` + `trait duration` in reference).
 - **Date arithmetic** and comparisons; **timezone** handling where documented in tests/reference.
 - **Sugar** such as `in_past`, `in_calendar_year`, etc., where enabled (see reference and examples).
 
@@ -208,7 +212,7 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 
 ### 3.9 Inversion (constraint solving)
 
-- Engine exposes **inversion** types (`Target`, `Domain`, `InversionResponse`, etc.—see `lemma` crate exports). Use cases: "what values satisfy this rule's target?" subject to **supported** expression shapes; unsupported shapes yield a clear **unsupported** outcome rather than silent wrong answers.
+- Engine exposes **inversion** (`invert`, `Target`, `Domain`, `InversionResponse`—see `lemma` crate and Hex `Lemma.invert/3`). Supported expression shapes return candidate inputs; unsupported shapes error clearly. End-user guides and CLI coverage are still limited.
 
 ### 3.10 Formatting
 
@@ -217,7 +221,7 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 ### 3.11 CLI
 
 - **run** with data, rule filters, JSON output, interactive mode, effective time.
-- **schema**, **list**, **show**, **get** (registry deps), **format**.
+- **schema**, **list** (including `lemma list lemma` for embedded stdlib), **fetch** (registry deps), **format**, **mcp**.
 - **server** with OpenAPI, docs route, watch mode.
 - **mcp** for assistant integration.
 

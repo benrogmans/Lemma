@@ -4,12 +4,20 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+fn decimal_lit(d: &str) -> Decimal {
+    Decimal::from_str(d).unwrap()
+}
+fn rational_lit(d: &str) -> lemma::RationalInteger {
+    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
+}
+
 #[test]
 fn test_employee_contract_comprehensive() {
     let mut engine = Engine::new();
 
     let base_contract = r#"
 spec base_contract
+uses lemma si
 data min_salary: 30000
 data max_salary: 200000
 data standard_vacation_days: 20 days
@@ -19,6 +27,7 @@ data min_age: 18 years
 
     let employment_terms = r#"
 spec employment_terms
+uses lemma si
 uses base: base_contract
 data salary: 75000
 data bonus_percentage: 10%
@@ -37,21 +46,22 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 "#;
 
     engine
-        .load(
-            base_contract,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(base_contract, lemma::SourceType::Volatile)
         .unwrap();
     engine
-        .load(
-            employment_terms,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(employment_terms, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "employment_terms", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "employment_terms",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let total_comp = response
@@ -62,7 +72,10 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 
     match &total_comp.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("82500").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                decimal_lit("82500")
+            ),
             other => panic!("Expected Number for total_compensation, got {:?}", other),
         },
         other => panic!("Expected Value for total_compensation, got {:?}", other),
@@ -110,16 +123,18 @@ rule net_income: income - tax_amount
 rule effective_rate: (tax_amount / income) * 100%
 "#;
 
-    engine
-        .load(
-            tax_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(tax_spec, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "tax_calculation", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "tax_calculation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let taxable = response
@@ -129,7 +144,10 @@ rule effective_rate: (tax_amount / income) * 100%
         .unwrap();
     match &taxable.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(*n, Decimal::from_str("70000").unwrap()),
+            lemma::ValueKind::Number(n) => assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                decimal_lit("70000")
+            ),
             other => panic!("Expected Number for taxable_income, got {:?}", other),
         },
         other => panic!("Expected Value for taxable_income, got {:?}", other),
@@ -153,7 +171,7 @@ rule effective_rate: (tax_amount / income) * 100%
     assert_eq!(
         tax_rate.result,
         lemma::OperationResult::Value(Box::new(lemma::LiteralValue::ratio(
-            Decimal::from_str("0.2").unwrap(),
+            rational_lit("0.2"),
             Some("percent".to_string())
         )))
     );
@@ -178,10 +196,7 @@ rule status: "LOW"
 "#;
 
     engine
-        .load(
-            config_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(config_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let mut data = std::collections::HashMap::new();
@@ -190,7 +205,14 @@ rule status: "LOW"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "dynamic_config", Some(&now), data, false)
+        .run(
+            None,
+            "dynamic_config",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let calculated = response
@@ -212,7 +234,14 @@ rule status: "LOW"
     data2.insert("multiplier".to_string(), "2".to_string());
 
     let response2 = engine
-        .run(None, "dynamic_config", Some(&now), data2, false)
+        .run(
+            None,
+            "dynamic_config",
+            Some(&now),
+            data2,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let status2 = response2
@@ -231,6 +260,7 @@ fn test_date_arithmetic_comprehensive() {
 
     let timeline_spec = r#"
 spec project_timeline
+uses lemma si
 data project_start: 2024-01-15
 data phase1_duration: 30 days
 data phase2_duration: 45 days
@@ -242,8 +272,8 @@ rule phase2_end: phase1_end + phase2_duration
 rule phase3_end: phase2_end + phase3_duration
 
 rule project_duration: phase1_duration + phase2_duration + phase3_duration
-rule elapsed_time: today - project_start
-rule days_remaining: phase3_end - today
+rule elapsed_time: project_start...today as days
+rule days_remaining: today...phase3_end as days
 
 rule is_phase1_complete: today > phase1_end
 rule is_phase2_complete: today > phase2_end
@@ -251,15 +281,19 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 "#;
 
     engine
-        .load(
-            timeline_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(timeline_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "project_timeline", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "project_timeline",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let phase1_complete = response
@@ -304,22 +338,21 @@ data salary: 75000
 rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            child_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(child_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "child", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "child",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let is_valid = response
@@ -339,33 +372,34 @@ fn test_spec_ref_field_access_arithmetic() {
 
     let base_spec = r#"
 spec base
+uses lemma si
 data project_start: 2024-01-15
 data probation_period: 90 days
 "#;
 
     let child_spec = r#"
 spec child
+uses lemma si
 uses base_contract: base
 
 rule probation_end: base_contract.project_start + base_contract.probation_period
 "#;
 
+    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(
-            base_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
-    engine
-        .load(
-            child_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(child_spec, lemma::SourceType::Volatile)
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "child", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "child",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let probation_end = response

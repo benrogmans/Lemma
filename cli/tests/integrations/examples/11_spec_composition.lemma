@@ -103,7 +103,7 @@ Demonstrates literal bindings through nested spec references.
 """
 
 uses line: line_item
-data line.quantity : 100
+fill line.quantity : 100
 
 rule order_total:
   line.line_total

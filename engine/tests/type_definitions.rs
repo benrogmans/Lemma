@@ -13,7 +13,7 @@ data salary: number
 
     let test_spec = r#"
 spec test
-data salary: money.salary
+fill salary: money.salary
 rule total: salary
 "#;
 
@@ -24,10 +24,7 @@ rule total: salary
         )
         .unwrap();
     let err = engine
-        .load(
-            test_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(test_spec, lemma::SourceType::Volatile)
         .unwrap_err();
 
     let err_msg = err.errors[0].to_string();
@@ -52,7 +49,8 @@ data age: number
     let test_types_spec = r#"
 spec test_types
 
-data age: age from age
+uses age_spec: age
+data age: age_spec.age
 
 data adult_age: age
   -> minimum 21
@@ -84,7 +82,14 @@ rule total: age + adult_age + twenties
     data.insert("twenties".to_string(), "25".to_string());
 
     let response = engine
-        .run(None, "test_types", Some(&now), data, false)
+        .run(
+            None,
+            "test_types",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "test_types");
@@ -110,7 +115,8 @@ spec constants
 data pi: 3.14
 
 spec finance
-data pi: pi from constants
+uses constants
+data pi: constants.pi
 rule x: pi
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
@@ -121,28 +127,35 @@ rule x: pi
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "finance", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "finance",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run finance");
 
     let rule_x = response.results.get("x").expect("rule x");
     assert_eq!(rule_x.result.value().unwrap().to_string(), "3.14");
 }
 
-/// Regression test: scale type with `-> default` before `-> unit` must work.
+/// Regression test: quantity type with `-> default` before `-> unit` must work.
 /// Previously, constraints were applied in declaration order, so `default`
 /// would fail to find the unit because it hadn't been registered yet.
 #[test]
-fn test_scale_type_default_before_unit_declarations() {
+fn test_quantity_type_default_before_unit_declarations() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec pricing
-        data money: scale
+        data money: quantity
           -> default 4 eur
           -> unit eur 1
-          -> unit usd 1.19
+          -> unit usd 0.84
         data price: money
         rule doubled: price * 2
     "#,
@@ -157,16 +170,16 @@ fn test_scale_type_default_before_unit_declarations() {
     let schema = plan.schema();
     let entry = schema.data.get("price").expect("price data in schema");
     assert!(
-        entry.lemma_type.is_scale(),
-        "price must be scale money type"
+        entry.lemma_type.is_quantity(),
+        "price must be quantity money type"
     );
-    assert_eq!(entry.lemma_type.name(), "money");
+    assert_eq!(entry.lemma_type.extends.parent_name(), Some("money"));
     match &entry.lemma_type.specifications {
-        TypeSpecification::Scale { units, .. } => {
+        TypeSpecification::Quantity { units, .. } => {
             let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
             assert!(names.contains(&"eur") && names.contains(&"usd"));
         }
-        other => panic!("expected Scale, got {:?}", other),
+        other => panic!("expected Quantity, got {:?}", other),
     }
     assert!(
         entry.default.is_some() && entry.bound_value.is_none(),
@@ -176,19 +189,18 @@ fn test_scale_type_default_before_unit_declarations() {
 
 /// Verify that `-> default` after `-> unit` (the original order) still works.
 #[test]
-fn test_scale_type_default_after_unit_declarations() {
+fn test_quantity_type_default_after_unit_declarations() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec pricing
-        data money: scale
+        data money: quantity
           -> unit eur 1
-          -> unit usd 1.19
+          -> unit usd 0.84
           -> default 4 eur
-        data price: money
-        rule doubled: price * 2
+        rule doubled: money * 2
     "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "pricing.lemma",
@@ -199,18 +211,18 @@ fn test_scale_type_default_after_unit_declarations() {
 
     let plan = engine.get_plan(None, "pricing", Some(&now)).unwrap();
     let schema = plan.schema();
-    let entry = schema.data.get("price").expect("price data in schema");
+    let entry = schema.data.get("money").expect("money data in schema");
     assert!(
-        entry.lemma_type.is_scale(),
-        "price must be scale money type"
+        entry.lemma_type.is_quantity(),
+        "money must be quantity money type"
     );
     assert_eq!(entry.lemma_type.name(), "money");
     match &entry.lemma_type.specifications {
-        TypeSpecification::Scale { units, .. } => {
+        TypeSpecification::Quantity { units, .. } => {
             let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
             assert!(names.contains(&"eur") && names.contains(&"usd"));
         }
-        other => panic!("expected Scale, got {:?}", other),
+        other => panic!("expected Quantity, got {:?}", other),
     }
     assert!(
         entry.default.is_some() && entry.bound_value.is_none(),
@@ -322,16 +334,16 @@ fn test_schema_splits_bound_literal_and_default_suggestion() {
 }
 
 #[test]
-fn test_schema_scale_default_is_value() {
+fn test_schema_quantity_default_is_value() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec salary
-        data money: scale
+        data money: quantity
           -> unit eur 1
-          -> unit usd 1.19
+          -> unit usd 0.84
           -> default 3000 eur
         data salary: money
         rule doubled: salary * 2
@@ -349,7 +361,7 @@ fn test_schema_scale_default_is_value() {
     let salary = schema.data.get("salary").expect("salary should exist");
     assert!(
         salary.default.is_some() && salary.bound_value.is_none(),
-        "scale typedef default must surface as schema suggestion on salary"
+        "quantity typedef default must surface as schema suggestion on salary"
     );
 }
 
@@ -363,7 +375,7 @@ fn test_typedef_default_inherits_through_extension_chain() {
         .load(
             r#"
             spec chain
-            data money: scale
+            data money: quantity
               -> unit eur 1
               -> default 4 eur
             data price: money

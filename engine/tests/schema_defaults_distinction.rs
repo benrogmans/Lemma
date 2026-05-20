@@ -54,7 +54,13 @@ fn run_plan_without_defaults_surfaces_missing_data_for_typedecl_default() {
     let now = DateTimeValue::now();
     let plan = engine.get_plan(None, "s", Some(&now)).expect("plan");
     let response = engine
-        .run_plan_without_defaults(plan, Some(&now), HashMap::new(), false)
+        .run_plan_without_defaults(
+            plan,
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("response");
 
     assert!(

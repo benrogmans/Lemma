@@ -336,6 +336,38 @@ fn test_mcp_get_spec_source() {
 }
 
 #[test]
+fn test_mcp_get_spec_source_embedded_lemma_repository() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "get_spec_source",
+                    "arguments": {
+                        "repository": "lemma"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("get_spec_source should return text");
+    assert!(
+        text.contains("repo lemma") && text.contains("spec si") && text.contains("trait duration"),
+        "Should return formatted embedded stdlib, got: {text}"
+    );
+}
+
+#[test]
 fn test_mcp_get_spec_source_blocked_without_admin() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
@@ -749,8 +781,8 @@ fn test_mcp_list_specs_empty_workspace() {
         .expect("list_specs should return text");
 
     assert!(
-        text.contains("No specs loaded"),
-        "Should indicate no specs loaded, got: {text}"
+        text.contains("Repository: lemma") && text.contains("Spec: si"),
+        "embedded stdlib must appear in list_specs, got: {text}"
     );
 }
 
@@ -780,8 +812,12 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
         .expect("list_specs should return text");
 
     assert!(
+        text.contains("Repository: lemma") && text.contains("Spec: si"),
+        "embedded stdlib must appear, got: {text}"
+    );
+    assert!(
         text.contains("add_spec"),
-        "Admin mode should suggest using add_spec, got: {text}"
+        "Admin mode should suggest using add_spec when workspace is empty, got: {text}"
     );
 }
 
@@ -808,8 +844,8 @@ fn test_mcp_omit_path_no_disk_at_startup() {
         .as_str()
         .expect("list_specs should return text");
     assert!(
-        text.contains("No specs loaded"),
-        "Omitting path should start with empty engine, got: {text}"
+        text.contains("Repository: lemma") && text.contains("Spec: si"),
+        "embedded stdlib must appear when no workspace path, got: {text}"
     );
     assert!(text.contains("add_spec"));
 }

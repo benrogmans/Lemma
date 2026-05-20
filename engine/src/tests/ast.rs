@@ -1,14 +1,14 @@
+use crate::computation::rational::RationalInteger;
 use crate::parsing::ast::*;
 use crate::planning::semantics::{
-    date_time_to_semantic, duration_unit_to_semantic, primitive_time, time_to_semantic, LemmaType,
-    LiteralValue, TypeExtends, TypeSpecification,
+    date_time_to_semantic, primitive_time, time_to_semantic, BaseQuantityVector, LemmaType,
+    LiteralValue, QuantityTrait, QuantityUnit, QuantityUnits, TypeExtends, TypeSpecification,
 };
 use rust_decimal::Decimal;
-use std::str::FromStr;
 
 #[test]
 fn test_literal_value_to_primitive_type() {
-    let one = Decimal::from_str("1").unwrap();
+    let one = RationalInteger::new(1, 1);
 
     assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
     assert_eq!(LiteralValue::number(one).lemma_type.name(), "number");
@@ -36,13 +36,35 @@ fn test_literal_value_to_primitive_type() {
         "date"
     );
     assert_eq!(
-        LiteralValue::ratio(one / Decimal::from(100), None)
+        LiteralValue::ratio(RationalInteger::new(1, 2), None)
             .lemma_type
             .name(),
         "ratio"
     );
+    let dur_type = LemmaType::new(
+        "duration".to_string(),
+        TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: QuantityUnits::from(vec![QuantityUnit {
+                name: "second".to_string(),
+                factor: crate::computation::rational::rational_one(),
+                derived_quantity_factors: Vec::new(),
+                decomposition: BaseQuantityVector::new(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: None,
+            }]),
+            traits: vec![QuantityTrait::Duration],
+            decomposition: BaseQuantityVector::new(),
+            canonical_unit: "second".to_string(),
+            help: String::new(),
+        },
+        TypeExtends::Primitive,
+    );
     assert_eq!(
-        LiteralValue::duration(one, duration_unit_to_semantic(&DurationUnit::Second))
+        LiteralValue::quantity_with_type(one, "second".to_string(), dur_type)
             .lemma_type
             .name(),
         "duration"
@@ -73,22 +95,9 @@ fn test_comparison_operator_display() {
 }
 
 #[test]
-fn test_duration_unit_display() {
-    assert_eq!(format!("{}", DurationUnit::Second), "seconds");
-    assert_eq!(format!("{}", DurationUnit::Minute), "minutes");
-    assert_eq!(format!("{}", DurationUnit::Hour), "hours");
-    assert_eq!(format!("{}", DurationUnit::Day), "days");
-    assert_eq!(format!("{}", DurationUnit::Week), "weeks");
-    assert_eq!(format!("{}", DurationUnit::Millisecond), "milliseconds");
-    assert_eq!(format!("{}", DurationUnit::Microsecond), "microseconds");
-    assert_eq!(format!("{}", DurationUnit::Year), "years");
-    assert_eq!(format!("{}", DurationUnit::Month), "months");
-}
-
-#[test]
 fn test_conversion_target_display() {
     assert_eq!(
-        format!("{}", ConversionTarget::Duration(DurationUnit::Hour)),
+        format!("{}", ConversionTarget::Unit("hours".to_string())),
         "hours"
     );
     assert_eq!(
@@ -120,8 +129,8 @@ fn test_spec_type_display() {
         "ratio"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_duration()),
-        "duration"
+        format!("{}", crate::planning::semantics::primitive_quantity()),
+        "quantity"
     );
     assert_eq!(format!("{}", primitive_time()), "time");
 }
@@ -167,7 +176,7 @@ fn test_type_serialization() {
 
 #[test]
 fn test_literal_value_display_value() {
-    let ten = Decimal::from_str("10").unwrap();
+    let ten = RationalInteger::new(10, 1);
 
     assert_eq!(
         LiteralValue::text("hello".to_string()).display_value(),
@@ -177,7 +186,7 @@ fn test_literal_value_display_value() {
     assert_eq!(LiteralValue::from_bool(true).display_value(), "true");
     assert_eq!(LiteralValue::from_bool(false).display_value(), "false");
 
-    let ten_percent_ratio = LiteralValue::ratio(Decimal::from_str("0.10").unwrap(), None);
+    let ten_percent_ratio = LiteralValue::ratio(RationalInteger::new(1, 10), None);
     assert_eq!(ten_percent_ratio.display_value(), "0.1");
 
     let date = DateTimeValue {
@@ -217,6 +226,7 @@ fn test_literal_value_display_value() {
         hour: 14,
         minute: 30,
         second: 0,
+        microsecond: 0,
         timezone: None,
     };
     assert_eq!(
@@ -224,8 +234,31 @@ fn test_literal_value_display_value() {
         "14:30:00"
     );
 
+    let dur_type = LemmaType::new(
+        "duration".to_string(),
+        TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: QuantityUnits::from(vec![QuantityUnit {
+                name: "hours".to_string(),
+                factor: crate::computation::rational::decimal_to_rational(Decimal::from(3600))
+                    .expect("3600 must be exact decimal ratio"),
+                derived_quantity_factors: Vec::new(),
+                decomposition: BaseQuantityVector::new(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: None,
+            }]),
+            traits: vec![QuantityTrait::Duration],
+            decomposition: BaseQuantityVector::new(),
+            canonical_unit: "second".to_string(),
+            help: String::new(),
+        },
+        TypeExtends::Primitive,
+    );
     assert_eq!(
-        LiteralValue::duration(ten, duration_unit_to_semantic(&DurationUnit::Hour)).display_value(),
+        LiteralValue::quantity_with_type(ten, "hours".to_string(), dur_type).display_value(),
         "10 hours"
     );
 }
@@ -236,6 +269,7 @@ fn test_literal_value_time_type() {
         hour: 14,
         minute: 30,
         second: 0,
+        microsecond: 0,
         timezone: None,
     };
     assert_eq!(
@@ -271,13 +305,14 @@ fn test_time_value_display() {
         hour: 14,
         minute: 30,
         second: 45,
+        microsecond: 0,
         timezone: Some(TimezoneValue {
             offset_hours: -5,
             offset_minutes: 30,
         }),
     };
     let display = format!("{}", time);
-    assert_eq!(display, "14:30:45");
+    assert_eq!(display, "14:30:45-05:30");
 }
 
 #[test]

@@ -1,6 +1,9 @@
 use crate::evaluation::operations::{ComputationKind, OperationResult};
 use crate::planning::semantics::{DataPath, LiteralValue, RulePath, Source};
 use serde::{Serialize, Serializer};
+
+#[cfg(test)]
+use serde::Deserialize;
 use std::sync::Arc;
 
 fn serialize_arc<T, S>(value: &Arc<T>, serializer: S) -> Result<S::Ok, S::Error>
@@ -21,6 +24,23 @@ pub struct Explanation {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionExplanationRole {
+    Outcome,
+    Rule,
+    Source,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(Deserialize))]
+pub struct ConversionExplanationStep {
+    pub role: ConversionExplanationRole,
+    pub text: String,
+    pub data_ref: Option<DataPath>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExplanationNode {
     Value {
@@ -37,6 +57,7 @@ pub enum ExplanationNode {
     },
     Computation {
         kind: ComputationKind,
+        conversion_steps: Vec<ConversionExplanationStep>,
         original_expression: String,
         expression: String,
         result: LiteralValue,

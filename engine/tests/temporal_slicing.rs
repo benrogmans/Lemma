@@ -25,7 +25,14 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(None, spec_name, Some(effective), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap()
 }
 
@@ -40,7 +47,14 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec_name, Some(effective), map, false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            map,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap()
 }
 
@@ -1396,7 +1410,7 @@ data threshold: number
             r#"
 spec consumer 2025-01-01
 uses c: cfg
-data c.threshold: 50
+fill c.threshold: 50
 rule t: c.threshold
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
@@ -1770,11 +1784,11 @@ fn slice_incompat_named_type_adds_unit_across_slices() {
         .load(
             r#"
 spec dep 2025-01-01
-data money: scale
+data money: quantity
  -> unit eur 1.0
 
 spec dep 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.0
  -> unit usd 1.1
 "#,
@@ -1786,7 +1800,8 @@ data money: scale
         .load(
             r#"
 spec app 2025-01-01
-data m: money from dep
+uses dep
+data m: dep.money
 rule x: 1
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("app.lemma"))),

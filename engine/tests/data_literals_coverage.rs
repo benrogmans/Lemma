@@ -56,7 +56,14 @@ fn rule_value(result: &lemma::evaluation::Response, rule_name: &str) -> String {
 fn run(engine: &Engine, spec: &str) -> lemma::evaluation::Response {
     let now = DateTimeValue::now();
     engine
-        .run(None, spec, Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            spec,
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run")
 }
 
@@ -334,6 +341,7 @@ rule r: t
 fn duration_literal_years_plural() {
     let code = r#"
 spec s
+uses lemma si
 data d: 5 years
 rule r: d
 "#;
@@ -347,6 +355,7 @@ rule r: d
 fn duration_literal_year_singular() {
     let code = r#"
 spec s
+uses lemma si
 data d: 1 year
 rule r: d
 "#;
@@ -360,6 +369,7 @@ rule r: d
 fn duration_literal_months() {
     let code = r#"
 spec s
+uses lemma si
 data d: 3 months
 rule r: d
 "#;
@@ -373,6 +383,7 @@ rule r: d
 fn duration_literal_weeks() {
     let code = r#"
 spec s
+uses lemma si
 data d: 2 weeks
 rule r: d
 "#;
@@ -386,6 +397,7 @@ rule r: d
 fn duration_literal_days() {
     let code = r#"
 spec s
+uses lemma si
 data d: 7 days
 rule r: d
 "#;
@@ -399,6 +411,7 @@ rule r: d
 fn duration_literal_hours() {
     let code = r#"
 spec s
+uses lemma si
 data d: 12 hours
 rule r: d
 "#;
@@ -412,6 +425,7 @@ rule r: d
 fn duration_literal_minutes() {
     let code = r#"
 spec s
+uses lemma si
 data d: 90 minutes
 rule r: d
 "#;
@@ -425,6 +439,7 @@ rule r: d
 fn duration_literal_seconds() {
     let code = r#"
 spec s
+uses lemma si
 data d: 45 seconds
 rule r: d
 "#;
@@ -440,6 +455,7 @@ fn duration_literal_negative_rejected_or_supported_consistently() {
     // accepts and stores -5, or rejects. Silent coercion to 0 or +5 is a bug.
     let code = r#"
 spec s
+uses lemma si
 data d: -5 days
 rule r: d
 "#;
@@ -491,15 +507,13 @@ fn rule_ratio(
         OperationResult::Veto(v) => panic!("rule '{}' produced veto: {}", rule_name, v),
     };
     match &lit.value {
-        ValueKind::Ratio(n, u) => (*n, u.clone()),
+        ValueKind::Ratio(n, u) => (lemma::commit_rational_to_decimal(n).unwrap(), u.clone()),
         other => panic!("rule '{}' produced non-Ratio value {:?}", rule_name, other),
     }
 }
 
 #[test]
 fn ratio_literal_percent_sign() {
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     let code = r#"
 spec s
 data r: 50%
@@ -509,15 +523,13 @@ rule out: r
     load_ok(&mut engine, code);
     let resp = run(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
-    assert_eq!(value, Decimal::from_str("0.50").unwrap());
+    assert_eq!(value, rust_decimal::Decimal::new(50, 2));
     assert_eq!(unit.as_deref(), Some("percent"));
     assert_eq!(rule_value(&resp, "out"), "50%");
 }
 
 #[test]
 fn ratio_literal_permille_sign() {
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     let code = r#"
 spec s
 data r: 25%%
@@ -527,15 +539,13 @@ rule out: r
     load_ok(&mut engine, code);
     let resp = run(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
-    assert_eq!(value, Decimal::from_str("0.025").unwrap());
+    assert_eq!(value, rust_decimal::Decimal::new(25, 3));
     assert_eq!(unit.as_deref(), Some("permille"));
     assert_eq!(rule_value(&resp, "out"), "25%%");
 }
 
 #[test]
 fn ratio_literal_percent_keyword_matches_sigil() {
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     let code = r#"
 spec s
 data r: 50 percent
@@ -545,15 +555,13 @@ rule out: r
     load_ok(&mut engine, code);
     let resp = run(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
-    assert_eq!(value, Decimal::from_str("0.50").unwrap());
+    assert_eq!(value, rust_decimal::Decimal::new(50, 2));
     assert_eq!(unit.as_deref(), Some("percent"));
     assert_eq!(rule_value(&resp, "out"), "50%");
 }
 
 #[test]
 fn ratio_literal_permille_keyword_matches_sigil() {
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     let code = r#"
 spec s
 data r: 25 permille
@@ -563,15 +571,13 @@ rule out: r
     load_ok(&mut engine, code);
     let resp = run(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
-    assert_eq!(value, Decimal::from_str("0.025").unwrap());
+    assert_eq!(value, rust_decimal::Decimal::new(25, 3));
     assert_eq!(unit.as_deref(), Some("permille"));
     assert_eq!(rule_value(&resp, "out"), "25%%");
 }
 
 #[test]
 fn ratio_literal_negative_percent_sign() {
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     let code = r#"
 spec s
 data r: -50%
@@ -581,15 +587,13 @@ rule out: r
     load_ok(&mut engine, code);
     let resp = run(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
-    assert_eq!(value, Decimal::from_str("-0.50").unwrap());
+    assert_eq!(value, rust_decimal::Decimal::new(-50, 2));
     assert_eq!(unit.as_deref(), Some("percent"));
     assert_eq!(rule_value(&resp, "out"), "-50%");
 }
 
 #[test]
 fn ratio_literal_bare_number_has_no_unit() {
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
     let code = r#"
 spec s
 data r: 0.25
@@ -606,25 +610,31 @@ rule out: r
     use lemma::ValueKind;
     match &lit.value {
         ValueKind::Number(n) => {
-            assert_eq!(*n, Decimal::from_str("0.25").unwrap());
+            assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                rust_decimal::Decimal::new(25, 2)
+            );
         }
         ValueKind::Ratio(n, u) => {
-            assert_eq!(*n, Decimal::from_str("0.25").unwrap());
+            assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                rust_decimal::Decimal::new(25, 2)
+            );
             assert_eq!(u.as_deref(), None);
         }
         other => panic!("expected Number or Ratio, got: {:?}", other),
     }
 }
 
-// ─── Scale literals (require user-defined unit) ───────────────────────
+// ─── Quantity literals (require user-defined unit) ───────────────────────
 
 #[test]
-fn scale_literal_with_defined_unit() {
+fn quantity_literal_with_defined_unit() {
     let code = r#"
 spec s
-data money: scale
+data money: quantity
   -> unit eur 1
-  -> unit usd 1.19
+  -> unit usd 0.84
 data price: 10 eur
 rule r: price
 "#;
@@ -635,11 +645,11 @@ rule r: price
 }
 
 #[test]
-fn scale_literal_with_unknown_unit_is_rejected() {
-    // No scale type defines `banana` as a unit; the literal must fail.
+fn quantity_literal_with_unknown_unit_is_rejected() {
+    // No quantity type defines `banana` as a unit; the literal must fail.
     let code = r#"
 spec s
-data money: scale -> unit eur 1
+data money: quantity -> unit eur 1
 data price: 10 banana
 rule r: price
 "#;
@@ -654,12 +664,12 @@ rule r: price
 }
 
 #[test]
-fn scale_literal_conversion_to_defined_unit() {
+fn quantity_literal_conversion_to_defined_unit() {
     let code = r#"
 spec s
-data money: scale
+data money: quantity
   -> unit eur 1
-  -> unit usd 1.19
+  -> unit usd 0.84
 data price: 10 usd
 rule r: price
 "#;

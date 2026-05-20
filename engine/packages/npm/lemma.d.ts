@@ -35,6 +35,11 @@ declare module './lemma.bindings.js' {
     list(): ResolvedRepositoryJson[];
 
     /**
+     * Formatted Lemma source for a loaded repository (from in-engine AST). Use `"lemma"` for embedded SI stdlib.
+     */
+    format_repository(repository: string): string;
+
+    /**
      * `repository`: qualifier or `null`/omit for workspace — same as `Engine::schema` `repo`.
      */
     schema(
@@ -51,6 +56,7 @@ declare module './lemma.bindings.js' {
       spec: string,
       rule_names: string[] | string,
       data_values: Record<string, unknown>,
+      rule_result_units?: Record<string, string> | null,
       effective?: string | null,
     ): any;
   }
@@ -117,8 +123,21 @@ export type TypeExtends =
       defining_spec: unknown;
     };
 
-export interface UnitDef { name: string; value: string }
-export interface RatioUnitDef { name: string; value: string }
+export interface UnitDef {
+  name: string;
+  factor: { numer: string; denom: string };
+  minimum?: string | null;
+  maximum?: string | null;
+  default?: string | null;
+}
+
+export interface RatioUnitDef {
+  name: string;
+  value: { numer: string; denom: string };
+  minimum?: string | null;
+  maximum?: string | null;
+  default?: string | null;
+}
 
 /** Discriminated union over the 10 Lemma type kinds. Field `kind` is the
  *  serde tag; kind-specific fields sit at the top level next to `kind`,
@@ -128,11 +147,18 @@ export type LemmaType =
   & (
     | { kind: "boolean"; help: string }
     | {
-        kind: "scale";
+        kind: "quantity";
         minimum: string | null;
         maximum: string | null;
         decimals: number | null;
-        precision: string | null;
+        units: UnitDef[];
+        help: string;
+      }
+    | {
+        kind: "quantity range";
+        minimum: string | null;
+        maximum: string | null;
+        decimals: number | null;
         units: UnitDef[];
         help: string;
       }
@@ -141,11 +167,18 @@ export type LemmaType =
         minimum: string | null;
         maximum: string | null;
         decimals: number | null;
-        precision: string | null;
         help: string;
       }
     | {
         kind: "ratio";
+        minimum: string | null;
+        maximum: string | null;
+        decimals: number | null;
+        units: RatioUnitDef[];
+        help: string;
+      }
+    | {
+        kind: "ratio range";
         minimum: string | null;
         maximum: string | null;
         decimals: number | null;
@@ -162,7 +195,6 @@ export type LemmaType =
       }
     | { kind: "date"; minimum: string | null; maximum: string | null; help: string }
     | { kind: "time"; minimum: string | null; maximum: string | null; help: string }
-    | { kind: "duration"; help: string }
     | { kind: "veto"; message: string | null }
   );
 
@@ -179,6 +211,7 @@ export interface DataEntry {
 export interface SpecSchema {
   spec: string;
   data: Record<string, DataEntry>;
+  /** Rule result types; quantity and ratio entries expose `units[]` like their data counterparts. */
   rules: Record<string, LemmaType>;
   meta: Record<string, unknown>;
 }

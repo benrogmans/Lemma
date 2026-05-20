@@ -1,7 +1,7 @@
-//! Rock-solid tests locking in ratio vs scale unit behaviour.
+//! Rock-solid tests locking in ratio vs quantity unit behaviour.
 //!
-//! Covers: "in percent" / "in permille" as ratio conversion; comparison with percent literals;
-//! unknown unit error; scale conversion unchanged; ratio display with no unit;
+//! Covers: "as percent" / "as permille" ratio conversion; comparison with percent literals;
+//! unknown unit error; quantity conversion unchanged; ratio display with no unit;
 //! number ± ratio data semantics (e.g. 100 - discount: 100 * (1 - discount)).
 
 use lemma::evaluation::OperationResult;
@@ -12,6 +12,14 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+fn decimal_lit(d: &str) -> Decimal {
+    Decimal::from_str(d).unwrap()
+}
+
+fn rational_lit(d: &str) -> lemma::RationalInteger {
+    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
+}
+
 #[test]
 fn in_percent_produces_ratio_and_compares_with_percent_literal() {
     let code = r#"
@@ -19,22 +27,24 @@ spec savings
 data savings_amount: 75
 data total_amount: 300
 
-rule savings_ratio: (savings_amount / total_amount) in percent
+rule savings_ratio: (savings_amount / total_amount) as percent
 rule is_above_20: savings_ratio > 20%
 rule is_above_30: savings_ratio > 30%
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "savings", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "savings",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let ratio_result = response
@@ -44,7 +54,11 @@ rule is_above_30: savings_ratio > 30%
     match &ratio_result.result {
         OperationResult::Value(lit) => match &lit.value {
             ValueKind::Ratio(r, u) => {
-                assert_eq!(*r, Decimal::new(25, 2), "75/300 = 0.25");
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(r).unwrap(),
+                    Decimal::new(25, 2),
+                    "75/300 = 0.25"
+                );
                 assert_eq!(u.as_deref(), Some("percent"));
             }
             _ => panic!("savings_ratio must be Ratio, got {:?}", lit.value),
@@ -73,23 +87,25 @@ spec summary
 data part: 18
 data whole: 60
 
-rule pct: (part / whole) in percent
+rule pct: (part / whole) as percent
 rule tier: "low"
     unless pct > 25% then "mid"
     unless pct > 50% then "high"
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "summary", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "summary",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let tier = response.results.get("tier").expect("tier");
     match &tier.result {
@@ -106,27 +122,32 @@ fn in_permille_produces_ratio() {
 spec permille_spec
 data value: 0.025
 
-rule as_permille: value in permille
+rule as_permille: value as permille
 rule above_20_permille: as_permille > 20 permille
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "permille_spec", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "permille_spec",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let as_permille = response.results.get("as_permille").expect("as_permille");
     match &as_permille.result {
         OperationResult::Value(lit) => match &lit.value {
             ValueKind::Ratio(r, u) => {
-                assert_eq!(*r, Decimal::new(25, 3));
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(r).unwrap(),
+                    Decimal::new(25, 3)
+                );
                 assert_eq!(u.as_deref(), Some("permille"));
             }
             _ => panic!("as_permille must be Ratio, got {:?}", lit.value),
@@ -147,16 +168,11 @@ fn unknown_unit_in_conversion_fails_planning() {
 spec bad
 data x: 100
 
-rule bad_conv: x in not_a_unit
+rule bad_conv: x as not_a_unit
 "#;
 
     let mut engine = Engine::new();
-    let err = engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap_err();
+    let err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
 
     let msg = format!("{:?}", err);
     assert!(
@@ -176,12 +192,7 @@ rule price: 100 - discount
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -191,6 +202,7 @@ rule price: 100 - discount
             Some(&now),
             HashMap::from([("discount".to_string(), "20 percent".to_string())]),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
@@ -198,7 +210,11 @@ rule price: 100 - discount
     match &price.result {
         OperationResult::Value(lit) => {
             if let ValueKind::Number(n) = &lit.value {
-                assert_eq!(*n, Decimal::from(80), "100 - 20% = 100 * (1 - 0.20) = 80");
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(n).unwrap(),
+                    Decimal::from(80),
+                    "100 - 20% = 100 * (1 - 0.20) = 80"
+                );
             } else {
                 panic!("price should be Number, got {:?}", lit.value);
             }
@@ -209,7 +225,7 @@ rule price: 100 - discount
 
 #[test]
 fn ratio_display_with_none_unit_shows_number_only() {
-    let lit = LiteralValue::ratio(Decimal::from_str("0.5").unwrap(), None);
+    let lit = LiteralValue::ratio(rational_lit("0.5"), None);
     let display = lit.display_value();
     assert!(
         !display.contains("percent") && display.contains("0.5"),
@@ -217,10 +233,7 @@ fn ratio_display_with_none_unit_shows_number_only() {
         display
     );
 
-    let with_unit = LiteralValue::ratio(
-        Decimal::from_str("0.5").unwrap(),
-        Some("percent".to_string()),
-    );
+    let with_unit = LiteralValue::ratio(rational_lit("0.5"), Some("percent".to_string()));
     let display_with = with_unit.display_value();
     assert!(
         display_with.contains('%'),
@@ -236,22 +249,24 @@ spec chained
 data a: 10
 data b: 40
 
-rule pct: (a / b) in percent
+rule pct: (a / b) as percent
 rule plus_five: pct + 5%
 rule compared: plus_five > 25%
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "chained", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "chained",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let pct = response.results.get("pct").expect("pct");
     let plus_five = response.results.get("plus_five").expect("plus_five");
@@ -260,7 +275,10 @@ rule compared: plus_five > 25%
     match &pct.result {
         OperationResult::Value(lit) => {
             if let ValueKind::Ratio(r, _) = &lit.value {
-                assert_eq!(*r, Decimal::new(25, 2));
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(r).unwrap(),
+                    Decimal::new(25, 2)
+                );
             }
         }
         _ => panic!("pct must be Value"),
@@ -268,7 +286,10 @@ rule compared: plus_five > 25%
     match &plus_five.result {
         OperationResult::Value(lit) => {
             if let ValueKind::Ratio(r, _) = &lit.value {
-                assert_eq!(*r, Decimal::new(30, 2));
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(r).unwrap(),
+                    Decimal::new(30, 2)
+                );
             }
         }
         _ => panic!("plus_five must be Value"),
@@ -280,31 +301,33 @@ rule compared: plus_five > 25%
 }
 
 #[test]
-fn scale_and_ratio_conversion_in_same_spec() {
+fn quantity_and_ratio_conversion_in_same_spec() {
     let code = r#"
 spec mixed
-data money: scale
+data money: quantity
   -> unit eur 1
 
 data amount: 200
 data part: 50
 
-rule as_eur: amount in eur
-rule share_pct: (part / amount) in percent
+rule as_eur: amount as eur
+rule share_pct: (part / amount) as percent
 rule share_above_20: share_pct > 20%
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "mixed", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "mixed",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let as_eur = response.results.get("as_eur").expect("as_eur");
     let share_pct = response.results.get("share_pct").expect("share_pct");
@@ -316,17 +339,20 @@ rule share_above_20: share_pct > 20%
     match &as_eur.result {
         OperationResult::Value(lit) => {
             assert!(
-                matches!(&lit.value, ValueKind::Scale(n, u) if *n == Decimal::from(200) && u == "eur"),
+                matches!(&lit.value, ValueKind::Quantity(n, u, _) if *n == lemma::RationalInteger::new(200, 1) && u == "eur"),
                 "as_eur: got {:?}",
                 lit.value
             );
         }
-        _ => panic!("as_eur must be Scale"),
+        _ => panic!("as_eur must be Quantity"),
     }
     match &share_pct.result {
         OperationResult::Value(lit) => {
             if let ValueKind::Ratio(r, u) = &lit.value {
-                assert_eq!(*r, Decimal::new(25, 2));
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(r).unwrap(),
+                    Decimal::new(25, 2)
+                );
                 assert_eq!(u.as_deref(), Some("percent"));
             }
         }

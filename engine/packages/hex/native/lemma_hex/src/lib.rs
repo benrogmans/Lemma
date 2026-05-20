@@ -28,7 +28,7 @@ fn load(env: Env, _info: Term) -> bool {
 
 #[rustler::nif]
 fn lemma_new<'a>(env: Env<'a>, limits_term: Option<Term<'a>>) -> NifResult<Term<'a>> {
-    let engine = match limits_term {
+    let mut engine = match limits_term {
         None => Engine::new(),
         Some(term) => {
             if term.as_c_arg() == atom::nil().as_c_arg() {
@@ -40,6 +40,9 @@ fn lemma_new<'a>(env: Env<'a>, limits_term: Option<Term<'a>>) -> NifResult<Term<
             }
         }
     };
+    engine.replan().map_err(|e| {
+        rustler::Error::RaiseTerm(Box::new(format!("Initial planning failed: {e}")))
+    })?;
     let resource = ResourceArc::new(LemmaEngineResource(Mutex::new(engine)));
     Ok((rustler::Atom::from_str(env, "ok")?, resource).encode(env))
 }
@@ -202,9 +205,6 @@ fn lemma_list<'a>(env: Env<'a>, resource: ResourceArc<LemmaEngineResource>) -> N
     };
 
     let repos = engine.list();
-    if repos.iter().all(|r| r.specs.is_empty()) {
-        return Ok((rustler::Atom::from_str(env, "ok")?, Vec::<Term<'a>>::new()).encode(env));
-    }
 
     let mut groups: Vec<Term<'a>> = Vec::new();
     for repo in &repos {
@@ -285,6 +285,25 @@ fn lemma_list<'a>(env: Env<'a>, resource: ResourceArc<LemmaEngineResource>) -> N
 }
 
 #[rustler::nif]
+fn lemma_format_repository<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+    repository: String,
+) -> NifResult<Term<'a>> {
+    let engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+    match engine.format_repository(&repository) {
+        Ok(text) => Ok((rustler::Atom::from_str(env, "ok")?, text).encode(env)),
+        Err(err) => {
+            let term = encode_error(env, &err)?;
+            Ok((rustler::Atom::from_str(env, "error")?, term).encode(env))
+        }
+    }
+}
+
+#[rustler::nif]
 fn lemma_schema<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
@@ -340,7 +359,14 @@ fn lemma_run<'a>(
         None => None,
     };
     let values = map_term_to_data_values(data_values)?;
-    match engine.run(None, &spec, effective, values, false) {
+    match engine.run(
+        None,
+        &spec,
+        effective,
+        values,
+        false,
+        lemma::EvaluationRequest::default(),
+    ) {
         Ok(response) => {
             let json = serde_json::to_vec(&response).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Response serialization failed: {}", e)))
@@ -709,8 +735,8 @@ fn parse_value_string_to_literal(s: &str) -> Result<LiteralValue, rustler::Error
             lemma_type: lemma::planning::semantics::primitive_boolean().clone(),
         });
     }
-    if let Ok(n) = rust_decimal::Decimal::from_str(s) {
-        return Ok(LiteralValue::number(n));
+    if let Ok(d) = rust_decimal::Decimal::from_str(s) {
+        return Ok(LiteralValue::number_from_decimal(d));
     }
     if let Ok(dt) = s.parse::<DateTimeValue>() {
         let sem_dt = SemanticDateTime {

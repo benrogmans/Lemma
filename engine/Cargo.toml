@@ -23,6 +23,8 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
+num-rational.workspace = true
+num-integer.workspace = true
 indexmap = { version = "2.0", features = ["serde"] }
 sha2 = "0.10"
 boolean_expression = "0.4"

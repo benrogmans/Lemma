@@ -36,12 +36,11 @@ cargo deny check --config .cargo/deny.toml
 
 1. Write a test first
 2. Make your changes
-3. Run before submitting:
+3. Run before submitting (from repo root):
    ```bash
-   cargo nextest run --workspace
-   cargo clippy --all-targets --all-features -- -D warnings
-   cargo fmt --all
+   cargo precommit
    ```
+   Same pipeline as CI: versions-verify, fmt, clippy, nextest (including ignored benches), WASM npm build+test, cargo-deny. Requires `cargo-nextest`, `cargo-deny`, Node.js, and `wasm-pack`.
 
 ### Release version (maintainers)
 
@@ -55,7 +54,7 @@ Do not hand-edit those copies unless you keep them in sync.
 ## Pull Requests
 
 Automated checks that must pass:
-- Tests (stable + beta Rust)
+- Tests (stable + beta Rust), including WASM npm `build.js` + `test.js`
 - Clippy linting
 - Formatting (rustfmt)
 - Security audit (cargo-deny)
@@ -77,6 +76,14 @@ Automated checks that must pass:
 cargo nextest run --workspace
 ```
 
+Hex NIF (ExUnit):
+
+```bash
+cd engine/packages/hex && mix test
+```
+
+See [engine/tests/README.md](../engine/tests/README.md) (catalog + semantics audit) and [cli/tests/README.md](../cli/tests/README.md).
+
 ### Fuzz testing
 Requires nightly Rust:
 
@@ -86,8 +93,12 @@ cargo +nightly fuzz list
 cargo +nightly fuzz run fuzz_parser -- -max_total_time=60
 ```
 
-### WASM build and test (from `engine/packages/npm`)
+### WASM build and test
+
+`cargo precommit` runs these from `engine/packages/npm` automatically. To run manually:
+
 ```bash
+cd engine/packages/npm
 node build.js   # wasm-pack → lemma.bindings.js; copies entrypoints and lsp-client
 node test.js
 ```

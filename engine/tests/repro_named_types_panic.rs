@@ -1,5 +1,5 @@
-//! Repro for "BUG: type not in named_types — TypeResolver should have registered it"
-//! observed in WASM (browser). Mirrors the exact load sequence from the playground.
+//! Repro for missing resolved type during graph build (TypeResolver / `ResolvedSpecTypes.resolved`).
+//! Observed in WASM (browser). Mirrors the exact load sequence from the playground.
 
 use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;

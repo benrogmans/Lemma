@@ -4,11 +4,14 @@
 //! The execution plan is self-contained with all rules flattened into branches.
 //! The evaluator executes rules linearly without recursion or tree traversal.
 
+pub mod conversion_explanation;
 pub mod explanation;
 pub mod expression;
 pub mod operations;
+pub mod request;
 pub mod response;
 
+use crate::computation::units::{convert_unit, UnitResolutionContext};
 use crate::evaluation::explanation::{ExplanationNode, ValueSource};
 use crate::evaluation::operations::VetoType;
 use crate::evaluation::response::EvaluatedRule;
@@ -20,8 +23,43 @@ use crate::planning::semantics::{
 use crate::planning::ExecutionPlan;
 use indexmap::IndexMap;
 pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
+pub use request::{parse_rule_result_conversion_strings, EvaluationRequest};
 pub use response::{DataGroup, Response, RuleResult};
 use std::collections::{HashMap, HashSet};
+
+pub(crate) const DECIMAL_VALUE_LIMIT_VETO_MESSAGE: &str =
+    "Calculated result exceeds decimal value limit";
+
+fn literal_value_committable_to_decimal_wire(value: &LiteralValue) -> bool {
+    use crate::computation::rational::commit_rational_to_decimal;
+
+    match &value.value {
+        ValueKind::Number(rational)
+        | ValueKind::Ratio(rational, _)
+        | ValueKind::Calendar(rational, _) => commit_rational_to_decimal(rational).is_ok(),
+        ValueKind::Quantity(rational, _, _) => commit_rational_to_decimal(rational).is_ok(),
+        ValueKind::Range(left, right) => {
+            literal_value_committable_to_decimal_wire(left)
+                && literal_value_committable_to_decimal_wire(right)
+        }
+        ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) | ValueKind::Boolean(_) => {
+            true
+        }
+    }
+}
+
+fn ensure_rule_result_within_decimal_wire_limit(result: OperationResult) -> OperationResult {
+    match result {
+        OperationResult::Value(value) => {
+            if literal_value_committable_to_decimal_wire(value.as_ref()) {
+                OperationResult::Value(value)
+            } else {
+                OperationResult::Veto(VetoType::computation(DECIMAL_VALUE_LIMIT_VETO_MESSAGE))
+            }
+        }
+        OperationResult::Veto(veto) => OperationResult::Veto(veto),
+    }
+}
 
 /// Evaluation context for storing intermediate results
 pub(crate) struct EvaluationContext {
@@ -50,6 +88,10 @@ pub(crate) struct EvaluationContext {
     /// rule-target reference values lazily in
     /// [`Self::lazy_rule_reference_resolve`].
     reference_types: HashMap<DataPath, LemmaType>,
+    /// Maps each quantity unit name to its owning `LemmaType` (post-decomp).
+    /// Cloned from [`ExecutionPlan::unit_index`]. Used by the `as <unit>` evaluation path
+    /// to resolve anonymous intermediate quantity values into named typed values.
+    pub(crate) unit_index: HashMap<String, LemmaType>,
 }
 
 impl EvaluationContext {
@@ -150,6 +192,8 @@ impl EvaluationContext {
             }
         }
 
+        let unit_index = plan.unit_index.clone();
+
         Self {
             data_values,
             rule_results: HashMap::new(),
@@ -164,6 +208,7 @@ impl EvaluationContext {
             rule_references,
             reference_vetoes,
             reference_types,
+            unit_index,
         }
     }
 
@@ -373,7 +418,7 @@ data v: number -> default 5
 spec outer
 uses i: inner
 uses src: source_spec
-data i.slot: src.v
+fill i.slot: src.v
 rule r: i.slot
 "#;
         let mut engine = Engine::new();
@@ -441,9 +486,9 @@ impl Evaluator {
     /// Executes rules in pre-computed dependency order with all data pre-loaded.
     /// Rules are already flattened into executable branches with data prefixes resolved.
     ///
-    /// After planning, evaluation is guaranteed to complete. This function never returns
-    /// a Error — runtime issues (division by zero, missing data, user-defined veto)
-    /// produce Vetoes, which are valid evaluation outcomes.
+    /// After planning, evaluation completes without `Error`: numeric rules return
+    /// `Value` (stored `Decimal` semantics) or `Veto` for impossible data (e.g. division
+    /// by zero). Panics indicate engine bugs, not user-facing failures.
     ///
     /// When `record_operations` is true, each rule's evaluation records a trace of
     /// operations (data used, rules used, computations, branch evaluations) into
@@ -453,6 +498,7 @@ impl Evaluator {
         plan: &ExecutionPlan,
         now: LiteralValue,
         record_operations: bool,
+        request: &request::EvaluationRequest,
     ) -> Response {
         let mut context = EvaluationContext::new(plan, now, record_operations);
 
@@ -472,17 +518,49 @@ impl Evaluator {
             }
             context.explanation_nodes.clear();
 
-            let (result, explanation) = expression::evaluate_rule(exec_rule, &mut context);
+            let (mut result, mut explanation) = expression::evaluate_rule(exec_rule, &mut context);
 
             context
                 .rule_results
                 .insert(exec_rule.path.clone(), result.clone());
             context.set_rule_explanation(exec_rule.path.clone(), explanation.clone());
 
+            if let Some(target) = request.rule_result_units.get(&exec_rule.name) {
+                if let OperationResult::Value(value) = &result {
+                    let converted = convert_unit(
+                        value.as_ref(),
+                        target,
+                        UnitResolutionContext::WithIndex(&context.unit_index),
+                    );
+                    match converted {
+                        OperationResult::Veto(_) => {
+                            unreachable!(
+                                "BUG: rule '{}' unit conversion to '{}' vetoed after request validation",
+                                exec_rule.name, target
+                            );
+                        }
+                        OperationResult::Value(_) => {
+                            result = converted.clone();
+                            explanation.result = converted;
+                        }
+                    }
+                }
+            }
+
             let rule_operations = context.operations.clone().unwrap_or_default();
 
             if !exec_rule.path.segments.is_empty() {
                 continue;
+            }
+
+            result = ensure_rule_result_within_decimal_wire_limit(result);
+            if matches!(result, OperationResult::Veto(_)) {
+                explanation = crate::evaluation::explanation::Explanation {
+                    rule_path: exec_rule.path.clone(),
+                    source: Some(exec_rule.source.clone()),
+                    result: result.clone(),
+                    tree: explanation.tree,
+                };
             }
 
             let unless_branches: Vec<(Option<Expression>, Expression)> = exec_rule.branches[1..]

@@ -47,7 +47,14 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     group.bench_function("engine_evaluate", |b| {
         b.iter(|| {
             let resp = engine
-                .run(None, spec, Some(&now), data.clone(), false)
+                .run(
+                    None,
+                    spec,
+                    Some(&now),
+                    data.clone(),
+                    false,
+                    lemma::EvaluationRequest::default(),
+                )
                 .expect("run");
             std::hint::black_box(resp);
         });
@@ -60,7 +67,10 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
         b.iter(|| {
             let plan = base_plan
                 .clone()
-                .set_data_values(data.clone(), &ResourceLimits::default())
+                .set_data_values(
+                    serialization::data_values_from_strings(data.clone()),
+                    &ResourceLimits::default(),
+                )
                 .expect("set_data_values");
             std::hint::black_box(plan);
         });
@@ -79,7 +89,14 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     group.bench_function("single_rule", |b| {
         b.iter(|| {
             let mut resp = engine
-                .run(None, spec, Some(&now), data.clone(), false)
+                .run(
+                    None,
+                    spec,
+                    Some(&now),
+                    data.clone(),
+                    false,
+                    lemma::EvaluationRequest::default(),
+                )
                 .expect("run");
             resp.filter_rules(&[String::from("periods_per_year")]);
             std::hint::black_box(resp);
@@ -88,7 +105,14 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_envelope", |b| {
         let response = engine
-            .run(None, spec, Some(&now), data.clone(), false)
+            .run(
+                None,
+                spec,
+                Some(&now),
+                data.clone(),
+                false,
+                lemma::EvaluationRequest::default(),
+            )
             .expect("run");
         b.iter(|| {
             let envelope = build_envelope(&response, spec, &now);
@@ -99,7 +123,14 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_raw_response", |b| {
         let response = engine
-            .run(None, spec, Some(&now), data.clone(), false)
+            .run(
+                None,
+                spec,
+                Some(&now),
+                data.clone(),
+                false,
+                lemma::EvaluationRequest::default(),
+            )
             .expect("run");
         b.iter(|| {
             let json = serde_json::to_vec(&response).expect("serialize");
@@ -120,11 +151,8 @@ fn build_envelope(
         let mut entry = serde_json::Map::new();
         match &rule_result.result {
             OperationResult::Value(v) => {
-                let (val, unit) = serialization::literal_value_to_json(v);
+                let val = serde_json::to_value(&v.value).expect("ValueKind serializes");
                 entry.insert("value".into(), val);
-                if let Some(u) = unit {
-                    entry.insert("unit".into(), serde_json::Value::String(u));
-                }
                 entry.insert(
                     "display".into(),
                     serde_json::Value::String(v.display_value()),

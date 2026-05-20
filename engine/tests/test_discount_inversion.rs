@@ -1,6 +1,5 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, LiteralValue, Target};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
@@ -31,8 +30,8 @@ fn discount_multiple_paths_to_same_value() {
             "shop",
             Some(&now),
             "discount",
-            Target::value(LiteralValue::number(
-                Decimal::from_str_exact("0.30").unwrap(),
+            Target::value(LiteralValue::number_from_decimal(
+                rust_decimal::Decimal::new(3, 1),
             )),
             HashMap::new(),
         )

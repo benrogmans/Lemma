@@ -7,14 +7,9 @@ use serde::Serialize;
 /// JSON-producing surface. Ensures consistent field names and veto handling.
 #[derive(Debug, Serialize)]
 pub struct RuleResultJson {
-    /// The computed value using native JSON types where possible:
-    /// boolean -> JSON bool, number/scale/ratio/duration -> JSON number, text/date/time -> string.
-    /// `None` when the rule was vetoed.
+    /// Serialized [`ValueKind`] (same shape as WASM evaluation results). `None` when vetoed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<serde_json::Value>,
-    /// Unit of the value (e.g. "eur", "hours"). Present for scale and duration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
     /// Human-readable formatted value (e.g. "345.00 eur", "true", "21%"). Always a string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display: Option<String>,
@@ -64,13 +59,15 @@ pub fn convert_response(
         .iter()
         .map(|(name, rule_result)| {
             let line = rule_result.rule.source_location.span.line;
-            let (value, unit, display, vetoed, veto_reason) = match &rule_result.result {
-                lemma::OperationResult::Value(v) => {
-                    let (val, unit) = lemma::serialization::literal_value_to_json(v);
-                    (Some(val), unit, Some(v.display_value()), false, None)
-                }
+            let (value, display, vetoed, veto_reason) = match &rule_result.result {
+                lemma::OperationResult::Value(v) => (
+                    serde_json::to_value(&v.value).ok(),
+                    Some(v.display_value()),
+                    false,
+                    None,
+                ),
                 lemma::OperationResult::Veto(reason) => {
-                    (None, None, None, true, Some(reason.to_string()))
+                    (None, None, true, Some(reason.to_string()))
                 }
             };
             let explanation = if include_explanations {
@@ -86,7 +83,6 @@ pub fn convert_response(
                 name.clone(),
                 RuleResultJson {
                     value,
-                    unit,
                     display,
                     vetoed,
                     veto_reason,

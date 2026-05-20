@@ -90,8 +90,8 @@ impl std::error::Error for RegistryError {}
 ///
 /// `get` returns a bundle containing ALL temporal versions for the requested
 /// identifier. The engine handles temporal resolution locally using
-/// `effective_from` on the parsed specs. Registry-qualified `uses` / `from`
-/// references and data imports from specs share this resolution path.
+/// `effective_from` on the parsed specs. Registry-qualified `uses`
+/// references and `uses`-backed type parents from specs share this resolution path.
 ///
 /// `name` is the full repository name as it appears in source (e.g. `"@org/project"`).
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
@@ -330,13 +330,14 @@ impl Registry for LemmaBase {
 // Resolution: fetching external `@...` specs from a Registry
 // ---------------------------------------------------------------------------
 
-/// Resolve every `uses <repository> <spec>` or `data x: y from <repository> <spec>` reference in the loaded specs.
+/// Resolve every `uses` reference that carries a registry repository qualifier in the loaded specs.
 ///
 /// Starting from the already-parsed local specs, this function:
 /// 1. Collects every distinct registry repository qualifier referenced by the specs.
 /// 2. For each repository qualifier not already loaded into `ctx`, calls the Registry.
 /// 3. Parses the returned source text and inserts every spec from the bundle
-///    under the registry [`LemmaRepository`] for that fetch (from `reference.repository_qualifier`).
+///    under the registry [`LemmaRepository`] for that fetch (using each reference's
+///    [`crate::parsing::ast::SpecRef::repository`] qualifier when present).
 /// 4. Recurses: the newly inserted specs may themselves reference further
 ///    registry repositories.
 /// 5. Repeats until no unresolved repository qualifiers remain.
@@ -489,33 +490,16 @@ fn find_missing_repositories(
         let spec = spec.as_ref();
 
         for data in &spec.data {
-            match &data.value {
-                // `uses <repository> <spec>`
-                DataValue::Import(spec_ref) => {
-                    collect_repository_qualifiers_from_spec_ref(
-                        spec_ref,
-                        &data.source_location,
-                        ctx,
-                        already_requested,
-                        &mut seen_in_this_round,
-                        &mut unresolved,
-                    );
-                }
-                // `data x: y from <repository> <spec>`
-                DataValue::Definition {
-                    from: Some(from_ref),
-                    ..
-                } => {
-                    collect_repository_qualifiers_from_spec_ref(
-                        from_ref,
-                        &data.source_location,
-                        ctx,
-                        already_requested,
-                        &mut seen_in_this_round,
-                        &mut unresolved,
-                    );
-                }
-                _ => {}
+            // `uses <repository> <spec>`
+            if let DataValue::Import(spec_ref) = &data.value {
+                collect_repository_qualifiers_from_spec_ref(
+                    spec_ref,
+                    &data.source_location,
+                    ctx,
+                    already_requested,
+                    &mut seen_in_this_round,
+                    &mut unresolved,
+                );
             }
         }
     }
@@ -616,9 +600,10 @@ data price: 100"#;
         .await
         .unwrap();
 
-        assert_eq!(store.len(), 1);
+        assert_eq!(store.len(), 2, "embedded spec si plus workspace example");
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
-        assert_eq!(names, ["example"]);
+        assert!(names.iter().any(|n| n == "example"));
+        assert!(names.iter().any(|n| n == "si"));
     }
 
     #[tokio::test]
@@ -663,10 +648,11 @@ data quantity: 42"#,
         .await
         .unwrap();
 
-        assert_eq!(store.len(), 2);
+        assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "helper"));
+        assert!(names.iter().any(|n| n == "si"));
     }
 
     #[tokio::test]
@@ -806,11 +792,12 @@ data value: 99"#,
         .await
         .unwrap();
 
-        assert_eq!(store.len(), 3);
+        assert_eq!(store.len(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "spec_a"));
         assert!(names.iter().any(|n| n == "spec_b"));
+        assert!(names.iter().any(|n| n == "si"));
     }
 
     #[tokio::test]
@@ -857,11 +844,12 @@ data value: 99"#,
         .await
         .unwrap();
 
-        assert_eq!(store.len(), 3);
+        assert_eq!(store.len(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "spec_a"));
         assert!(names.iter().any(|n| n == "spec_b"));
+        assert!(names.iter().any(|n| n == "si"));
     }
 
     #[tokio::test]
@@ -936,7 +924,8 @@ uses external: @org/project missing"#;
     async fn resolve_returns_all_registry_errors_when_multiple_repositorys_fail() {
         let local_source = r#"spec main_spec
 uses @org/example helper
-data money: money from @lemma/std finance"#;
+uses @lemma/std finance
+data money: finance.money"#;
         let local_specs = crate::parse(
             local_source,
             crate::parsing::source::SourceType::Volatile,
@@ -1035,15 +1024,17 @@ data value: 1"#,
         .await
         .unwrap();
 
-        assert_eq!(store.len(), 3);
+        assert_eq!(store.len(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "shared"));
+        assert!(names.iter().any(|n| n == "si"));
     }
 
     #[tokio::test]
     async fn resolve_handles_data_import_from_registry() {
         let local_source = r#"spec main_spec
-data money: money from @lemma/std finance
+uses @lemma/std finance
+data money: finance.money
 data price: money"#;
         let local_specs = crate::parse(
             local_source,
@@ -1070,9 +1061,9 @@ data price: money"#;
             "@lemma/std",
             r#"repo @lemma/std
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2"#,
         );
 
@@ -1085,10 +1076,11 @@ data money: scale
         .await
         .unwrap();
 
-        assert_eq!(store.len(), 2);
+        assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "finance"));
+        assert!(names.iter().any(|n| n == "si"));
     }
 
     // -----------------------------------------------------------------------

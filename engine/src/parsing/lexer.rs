@@ -1,7 +1,5 @@
 use crate::error::Error;
-use crate::parsing::ast::{
-    BooleanValue, CalendarUnit, ConversionTarget, DurationUnit, PrimitiveKind, Span,
-};
+use crate::parsing::ast::{BooleanValue, CalendarUnit, ConversionTarget, PrimitiveKind, Span};
 use crate::parsing::source::Source;
 use std::sync::Arc;
 
@@ -17,9 +15,10 @@ pub enum TokenKind {
     Not,
     And,
     In,
+    As,
     Type,
-    From,
     Uses,
+    Fill,
     Meta,
     Veto,
     Now,
@@ -36,12 +35,11 @@ pub enum TokenKind {
     Reject,
 
     // Type keywords
-    ScaleKw,
+    QuantityKw,
     NumberKw,
     TextKw,
     DateKw,
     TimeKw,
-    DurationKw,
     BooleanKw,
     PercentKw,
     RatioKw,
@@ -61,25 +59,6 @@ pub enum TokenKind {
     Ceil,
     Round,
 
-    // Duration unit keywords
-    Years,
-    Year,
-    Months,
-    Month,
-    Weeks,
-    Week,
-    Days,
-    Day,
-    Hours,
-    Hour,
-    Minutes,
-    Minute,
-    Seconds,
-    Second,
-    Milliseconds,
-    Millisecond,
-    Microseconds,
-    Microsecond,
     Permille,
 
     // Comparison keyword operators
@@ -102,6 +81,7 @@ pub enum TokenKind {
     // Punctuation
     Colon,
     Arrow,
+    Ellipsis,
     Dot,
     At,
     LParen,
@@ -133,9 +113,10 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Not => write!(f, "'not'"),
             TokenKind::And => write!(f, "'and'"),
             TokenKind::In => write!(f, "'in'"),
+            TokenKind::As => write!(f, "'as'"),
             TokenKind::Type => write!(f, "'type'"),
-            TokenKind::From => write!(f, "'from'"),
             TokenKind::Uses => write!(f, "'uses'"),
+            TokenKind::Fill => write!(f, "'fill'"),
             TokenKind::Meta => write!(f, "'meta'"),
             TokenKind::Veto => write!(f, "'veto'"),
             TokenKind::Now => write!(f, "'now'"),
@@ -148,12 +129,11 @@ impl std::fmt::Display for TokenKind {
             TokenKind::No => write!(f, "'no'"),
             TokenKind::Accept => write!(f, "'accept'"),
             TokenKind::Reject => write!(f, "'reject'"),
-            TokenKind::ScaleKw => write!(f, "'scale'"),
+            TokenKind::QuantityKw => write!(f, "'quantity'"),
             TokenKind::NumberKw => write!(f, "'number'"),
             TokenKind::TextKw => write!(f, "'text'"),
             TokenKind::DateKw => write!(f, "'date'"),
             TokenKind::TimeKw => write!(f, "'time'"),
-            TokenKind::DurationKw => write!(f, "'duration'"),
             TokenKind::BooleanKw => write!(f, "'boolean'"),
             TokenKind::PercentKw => write!(f, "'percent'"),
             TokenKind::RatioKw => write!(f, "'ratio'"),
@@ -170,24 +150,6 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Floor => write!(f, "'floor'"),
             TokenKind::Ceil => write!(f, "'ceil'"),
             TokenKind::Round => write!(f, "'round'"),
-            TokenKind::Years => write!(f, "'years'"),
-            TokenKind::Year => write!(f, "'year'"),
-            TokenKind::Months => write!(f, "'months'"),
-            TokenKind::Month => write!(f, "'month'"),
-            TokenKind::Weeks => write!(f, "'weeks'"),
-            TokenKind::Week => write!(f, "'week'"),
-            TokenKind::Days => write!(f, "'days'"),
-            TokenKind::Day => write!(f, "'day'"),
-            TokenKind::Hours => write!(f, "'hours'"),
-            TokenKind::Hour => write!(f, "'hour'"),
-            TokenKind::Minutes => write!(f, "'minutes'"),
-            TokenKind::Minute => write!(f, "'minute'"),
-            TokenKind::Seconds => write!(f, "'seconds'"),
-            TokenKind::Second => write!(f, "'second'"),
-            TokenKind::Milliseconds => write!(f, "'milliseconds'"),
-            TokenKind::Millisecond => write!(f, "'millisecond'"),
-            TokenKind::Microseconds => write!(f, "'microseconds'"),
-            TokenKind::Microsecond => write!(f, "'microsecond'"),
             TokenKind::Permille => write!(f, "'permille'"),
             TokenKind::Is => write!(f, "'is'"),
             TokenKind::Plus => write!(f, "'+'"),
@@ -204,6 +166,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Lte => write!(f, "'<='"),
             TokenKind::Colon => write!(f, "':'"),
             TokenKind::Arrow => write!(f, "'->'"),
+            TokenKind::Ellipsis => write!(f, "'...'"),
             TokenKind::Dot => write!(f, "'.'"),
             TokenKind::At => write!(f, "'@'"),
             TokenKind::LParen => write!(f, "'('"),
@@ -237,6 +200,16 @@ impl Token {
             text: String::new(),
         }
     }
+}
+
+#[derive(Clone)]
+pub struct LexerCheckpoint {
+    pos: usize,
+    line: usize,
+    col: usize,
+    byte_offset: usize,
+    peeked: Option<Token>,
+    peeked2: Option<Token>,
 }
 
 // todo: find out why derive Clone is necessary
@@ -310,6 +283,27 @@ impl Lexer {
             return Ok(token);
         }
         self.lex_token()
+    }
+
+    /// Saved lexer position for speculative parsing.
+    pub fn checkpoint(&self) -> LexerCheckpoint {
+        LexerCheckpoint {
+            pos: self.pos,
+            line: self.line,
+            col: self.col,
+            byte_offset: self.byte_offset,
+            peeked: self.peeked.clone(),
+            peeked2: self.peeked2.clone(),
+        }
+    }
+
+    pub fn restore(&mut self, checkpoint: LexerCheckpoint) {
+        self.pos = checkpoint.pos;
+        self.line = checkpoint.line;
+        self.col = checkpoint.col;
+        self.byte_offset = checkpoint.byte_offset;
+        self.peeked = checkpoint.peeked;
+        self.peeked2 = checkpoint.peeked2;
     }
 
     fn current_char(&self) -> Option<char> {
@@ -393,6 +387,19 @@ impl Lexer {
         // Two-character operators (check before single-char)
         if let Some(token) = self.try_two_char_operator(start_byte, start_line, start_col) {
             return Ok(token);
+        }
+
+        // Three-character ellipsis
+        if ch == '.' && self.peek_char() == Some('.') && self.peek_char_at(2) == Some('.') {
+            self.advance();
+            self.advance();
+            self.advance();
+            let span = self.make_span(start_byte, start_line, start_col);
+            return Ok(Token {
+                kind: TokenKind::Ellipsis,
+                span,
+                text: "...".to_string(),
+            });
         }
 
         // Single-character operators/punctuation
@@ -667,9 +674,10 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "not" => TokenKind::Not,
         "and" => TokenKind::And,
         "in" => TokenKind::In,
+        "as" => TokenKind::As,
         "type" => TokenKind::Type,
-        "from" => TokenKind::From,
         "uses" => TokenKind::Uses,
+        "fill" => TokenKind::Fill,
         "meta" => TokenKind::Meta,
         "veto" => TokenKind::Veto,
         "now" => TokenKind::Now,
@@ -682,12 +690,11 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "no" => TokenKind::No,
         "accept" => TokenKind::Accept,
         "reject" => TokenKind::Reject,
-        "scale" => TokenKind::ScaleKw,
+        "quantity" => TokenKind::QuantityKw,
         "number" => TokenKind::NumberKw,
         "text" => TokenKind::TextKw,
         "date" => TokenKind::DateKw,
         "time" => TokenKind::TimeKw,
-        "duration" => TokenKind::DurationKw,
         "boolean" => TokenKind::BooleanKw,
         "percent" => TokenKind::PercentKw,
         "ratio" => TokenKind::RatioKw,
@@ -705,31 +712,13 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "ceil" => TokenKind::Ceil,
         "round" => TokenKind::Round,
         "is" => TokenKind::Is,
-        "years" => TokenKind::Years,
-        "year" => TokenKind::Year,
-        "months" => TokenKind::Months,
-        "month" => TokenKind::Month,
-        "weeks" => TokenKind::Weeks,
-        "week" => TokenKind::Week,
-        "days" => TokenKind::Days,
-        "day" => TokenKind::Day,
-        "hours" => TokenKind::Hours,
-        "hour" => TokenKind::Hour,
-        "minutes" => TokenKind::Minutes,
-        "minute" => TokenKind::Minute,
-        "seconds" => TokenKind::Seconds,
-        "second" => TokenKind::Second,
-        "milliseconds" => TokenKind::Milliseconds,
-        "millisecond" => TokenKind::Millisecond,
-        "microseconds" => TokenKind::Microseconds,
-        "microsecond" => TokenKind::Microsecond,
         "permille" => TokenKind::Permille,
         _ => TokenKind::Identifier,
     }
 }
 
 /// Structural keywords can never be used as identifiers (data/rule names).
-/// Type keywords (scale, number, text, date, time, duration, boolean, percent, ratio)
+/// Type keywords (quantity, number, text, date, time, boolean, percent, ratio)
 /// CAN be used as names because `reference_segment` accepts them
 /// via the `type_standard` alternative.
 pub fn is_structural_keyword(kind: &TokenKind) -> bool {
@@ -744,9 +733,10 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
             | TokenKind::Not
             | TokenKind::And
             | TokenKind::In
+            | TokenKind::As
             | TokenKind::Type
-            | TokenKind::From
             | TokenKind::Uses
+            | TokenKind::Fill
             | TokenKind::Meta
             | TokenKind::Veto
             | TokenKind::Now
@@ -783,14 +773,14 @@ pub fn is_type_keyword(kind: &TokenKind) -> bool {
 pub fn token_kind_to_primitive(kind: &TokenKind) -> Option<PrimitiveKind> {
     match kind {
         TokenKind::BooleanKw => Some(PrimitiveKind::Boolean),
-        TokenKind::ScaleKw => Some(PrimitiveKind::Scale),
+        TokenKind::QuantityKw => Some(PrimitiveKind::Quantity),
         TokenKind::NumberKw => Some(PrimitiveKind::Number),
         TokenKind::PercentKw => Some(PrimitiveKind::Percent),
         TokenKind::RatioKw => Some(PrimitiveKind::Ratio),
         TokenKind::TextKw => Some(PrimitiveKind::Text),
         TokenKind::DateKw => Some(PrimitiveKind::Date),
         TokenKind::TimeKw => Some(PrimitiveKind::Time),
-        TokenKind::DurationKw => Some(PrimitiveKind::Duration),
+        TokenKind::Calendar => Some(PrimitiveKind::Calendar),
         _ => None,
     }
 }
@@ -808,88 +798,17 @@ pub fn is_boolean_keyword(kind: &TokenKind) -> bool {
     )
 }
 
-/// Returns true if the token kind represents a duration unit keyword.
-pub fn is_duration_unit(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Years
-            | TokenKind::Year
-            | TokenKind::Months
-            | TokenKind::Month
-            | TokenKind::Weeks
-            | TokenKind::Week
-            | TokenKind::Days
-            | TokenKind::Day
-            | TokenKind::Hours
-            | TokenKind::Hour
-            | TokenKind::Minutes
-            | TokenKind::Minute
-            | TokenKind::Seconds
-            | TokenKind::Second
-            | TokenKind::Milliseconds
-            | TokenKind::Millisecond
-            | TokenKind::Microseconds
-            | TokenKind::Microsecond
-            | TokenKind::PercentKw
-    )
-}
-
-/// Maps a duration-unit token kind to DurationUnit. Call only when `is_duration_unit(kind) && kind != PercentKw`.
-#[must_use]
-pub fn token_kind_to_duration_unit(kind: &TokenKind) -> DurationUnit {
-    match kind {
-        TokenKind::Years | TokenKind::Year => DurationUnit::Year,
-        TokenKind::Months | TokenKind::Month => DurationUnit::Month,
-        TokenKind::Weeks | TokenKind::Week => DurationUnit::Week,
-        TokenKind::Days | TokenKind::Day => DurationUnit::Day,
-        TokenKind::Hours | TokenKind::Hour => DurationUnit::Hour,
-        TokenKind::Minutes | TokenKind::Minute => DurationUnit::Minute,
-        TokenKind::Seconds | TokenKind::Second => DurationUnit::Second,
-        TokenKind::Milliseconds | TokenKind::Millisecond => DurationUnit::Millisecond,
-        TokenKind::Microseconds | TokenKind::Microsecond => DurationUnit::Microsecond,
-        _ => unreachable!(
-            "BUG: token_kind_to_duration_unit called with non-duration token {:?}",
-            kind
-        ),
-    }
-}
-
-/// Builds ConversionTarget from a token. For duration-unit tokens returns Duration(unit);
-/// otherwise returns Unit(fallback_text) for identifiers/custom units.
+/// Builds ConversionTarget from a token.
+/// Duration/calendar unit labels map to their primitive targets; `number` -> Type(Number);
+/// identifiers/units -> Unit.
 #[must_use]
 pub fn conversion_target_from_token(kind: &TokenKind, fallback_text: &str) -> ConversionTarget {
-    if is_duration_unit(kind) && *kind != TokenKind::PercentKw {
-        ConversionTarget::Duration(token_kind_to_duration_unit(kind))
+    if let Some(unit) = CalendarUnit::from_keyword(fallback_text) {
+        ConversionTarget::Calendar(unit)
+    } else if *kind == TokenKind::NumberKw {
+        ConversionTarget::Type(PrimitiveKind::Number)
     } else {
         ConversionTarget::Unit(fallback_text.to_lowercase())
-    }
-}
-
-/// Returns true if the token kind is a calendar unit (year, month, week).
-#[must_use]
-pub fn is_calendar_unit_token(kind: &TokenKind) -> bool {
-    matches!(
-        kind,
-        TokenKind::Years
-            | TokenKind::Year
-            | TokenKind::Months
-            | TokenKind::Month
-            | TokenKind::Weeks
-            | TokenKind::Week
-    )
-}
-
-/// Maps a calendar-unit token kind to CalendarUnit. Call only when `is_calendar_unit_token(kind)`.
-#[must_use]
-pub fn token_kind_to_calendar_unit(kind: &TokenKind) -> CalendarUnit {
-    match kind {
-        TokenKind::Years | TokenKind::Year => CalendarUnit::Year,
-        TokenKind::Months | TokenKind::Month => CalendarUnit::Month,
-        TokenKind::Weeks | TokenKind::Week => CalendarUnit::Week,
-        _ => unreachable!(
-            "BUG: token_kind_to_calendar_unit called with non-calendar token {:?}",
-            kind
-        ),
     }
 }
 
@@ -935,14 +854,12 @@ pub fn is_math_function(kind: &TokenKind) -> bool {
 pub fn is_spec_body_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Data | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
+        TokenKind::Data | TokenKind::Fill | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
     )
 }
 
 /// Returns true if the token can be used as a label/identifier
 /// (i.e. it is a non-reserved keyword or an identifier).
-/// Some keywords like duration units, calendar units, etc. are allowed
-/// as identifiers in certain contexts (e.g. unit names, type names).
 pub fn can_be_label(kind: &TokenKind) -> bool {
     matches!(
         kind,
@@ -950,24 +867,6 @@ pub fn can_be_label(kind: &TokenKind) -> bool {
             | TokenKind::Calendar
             | TokenKind::Past
             | TokenKind::Future
-            | TokenKind::Years
-            | TokenKind::Year
-            | TokenKind::Months
-            | TokenKind::Month
-            | TokenKind::Weeks
-            | TokenKind::Week
-            | TokenKind::Days
-            | TokenKind::Day
-            | TokenKind::Hours
-            | TokenKind::Hour
-            | TokenKind::Minutes
-            | TokenKind::Minute
-            | TokenKind::Seconds
-            | TokenKind::Second
-            | TokenKind::Milliseconds
-            | TokenKind::Millisecond
-            | TokenKind::Microseconds
-            | TokenKind::Microsecond
             | TokenKind::Permille
             | TokenKind::Is
     )
@@ -991,7 +890,6 @@ pub fn can_be_repository_qualifier_segment(kind: &TokenKind) -> bool {
         || is_type_keyword(kind)
         || is_boolean_keyword(kind)
         || is_math_function(kind)
-        || is_duration_unit(kind)
 }
 
 #[cfg(test)]
@@ -1122,8 +1020,8 @@ mod tests {
 
     #[test]
     fn lex_keywords() {
-        let kinds = lex_kinds("spec data rule unless then not and in type from uses meta veto now")
-            .unwrap();
+        let kinds =
+            lex_kinds("spec data rule unless then not and in as type uses meta veto now").unwrap();
         assert_eq!(
             &kinds[..14],
             &[
@@ -1135,8 +1033,8 @@ mod tests {
                 TokenKind::Not,
                 TokenKind::And,
                 TokenKind::In,
+                TokenKind::As,
                 TokenKind::Type,
-                TokenKind::From,
                 TokenKind::Uses,
                 TokenKind::Meta,
                 TokenKind::Veto,
@@ -1167,13 +1065,13 @@ mod tests {
         assert_eq!(
             &kinds[..7],
             &[
-                TokenKind::Years,
-                TokenKind::Months,
-                TokenKind::Weeks,
-                TokenKind::Days,
-                TokenKind::Hours,
-                TokenKind::Minutes,
-                TokenKind::Seconds,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
+                TokenKind::Identifier,
             ]
         );
     }

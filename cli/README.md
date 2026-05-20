@@ -40,7 +40,7 @@ lemma list '@lemma/std'
 lemma list ./my_project spec_composition
 
 # Start the HTTP server
-lemma server --port 8012 --dir ./documentation/examples
+lemma server ./documentation/examples --port 8012
 
 # Start the MCP server (AI assistant integration)
 lemma mcp ./documentation/examples
@@ -79,7 +79,7 @@ lemma run shipping --raw > output.json
 ## Documentation
 
 - CLI reference: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>
-- Language guide: <https://benrogmans.github.io/lemma/>
+- Language guide: <https://github.com/lemma/lemma/blob/main/documentation/index.md>
 - API docs (engine): <https://docs.rs/lemma-engine>
 - Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
 

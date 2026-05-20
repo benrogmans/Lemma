@@ -1,7 +1,7 @@
 defmodule Lemma.MixProject do
   use Mix.Project
 
-  @version "0.8.13"
+  @version "0.8.14"
   @source_url "https://github.com/lemma/lemma"
 
   def project do
@@ -23,9 +23,24 @@ defmodule Lemma.MixProject do
     []
   end
 
+  def cli do
+    [
+      preferred_envs: [
+        precommit: :test,
+        "test.precommit": :test
+      ]
+    ]
+  end
+
   defp aliases do
     [
-      precommit: ["format --check-formatted", "deps.get --check-locked", "compile"]
+      precommit: [
+        "format --check-formatted",
+        "deps.get --check-locked",
+        "compile",
+        "test.precommit"
+      ],
+      "test.precommit": ["test"]
     ]
   end
 

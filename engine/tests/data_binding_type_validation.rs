@@ -16,18 +16,20 @@ rule doubled: age * 2
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let mut data = HashMap::new();
     data.insert("age".to_string(), "twenty".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, false);
+    let result = engine.run(
+        None,
+        "test",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    );
 
     assert!(result.is_err(), "Expected error but got: {:?}", result);
     let error = result.unwrap_err().to_string();
@@ -49,12 +51,7 @@ rule total: price * quantity
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "expensive".to_string());
@@ -62,7 +59,14 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, false);
+    let result = engine.run(
+        None,
+        "test",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(result.is_err(), "Expected type mismatch error");
     assert!(result
         .unwrap_err()
@@ -75,7 +79,14 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let err = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("quantity must reject non-number");
     assert!(err.to_string().contains("Failed to parse data 'quantity'"));
 
@@ -85,7 +96,14 @@ rule total: price * quantity
     data.insert("active".to_string(), "maybe".to_string());
 
     let err = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("active must reject non-boolean");
     assert!(err.to_string().contains("Failed to parse data 'active'"));
 
@@ -95,7 +113,14 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("valid data must evaluate");
     let total = response
         .results
@@ -116,19 +141,21 @@ rule total: base_price * 1.2
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let mut data = HashMap::new();
     data.insert("base_price".to_string(), "sixty".to_string());
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("base_price must reject non-number");
     assert!(err
         .to_string()
@@ -138,7 +165,14 @@ rule total: base_price * 1.2
     data.insert("base_price".to_string(), "60".to_string());
 
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("valid base_price must evaluate");
     let total = response
         .results
@@ -163,19 +197,21 @@ rule total: price * 1.1
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "100".to_string());
     data.insert("unknown_data".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, false);
+    let result = engine.run(
+        None,
+        "test",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(result.is_err(), "Expected error for unknown data binding");
     assert!(result.unwrap_err().to_string().contains("unknown_data"));
 }
@@ -208,7 +244,14 @@ rule r: p
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("5% < 10%");
     let s = err.to_string();
     assert!(
@@ -227,7 +270,9 @@ fn percent_override_value_is_pinned() {
     use lemma::ValueKind;
     use rust_decimal::Decimal;
     use std::str::FromStr;
-
+    fn decimal_lit(d: &str) -> Decimal {
+        Decimal::from_str(d).unwrap()
+    }
     let code = r#"
 spec s
 data p: percent
@@ -246,7 +291,14 @@ rule r: p
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("'5%' must parse on a percent type without constraints");
     let rr = resp.results.get("r").expect("rule 'r' not found");
     let lit = match &rr.result {
@@ -255,7 +307,10 @@ rule r: p
     };
     match &lit.value {
         ValueKind::Ratio(n, u) => {
-            assert_eq!(*n, Decimal::from_str("0.05").unwrap());
+            assert_eq!(
+                lemma::commit_rational_to_decimal(n).unwrap(),
+                decimal_lit("0.05")
+            );
             assert_eq!(u.as_deref(), Some("percent"));
         }
         other => panic!("expected Ratio, got: {:?}", other),
@@ -282,7 +337,14 @@ rule r: p
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("90% > 50%");
     let s = err.to_string();
     assert!(
@@ -295,7 +357,8 @@ rule r: p
 fn duration_minimum_violation_on_override() {
     let code = r#"
 spec s
-data d: duration -> minimum 1 day
+uses lemma si
+data d: si.duration -> minimum 1 day
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -321,7 +384,14 @@ rule r: d
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("12 hours < 1 day");
     let s = err.to_string();
     assert!(
@@ -358,7 +428,14 @@ rule r: when
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("date before minimum");
     let s = err.to_string();
     assert!(
@@ -389,7 +466,14 @@ rule r: n
     data.insert("n".to_string(), "3.14159".to_string());
 
     let now = DateTimeValue::now();
-    match engine.run(None, "s", Some(&now), data, false) {
+    match engine.run(
+        None,
+        "s",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    ) {
         Ok(resp) => {
             let rr = resp.results.get("r").expect("rule 'r'");
             match &rr.result {
@@ -406,7 +490,7 @@ rule r: n
         Err(e) => {
             let s = e.to_string();
             assert!(
-                s.contains("decimals") || s.contains("precision"),
+                s.contains("decimals"),
                 "rejection must reference the decimals constraint, got: {s}"
             );
         }
@@ -433,7 +517,14 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("5-char string must be accepted");
     let rr = resp.results.get("r").expect("rule 'r'");
     match &rr.result {
@@ -443,10 +534,77 @@ rule r: msg
 }
 
 #[test]
-fn scale_override_with_wrong_unit_rejected() {
+fn quantity_overwrites_inherited_unit_factors() {
+    use lemma::planning::semantics::TypeSpecification;
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    fn decimal_lit(s: &str) -> Decimal {
+        Decimal::from_str(s).unwrap()
+    }
+
+    fn qty_factor(spec: &TypeSpecification, name: &str) -> Decimal {
+        match spec {
+            TypeSpecification::Quantity { units, .. } => {
+                let u = units
+                    .iter()
+                    .find(|u| u.name == name)
+                    .unwrap_or_else(|| panic!("unit {name} missing"));
+                lemma::commit_rational_to_decimal(&u.factor).unwrap()
+            }
+            other => panic!("expected Quantity, got {other:?}"),
+        }
+    }
+
+    let mut engine = Engine::new();
+    engine
+        .load(
+            r#"
+spec finance
+data money: quantity
+  -> unit eur 1.00
+  -> unit usd 0.91
+  -> decimals 2
+"#,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
+        )
+        .unwrap();
+    engine
+        .load(
+            r#"
+spec pricing
+uses fin: finance
+data currency: fin.money
+  -> unit eur 1
+  -> unit usd 0.84
+  -> decimals 2
+rule r: currency
+"#,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "pricing.lemma",
+            ))),
+        )
+        .unwrap();
+
+    let now = DateTimeValue::now();
+    let schema = engine.schema(None, "pricing", Some(&now)).expect("schema");
+    let entry = schema.data.get("currency").expect("currency");
+    let specs = &entry.lemma_type.specifications;
+    assert_eq!(qty_factor(specs, "usd"), decimal_lit("0.84"));
+    assert_eq!(qty_factor(specs, "eur"), decimal_lit("1"));
+    match specs {
+        TypeSpecification::Quantity { decimals, .. } => assert_eq!(*decimals, Some(2)),
+        other => panic!("expected Quantity, got {other:?}"),
+    }
+}
+
+#[test]
+fn quantity_override_with_wrong_unit_rejected() {
     let code = r#"
 spec s
-data money: scale -> unit eur 1 -> unit usd 1.19
+data money: quantity -> unit eur 1 -> unit usd 0.84
 data price: money
 rule r: price
 "#;
@@ -464,8 +622,15 @@ rule r: price
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
-        .expect_err("wrong scale unit must fail");
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect_err("wrong quantity unit must fail");
     let s = err.to_string();
     assert!(
         s.contains("unit") || s.contains("meter"),
@@ -477,7 +642,7 @@ rule r: price
 fn test_structured_error_related_data_attribution() {
     let code = r#"
 spec bridge
-data bridge_height: scale -> unit meter 1.0
+data bridge_height: quantity -> unit meter 1.0
 rule span: bridge_height
 "#;
 
@@ -496,8 +661,15 @@ rule span: bridge_height
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "bridge", Some(&now), data, false)
-        .expect_err("bad scale unit must error");
+        .run(
+            None,
+            "bridge",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect_err("bad quantity unit must error");
 
     assert_eq!(err.related_data(), Some("bridge_height"));
     assert_eq!(err.kind(), ErrorKind::Validation);
