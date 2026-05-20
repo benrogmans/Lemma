@@ -32,17 +32,18 @@ function literalNumberValue(lit) {
   const t = literalPrimitiveType(lit);
   if (t !== 'number') return null;
   const v = lit.value.number;
-  return typeof v === 'string' ? Number(v) : v;
+  if (typeof v !== 'string') return null;
+  return Number(v);
 }
 
-function literalScaleValue(lit) {
+function literalQuantityValue(lit) {
   const t = literalPrimitiveType(lit);
-  if (t !== 'scale') return null;
-  const v = lit.value.scale;
-  if (!Array.isArray(v) || v.length !== 2) return null;
-  const amount = typeof v[0] === 'string' ? Number(v[0]) : v[0];
-  const unit = v[1];
-  if (typeof unit !== 'string') return null;
+  if (t !== 'quantity') return null;
+  const v = lit.value.quantity;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const amount = typeof v.value === 'string' ? Number(v.value) : null;
+  const unit = v.unit;
+  if (amount === null || typeof unit !== 'string') return null;
   return { amount, unit };
 }
 
@@ -56,7 +57,7 @@ function formatReject(e) {
 
 function runEx(engine, spec, rules, data, effective) {
   try {
-    return engine.run(null, spec, rules, data, effective ?? null);
+    return engine.run(null, spec, rules, data, null, effective ?? null);
   } catch (e) {
     throw new Error(formatReject(e));
   }
@@ -130,12 +131,20 @@ function specNames(listGroups) {
     .filter(Boolean);
 }
 
+function failTest(err) {
+  if (err?.message) {
+    console.error(err.message);
+  }
+  console.error('\nRebuild: node engine/packages/npm/build.js');
+  process.exit(1);
+}
+
 export async function test() {
   console.log('Lemma WASM package tests\n');
 
+  try {
   if (!existsSync(join(DIST_PATH, 'lemma.js'))) {
-    console.error('dist/ missing. Run: node engine/packages/npm/build.js');
-    process.exit(1);
+    throw new Error('dist/ missing. Run: node engine/packages/npm/build.js');
   }
 
   const importRegex = /from\s+['"](\.[^'"]+)['"]/g;
@@ -175,7 +184,18 @@ export async function test() {
     passed++;
   };
 
-  try {
+    await run('embedded lemma in list + format_repository', () => {
+      const fresh = new Engine();
+      const groups = fresh.list();
+      assert(
+        groups.some((g) => g.repository && g.repository.name === 'lemma'),
+        `expected lemma in list: ${JSON.stringify(groups.map((g) => g.repository?.name))}`
+      );
+      const src = fresh.format_repository('lemma');
+      assert(src.includes('spec si'), 'format_repository must include spec si');
+      assert(src.includes('trait duration'), 'format_repository must include duration typedef');
+    });
+
     await run('load + run shape + double rule', () => {
       engine.load(
         `spec test
@@ -221,6 +241,25 @@ export async function test() {
       assert(x.type && typeof x.type.kind === 'string', 'type carries `kind` discriminator');
       const doubleRule = schema.rules.double;
       assert(typeof doubleRule.kind === 'string', 'rule types expose `kind` at the top level');
+    });
+
+    await run('schema rule result units for quantity and ratio', () => {
+      engine.load(
+        `spec units_contract
+data money: quantity -> unit eur 1 -> unit usd 0.91
+data rate: ratio
+  -> unit basis_points 10000
+  -> unit percent 100
+  -> default 500 basis_points
+rule total: money
+rule rate_out: rate`,
+        'units_contract.lemma'
+      );
+      const schema = engine.schema(null, 'units_contract', null);
+      assert(Array.isArray(schema.rules.total.units) && schema.rules.total.units.length >= 1);
+      assert(schema.rules.total.units[0].factor, 'quantity rule units expose factor');
+      assert(Array.isArray(schema.rules.rate_out.units) && schema.rules.rate_out.units.length >= 1);
+      assert(schema.rules.rate_out.units[0].value, 'ratio rule units expose value');
     });
 
     await run('run rule filter', () => {
@@ -294,7 +333,7 @@ export async function test() {
     await run('run structured error attributes data', () => {
       engine.load(
         `spec bridge
-      data bridge_height: scale -> unit meter 1.0
+      data bridge_height: quantity -> unit meter 1.0
       rule span: bridge_height`,
         'workspace.lemma'
       );
@@ -358,18 +397,19 @@ export async function test() {
       assert(String(r.results.sum.result.veto).includes('y'));
     });
 
-    await run('scale eur→usd', () => {
+    await run('quantity unit conversion', () => {
+      // unit usd 0.84: 1 USD = 0.84 EUR (canonical). 100 usd as eur => 100 * 0.84 = 84.
       engine.load(
-        `spec scale_conv
-      data money: scale
+        `spec quantity_conv
+      data money: quantity
         -> unit eur 1
-        -> unit usd 1.19
-      rule price_usd: 100 eur in usd`,
+        -> unit usd 0.84
+      rule price_eur: 100 usd as eur`,
         'sc.lemma'
       );
-      const r = runEx(engine, 'scale_conv', [], {}, null);
-      const sc = literalScaleValue(r.results.price_usd.result.value);
-      assert(sc && sc.unit === 'usd' && sc.amount === 119);
+      const r = runEx(engine, 'quantity_conv', [], {}, null);
+      const sc = literalQuantityValue(r.results.price_eur.result.value);
+      assert(sc && sc.unit === 'eur' && sc.amount === 84);
     });
 
     await run('multiple specs', () => {
@@ -379,13 +419,14 @@ export async function test() {
     });
 
     console.log(`\nAll ${passed} cases passed.`);
-  } catch {
-    console.error('\nRebuild: node engine/packages/npm/build.js');
-    process.exit(1);
+  } catch (err) {
+    failTest(err);
   }
 }
 
 const isMain =
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
-if (isMain) await test();
+if (isMain) {
+  await test().catch(failTest);
+}

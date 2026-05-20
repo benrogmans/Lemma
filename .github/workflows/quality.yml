@@ -65,11 +65,29 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18"
+          otp-version: "27"
+
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
 
       - name: Run tests
         run: cargo nextest run --workspace --all-features --run-ignored all
+
+      - name: Test Hex package
+        working-directory: engine/packages/hex
+        run: mix precommit
+        env:
+          MIX_ENV: test
+
+      - name: Build and test WASM npm package
+        working-directory: engine/packages/npm
+        run: |
+          node build.js
+          node test.js
 
   lint:
     name: Lint

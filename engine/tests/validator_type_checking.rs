@@ -8,10 +8,7 @@ rule result: 5 and true
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+    let result = engine.load(code, lemma::SourceType::Volatile);
     assert!(result.is_err(), "Should reject non-boolean in 'and'");
     let errs = result.unwrap_err();
     assert!(errs.iter().any(|e| e.to_string().contains("boolean")));
@@ -27,10 +24,7 @@ rule value: "default"
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+    let result = engine.load(code, lemma::SourceType::Volatile);
     assert!(
         result.is_err(),
         "Should reject mixing text and number types"
@@ -58,10 +52,7 @@ rule result: time1 and time2
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+    let result = engine.load(code, lemma::SourceType::Volatile);
     assert!(
         result.is_err(),
         "Should reject time values in logical operators"
@@ -74,19 +65,16 @@ rule result: time1 and time2
 fn test_mathematical_function_requires_number_operand() {
     let code = r#"
 spec test
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 100 eur
 rule bad: sqrt price
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+    let result = engine.load(code, lemma::SourceType::Volatile);
     assert!(
         result.is_err(),
-        "sqrt(scale) should be rejected at planning"
+        "sqrt(quantity) should be rejected at planning"
     );
     let errs = result.unwrap_err();
     assert!(

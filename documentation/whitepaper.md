@@ -73,12 +73,12 @@ Consider a simple pricing rule:
 spec pricing
 
 data quantity: number
-data is_vip: false
+data is_vip:   false
 
 rule discount: 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless is_vip         then 25%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
 
 rule price: 200 - discount
 ```
@@ -99,8 +99,8 @@ Lemma encodes this exactly as stated:
 
 ```lemma
 rule shipping: 12.99
-  unless destination is "CA" then 25.00
-  unless order_total >= 100 then 0
+  unless destination is "CA" then 25
+  unless order_total >= 100  then 0
 ```
 
 This "last matching wins" semantic might seem counterintuitive to programmers who are accustomed to "early returns" or "first match" logic, but it aligns perfectly with natural language. When we say "X, unless Y, unless Z," we mean that Z overrides Y, which overrides X.
@@ -119,22 +119,31 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
-data mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
+uses lemma si
 
-data salary: 75000              // Number type inferred
-data vacation: 3 weeks          // Duration type inferred
-data weight: 15 kilograms       // Uses custom mass type
-data deadline: 2024-12-31       // Date type inferred
-data tax_rate: 22%              // Ratio type inferred
+data mass: quantity
+  -> unit kilogram 1.0
+  -> unit pound 0.453592
+
+data salary:   75_000
+data vacation: si.duration
+  -> default 3 weeks
+
+data weight:   15 kilogram
+data deadline: 2024-12-31
+data tax_rate: 22%
 ```
 
 The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions within the same type:
 
 ```lemma
-data mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
+data mass: quantity
+  -> unit kilogram 1.0
+  -> unit pound 0.453592
 
-data weight: 70 kilograms
-rule weight_in_pounds: weight in pounds  // Automatic conversion within type
+data weight: 70 kilogram
+
+rule weight_in_pounds: weight as pound
 ```
 
 ### 2.4 Composition over configuration
@@ -143,12 +152,16 @@ Lemma encourages building complex systems from simple, composable pieces. Specs 
 
 ```lemma
 spec base_employee
-data salary: 50000
+
+data salary:     50_000
 data bonus_rate: 5%
 
+
 spec manager
+
 uses employee: base_employee
-data employee.salary: 80000
+
+data employee.salary:     80_000
 data employee.bonus_rate: 15%
 
 rule manager_bonus: employee.salary * employee.bonus_rate
@@ -165,19 +178,19 @@ This compositional design enables reusable rule libraries and reduces duplicatio
 Data are named values of a certain type. They represent inputs to the system:
 
 ```lemma
-data name: "Alice"
-data age: 35
+data name:       "Alice"
+data age:        35
 data start_date: 2024-01-15
-data salary: 75000
+data salary:     75_000
 data is_manager: true
 ```
 
 Data can also be type annotations, declaring expected inputs without values:
 
 ```lemma
-data birth_date: date
+data birth_date:     date
 data employee_count: number
-data location: text
+data location:       text
 ```
 
 ### 3.2 Rules
@@ -186,16 +199,18 @@ Rules compute values based on data and other rules. A rule has a name, a default
 
 ```lemma
 rule discount: 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless is_vip then 25%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
 ```
 
 Rules can reference other rules by name (the engine resolves whether a name is a data or a rule during planning):
 
 ```lemma
 rule is_adult: age >= 18
+
 rule has_license: license_status is "valid"
+
 rule can_drive: is_adult and has_license
 ```
 
@@ -218,8 +233,10 @@ While "unless" clauses override values, sometimes you need to block a rule entir
 ```lemma
 rule loan_approval: reject
   unless credit_score >= 600 then accept
-  unless age < 18 then veto "Must be 18 or older"
-  unless bankruptcy_flag then veto "Cannot approve due to bankruptcy"
+  unless age < 18
+    then veto "Must be 18 or older"
+  unless bankruptcy_flag
+    then veto "Cannot approve due to bankruptcy"
 ```
 
 When a veto applies, the rule produces no valid result. This is useful for validation and hard constraints.
@@ -237,7 +254,7 @@ rule compound: principal * (1 + rate) ^ years
 **Comparison**: `>`, `<`, `>=`, `<=`, `is`, `is not`
 
 ```lemma
-rule is_eligible: age >= 18 and income > 30000
+rule is_eligible: age >= 18 and income > 30_000
 ```
 
 **Logical**: `and`, `not`
@@ -249,7 +266,7 @@ rule can_approve: is_manager and not is_suspended
 **Mathematical**: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
 
 ```lemma
-rule hypotenuse: sqrt(a^2 + b^2)
+rule hypotenuse: sqrt (a ^ 2 + b ^ 2)
 ```
 
 ### 3.6 Type-aware arithmetic
@@ -271,20 +288,23 @@ Lemma understands that subtracting a ratio from a number means "subtract 25% of 
 Lemma provides several primitive types:
 
 - **Boolean**: true/false, yes/no, accept/reject
-- **Number**: Dimensionless integers and floating-point values
-- **Scale**: Numeric values that can have units
+- **Number**: Dimensionless numeric values (exact rationals internally; decimal strings in API output — see [numeric_precision.md](numeric_precision.md))
+- **Quantity**: Numeric values with units (including **time periods** via `-> trait duration`)
 - **Text**: String literals
 - **Date**: ISO 8601 format dates and datetimes
 - **Time**: Time values
-- **Duration**: Time periods (hours, days, weeks, etc.)
 - **Ratio**: Proportional values (percent, permille)
 
 ```lemma
-data count: 42
-data name: "Alice"
+uses lemma si
+
+data count:     42
+data name:      "Alice"
 data is_active: true
-data deadline: 2024-12-31
-data workweek: 40 hours
+data deadline:  2024-12-31
+data workweek: si.duration
+  -> default 40 hours
+
 data tax_rate: 15%
 ```
 
@@ -295,24 +315,24 @@ Lemma allows users to define custom types using the `data` keyword with type com
 **Defining a typed data:**
 
 ```lemma
-data money: scale
+data money: quantity
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
   -> minimum 0
 
-data mass: scale
+data mass: quantity
   -> unit kilogram 1.0
   -> unit gram 0.001
   -> unit pound 0.453592
 
-data price: 100 eur
-data weight: 75 kilograms
+data price:  100 eur
+data weight: 75 kilogram
 ```
 
 **Type commands** allow fine-grained control:
 
-- `unit <name> <value>` - Define units (for `scale` and `ratio` types)
+- `unit <name> <value>` - Define units (for `quantity` and `ratio` types)
 - `decimals <n>` - Set decimal precision
 - `minimum <value>` / `maximum <value>` - Set value constraints
 - `option "<value>"` - Define allowed text values
@@ -322,21 +342,32 @@ data weight: 75 kilograms
 Data can also extend another data's type:
 
 ```lemma
-data price: money -> minimum 0
+data price: money
+  -> minimum 0
 ```
 
-**Data imports** enable reuse across specs:
+**Cross-spec types** — `uses` plus qualified parent types:
 
 ```lemma
-data currency from base_types
-data discount_rate from pricing -> maximum 0.5
+uses base: base_types
+
+uses rates: pricing
+
+data currency: base.Currency
+data discount_rate: rates.Rate
+  -> maximum 0.5
 ```
 
 **Inline type constraints** in data declarations:
 
 ```lemma
-data age: number -> minimum 0 -> maximum 120
-data price: scale -> unit eur 1.00 -> unit usd 1.10
+data age: number
+  -> minimum 0
+  -> maximum 120
+
+data price: quantity
+  -> unit eur 1.00
+  -> unit usd 1.10
 ```
 
 ### 4.3 Unit conversion
@@ -344,23 +375,30 @@ data price: scale -> unit eur 1.00 -> unit usd 1.10
 Unit conversions work within the same type definition. This ensures type safety while allowing flexible unit systems.
 
 ```lemma
-data money: scale -> unit eur 1.00 -> unit usd 1.10
+data money: quantity
+  -> unit eur 1.00
+  -> unit usd 1.10
 
 data price: 100 eur
-rule price_usd: price in usd  // Converts to 110 usd
+
+rule price_usd: price as usd
 ```
 
-**Duration units** are built-in (the only exception):
+**Trait-duration quantities** (stdlib `si.duration` or your own `quantity` + `trait duration`) use the same `as` conversion rules as other quantities:
 
 ```lemma
-data workweek: 40 hours
-rule workweek_days: workweek in days  // Converts to ~1.67 days
+uses lemma si
+
+data workweek: si.duration
+  -> default 40 hours
+
+rule workweek_days: workweek as days
 ```
 
 **Number to ratio conversion:**
 
 ```lemma
-rule discount_as_percent: 0.25 in percent  // Converts to 25 percent
+rule discount_as_percent: 0.25 as percent
 ```
 
 This design eliminates manual conversion logic while maintaining clear type boundaries.
@@ -370,9 +408,9 @@ This design eliminates manual conversion logic while maintaining clear type boun
 Ratios represent proportional values. The `ratio` type includes `percent` and `permille` units by default.
 
 ```lemma
-data tax_rate: 15%        // or 15 percent
-data discount: 25%
-data error_rate: 2 permille  // or 2%%
+data tax_rate:   15%
+data discount:   25%
+data error_rate: 2%%
 data completion: 87.5%
 ```
 
@@ -380,10 +418,10 @@ data completion: 87.5%
 
 ```lemma
 data discount_ratio: ratio
-  -> minimum 0
-  -> maximum 1
+  -> minimum 0%
+  -> maximum 100%
 
-data discount: 0.25  // 25% as decimal ratio
+data discount: 25%
 ```
 
 Ratios interact intelligently with other types in arithmetic operations, automatically applying proportional calculations.
@@ -402,11 +440,12 @@ spec employee/benefits
 Company benefits policy for full-time employees
 """
 
-data base_vacation: 15 days
+uses lemma si
+
 data years_of_service: number
 
-rule vacation_days: base_vacation
-  unless years_of_service >= 5 then 20 days
+rule vacation_days: 15 days
+  unless years_of_service >= 5  then 20 days
   unless years_of_service >= 10 then 25 days
 ```
 
@@ -418,12 +457,16 @@ Specs can reference other specs, enabling composition and reuse:
 
 ```lemma
 spec base_employee
-data name: "John Doe"
-data salary: 50000
+
+data name:   "John Doe"
+data salary: 50_000
+
 
 spec manager
+
 uses employee: base_employee
-data employee.salary: 80000
+
+data employee.salary: 80_000
 
 rule manager_bonus: employee.salary * 0.15
 ```
@@ -436,11 +479,14 @@ Data can be bound at different levels:
 
 ```lemma
 spec pricing
-data quantity: 100
+
+data quantity:   100
 data unit_price: 50
 
+
 spec wholesale_pricing
-data pricing.quantity: 1000
+
+data pricing.quantity:   1000
 data pricing.unit_price: 35
 
 rule total: pricing.quantity * pricing.unit_price
@@ -465,16 +511,16 @@ policies/
       └── rates.lemma
 ```
 
-The CLI can show a workspace summary:
+List specs in a workspace:
 
 ```bash
-lemma workspace ./policies/
+lemma list ./policies/
 ```
 
-Or run queries against specs in a workspace:
+Run a spec:
 
 ```bash
-lemma run pricing final_price --workdir ./policies/
+lemma run --prefix ./policies pricing --rules=final_price
 ```
 
 ---
@@ -539,8 +585,8 @@ Example evaluation:
 
 ```lemma
 rule discount: 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
 ```
 
 The evaluator processes this by:
@@ -555,7 +601,7 @@ The evaluator processes this by:
 Lemma's type system provides:
 
 - **Automatic conversions**: Between units within the same type definition
-- **Type safety**: Prevents invalid operations (e.g., adding different scale types)
+- **Type safety**: Prevents invalid operations (e.g., adding different quantity types)
 - **User-defined types**: Custom types with units, constraints, and validation
 - **Validation**: Compile-time checking of type compatibility
 
@@ -588,21 +634,21 @@ Progressive tax systems are naturally expressed in Lemma:
 ```lemma
 spec tax_policy
 
-data income: 85000
+data income:        85_000
 data filing_status: "single"
 
 rule taxable_income: income - standard_deduction
 
-rule standard_deduction: 13850
-  unless filing_status is "married" then 27700
+rule standard_deduction: 13_850
+  unless filing_status is "married" then 27_700
 
 rule tax_owed: 0
-  unless taxable_income > 11000
-    then (taxable_income - 11000) * 10%
-  unless taxable_income > 44725
-    then 3372.50 + (taxable_income - 44725) * 12%
-  unless taxable_income > 95375
-    then 9875 + (taxable_income - 95375) * 22%
+  unless taxable_income > 11_000
+    then (taxable_income - 11_000) * 10%
+  unless taxable_income > 44_725
+    then 3_372.50 + (taxable_income - 44_725) * 12%
+  unless taxable_income > 95_375
+    then 9_875 + (taxable_income - 95_375) * 22%
 ```
 
 ### 7.2 E-commerce pricing
@@ -612,24 +658,26 @@ Complex pricing rules with volume discounts and customer tiers:
 ```lemma
 spec pricing
 
-data quantity: number
+data quantity:      number
 data customer_tier: "standard"
-data unit_price: 100
+data unit_price:    100
 
 rule volume_discount: 0%
-  unless quantity >= 10 then 5%
-  unless quantity >= 50 then 10%
+  unless quantity >= 10  then 5%
+  unless quantity >= 50  then 10%
   unless quantity >= 100 then 15%
 
 rule tier_discount: 0%
-  unless customer_tier is "silver" then 5%
-  unless customer_tier is "gold" then 10%
+  unless customer_tier is "silver"   then 5%
+  unless customer_tier is "gold"     then 10%
   unless customer_tier is "platinum" then 15%
 
 rule best_discount: volume_discount
-  unless tier_discount > volume_discount then tier_discount
+  unless tier_discount > volume_discount
+    then tier_discount
 
-rule final_price: quantity * unit_price * (1 - best_discount)
+rule final_price:
+  quantity * unit_price * (1 - best_discount)
 ```
 
 ### 7.3 Insurance eligibility
@@ -639,10 +687,10 @@ Determining eligibility based on multiple criteria:
 ```lemma
 spec insurance/eligibility
 
-data age: number
+data age:                     number
 data pre_existing_conditions: boolean
-data employment_status: text
-data coverage_start: date
+data employment_status:       text
+data coverage_start:          date
 
 rule eligible_age: age >= 18 and age <= 65
 
@@ -652,10 +700,14 @@ rule eligible_employment: false
   unless employment_status is "full_time" then true
   unless employment_status is "part_time" then true
 
-rule is_eligible: eligible_age and eligible_health and eligible_employment
-  unless eligible_age is false then veto "Age not within eligible range"
-  unless eligible_health is false then veto "Pre-existing conditions"
-  unless eligible_employment is false then veto "Employment status ineligible"
+rule is_eligible:
+  eligible_age and eligible_health and eligible_employment
+  unless not eligible_age
+    then veto "Age not within eligible range"
+  unless not eligible_health
+    then veto "Pre-existing conditions"
+  unless not eligible_employment
+    then veto "Employment status ineligible"
 ```
 
 ### 7.4 Shipping policy
@@ -666,26 +718,31 @@ Complex shipping calculations with multiple factors:
 spec shipping
 
 data order_total: number
-data mass: scale -> unit kilogram 1.0 -> unit pound 0.453592
+data mass: quantity
+  -> unit kilogram 1.0
+  -> unit pound 0.453592
 
-data weight: mass
-data destination: text
+data weight:       mass
+data destination:  text
 data is_expedited: false
 
 rule base_rate: 12.99
-  unless destination is "CA" then 25.00
-  unless destination is "MX" then 22.00
+  unless destination is "CA" then 25
+  unless destination is "MX" then 22
 
 rule weight_surcharge: 0
-  unless weight > 5 kilograms then 7.50
-  unless weight > 20 kilograms then veto "Too heavy for standard shipping"
+  unless weight > 5 kilogram  then 7.50
+  unless weight > 20 kilogram
+    then veto "Too heavy for standard shipping"
 
 rule expedited_fee: 0
-  unless is_expedited then 25.00
+  unless is_expedited then 25
 
-rule free_shipping: order_total >= 100 and destination is "US"
+rule free_shipping:
+  order_total >= 100 and destination is "US"
 
-rule final_shipping: base_rate + weight_surcharge + expedited_fee
+rule final_shipping:
+  base_rate + weight_surcharge + expedited_fee
   unless free_shipping then 0
 ```
 
@@ -696,27 +753,30 @@ Complex compensation rules with multiple variables:
 ```lemma
 spec compensation
 
-data base_salary: number
-data years_of_service: number
+data base_salary:        number
+data years_of_service:   number
 data performance_rating: number
-data department: text
+data department:         text
 
 rule tenure_bonus: 0
-  unless years_of_service >= 5 then base_salary * 5%
+  unless years_of_service >= 5  then base_salary * 5%
   unless years_of_service >= 10 then base_salary * 10%
   unless years_of_service >= 15 then base_salary * 15%
 
 rule performance_bonus: base_salary * 0%
   unless performance_rating >= 3 then base_salary * 5%
   unless performance_rating >= 4 then base_salary * 10%
-  unless performance_rating >= 4.5 then base_salary * 15%
+  unless performance_rating >= 4.5
+    then base_salary * 15%
 
 rule department_bonus: 0
   unless department is "sales" then base_salary * 10%
-  unless department is "engineering" then base_salary * 5%
+  unless department is "engineering"
+    then base_salary * 5%
 
-rule total_compensation: base_salary + tenure_bonus
-                          + performance_bonus + department_bonus
+rule total_compensation:
+  base_salary + tenure_bonus + performance_bonus
+  + department_bonus
 ```
 
 ---
@@ -752,9 +812,9 @@ Lemma equivalent is clearer and matches natural language:
 
 ```lemma
 rule discount: 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless is_vip then 25%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
 ```
 
 ### 8.2 Business rules engines
@@ -859,46 +919,23 @@ Lemma provides better readability, version control, testing, and composition.
 
 ### 9.1 Tables (collections)
 
-**Planned feature**: Support data that hold multiple values with declarative operations.
-
-```lemma
-data employees: multi text
-data salaries: multi number
-
-rule total_payroll: sum of salaries
-rule average_salary: avg of salaries
-rule employee_count: count of employees
-rule high_earners: salaries where value > 100000
-```
-
-This will enable working with collections of data in a declarative way.
+**Planned feature**: Support data that hold multiple values with declarative operations (for example `sum`, `avg`, and `count` over named collections). Syntax and types are not finalized yet.
 
 ### 9.2 Language Server Protocol (LSP)
 
-**Planned feature**: IDE support for `.lemma` files with:
-- Syntax highlighting
-- Real-time error checking
-- Auto-completion
-- Go-to-definition
-- Hover documentation
-- Refactoring support
+**Available today** — LSP server, VS Code/Cursor extension, diagnostics, formatting, semantic tokens, registry links. See [`engine/lsp/`](../engine/lsp/) and the marketplace extension "Lemma Language".
+
+Further work: richer completion, go-to-definition, refactoring.
 
 ### 9.3 WebAssembly support
 
-**Planned feature**: Compile Lemma to WebAssembly for browser-based evaluation, enabling:
-- Client-side rule evaluation
-- Interactive documentation with live examples
-- Browser-based policy simulators
-- No server round-trip required
+**Available today** via `@lemmabase/lemma-engine` (see [wasm.md](wasm.md)). Further work includes interactive documentation with live examples and browser-based policy simulators.
 
 ### 9.4 API and integration
 
-**Planned features**:
-- REST API server for rule evaluation
-- gRPC interface for high-performance integrations
-- Native bindings for Python, JavaScript, Java
-- Kafka/event stream integrations
-- Database query integrations
+**Available today**: REST evaluation and discovery via `lemma server` (OpenAPI at `/openapi.json`, interactive docs at `/docs`). WASM/npm and Rust crate bindings.
+
+**Planned**: gRPC interface, additional native bindings (Python, Java), Kafka/event stream and database integrations.
 
 ---
 
@@ -946,7 +983,7 @@ Lemma is open source under the Apache 2.0 license. To get started:
 
 ```bash
 # Install
-cargo install lemma
+cargo install lemma-cli
 
 # Create a rule file
 cat > example.lemma << 'EOF'
@@ -988,62 +1025,67 @@ This spec encodes the complete compensation rules including
 base salary, bonuses, equity, and benefits.
 """
 
-data employee_id: text
-data base_salary: number
-data years_of_service: number
+uses lemma si
+
+data employee_id:        text
+data base_salary:        number
+data years_of_service:   number
 data performance_rating: number
-data department: text
-data location: text
-data is_manager: false
+data department:         text
+data location:           text
+data is_manager:         false
 
 rule cost_of_living_adjustment: 0%
   unless location is "San Francisco" then 25%
-  unless location is "New York" then 20%
-  unless location is "Seattle" then 15%
+  unless location is "New York"      then 20%
+  unless location is "Seattle"       then 15%
 
-rule adjusted_salary: base_salary * (1 + cost_of_living_adjustment)
+rule adjusted_salary:
+  base_salary * (1 + cost_of_living_adjustment)
 
 rule tenure_bonus_rate: 0%
-  unless years_of_service >= 5 then 5%
+  unless years_of_service >= 5  then 5%
   unless years_of_service >= 10 then 10%
   unless years_of_service >= 15 then 15%
 
 rule tenure_bonus: adjusted_salary * tenure_bonus_rate
 
-rule performance_multiplier: 1.0
-  unless performance_rating >= 3.0 then 1.0
-  unless performance_rating >= 4.0 then 1.5
-  unless performance_rating >= 4.5 then 2.0
+rule performance_multiplier: 1
+  unless performance_rating >= 3   then 1
+  unless performance_rating >= 4   then 1.5
+  unless performance_rating >= 4.5 then 2
 
 rule target_bonus_rate: 10%
-  unless is_manager then 20%
+  unless is_manager            then 20%
   unless department is "sales" then 30%
 
-rule performance_bonus: adjusted_salary * target_bonus_rate * performance_multiplier
+rule performance_bonus:
+  adjusted_salary * target_bonus_rate
+  * performance_multiplier
 
 rule equity_grant_value: 0
   unless is_manager then adjusted_salary * 25%
-  unless years_of_service < 1 then veto "Not eligible for equity in first year"
+  unless years_of_service < 1
+    then veto "Not eligible for equity in first year"
 
 rule vacation_days: 15 days
-  unless years_of_service >= 5 then 20 days
+  unless years_of_service >= 5  then 20 days
   unless years_of_service >= 10 then 25 days
-  unless is_manager then 30 days
+  unless is_manager             then 30 days
 
-rule total_compensation: adjusted_salary + tenure_bonus
-                          + performance_bonus + equity_grant_value
-
-rule compensation_summary: "Total: " + total_compensation
+rule total_compensation:
+  adjusted_salary + tenure_bonus + performance_bonus
+  + equity_grant_value
 ```
 
 Query examples:
 
 ```bash
-lemma run compensation total_compensation \
+lemma run compensation --rules=total_compensation \
   base_salary=120000 years_of_service=7 performance_rating=4.2 \
   location="New York" department=engineering is_manager=true
 
-lemma run compensation vacation_days \
+lemma run compensation --rules=vacation_days \
   years_of_service=12 is_manager=true
 ```
 
@@ -1075,7 +1117,7 @@ Expressions:
   <comparison>        // >, <, >=, <=, is, is not
   <logical>          // and, not
   <mathematical>     // sqrt, sin, cos, tan, log, exp, abs, floor, ceil, round
-  <unit-conversion>  // <value> in <unit>
+  <unit-conversion>  // <value> as <unit>
   <reference>        // name or path (resolved to data or rule)
   <data-reference>   // <name>
   veto [<message>]
@@ -1086,7 +1128,7 @@ Literals:
   <boolean>          // true, false, yes, no, accept, reject
   <date>             // 2024-01-15, 2024-01-15T14:30:00Z
   <ratio>            // 15%, 15 percent, 5 permille, 5%%
-  <unit-value>       // 5 eur (requires type definition), 3 weeks (duration)
+  <unit-value>       // 5 eur (requires quantity type + unit); 3 weeks (trait-duration quantity)
 ```
 
 ---

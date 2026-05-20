@@ -3,18 +3,15 @@ use crate::limits::ResourceLimits;
 use crate::parsing::ast::{try_parse_type_constraint_command, *};
 use crate::parsing::lexer::{
     can_be_label, can_be_reference_segment, can_be_repository_qualifier_segment,
-    conversion_target_from_token, is_boolean_keyword, is_calendar_unit_token, is_duration_unit,
-    is_math_function, is_spec_body_keyword, is_structural_keyword, is_type_keyword,
-    token_kind_to_boolean_value, token_kind_to_calendar_unit, token_kind_to_duration_unit,
-    token_kind_to_primitive, Lexer, Token, TokenKind,
+    conversion_target_from_token, is_boolean_keyword, is_math_function, is_spec_body_keyword,
+    is_structural_keyword, is_type_keyword, token_kind_to_boolean_value, token_kind_to_primitive,
+    Lexer, LexerCheckpoint, Token, TokenKind,
 };
 use crate::parsing::source::Source;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 use std::sync::Arc;
-
-type TypeArrowChain = (ParentType, Option<SpecRef>, Option<Vec<Constraint>>);
 
 #[derive(Debug)]
 pub struct ParseResult {
@@ -128,6 +125,15 @@ impl Parser {
     fn at_any(&mut self, kinds: &[TokenKind]) -> Result<bool, Error> {
         let current = &self.peek()?.kind;
         Ok(kinds.contains(current))
+    }
+
+    fn checkpoint(&self) -> (LexerCheckpoint, usize) {
+        (self.lexer.checkpoint(), self.expression_count)
+    }
+
+    fn restore(&mut self, checkpoint: (LexerCheckpoint, usize)) {
+        self.lexer.restore(checkpoint.0);
+        self.expression_count = checkpoint.1;
     }
 
     fn expect(&mut self, kind: &TokenKind) -> Result<Token, Error> {
@@ -284,6 +290,10 @@ impl Parser {
                     let datum = self.parse_data()?;
                     data.push(datum);
                 }
+                TokenKind::Fill => {
+                    let datum = self.parse_fill()?;
+                    data.push(datum);
+                }
                 TokenKind::Rule => {
                     let rule = self.parse_rule()?;
                     rules.push(rule);
@@ -292,8 +302,8 @@ impl Parser {
                     let token = self.next()?;
                     return Err(self.error_at_token_with_suggestion(
                         &token,
-                        "'type' has been removed. Types are now declared as data",
-                        "Use 'data' instead of 'type', e.g. 'data age: number -> minimum 0'",
+                        "'type' cannot start a declaration here",
+                        "Declare types with 'data', e.g. 'data age: number -> minimum 0'",
                     ));
                 }
                 TokenKind::Meta => {
@@ -310,7 +320,7 @@ impl Parser {
                     return Err(self.error_at_token_with_suggestion(
                         &token,
                         format!(
-                            "Expected 'data', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
+                            "Expected 'data', 'fill', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
                             token.text
                         ),
                         "Check the spelling or add the appropriate keyword",
@@ -336,15 +346,15 @@ impl Parser {
     ///
     /// Allows: `my_spec`, `contracts/employment/jack`, `nl.tax.brackets`.
     /// The `@` prefix is not allowed in spec names — it is valid in
-    /// repository names (`repo @org/name`) and qualifiers (`from @org/name`, `uses @org/name`).
+    /// repository names (`repo @org/name`) and qualifiers (`uses @org/name`).
     fn parse_spec_name(&mut self) -> Result<(String, Span), Error> {
         if self.at(&TokenKind::At)? {
             let at_tok = self.next()?;
             return Err(Error::parsing(
-                "'@' is not allowed in spec names; it is valid for repository names (`repo @org/name`) and qualifiers (`from @org/name`, `uses @org/name`)",
+                "'@' is not allowed in spec names; it is valid for repository names (`repo @org/name`) and qualifiers (`uses @org/name`)",
                 self.make_source(at_tok.span),
                 Some(
-                    "Write `spec my_spec`, then reference registry specs as `uses alias: @org/repo spec_name` or `data x: t from @org/repo source_spec`.",
+                    "Write `spec my_spec`, then reference registry specs as `uses alias: @org/repo spec_name` or `data x: alias.TypeName` after importing with `uses`.",
                 ),
             ));
         }
@@ -422,7 +432,7 @@ impl Parser {
     /// Slashes, dots and minuses between segments are stitched into the name verbatim
     /// so the qualifier round-trips exactly.
     ///
-    /// Used in `repo` declarations, registry qualifiers (`from`, `uses`), and data imports from specs.
+    /// Used in `repo` declarations and registry qualifiers (`uses`).
     fn parse_repository_qualifier(&mut self) -> Result<(RepositoryQualifier, Span), Error> {
         let has_at = self.at(&TokenKind::At)?;
         let start_span = if has_at {
@@ -670,24 +680,89 @@ impl Parser {
             )?;
         }
 
-        if self.at(&TokenKind::From)? {
-            let from_tok = self.peek()?.clone();
+        self.expect(&TokenKind::Colon)?;
+
+        if !reference.segments.is_empty() {
+            let tok = self.peek()?.clone();
             return Err(self.error_at_token_with_suggestion(
-                &from_tok,
-                "`data <name> from <spec>` syntax has been removed",
-                "Use `uses` to import a spec, or `data <name>: <type> from [<repository>] <spec> [<effective>]` to import data from another spec.",
+                &tok,
+                "Dotted paths require `fill`; `data` declares types and values on local names only.",
+                "Use `fill path.to.slot: <value or reference>` to assign on an imported or nested slot.",
             ));
         }
 
-        self.expect(&TokenKind::Colon)?;
-
-        let is_binding = !reference.segments.is_empty();
-        let value = self.parse_data_value(is_binding)?;
+        let value = self.parse_data_value()?;
 
         let span = self.span_covering(&start_span, &self.last_span);
         let source = self.make_source(span);
 
         Ok(LemmaData::new(reference, value, source))
+    }
+
+    fn parse_fill(&mut self) -> Result<LemmaData, Error> {
+        let fill_token = self.expect(&TokenKind::Fill)?;
+        let start_span = fill_token.span.clone();
+
+        let reference = self.parse_reference()?;
+        for segment in reference
+            .segments
+            .iter()
+            .chain(std::iter::once(&reference.name))
+        {
+            crate::limits::check_max_length(
+                segment,
+                self.max_data_name_length,
+                "fill",
+                Some(Source::new(self.source_type(), start_span.clone())),
+            )?;
+        }
+
+        self.expect(&TokenKind::Colon)?;
+
+        let value = self.parse_fill_value()?;
+
+        let span = self.span_covering(&start_span, &self.last_span);
+        let source = self.make_source(span);
+
+        Ok(LemmaData::new(reference, value, source))
+    }
+
+    fn fill_rhs_starts_as_literal(&self, kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::StringLit | TokenKind::NumberLit | TokenKind::Minus | TokenKind::Plus
+        ) || is_boolean_keyword(kind)
+    }
+
+    fn parse_fill_value(&mut self) -> Result<DataValue, Error> {
+        let peek_kind = self.peek()?.kind.clone();
+
+        if self.fill_rhs_starts_as_literal(&peek_kind) {
+            let value = self.parse_literal_value()?;
+            return Ok(DataValue::Fill(FillRhs::Literal(value)));
+        }
+
+        if can_be_label(&peek_kind) || is_type_keyword(&peek_kind) {
+            let target = self.parse_reference()?;
+            if self.at(&TokenKind::Arrow)? {
+                let tok = self.peek()?.clone();
+                return Err(self.error_at_token_with_suggestion(
+                    &tok,
+                    "Constraint chains (`-> ...`) are not allowed on `fill`; use `data` to declare types and constraints.",
+                    "Use `data name: <type> -> ...` for constraints, then `fill name: <reference or literal>` to assign.",
+                ));
+            }
+            return Ok(DataValue::Fill(FillRhs::Reference { target }));
+        }
+
+        let tok = self.peek()?.clone();
+        Err(self.error_at_token(
+            &tok,
+            format!(
+                "Expected a reference or literal after `fill ...:`, found {}",
+                tok.kind
+            ),
+        ))
     }
 
     fn parse_reference(&mut self) -> Result<Reference, Error> {
@@ -732,53 +807,23 @@ impl Parser {
         Ok(Reference::from_path(segments))
     }
 
-    fn parse_data_value(&mut self, is_binding: bool) -> Result<DataValue, Error> {
+    fn parse_data_value(&mut self) -> Result<DataValue, Error> {
         if self.at(&TokenKind::Spec)? {
             let token = self.next()?;
             return Err(self.error_at_token_with_suggestion(
                 &token,
-                "'data ... : spec ...' syntax has been removed",
-                "Use 'uses <spec_name>' or 'uses <alias>: <spec_name>' instead",
+                "Cannot import a spec with `data`; use `uses`",
+                "Use `uses <spec_name>` or `uses <alias>: <spec_name>`",
             ));
         }
 
         let peek_kind = self.peek()?.kind.clone();
 
-        // Reference RHS (value-copy reference) is recognized in two cases:
-        // 1. Any dotted path (e.g. `data x: foo.bar`), which can never be a typedef
-        //    name and therefore unambiguously means "copy value from this data or rule".
-        // 2. A non-dotted identifier when the LHS is a binding path (e.g.
-        //    `data x.y: myrule`). Local data like `data x: myrule` keep the existing
-        //    typedef-reference semantics and are NOT parsed as Reference here.
-        // Type keywords (`number`, `text`, ...) are excluded from reference heads
-        // because they are primitive type names, never data/rule names.
-        if can_be_label(&peek_kind) {
-            let next_is_dot = self.lexer.peek_second()?.kind == TokenKind::Dot;
-            if next_is_dot || is_binding {
-                let target = self.parse_reference()?;
-                let (_, _, constraints) = self.parse_remaining_arrow_chain()?;
-                return Ok(DataValue::Reference {
-                    target,
-                    constraints,
-                });
-            }
-        }
-
-        // Type keyword (number, text, boolean, ...) or label (custom type name) => type declaration
         if token_kind_to_primitive(&peek_kind).is_some() || can_be_label(&peek_kind) {
-            let (base, from_spec, constraints) = self.parse_type_arrow_chain()?;
-            if self.at(&TokenKind::Dot)? {
-                let dot_tok = self.peek()?.clone();
-                return Err(self.error_at_token_with_suggestion(
-                    &dot_tok,
-                    "Unexpected dot after type declaration",
-                    "Typedef references must be a single identifier. To reference another data or rule by value, use a dotted path like 'other_spec.name'",
-                ));
-            }
+            let (base, constraints) = self.parse_type_arrow_chain()?;
             return Ok(DataValue::Definition {
                 base: Some(base),
                 constraints,
-                from: from_spec,
                 value: None,
             });
         }
@@ -788,25 +833,55 @@ impl Parser {
         Ok(DataValue::Definition {
             base: None,
             constraints: None,
-            from: None,
             value: Some(value),
         })
     }
 
-    /// Parse a single `uses` item: `[alias ':'] spec_identifier [effective] [from repository_qualifier]`.
+    /// Parse a single `uses` item: `[alias ':']` then [`Self::parse_spec_ref_target`] (optional
+    /// repository qualifier, spec name, optional effective date pin).
     fn parse_uses_item(&mut self, start_span: &Span) -> Result<LemmaData, Error> {
-        let alias_marker = if can_be_reference_segment(&self.peek()?.kind)
+        let explicit_alias = if can_be_reference_segment(&self.peek()?.kind)
             && self.lexer.peek_second()?.kind == TokenKind::Colon
         {
             let alias_tok = self.next()?;
             self.expect(&TokenKind::Colon)?;
-            Some(alias_tok.text)
+            Some(alias_tok)
         } else {
             None
         };
 
         let spec_ref = self.parse_spec_ref_target()?;
-        let alias = alias_marker.unwrap_or_else(|| spec_ref.name.clone());
+
+        let spec_name_source = spec_ref
+            .target_span
+            .as_ref()
+            .map(|sp| Source::new(self.source_type(), sp.clone()));
+
+        crate::limits::check_max_length(
+            &spec_ref.name,
+            self.max_spec_name_length,
+            "spec",
+            spec_name_source.clone(),
+        )?;
+
+        let alias = if let Some(ref alias_tok) = explicit_alias {
+            crate::limits::check_max_length(
+                &alias_tok.text,
+                self.max_data_name_length,
+                "data",
+                Some(Source::new(self.source_type(), alias_tok.span.clone())),
+            )?;
+            alias_tok.text.clone()
+        } else {
+            let implicit = spec_ref.name.clone();
+            crate::limits::check_max_length(
+                &implicit,
+                self.max_data_name_length,
+                "data",
+                spec_name_source,
+            )?;
+            implicit
+        };
 
         let span = self.span_covering(start_span, &self.last_span);
         Ok(LemmaData::new(
@@ -866,8 +941,8 @@ impl Parser {
 
         self.expect(&TokenKind::Colon)?;
 
-        // Parse the base expression or veto
-        let expression = if self.at(&TokenKind::Veto)? {
+        // Parse the base expression or veto result (`veto "msg"`). `veto is …` is an expression.
+        let expression = if self.at(&TokenKind::Veto)? && !self.at_bare_veto_followed_by_is()? {
             self.parse_veto_expression()?
         } else {
             self.parse_expression()?
@@ -943,50 +1018,103 @@ impl Parser {
         })
     }
 
-    /// Parse a type arrow chain: type_name (-> command)*.
-    /// The legacy `type_name from <spec>` form is rejected with a migration error.
-    fn parse_type_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
+    fn parse_leaf_parent_type(&mut self) -> Result<ParentType, Error> {
         let name_tok = self.next()?;
-        let base = if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
-            ParentType::Primitive { primitive: kind }
-        } else if can_be_label(&name_tok.kind) {
-            ParentType::Custom {
-                name: name_tok.text.clone(),
-            }
-        } else {
-            return Err(self.error_at_token(
-                &name_tok,
-                format!("Expected a type name, found {}", name_tok.kind),
-            ));
-        };
-
-        let from_spec = if self.at(&TokenKind::From)? {
-            self.next()?;
-            Some(self.parse_spec_ref_target()?)
-        } else {
-            None
-        };
-
-        let mut commands = Vec::new();
-        while self.at(&TokenKind::Arrow)? {
-            self.next()?;
-            let (cmd, cmd_args) = self.parse_command()?;
-            commands.push((cmd, cmd_args));
-        }
-
-        let constraints = if commands.is_empty() {
-            None
-        } else {
-            Some(commands)
-        };
-
-        Ok((base, from_spec, constraints))
+        self.parse_leaf_parent_type_from_first_token(name_tok)
     }
 
-    fn parse_remaining_arrow_chain(&mut self) -> Result<TypeArrowChain, Error> {
+    fn parse_leaf_parent_type_from_first_token(
+        &mut self,
+        name_tok: Token,
+    ) -> Result<ParentType, Error> {
+        if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
+            let primitive = if self.at(&TokenKind::Identifier)?
+                && self.peek()?.text.eq_ignore_ascii_case("range")
+            {
+                let range_tok = self.peek()?.clone();
+                match kind {
+                    PrimitiveKind::Date => {
+                        self.next()?;
+                        PrimitiveKind::DateRange
+                    }
+                    PrimitiveKind::Number => {
+                        self.next()?;
+                        PrimitiveKind::NumberRange
+                    }
+                    PrimitiveKind::Quantity => {
+                        self.next()?;
+                        PrimitiveKind::QuantityRange
+                    }
+                    PrimitiveKind::Ratio => {
+                        self.next()?;
+                        PrimitiveKind::RatioRange
+                    }
+                    PrimitiveKind::Calendar => {
+                        self.next()?;
+                        PrimitiveKind::CalendarRange
+                    }
+                    _ => {
+                        return Err(self.error_at_token(
+                            &range_tok,
+                            format!(
+                                "'{} range' is not a valid type. Supported range types: calendar range, date range, number range, quantity range, ratio range",
+                                name_tok.text
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                kind
+            };
+            Ok(ParentType::Primitive { primitive })
+        } else if can_be_label(&name_tok.kind) {
+            Ok(ParentType::Custom {
+                name: name_tok.text.clone(),
+            })
+        } else {
+            Err(self.error_at_token(
+                &name_tok,
+                format!("Expected a type name, found {}", name_tok.kind),
+            ))
+        }
+    }
+
+    /// Parse a type arrow chain: [`ParentType`] (`alias.type` allowed) followed by `(-> command)*`.
+    fn parse_type_arrow_chain(&mut self) -> Result<(ParentType, Option<Vec<Constraint>>), Error> {
+        let first = self.parse_leaf_parent_type()?;
+
+        let base = if let ParentType::Custom { name } = &first {
+            if self.at(&TokenKind::Dot)? {
+                self.next()?;
+                let inner = self.parse_leaf_parent_type()?;
+                ParentType::Qualified {
+                    spec_alias: name.clone(),
+                    inner: Box::new(inner),
+                }
+            } else {
+                first
+            }
+        } else {
+            if self.at(&TokenKind::Dot)? {
+                let dot_tok = self.peek()?.clone();
+                return Err(self.error_at_token_with_suggestion(
+                    &dot_tok,
+                    "A primitive type cannot be the left segment of a qualified parent path",
+                    "Use `data name: alias.typename` where `alias` is the `uses` import name and `typename` is the parent type.",
+                ));
+            }
+            first
+        };
+
+        let constraints = self.parse_trailing_constraints()?;
+
+        Ok((base, constraints))
+    }
+
+    fn parse_trailing_constraints(&mut self) -> Result<Option<Vec<Constraint>>, Error> {
         let mut commands = Vec::new();
         while self.at(&TokenKind::Arrow)? {
-            self.next()?; // consume ->
+            self.next()?;
             let (cmd, cmd_args) = self.parse_command()?;
             commands.push((cmd, cmd_args));
         }
@@ -995,13 +1123,7 @@ impl Parser {
         } else {
             Some(commands)
         };
-        Ok((
-            ParentType::Custom {
-                name: String::new(),
-            },
-            None,
-            constraints,
-        ))
+        Ok(constraints)
     }
 
     fn parse_command(&mut self) -> Result<(TypeConstraintCommand, Vec<CommandArg>), Error> {
@@ -1016,12 +1138,23 @@ impl Parser {
             self.error_at_token(
                 &name_tok,
                 format!(
-                    "Unknown constraint command '{}'. Valid commands: help, default, unit, minimum, maximum, decimals, precision, option, options, length",
+                    "Unknown constraint command '{}'. Valid commands: help, default, unit, trait, minimum, maximum, decimals, option, options, length",
                     name_tok.text
                 ),
             )
         })?;
 
+        let args = if cmd == TypeConstraintCommand::Unit {
+            self.parse_unit_command_args()?
+        } else {
+            self.parse_generic_command_args()?
+        };
+
+        Ok((cmd, args))
+    }
+
+    /// Parse arguments for a generic (non-unit) constraint command.
+    fn parse_generic_command_args(&mut self) -> Result<Vec<CommandArg>, Error> {
         let mut args = Vec::new();
         loop {
             if self.at(&TokenKind::Arrow)?
@@ -1052,8 +1185,251 @@ impl Parser {
                 _ => break,
             }
         }
+        Ok(args)
+    }
 
-        Ok((cmd, args))
+    fn parse_scalar_literal_value(&mut self) -> Result<Value, Error> {
+        let peeked = self.peek()?;
+        match &peeked.kind {
+            TokenKind::StringLit => {
+                let tok = self.next()?;
+                let content = unquote_string(&tok.text);
+                Ok(Value::Text(content))
+            }
+            k if is_boolean_keyword(k) => {
+                let tok = self.next()?;
+                Ok(Value::Boolean(token_kind_to_boolean_value(&tok.kind)))
+            }
+            TokenKind::NumberLit => self.parse_number_literal(),
+            TokenKind::Minus | TokenKind::Plus => self.parse_signed_number_literal(),
+            _ => {
+                let tok = self.next()?;
+                Err(self.error_at_token(
+                    &tok,
+                    format!(
+                        "Expected a value (number, text, boolean, date, etc.), found '{}'",
+                        tok.text
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// Returns true when the current token ends the current command argument list.
+    fn at_command_terminator(&mut self) -> Result<bool, Error> {
+        if self.at(&TokenKind::Arrow)? || self.at(&TokenKind::Eof)? || self.at(&TokenKind::Spec)? {
+            return Ok(true);
+        }
+        Ok(is_spec_body_keyword(&self.peek()?.kind))
+    }
+
+    /// Parse arguments for a `-> unit <name> ...` command.
+    ///
+    /// Produces `[CommandArg::Label(unit_name), CommandArg::UnitExpr(unit_arg)]` where
+    /// `unit_arg` is either a simple `UnitArg::Factor` or a compound `UnitArg::Expr`.
+    ///
+    /// Grammar (after the `unit` keyword has been consumed):
+    /// ```text
+    /// unit_name_label  [numeric_prefix]  [unit_factor ('/' | ' ') unit_factor …]
+    /// ```
+    fn parse_unit_command_args(&mut self) -> Result<Vec<CommandArg>, Error> {
+        if self.at_command_terminator()? {
+            // No unit name — semantics will produce a meaningful error.
+            return Ok(Vec::new());
+        }
+
+        let peek_kind = self.peek()?.kind.clone();
+        if !can_be_label(&peek_kind) && !is_type_keyword(&peek_kind) {
+            // Not a label — let semantics produce the error.
+            return Ok(Vec::new());
+        }
+
+        let unit_name_tok = self.next()?;
+        let unit_name_arg = CommandArg::Label(unit_name_tok.text.clone());
+
+        // Optional numeric prefix (e.g. the `1` in `-> unit meter 1` or the `3.6` in
+        // `-> unit kmh 3.6 meter/second`).
+        let numeric_prefix: Option<Decimal> = if self.at(&TokenKind::NumberLit)? {
+            let num_tok = self.next()?;
+            match Decimal::from_str(&num_tok.text) {
+                Ok(d) => Some(d),
+                Err(_) => {
+                    return Err(self.error_at_token(
+                        &num_tok,
+                        format!(
+                            "Invalid numeric factor '{}' in unit declaration",
+                            num_tok.text
+                        ),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
+        // After an optional numeric prefix, check whether a compound unit expression follows
+        // (starts with a label / duration-unit keyword).
+        let peek_kind_after_prefix = self.peek()?.kind.clone();
+        let has_compound_expr = (can_be_label(&peek_kind_after_prefix)
+            || is_type_keyword(&peek_kind_after_prefix))
+            && !self.at_command_terminator()?;
+
+        if has_compound_expr {
+            let factors = self.parse_unit_factors()?;
+            let prefix = numeric_prefix.unwrap_or(Decimal::ONE);
+            let unit_arg = CommandArg::UnitExpr(UnitArg::Expr(prefix, factors));
+            Ok(vec![unit_name_arg, unit_arg])
+        } else if let Some(factor) = numeric_prefix {
+            let unit_arg = CommandArg::UnitExpr(UnitArg::Factor(factor));
+            Ok(vec![unit_name_arg, unit_arg])
+        } else {
+            // No factor and no compound expression.
+            // Produce an arg list that semantics will reject with a clear error.
+            Ok(vec![unit_name_arg])
+        }
+    }
+
+    /// Parse a sequence of `<quantity_ref>[^[-]<integer>]` terms joined by `*` or `/`.
+    ///
+    /// `*` is explicit multiplication and resets to numerator mode.
+    /// `/` switches to denominator mode for all subsequent factors until the next `*`.
+    /// Exponents in denominator mode are negated.
+    /// An explicit `^<integer>` overrides the default (±1), still relative to the current mode.
+    ///
+    /// Space has no meaning in Lemma — `kg * m / s^2` and `kg*m/s^2` are identical.
+    /// Space-adjacent labels without an intervening `*` or `/` end the expression;
+    /// the bare label belongs to the next syntactic element.
+    ///
+    /// Examples:
+    /// - `meter/second`            → `[{meter, +1}, {second, -1}]`
+    /// - `meter/second^2`          → `[{meter, +1}, {second, -2}]`
+    /// - `kg * meter / second^2`   → `[{kg, +1}, {meter, +1}, {second, -2}]`
+    /// - `meter / second * kg`     → `[{meter, +1}, {second, -1}, {kg, +1}]`
+    fn parse_unit_factors(&mut self) -> Result<Vec<UnitFactor>, Error> {
+        let mut factors: Vec<UnitFactor> = Vec::new();
+        let mut denominator_mode = false;
+        // Tracks whether the loop is sitting immediately after an operator (* or /).
+        // On the first iteration there is an implicit "we just started", so we allow
+        // the first label without a preceding operator.
+        let mut operator_just_consumed = true;
+
+        loop {
+            if self.at_command_terminator()? {
+                if !operator_just_consumed {
+                    break;
+                }
+                // An operator was consumed but no label followed — that is a parse error
+                // only if we already emitted at least one factor (dangling operator).
+                // If factors is empty the caller will handle the missing expression.
+                break;
+            }
+
+            // `*` — explicit multiplication; reset to numerator mode.
+            if self.at(&TokenKind::Star)? {
+                if operator_just_consumed && !factors.is_empty() {
+                    let bad_tok = self.next()?;
+                    return Err(self.error_at_token(
+                        &bad_tok,
+                        "Unexpected '*' in unit expression: two consecutive operators".to_string(),
+                    ));
+                }
+                self.next()?;
+                denominator_mode = false;
+                operator_just_consumed = true;
+                continue;
+            }
+
+            // `/` — switch to denominator mode.
+            if self.at(&TokenKind::Slash)? {
+                if operator_just_consumed && !factors.is_empty() {
+                    let bad_tok = self.next()?;
+                    return Err(self.error_at_token(
+                        &bad_tok,
+                        "Unexpected '/' in unit expression: two consecutive operators".to_string(),
+                    ));
+                }
+                self.next()?;
+                denominator_mode = true;
+                operator_just_consumed = true;
+                continue;
+            }
+
+            // A label (or duration-unit keyword treated as a label) is a quantity reference.
+            let peek_kind = self.peek()?.kind.clone();
+            if !can_be_label(&peek_kind) && !is_type_keyword(&peek_kind) {
+                break;
+            }
+
+            // A label without a preceding operator ends the expression.
+            // The first factor is permitted without an operator (operator_just_consumed starts true).
+            if !operator_just_consumed {
+                break;
+            }
+            operator_just_consumed = false;
+
+            let quantity_ref_tok = self.next()?;
+            let quantity_ref = quantity_ref_tok.text.clone();
+
+            // Optional exponent: `^` followed by an optional `-` and an integer.
+            let explicit_exp: Option<i32> = if self.at(&TokenKind::Caret)? {
+                self.next()?; // consume `^`
+
+                let negative = if self.at(&TokenKind::Minus)? {
+                    self.next()?; // consume `-`
+                    true
+                } else {
+                    false
+                };
+
+                if !self.at(&TokenKind::NumberLit)? {
+                    let bad_tok = self.next()?;
+                    return Err(self.error_at_token(
+                        &bad_tok,
+                        format!(
+                            "Expected an integer exponent after '^' in unit expression, found {}",
+                            bad_tok.kind
+                        ),
+                    ));
+                }
+
+                let exp_tok = self.next()?;
+                let raw: i32 = exp_tok.text.parse::<i32>().map_err(|_| {
+                    self.error_at_token(
+                        &exp_tok,
+                        format!(
+                            "Exponent '{}' is not a valid integer in unit expression",
+                            exp_tok.text
+                        ),
+                    )
+                })?;
+
+                if raw == 0 {
+                    return Err(self.error_at_token(
+                        &exp_tok,
+                        "Exponent cannot be zero in a unit expression".to_string(),
+                    ));
+                }
+
+                Some(if negative { -raw } else { raw })
+            } else {
+                None
+            };
+
+            // Apply denominator mode: negate the exponent (or its default) when in denominator.
+            let final_exp = match (explicit_exp, denominator_mode) {
+                (Some(e), true) => -e,
+                (Some(e), false) => e,
+                (None, true) => -1,
+                (None, false) => 1,
+            };
+
+            factors.push(UnitFactor {
+                quantity_ref,
+                exp: final_exp,
+            });
+        }
+
+        Ok(factors)
     }
 
     // ========================================================================
@@ -1142,29 +1518,13 @@ impl Parser {
     // ========================================================================
 
     fn parse_literal_value(&mut self) -> Result<Value, Error> {
-        let peeked = self.peek()?;
-        match &peeked.kind {
-            TokenKind::StringLit => {
-                let tok = self.next()?;
-                let content = unquote_string(&tok.text);
-                Ok(Value::Text(content))
-            }
-            k if is_boolean_keyword(k) => {
-                let tok = self.next()?;
-                Ok(Value::Boolean(token_kind_to_boolean_value(&tok.kind)))
-            }
-            TokenKind::NumberLit => self.parse_number_literal(),
-            TokenKind::Minus | TokenKind::Plus => self.parse_signed_number_literal(),
-            _ => {
-                let tok = self.next()?;
-                Err(self.error_at_token(
-                    &tok,
-                    format!(
-                        "Expected a value (number, text, boolean, date, etc.), found '{}'",
-                        tok.text
-                    ),
-                ))
-            }
+        let left = self.parse_scalar_literal_value()?;
+        if self.at(&TokenKind::Ellipsis)? {
+            self.next()?;
+            let right = self.parse_scalar_literal_value()?;
+            Ok(Value::Range(Box::new(left), Box::new(right)))
+        } else {
+            Ok(left)
         }
     }
 
@@ -1190,9 +1550,8 @@ impl Parser {
         }
         match value {
             Value::Number(d) => Ok(Value::Number(-d)),
-            Value::Scale(d, unit) => Ok(Value::Scale(-d, unit)),
-            Value::Duration(d, unit) => Ok(Value::Duration(-d, unit)),
-            Value::Ratio(d, label) => Ok(Value::Ratio(-d, label)),
+            Value::NumberWithUnit(d, unit) => Ok(Value::NumberWithUnit(-d, unit)),
+            Value::Calendar(d, unit) => Ok(Value::Calendar(-d, unit)),
             other => Err(Error::parsing(
                 format!("Cannot negate this value: {}", other),
                 self.make_source(sign_span),
@@ -1244,8 +1603,7 @@ impl Parser {
                 }
             }
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            let ratio_value = decimal / Decimal::from(1000);
-            return Ok(Value::Ratio(ratio_value, Some("permille".to_string())));
+            return Ok(Value::NumberWithUnit(decimal, "permille".to_string()));
         }
 
         // Check for % (percent)
@@ -1261,39 +1619,30 @@ impl Parser {
                 }
             }
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            let ratio_value = decimal / Decimal::from(100);
-            return Ok(Value::Ratio(ratio_value, Some("percent".to_string())));
+            return Ok(Value::NumberWithUnit(decimal, "percent".to_string()));
         }
 
         // Check for "percent" keyword
         if peeked.kind == TokenKind::PercentKw {
             self.next()?; // consume "percent"
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            let ratio_value = decimal / Decimal::from(100);
-            return Ok(Value::Ratio(ratio_value, Some("percent".to_string())));
+            return Ok(Value::NumberWithUnit(decimal, "percent".to_string()));
         }
 
         // Check for "permille" keyword
         if peeked.kind == TokenKind::Permille {
             self.next()?; // consume "permille"
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            let ratio_value = decimal / Decimal::from(1000);
-            return Ok(Value::Ratio(ratio_value, Some("permille".to_string())));
+            return Ok(Value::NumberWithUnit(decimal, "permille".to_string()));
         }
 
-        // Check for duration unit
-        if is_duration_unit(&peeked.kind) && peeked.kind != TokenKind::PercentKw {
-            let unit_tok = self.next()?;
-            let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            let duration_unit = token_kind_to_duration_unit(&unit_tok.kind);
-            return Ok(Value::Duration(decimal, duration_unit));
-        }
-
-        // Check for user-defined unit (identifier after number)
         if can_be_label(&peeked.kind) {
             let unit_tok = self.next()?;
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            return Ok(Value::Scale(decimal, unit_tok.text.clone()));
+            if let Some(calendar_unit) = CalendarUnit::from_keyword(&unit_tok.text) {
+                return Ok(Value::Calendar(decimal, calendar_unit));
+            }
+            return Ok(Value::NumberWithUnit(decimal, unit_tok.text.clone()));
         }
 
         // Plain number
@@ -1370,21 +1719,33 @@ impl Parser {
         // Z timezone
         if self.at(&TokenKind::Identifier)? {
             let peeked = self.peek()?;
-            if peeked.text == "Z" || peeked.text == "z" {
+            if (peeked.text == "Z" || peeked.text == "z") && peeked.span.start == self.last_span.end
+            {
                 let z_tok = self.next()?;
                 dt_str.push_str(&z_tok.text);
                 return Ok(());
             }
         }
 
-        // +HH:MM or -HH:MM
+        // +HH:MM or -HH:MM, only when attached directly to the preceding token.
         if self.at(&TokenKind::Plus)? || self.at(&TokenKind::Minus)? {
-            let sign_tok = self.next()?;
-            dt_str.push_str(&sign_tok.text);
-            let hour_tok = self.expect(&TokenKind::NumberLit)?;
-            dt_str.push_str(&hour_tok.text);
-            if self.at(&TokenKind::Colon)? {
-                self.next()?;
+            let mut lookahead = self.lexer.clone();
+            let sign_tok = lookahead.next_token()?;
+            let hour_tok = lookahead.next_token()?;
+            let colon_tok = lookahead.next_token()?;
+            let minute_tok = lookahead.next_token()?;
+
+            let attached = sign_tok.span.start == self.last_span.end;
+            let is_timezone_shape = hour_tok.kind == TokenKind::NumberLit
+                && colon_tok.kind == TokenKind::Colon
+                && minute_tok.kind == TokenKind::NumberLit;
+
+            if attached && is_timezone_shape {
+                let sign_tok = self.next()?;
+                dt_str.push_str(&sign_tok.text);
+                let hour_tok = self.expect(&TokenKind::NumberLit)?;
+                dt_str.push_str(&hour_tok.text);
+                self.expect(&TokenKind::Colon)?;
                 dt_str.push(':');
                 let min_tok = self.expect(&TokenKind::NumberLit)?;
                 dt_str.push_str(&min_tok.text);
@@ -1413,18 +1774,26 @@ impl Parser {
             time_str.push(':');
             let sec_tok = self.expect(&TokenKind::NumberLit)?;
             time_str.push_str(&sec_tok.text);
+
+            // Optional fractional seconds .NNNNNN
+            if self.at(&TokenKind::Dot)? {
+                self.next()?;
+                time_str.push('.');
+                let frac_tok = self.expect(&TokenKind::NumberLit)?;
+                time_str.push_str(&frac_tok.text);
+            }
         }
 
         // Try timezone
         self.try_consume_timezone(&mut time_str)?;
 
-        if let Ok(t) = time_str.parse::<chrono::NaiveTime>() {
-            use chrono::Timelike;
+        if let Ok(t) = time_str.parse::<TimeValue>() {
             return Ok(Value::Time(TimeValue {
-                hour: t.hour() as u8,
-                minute: t.minute() as u8,
-                second: t.second() as u8,
-                timezone: None,
+                hour: t.hour,
+                minute: t.minute,
+                second: t.second,
+                microsecond: t.microsecond,
+                timezone: t.timezone,
             }));
         }
 
@@ -1507,7 +1876,118 @@ impl Parser {
         Ok(left)
     }
 
+    fn at_bare_veto_token(&mut self) -> Result<bool, Error> {
+        if !self.at(&TokenKind::Veto)? {
+            return Ok(false);
+        }
+        let checkpoint = self.checkpoint();
+        self.next()?;
+        let bare = !self.at(&TokenKind::StringLit)?;
+        self.restore(checkpoint);
+        Ok(bare)
+    }
+
+    fn at_bare_veto_followed_by_is(&mut self) -> Result<bool, Error> {
+        if !self.at_bare_veto_token()? {
+            return Ok(false);
+        }
+        let checkpoint = self.checkpoint();
+        self.next()?;
+        let followed = self.at(&TokenKind::Is)?;
+        self.restore(checkpoint);
+        Ok(followed)
+    }
+
+    fn at_not_bare_veto_followed_by_is(&mut self) -> Result<bool, Error> {
+        if !self.at(&TokenKind::Not)? {
+            return Ok(false);
+        }
+        let checkpoint = self.checkpoint();
+        self.next()?;
+        if !self.at(&TokenKind::Veto)? {
+            self.restore(checkpoint);
+            return Ok(false);
+        }
+        self.next()?;
+        if self.at(&TokenKind::StringLit)? {
+            self.restore(checkpoint);
+            return Ok(false);
+        }
+        let followed = self.at(&TokenKind::Is)?;
+        self.restore(checkpoint);
+        Ok(followed)
+    }
+
+    fn wrap_result_is_veto_expression(
+        &mut self,
+        operand: Expression,
+        operator_is_not: bool,
+        keyword_was_negated: bool,
+        start_span: Span,
+    ) -> Result<Expression, Error> {
+        let negate = operator_is_not ^ keyword_was_negated;
+        let end_span = operand
+            .source_location
+            .as_ref()
+            .map(|source| source.span.clone())
+            .unwrap_or_else(|| start_span.clone());
+        let span = self.span_covering(&start_span, &end_span);
+        let core = self.new_expression(
+            ExpressionKind::ResultIsVeto(Arc::new(operand)),
+            self.make_source(span.clone()),
+        )?;
+        if negate {
+            self.new_expression(
+                ExpressionKind::LogicalNegation(Arc::new(core), NegationType::Not),
+                self.make_source(span),
+            )
+        } else {
+            Ok(core)
+        }
+    }
+
+    fn parse_veto_status_lhs_is_comparison(&mut self) -> Result<Expression, Error> {
+        let start_span = self.peek()?.span.clone();
+        let keyword_was_negated = if self.at(&TokenKind::Not)? {
+            self.next()?;
+            true
+        } else {
+            false
+        };
+        self.expect(&TokenKind::Veto)?;
+        if self.at(&TokenKind::StringLit)? {
+            let tok = self.peek()?.clone();
+            return Err(self.error_at_token(
+                &tok,
+                "veto with a message is only valid as a rule or unless result, not in `is veto` comparisons",
+            ));
+        }
+        let operator = self.parse_comparison_operator()?;
+        let operator_is_not = matches!(operator, ComparisonComputation::IsNot);
+        if !matches!(
+            operator,
+            ComparisonComputation::Is | ComparisonComputation::IsNot
+        ) {
+            let tok = self.peek()?.clone();
+            return Err(self.error_at_token(
+                &tok,
+                "Expected `is` or `is not` after `veto` in a veto-status comparison",
+            ));
+        }
+        let operand = self.parse_range_expression()?;
+        self.wrap_result_is_veto_expression(
+            operand,
+            operator_is_not,
+            keyword_was_negated,
+            start_span,
+        )
+    }
+
     fn parse_and_operand(&mut self) -> Result<Expression, Error> {
+        if self.at_not_bare_veto_followed_by_is()? || self.at_bare_veto_followed_by_is()? {
+            return self.parse_veto_status_lhs_is_comparison();
+        }
+
         // not expression
         if self.at(&TokenKind::Not)? {
             return self.parse_not_expression();
@@ -1540,29 +2020,46 @@ impl Parser {
 
     fn parse_repository_with_suffix(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
-        let repository = self.parse_repository_expression()?;
+        let repository = self.parse_range_expression()?;
+        self.continue_repository_operand(repository, start_span)
+    }
 
-        // Check for suffixes
-        let peeked = self.peek()?;
+    /// Postfix suffixes on a completed repository/range expression (`in`, calendar, comparison).
+    /// Unit conversion (`as`) is parsed at term level, not here.
+    fn continue_repository_operand(
+        &mut self,
+        mut expr: Expression,
+        start_span: Span,
+    ) -> Result<Expression, Error> {
+        loop {
+            let peeked = self.peek()?;
 
-        // Comparison suffix: >, <, >=, <=, is, is not
-        if is_comparison_operator(&peeked.kind) {
-            return self.parse_comparison_suffix(repository, start_span);
+            if is_comparison_operator(&peeked.kind) {
+                return self.parse_comparison_suffix(expr, start_span);
+            }
+
+            if peeked.kind == TokenKind::Not {
+                expr = self.parse_not_in_calendar_suffix(expr, start_span.clone())?;
+                continue;
+            }
+
+            if peeked.kind == TokenKind::In {
+                expr = self.parse_in_suffix(expr, start_span.clone())?;
+                continue;
+            }
+
+            break;
         }
 
-        // "not in calendar <unit>" suffix: expr not in calendar year|month|week
-        // After a repository_expression, "not" must be this suffix (prefix "not" is only
-        // at and_operand level, and "X and not Y" would have consumed "and" first).
-        if peeked.kind == TokenKind::Not {
-            return self.parse_not_in_calendar_suffix(repository, start_span);
+        if self.at_expression_suffix_end()? {
+            return Ok(expr);
         }
 
-        // "in" suffix: conversion, date relative, date calendar
-        if peeked.kind == TokenKind::In {
-            return self.parse_in_suffix(repository, start_span);
-        }
-
-        Ok(repository)
+        let tok = self.peek()?.clone();
+        Err(self.error_at_token(
+            &tok,
+            format!("Unexpected token '{}' after expression", tok.text),
+        ))
     }
 
     fn parse_comparison_suffix(
@@ -1571,18 +2068,29 @@ impl Parser {
         start_span: Span,
     ) -> Result<Expression, Error> {
         let operator = self.parse_comparison_operator()?;
+        let operator_is_not = matches!(operator, ComparisonComputation::IsNot);
 
-        // Right side can be: not_expr | repository_expression (optionally with "in unit")
+        if matches!(
+            operator,
+            ComparisonComputation::Is | ComparisonComputation::IsNot
+        ) && self.at_bare_veto_token()?
+        {
+            self.expect(&TokenKind::Veto)?;
+            if self.at(&TokenKind::StringLit)? {
+                let tok = self.peek()?.clone();
+                return Err(self.error_at_token(
+                    &tok,
+                    "veto with a message is only valid as a rule or unless result, not in `is veto` comparisons",
+                ));
+            }
+            return self.wrap_result_is_veto_expression(left, operator_is_not, false, start_span);
+        }
+
+        // Right side can be: not_expr | range/repository expression (term-level `as` included)
         let right = if self.at(&TokenKind::Not)? {
             self.parse_not_expression()?
         } else {
-            let rhs = self.parse_repository_expression()?;
-            // Check for "in unit" conversion on the rhs
-            if self.at(&TokenKind::In)? {
-                self.parse_in_suffix(rhs, start_span.clone())?
-            } else {
-                rhs
-            }
+            self.parse_range_expression()?
         };
 
         let end_span = right
@@ -1673,31 +2181,34 @@ impl Parser {
                 );
             }
 
-            // "in past [tolerance]" or "in future [tolerance]"
-            let tolerance = if !self.at(&TokenKind::And)?
-                && !self.at(&TokenKind::Unless)?
-                && !self.at(&TokenKind::Then)?
-                && !self.at(&TokenKind::Eof)?
-                && !is_comparison_operator(&self.peek()?.kind)
+            if self.at(&TokenKind::And)?
+                || self.at(&TokenKind::Unless)?
+                || self.at(&TokenKind::Then)?
+                || self.at(&TokenKind::RParen)?
+                || self.at(&TokenKind::Eof)?
+                || is_comparison_operator(&self.peek()?.kind)
             {
-                let peek_kind = self.peek()?.kind.clone();
-                if peek_kind == TokenKind::NumberLit
-                    || peek_kind == TokenKind::LParen
-                    || can_be_reference_segment(&peek_kind)
-                    || is_math_function(&peek_kind)
-                {
-                    Some(Arc::new(self.parse_repository_expression()?))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+                let end = self.peek()?.span.clone();
+                let span = self.span_covering(&start_span, &end);
+                return self.new_expression(
+                    ExpressionKind::DateRelative(rel_kind, Arc::new(repository)),
+                    self.make_source(span),
+                );
+            }
 
-            let end = self.peek()?.span.clone();
-            let span = self.span_covering(&start_span, &end);
+            let offset = self.parse_repository_expression()?;
+            let offset_end_span = offset
+                .source_location
+                .as_ref()
+                .map(|s| s.span.clone())
+                .unwrap_or_else(|| start_span.clone());
+            let range = self.new_expression(
+                ExpressionKind::PastFutureRange(rel_kind, Arc::new(offset)),
+                self.make_source(self.span_covering(&direction.span, &offset_end_span)),
+            )?;
+            let span = self.span_covering(&start_span, &offset_end_span);
             return self.new_expression(
-                ExpressionKind::DateRelative(rel_kind, Arc::new(repository), tolerance),
+                ExpressionKind::RangeContainment(Arc::new(repository), Arc::new(range)),
                 self.make_source(span),
             );
         }
@@ -1714,37 +2225,163 @@ impl Parser {
             );
         }
 
-        // "in <unit>" — unit conversion
-        let target_tok = self.next()?;
-        let target = conversion_target_from_token(&target_tok.kind, &target_tok.text);
-
-        let converted = self.new_expression(
-            ExpressionKind::UnitConversion(Arc::new(repository), target),
-            self.make_source(self.span_covering(&start_span, &target_tok.span)),
-        )?;
-
-        // Check if followed by comparison operator
-        if is_comparison_operator(&self.peek()?.kind) {
-            return self.parse_comparison_suffix(converted, start_span);
-        }
-
-        Ok(converted)
+        let range = self.parse_range_expression()?;
+        let end_span = range
+            .source_location
+            .as_ref()
+            .map(|s| s.span.clone())
+            .unwrap_or_else(|| start_span.clone());
+        let span = self.span_covering(&start_span, &end_span);
+        self.new_expression(
+            ExpressionKind::RangeContainment(Arc::new(repository), Arc::new(range)),
+            self.make_source(span),
+        )
     }
 
-    fn parse_calendar_unit(&mut self) -> Result<CalendarUnit, Error> {
-        let tok = self.next()?;
-        if !is_calendar_unit_token(&tok.kind) {
-            return Err(self.error_at_token(
-                &tok,
-                format!("Expected 'year', 'month', or 'week', found '{}'", tok.text),
-            ));
+    fn parse_as_chain(
+        &mut self,
+        mut expr: Expression,
+        start_span: Span,
+    ) -> Result<Expression, Error> {
+        while self.at(&TokenKind::As)? {
+            self.expect(&TokenKind::As)?;
+            let target_tok = self.next()?;
+            let target = conversion_target_from_token(&target_tok.kind, &target_tok.text);
+            expr = self.new_expression(
+                ExpressionKind::UnitConversion(Arc::new(expr), target),
+                self.make_source(self.span_covering(&start_span, &target_tok.span)),
+            )?;
         }
-        Ok(token_kind_to_calendar_unit(&tok.kind))
+        Ok(expr)
+    }
+
+    fn is_plain_number_literal(expr: &Expression) -> bool {
+        matches!(expr.kind, ExpressionKind::Literal(Value::Number(_)))
+    }
+
+    fn is_unit_conversion(expr: &Expression) -> bool {
+        matches!(expr.kind, ExpressionKind::UnitConversion(..))
+    }
+
+    /// True when the next token can follow a completed suffix expression (no further operands).
+    ///
+    /// Must include every token that can start the next spec-body item, a new `spec`/`repo`,
+    /// or end the file. See `parse_unit_conversion_before_expression_boundaries` in `parsing/mod.rs`.
+    fn at_expression_suffix_end(&mut self) -> Result<bool, Error> {
+        Ok(self.at(&TokenKind::And)?
+            || self.at(&TokenKind::Unless)?
+            || self.at(&TokenKind::Then)?
+            || self.at(&TokenKind::RParen)?
+            || self.at(&TokenKind::Eof)?
+            || self.at(&TokenKind::Spec)?
+            || self.at(&TokenKind::Repo)?
+            || self.at(&TokenKind::Uses)?
+            || is_spec_body_keyword(&self.peek()?.kind))
+    }
+
+    fn parse_calendar_unit(&mut self) -> Result<CalendarPeriodUnit, Error> {
+        let tok = self.next()?;
+        if let Some(unit) = CalendarPeriodUnit::from_keyword(&tok.text) {
+            return Ok(unit);
+        }
+        Err(self.error_at_token(
+            &tok,
+            format!("Expected 'year', 'month', or 'week', found '{}'", tok.text),
+        ))
     }
 
     // ========================================================================
     // Arithmetic expressions (precedence climbing)
     // ========================================================================
+
+    fn parse_range_expression(&mut self) -> Result<Expression, Error> {
+        self.parse_repository_expression()
+    }
+
+    /// Atom or range-typed value: `...` binds before `^`, `*`, `/`, `%` on the same operand.
+    /// Endpoints use [`Self::parse_range_ellipsis_bound`] (`+`/`-` only) so `now - 7 days...now` is valid
+    /// and `rate * period_start...period_end` keeps `*` outside the range.
+    fn parse_range_operand(&mut self) -> Result<Expression, Error> {
+        let start_span = self.peek()?.span.clone();
+        let checkpoint = self.checkpoint();
+        let left = self.parse_range_ellipsis_bound()?;
+        if !self.at(&TokenKind::Ellipsis)? {
+            self.restore(checkpoint);
+            return self.parse_factor();
+        }
+
+        self.next()?;
+        let right = self.parse_power_for_range_bound()?;
+        let end_span = right
+            .source_location
+            .as_ref()
+            .map(|s| s.span.clone())
+            .unwrap_or_else(|| start_span.clone());
+        let span = self.span_covering(&start_span, &end_span);
+        self.new_expression(
+            ExpressionKind::RangeLiteral(Arc::new(left), Arc::new(right)),
+            self.make_source(span),
+        )
+    }
+
+    /// One side of `...`: `+`/`-` between powers only (no `*`/`/`/`%` — those bind outside the range).
+    fn parse_range_ellipsis_bound(&mut self) -> Result<Expression, Error> {
+        let start_span = self.peek()?.span.clone();
+        let mut left = self.parse_power_for_range_bound()?;
+
+        while self.at_any(&[TokenKind::Plus, TokenKind::Minus])? {
+            let op_tok = self.next()?;
+            let operation = match op_tok.kind {
+                TokenKind::Plus => ArithmeticComputation::Add,
+                TokenKind::Minus => ArithmeticComputation::Subtract,
+                _ => unreachable!("BUG: only + and - should reach here"),
+            };
+
+            let right = self.parse_power_for_range_bound()?;
+            let end_span = right
+                .source_location
+                .as_ref()
+                .map(|s| s.span.clone())
+                .unwrap_or_else(|| start_span.clone());
+            let span = self.span_covering(&start_span, &end_span);
+
+            left = self.new_expression(
+                ExpressionKind::Arithmetic(Arc::new(left), operation, Arc::new(right)),
+                self.make_source(span),
+            )?;
+        }
+
+        Ok(left)
+    }
+
+    fn parse_power_for_range_bound(&mut self) -> Result<Expression, Error> {
+        let start_span = self.peek()?.span.clone();
+        let left = self.parse_factor()?;
+
+        if self.at(&TokenKind::Caret)? {
+            self.next()?;
+            self.check_depth()?;
+            let right = self.parse_power_for_range_bound()?;
+            self.depth_tracker.pop_depth();
+            let end_span = right
+                .source_location
+                .as_ref()
+                .map(|s| s.span.clone())
+                .unwrap_or_else(|| start_span.clone());
+            let span = self.span_covering(&start_span, &end_span);
+
+            return self.new_expression(
+                ExpressionKind::Arithmetic(
+                    Arc::new(left),
+                    ArithmeticComputation::Power,
+                    Arc::new(right),
+                ),
+                self.make_source(span),
+            );
+        }
+
+        Ok(left)
+    }
 
     fn parse_repository_expression(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
@@ -1761,6 +2398,19 @@ impl Parser {
             };
 
             let right = self.parse_term()?;
+            if Self::is_plain_number_literal(&left) && Self::is_unit_conversion(&right) {
+                let source = right
+                    .source_location
+                    .clone()
+                    .unwrap_or_else(|| self.make_source(start_span.clone()));
+                return Err(Error::parsing(
+                    "Cannot add a plain number to a converted value; convert each operand before \
+                     '+' (e.g. '5 as usd + c as usd')",
+                    source,
+                    None::<String>,
+                ));
+            }
+
             let end_span = right
                 .source_location
                 .as_ref()
@@ -1778,8 +2428,15 @@ impl Parser {
     }
 
     fn parse_term(&mut self) -> Result<Expression, Error> {
+        self.parse_term_with_as(true)
+    }
+
+    fn parse_term_with_as(&mut self, allow_as: bool) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
         let mut left = self.parse_power()?;
+        if allow_as {
+            left = self.parse_as_chain(left, start_span.clone())?;
+        }
 
         while self.at_any(&[TokenKind::Star, TokenKind::Slash, TokenKind::Percent])? {
             // Be careful: % could be a percent literal suffix (e.g. 50%)
@@ -1792,7 +2449,11 @@ impl Parser {
                 _ => unreachable!("BUG: only *, /, % should reach here"),
             };
 
-            let right = self.parse_power()?;
+            let right_start_span = self.peek()?.span.clone();
+            let mut right = self.parse_power()?;
+            if allow_as {
+                right = self.parse_as_chain(right, right_start_span)?;
+            }
             let end_span = right
                 .source_location
                 .as_ref()
@@ -1811,7 +2472,7 @@ impl Parser {
 
     fn parse_power(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
-        let left = self.parse_factor()?;
+        let left = self.parse_range_operand()?;
 
         if self.at(&TokenKind::Caret)? {
             self.next()?;
@@ -1942,6 +2603,28 @@ impl Parser {
                 self.new_expression(ExpressionKind::Now, self.make_source(tok.span))
             }
 
+            TokenKind::Past | TokenKind::Future => {
+                let tok = self.next()?;
+                let kind = if tok.kind == TokenKind::Past {
+                    DateRelativeKind::InPast
+                } else {
+                    DateRelativeKind::InFuture
+                };
+                let offset = self.parse_repository_expression()?;
+                let span = self.span_covering(
+                    &start_span,
+                    &offset
+                        .source_location
+                        .as_ref()
+                        .map(|s| s.span.clone())
+                        .unwrap_or(start_span.clone()),
+                );
+                self.new_expression(
+                    ExpressionKind::PastFutureRange(kind, Arc::new(offset)),
+                    self.make_source(span),
+                )
+            }
+
             // String literal
             TokenKind::StringLit => {
                 let tok = self.next()?;
@@ -2031,9 +2714,8 @@ impl Parser {
                 }
             }
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            let ratio_value = decimal / Decimal::from(1000);
             return self.new_expression(
-                ExpressionKind::Literal(Value::Ratio(ratio_value, Some("permille".to_string()))),
+                ExpressionKind::Literal(Value::NumberWithUnit(decimal, "permille".to_string())),
                 self.make_source(start_span),
             );
         }
@@ -2053,9 +2735,8 @@ impl Parser {
                 }
             }
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            let ratio_value = decimal / Decimal::from(100);
             return self.new_expression(
-                ExpressionKind::Literal(Value::Ratio(ratio_value, Some("percent".to_string()))),
+                ExpressionKind::Literal(Value::NumberWithUnit(decimal, "percent".to_string())),
                 self.make_source(self.span_covering(&start_span, &pct_span)),
             );
         }
@@ -2064,9 +2745,8 @@ impl Parser {
         if self.at(&TokenKind::PercentKw)? {
             self.next()?;
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            let ratio_value = decimal / Decimal::from(100);
             return self.new_expression(
-                ExpressionKind::Literal(Value::Ratio(ratio_value, Some("percent".to_string()))),
+                ExpressionKind::Literal(Value::NumberWithUnit(decimal, "percent".to_string())),
                 self.make_source(start_span),
             );
         }
@@ -2075,30 +2755,23 @@ impl Parser {
         if self.at(&TokenKind::Permille)? {
             self.next()?;
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            let ratio_value = decimal / Decimal::from(1000);
             return self.new_expression(
-                ExpressionKind::Literal(Value::Ratio(ratio_value, Some("permille".to_string()))),
+                ExpressionKind::Literal(Value::NumberWithUnit(decimal, "permille".to_string())),
                 self.make_source(start_span),
             );
         }
 
-        // Check for duration unit
-        if is_duration_unit(&self.peek()?.kind) && self.peek()?.kind != TokenKind::PercentKw {
-            let unit_tok = self.next()?;
-            let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            let duration_unit = token_kind_to_duration_unit(&unit_tok.kind);
-            return self.new_expression(
-                ExpressionKind::Literal(Value::Duration(decimal, duration_unit)),
-                self.make_source(self.span_covering(&start_span, &unit_tok.span)),
-            );
-        }
-
-        // Check for user-defined unit (identifier after number)
         if can_be_label(&self.peek()?.kind) {
             let unit_tok = self.next()?;
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
+            if let Some(calendar_unit) = CalendarUnit::from_keyword(&unit_tok.text) {
+                return self.new_expression(
+                    ExpressionKind::Literal(Value::Calendar(decimal, calendar_unit)),
+                    self.make_source(self.span_covering(&start_span, &unit_tok.span)),
+                );
+            }
             return self.new_expression(
-                ExpressionKind::UnresolvedUnitLiteral(decimal, unit_tok.text.clone()),
+                ExpressionKind::Literal(Value::NumberWithUnit(decimal, unit_tok.text.clone())),
                 self.make_source(self.span_covering(&start_span, &unit_tok.span)),
             );
         }
@@ -2173,7 +2846,6 @@ impl TokenKind {
             || can_be_label(self)
             || is_type_keyword(self)
             || is_boolean_keyword(self)
-            || is_duration_unit(self)
             || is_math_function(self)
     }
 }

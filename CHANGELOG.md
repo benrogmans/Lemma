@@ -2,6 +2,23 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.14] - 2026-05-21
+
+- Branch on failed rules: `is veto` / `is not veto` (e.g. `unless price is veto then fallback`).
+- Return a rule’s result in another unit without changing the spec: CLI `lemma run --as rule:unit`, HTTP `?as_units=rule:unit,...`, MCP/WASM `rule_result_units` (quantity conversion or ratio relabel).
+- Time: elapsed intervals via `uses lemma si` and types like `si.duration` (no built-in `duration` type); calendar periods (`year`, `month`, `week`) on **calendar** and **date** types — not mixed with elapsed durations.
+- **Calendar** type and **calendar range** for calendar-aware periods; **date**, **number**, **quantity**, and **ratio** ranges with half-open `lo...hi`; width via `(lo...hi) as <unit>` for number, duration quantity, and ratio ranges.
+- Compound quantity units (e.g. rates built from SI units in `uses lemma si`).
+- Arithmetic stays exact until API output; JSON magnitudes are decimal strings (see `documentation/numeric_precision.md`). Division by zero in rule bodies is rejected at planning time.
+
+### Breaking (0.8.13 → 0.8.14)
+
+- `scale` → `quantity` (and `scale range` → `quantity range`) in specs and API `kind` tags.
+- `uses lemma` → `uses lemma si`; stdlib is embedded `repo lemma` / `spec si` (`si.duration`, `si.length`, …).
+- `Engine::run`, `run_plan`, `run_plan_without_defaults`, and `evaluate_plan` take `EvaluationRequest` after `record_operations` — pass `EvaluationRequest::default()` when you do not need display conversion.
+- Value-copy rows use `fill` (removed `from` keyword); integrators: `rule_result_quantity_units` → `rule_result_units`.
+- Ratio typedef `minimum` / `maximum` / `default` must include units (`10%`, not bare `10`).
+
 ## [0.8.13] - 2026-05-06
 
 ### Added
@@ -38,6 +55,12 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 **Parsing / AST**
 
+- Removed the unused `TokenKind::DurationKw` surface and `PrimitiveKind::Duration` / `ConversionTarget::Duration` AST variants: the word `duration` is a normal identifier (e.g. a typedef may be named `duration`). The old built-in duration value/type shapes are gone; time periods are **quantity** values whose type declares `-> trait duration` (canonical **second**), carried as `Value::Quantity` / `ValueKind::Quantity` only.
+- `parse_value_from_string` has no separate duration primitive; duration-shaped values are quantity literals resolved against in-scope trait-duration quantities.
+- On quantity types that declare `-> trait duration`, `minimum`, `maximum`, and `default` constraints accept legacy duration-shaped literals and normalize them through the quantity unit table (or canonical base when the unit name is spelled differently).
+- Removed the `-> precision` type constraint command on `quantity` and `number` types (use `-> decimals` for decimal-place limits).
+- Schema `units[]` on `quantity` and `ratio` types include per-unit `minimum`, `maximum`, and `default` magnitudes (type-level bounds stay canonical).
+- `DataValue::Fill` with `FillRhs` (`Literal` | `Reference`): every `fill` row uses this variant so `fill` is never encoded as `Definition`. Literal and reference right-hand sides for `fill` share no AST shape with `data …: <literal>`.
 - `SpecRef` records optional `repository_span` and `target_span` (serde omits when absent) for tooling; parser fills spans on registry qualifiers and spec-reference targets.
 
 **Formatter**
@@ -80,9 +103,9 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - Reference targets may be data paths or rule results. Rule-target references are resolved lazily in topological order at evaluation time.
 - Local `-> ...` constraints on a reference (e.g. `data clamped: l.price -> maximum 1000 eur`) are merged with the LHS-declared type and validated against the copied value at runtime — a violation produces a Veto, not a planning error.
 - `-> default N` on a reference supplies a fallback when the target has no value (missing input or rule veto). The default is also surfaced in the spec schema (`SpecSchema.data[].default`).
-- Planning rejects a reference whose LHS-declared scale family differs from the target's family (e.g. `eur` vs `celsius`) — same `scale` discriminant is no longer sufficient.
+- Planning rejects a reference whose LHS-declared quantity family differs from the target's family (e.g. `eur` vs `celsius`) — same `quantity` discriminant is no longer sufficient.
 - Runtime `LiteralValue` stored under a reference path carries the reference's `resolved_type` (LHS-merged), not the target's looser type.
-- `engine/tests/data_references.rs` covers the full reference surface: value copy, chain resolution, user-value override, cycle detection, type mismatch, rule-target lazy resolution, scale-family mismatch, local default in schema, runtime type invariant.
+- `engine/tests/data_references.rs` covers the full reference surface: value copy, chain resolution, user-value override, cycle detection, type mismatch, rule-target lazy resolution, quantity-family mismatch, local default in schema, runtime type invariant.
 
 **Temporal ranges**
 - `Engine::get_spec_set`, `LemmaSpecSet::iter_with_ranges`, `Context::iter_with_ranges`, `Engine::list_specs_with_ranges`: catalog queries returning half-open `[effective_from, effective_to)` ranges per temporal version.
@@ -91,8 +114,8 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - `engine/tests/temporal_range_references.rs`: blueprint §2.1 test suite — qualified ref transitive subtree resolution, qualified-only edges do not split consumer slices, qualified ref skips coverage requirement, unqualified still requires full-range coverage, mixed qualified/unqualified slice counts, qualified type-import instant isolation.
 
 **Literal layer**
-- `ScaleUnits` / `RatioUnits` structs replacing unstructured vecs; `ScaleUnit` / `RatioUnit` carry name + factor.
-- Stricter `NumberWithUnit` and `RatioLiteral` parsing: unit must be present for scale and ratio literals.
+- `QuantityUnits` / `RatioUnits` structs replacing unstructured vecs; `QuantityUnit` / `RatioUnit` carry name + factor.
+- Stricter `NumberWithUnit` and `RatioLiteral` parsing: unit must be present for quantity and ratio literals.
 
 **CLI and tooling**
 - Interactive mode improvements.
@@ -118,7 +141,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 **Types**
 - `TypePageification::Text` drops `minimum` / `maximum` length-range constraints; only `length` (exact match) remains. Specs using `text -> minimum N` or `text -> maximum N` are rejected at planning.
 - `TypePageification::Duration` gains `minimum` / `maximum`.
-- Reference kind compatibility check replaced discriminant-only comparison with `has_same_base_type` + `same_scale_family` — scale types in different families are now correctly rejected.
+- Reference kind compatibility check replaced discriminant-only comparison with `has_same_base_type` + `same_quantity_family` — quantity types in different families are now correctly rejected.
 
 **Inversion subsystem**
 - Refactored into separate modules: constraints, domain, solve, world, target.

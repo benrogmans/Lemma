@@ -4,10 +4,9 @@ use std::fmt;
 
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, DataPath, LemmaType, LiteralValue,
-    LogicalComputation, MathematicalComputation, RulePath, SemanticDateTime, SemanticDurationUnit,
-    SemanticTime, TypeSpecification,
+    LogicalComputation, MathematicalComputation, RulePath, SemanticConversionTarget,
+    SemanticDateTime, SemanticTime, TypeSpecification,
 };
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
 /// Why an operation yielded no value (domain veto).
@@ -76,19 +75,20 @@ impl OperationResult {
         }
     }
 
-    pub fn number(number: impl Into<Decimal>) -> Self {
-        Self::Value(Box::new(LiteralValue::number(number.into())))
+    pub fn number(number: rust_decimal::Decimal) -> Self {
+        Self::Value(Box::new(LiteralValue::number_from_decimal(number)))
     }
 
-    pub fn scale(
-        scale: impl Into<Decimal>,
+    pub fn quantity(
+        value: rust_decimal::Decimal,
         unit: impl Into<String>,
         lemma_type: Option<LemmaType>,
     ) -> Self {
         let lemma_type =
-            lemma_type.unwrap_or_else(|| LemmaType::primitive(TypeSpecification::scale()));
-        Self::Value(Box::new(LiteralValue::scale_with_type(
-            scale.into(),
+            lemma_type.unwrap_or_else(|| LemmaType::primitive(TypeSpecification::quantity()));
+        Self::Value(Box::new(LiteralValue::quantity_with_type(
+            crate::literals::rational_from_parsed_decimal(value)
+                .expect("BUG: operation result quantity must lift at boundary"),
             unit.into(),
             lemma_type,
         )))
@@ -110,15 +110,8 @@ impl OperationResult {
         Self::Value(Box::new(LiteralValue::from_bool(boolean)))
     }
 
-    pub fn duration(duration: impl Into<Decimal>, unit: impl Into<SemanticDurationUnit>) -> Self {
-        Self::Value(Box::new(LiteralValue::duration(
-            duration.into(),
-            unit.into(),
-        )))
-    }
-
-    pub fn ratio(ratio: impl Into<Decimal>) -> Self {
-        Self::Value(Box::new(LiteralValue::ratio(ratio.into(), None)))
+    pub fn ratio(rational: rust_decimal::Decimal) -> Self {
+        Self::Value(Box::new(LiteralValue::ratio_from_decimal(rational, None)))
     }
 
     pub fn veto(veto: impl Into<String>) -> Self {
@@ -136,6 +129,11 @@ pub enum ComputationKind {
     Comparison(ComparisonComputation),
     Logical(LogicalComputation),
     Mathematical(MathematicalComputation),
+    UnitConversion {
+        target: SemanticConversionTarget,
+    },
+    /// Operand result was tested for veto (`is veto` syntax).
+    ResultIsVeto,
 }
 
 /// A record of a single operation during evaluation
@@ -207,6 +205,17 @@ mod computation_kind_serde_tests {
     #[test]
     fn computation_kind_mathematical_round_trip() {
         let k = ComputationKind::Mathematical(MathematicalComputation::Sqrt);
+        let json = serde_json::to_string(&k).expect("serialize");
+        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, k);
+    }
+
+    #[test]
+    fn computation_kind_unit_conversion_round_trip() {
+        use crate::planning::semantics::SemanticConversionTarget;
+        let k = ComputationKind::UnitConversion {
+            target: SemanticConversionTarget::QuantityUnit("days".to_string()),
+        };
         let json = serde_json::to_string(&k).expect("serialize");
         let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, k);

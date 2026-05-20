@@ -25,14 +25,14 @@ spec with_alias
 
   uses @lemma/std finance 2024-01-01
 
-  data y          : z from finance
+  data y          : finance.z
   data unit_price : 5 eur
 
   rule x:
     finance.x
 
   rule line_total:
-    unit_price * 2 in eur
+    (unit_price * 2) as eur
 
 
 repo x

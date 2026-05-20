@@ -355,20 +355,22 @@ fn extract_rule_paths_from_expression(expr: &Expression, paths: &mut HashSet<Rul
         }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right) => {
+        | ExpressionKind::LogicalAnd(left, right)
+        | ExpressionKind::LogicalOr(left, right)
+        | ExpressionKind::RangeLiteral(left, right)
+        | ExpressionKind::RangeContainment(left, right) => {
             extract_rule_paths_from_expression(left, paths);
             extract_rule_paths_from_expression(right, paths);
         }
         ExpressionKind::LogicalNegation(inner, _)
         | ExpressionKind::UnitConversion(inner, _)
-        | ExpressionKind::MathematicalComputation(_, inner) => {
+        | ExpressionKind::MathematicalComputation(_, inner)
+        | ExpressionKind::ResultIsVeto(inner)
+        | ExpressionKind::PastFutureRange(_, inner) => {
             extract_rule_paths_from_expression(inner, paths);
         }
-        ExpressionKind::DateRelative(_, date_expr, tolerance) => {
+        ExpressionKind::DateRelative(_, date_expr) => {
             extract_rule_paths_from_expression(date_expr, paths);
-            if let Some(tol) = tolerance {
-                extract_rule_paths_from_expression(tol, paths);
-            }
         }
         ExpressionKind::DateCalendar(_, _, date_expr) => {
             extract_rule_paths_from_expression(date_expr, paths);
@@ -398,7 +400,9 @@ fn substitute_rules_in_expression(
         BuildArithmetic(ArithmeticComputation, Option<Source>),
         BuildComparison(ComparisonComputation, Option<Source>),
         BuildLogicalAnd(Option<Source>),
+        BuildLogicalOr(Option<Source>),
         BuildLogicalNegation(NegationType, Option<Source>),
+        BuildResultIsVeto(Option<Source>),
         BuildUnitConversion(SemanticConversionTarget, Option<Source>),
         BuildMathematicalComputation(MathematicalComputation, Option<Source>),
         PopVisitedRules,
@@ -491,6 +495,24 @@ fn substitute_rules_in_expression(
                         work_stack.push(WorkItem::Process(right_idx));
                         work_stack.push(WorkItem::Process(left_idx));
                     }
+                    ExpressionKind::LogicalOr(left, right) => {
+                        let left_arc = Arc::clone(left);
+                        let right_arc = Arc::clone(right);
+
+                        let left_idx = expr_pool.len();
+                        expr_pool.push(left_arc);
+                        let right_idx = expr_pool.len();
+                        expr_pool.push(right_arc);
+
+                        work_stack.push(WorkItem::BuildLogicalOr(source_loc));
+                        work_stack.push(WorkItem::Process(right_idx));
+                        work_stack.push(WorkItem::Process(left_idx));
+                    }
+                    ExpressionKind::RangeLiteral(..)
+                    | ExpressionKind::PastFutureRange(..)
+                    | ExpressionKind::RangeContainment(..) => {
+                        result_pool.push(Expression::with_source(e.kind.clone(), source_loc));
+                    }
                     ExpressionKind::LogicalNegation(inner, neg_type) => {
                         let neg_type_clone = neg_type.clone();
                         let inner_arc = Arc::clone(inner);
@@ -515,6 +537,13 @@ fn substitute_rules_in_expression(
                         work_stack.push(WorkItem::BuildMathematicalComputation(
                             func_clone, source_loc,
                         ));
+                        work_stack.push(WorkItem::Process(inner_idx));
+                    }
+                    ExpressionKind::ResultIsVeto(inner) => {
+                        let inner_arc = Arc::clone(inner);
+                        let inner_idx = expr_pool.len();
+                        expr_pool.push(inner_arc);
+                        work_stack.push(WorkItem::BuildResultIsVeto(source_loc));
                         work_stack.push(WorkItem::Process(inner_idx));
                     }
                     ExpressionKind::Literal(lit) => {
@@ -591,12 +620,39 @@ fn substitute_rules_in_expression(
                     source_loc,
                 ));
             }
+            WorkItem::BuildLogicalOr(source_loc) => {
+                let right = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: missing right expression for LogicalOr during inversion hydration"
+                    )
+                });
+                let left = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: missing left expression for LogicalOr during inversion hydration"
+                    )
+                });
+                result_pool.push(Expression::with_source(
+                    ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
+                    source_loc,
+                ));
+            }
             WorkItem::BuildLogicalNegation(neg_type, source_loc) => {
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for LogicalNegation");
                 result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalNegation(Arc::new(inner), neg_type),
+                    source_loc,
+                ));
+            }
+            WorkItem::BuildResultIsVeto(source_loc) => {
+                let inner = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: missing operand expression for ResultIsVeto during inversion substitution"
+                    )
+                });
+                result_pool.push(Expression::with_source(
+                    ExpressionKind::ResultIsVeto(Arc::new(inner)),
                     source_loc,
                 ));
             }
@@ -647,7 +703,9 @@ fn hydrate_data_in_expression(
         BuildArithmetic(ArithmeticComputation, Option<Source>),
         BuildComparison(ComparisonComputation, Option<Source>),
         BuildLogicalAnd(Option<Source>),
+        BuildLogicalOr(Option<Source>),
         BuildLogicalNegation(NegationType, Option<Source>),
+        BuildResultIsVeto(Option<Source>),
         BuildUnitConversion(SemanticConversionTarget, Option<Source>),
         BuildMathematicalComputation(MathematicalComputation, Option<Source>),
     }
@@ -725,6 +783,25 @@ fn hydrate_data_in_expression(
                         work_stack.push(WorkItem::Process(right_idx));
                         work_stack.push(WorkItem::Process(left_idx));
                     }
+                    ExpressionKind::LogicalOr(left, right) => {
+                        let left_arc = Arc::clone(left);
+                        let right_arc = Arc::clone(right);
+
+                        let left_idx = expr_pool.len();
+                        expr_pool.push(left_arc);
+                        let right_idx = expr_pool.len();
+                        expr_pool.push(right_arc);
+
+                        work_stack.push(WorkItem::BuildLogicalOr(source_loc));
+                        work_stack.push(WorkItem::Process(right_idx));
+                        work_stack.push(WorkItem::Process(left_idx));
+                    }
+                    ExpressionKind::RangeLiteral(..)
+                    | ExpressionKind::PastFutureRange(..)
+                    | ExpressionKind::RangeContainment(..) => {
+                        result_pool
+                            .push(Expression::with_source(expr_kind_ref.clone(), source_loc));
+                    }
                     ExpressionKind::LogicalNegation(inner, neg_type) => {
                         let neg_type_clone = neg_type.clone();
                         let inner_arc = Arc::clone(inner);
@@ -749,6 +826,13 @@ fn hydrate_data_in_expression(
                         work_stack.push(WorkItem::BuildMathematicalComputation(
                             func_clone, source_loc,
                         ));
+                        work_stack.push(WorkItem::Process(inner_idx));
+                    }
+                    ExpressionKind::ResultIsVeto(inner) => {
+                        let inner_arc = Arc::clone(inner);
+                        let inner_idx = expr_pool.len();
+                        expr_pool.push(inner_arc);
+                        work_stack.push(WorkItem::BuildResultIsVeto(source_loc));
                         work_stack.push(WorkItem::Process(inner_idx));
                     }
                     ExpressionKind::Literal(lit) => {
@@ -814,12 +898,35 @@ fn hydrate_data_in_expression(
                     source_loc,
                 ));
             }
+            WorkItem::BuildLogicalOr(source_loc) => {
+                let right = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing right expression for LogicalOr"));
+                let left = result_pool
+                    .pop()
+                    .unwrap_or_else(|| unreachable!("BUG: missing left expression for LogicalOr"));
+                result_pool.push(Expression::with_source(
+                    ExpressionKind::LogicalOr(Arc::new(left), Arc::new(right)),
+                    source_loc,
+                ));
+            }
             WorkItem::BuildLogicalNegation(neg_type, source_loc) => {
                 let inner = result_pool
                     .pop()
                     .expect("Internal error: missing expression for LogicalNegation");
                 result_pool.push(Expression::with_source(
                     ExpressionKind::LogicalNegation(Arc::new(inner), neg_type),
+                    source_loc,
+                ));
+            }
+            WorkItem::BuildResultIsVeto(source_loc) => {
+                let inner = result_pool.pop().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: missing operand expression for ResultIsVeto during inversion hydration"
+                    )
+                });
+                result_pool.push(Expression::with_source(
+                    ExpressionKind::ResultIsVeto(Arc::new(inner)),
                     source_loc,
                 ));
             }
@@ -874,7 +981,9 @@ fn is_boolean_expression(expr: &Expression) -> bool {
         &expr.kind,
         ExpressionKind::Comparison(_, _, _)
             | ExpressionKind::LogicalAnd(_, _)
+            | ExpressionKind::LogicalOr(_, _)
             | ExpressionKind::LogicalNegation(_, _)
+            | ExpressionKind::ResultIsVeto(_)
     )
 }
 
@@ -1015,7 +1124,12 @@ fn evaluate_comparison(
     use crate::computation::comparison_operation;
     use crate::planning::semantics::ValueKind;
 
-    match comparison_operation(left, op, right) {
+    match comparison_operation(
+        left,
+        op,
+        right,
+        crate::computation::UnitResolutionContext::NamedQuantityOnly,
+    ) {
         OperationResult::Value(lit) => match &lit.value {
             ValueKind::Boolean(b) => Some(*b),
             _ => None,
@@ -1031,15 +1145,15 @@ fn evaluate_comparison(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::computation::rational::RationalInteger;
     use crate::planning::semantics::ValueKind;
-    use rust_decimal::Decimal;
 
     fn literal_expr(val: LiteralValue) -> Expression {
         Expression::with_source(ExpressionKind::Literal(Box::new(val)), None)
     }
 
     fn num(n: i64) -> LiteralValue {
-        LiteralValue::number(Decimal::from(n))
+        LiteralValue::number(RationalInteger::new(n as i128, 1))
     }
 
     #[test]
@@ -1072,7 +1186,7 @@ mod tests {
 
         if let ExpressionKind::Literal(lit) = &folded.kind {
             if let ValueKind::Number(n) = &lit.value {
-                assert_eq!(*n, Decimal::from(15));
+                assert_eq!(*n, RationalInteger::new(15, 1));
             } else {
                 panic!("Expected literal number");
             }

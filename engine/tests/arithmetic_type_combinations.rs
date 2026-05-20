@@ -9,22 +9,31 @@ use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
+fn with_duration_typedef(code: &str) -> String {
+    code.replacen("spec t\n", "spec t\nuses lemma si\n", 1)
+}
+
 fn eval_rule(
     code: &str,
     spec_name: &str,
     rule_name: &str,
     data: HashMap<String, String>,
 ) -> String {
+    let code = with_duration_typedef(code);
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(&code, lemma::SourceType::Volatile)
         .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), data, false)
+        .run(
+            None,
+            spec_name,
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("Should evaluate");
     let result = response
         .results
@@ -40,6 +49,25 @@ fn eval_rule(
             )
         })
         .to_string()
+}
+
+fn expect_plan_error(code: &str, expected_fragment: &str) {
+    let code = with_duration_typedef(code);
+    let mut engine = Engine::new();
+    let result = engine.load(&code, lemma::SourceType::Volatile);
+    assert!(result.is_err(), "Expected planning error");
+    let combined = result
+        .unwrap_err()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.contains(expected_fragment),
+        "Expected error containing '{}', got: {}",
+        expected_fragment,
+        combined
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -101,13 +129,13 @@ rule result: a ^ b"#;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Scale with Number → Scale
+// Quantity with Number → Quantity
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn scale_add_number() {
+fn quantity_add_number() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 5
 rule result: price + n"#;
@@ -116,9 +144,9 @@ rule result: price + n"#;
 }
 
 #[test]
-fn scale_subtract_number() {
+fn quantity_subtract_number() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 3
 rule result: price - n"#;
@@ -127,9 +155,9 @@ rule result: price - n"#;
 }
 
 #[test]
-fn scale_multiply_number() {
+fn quantity_multiply_number() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 3
 rule result: price * n"#;
@@ -138,9 +166,9 @@ rule result: price * n"#;
 }
 
 #[test]
-fn number_multiply_scale() {
+fn number_multiply_quantity() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data n: 3
 data price: 10 eur
 rule result: n * price"#;
@@ -149,9 +177,9 @@ rule result: n * price"#;
 }
 
 #[test]
-fn scale_divide_number() {
+fn quantity_divide_number() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 12 eur
 data n: 4
 rule result: price / n"#;
@@ -160,9 +188,9 @@ rule result: price / n"#;
 }
 
 #[test]
-fn scale_modulo_number() {
+fn quantity_modulo_number() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 3
 rule result: price % n"#;
@@ -171,24 +199,59 @@ rule result: price % n"#;
 }
 
 #[test]
-fn scale_power_number() {
+fn quantity_power_number() {
+    // Exponent must be an integer literal for dimensional types; using a literal 3 directly.
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 2 eur
-data n: 3
-rule result: price ^ n"#;
+rule result: price ^ 3"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
     assert!(val.contains("8"), "Expected 8 eur, got: {}", val);
 }
 
+#[test]
+fn quantity_power_variable_exponent_rejected() {
+    // Variable exponent for Quantity ^ Number must be rejected at plan time.
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data money: quantity -> unit eur 1.00
+data price: 2 eur
+data n: 3
+rule result: price ^ n"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Quantity ^ variable_exponent should be rejected at plan time"
+    );
+}
+
+#[test]
+fn quantity_power_fractional_exponent_rejected() {
+    // Fractional literal exponents for Quantity ^ Number must also be rejected.
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data money: quantity -> unit eur 1.00
+data price: 4 eur
+rule result: price ^ 0.5"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Quantity ^ fractional_exponent should be rejected at plan time"
+    );
+}
+
 // ═══════════════════════════════════════════════════════════════════
-// Scale with Ratio → Scale
+// Quantity with Ratio → Quantity
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn scale_add_ratio() {
+fn quantity_add_ratio() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 100 eur
 data rate: 10%
 rule result: price + rate"#;
@@ -197,9 +260,9 @@ rule result: price + rate"#;
 }
 
 #[test]
-fn scale_subtract_ratio() {
+fn quantity_subtract_ratio() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 100 eur
 data discount: 25%
 rule result: price - discount"#;
@@ -208,9 +271,9 @@ rule result: price - discount"#;
 }
 
 #[test]
-fn scale_multiply_ratio() {
+fn quantity_multiply_ratio() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 100 eur
 data rate: 50%
 rule result: price * rate"#;
@@ -219,9 +282,9 @@ rule result: price * rate"#;
 }
 
 #[test]
-fn scale_divide_ratio() {
+fn quantity_divide_ratio() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data price: 100 eur
 data rate: 50%
 rule result: price / rate"#;
@@ -230,40 +293,63 @@ rule result: price / rate"#;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Scale with Duration → Number
+// Quantity with Duration → anonymous intermediate (canonical magnitudes).
+// Phase 1 dimensional arithmetic: operands are converted to canonical magnitudes before
+// the operation. eur has factor 1 (canonical), hours converts to 3600 seconds.
+// 50 eur * 8 hours → 50 * 28800 seconds = 1 440 000 (anonymous {money:1, duration:1}).
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn scale_multiply_duration() {
-    let code = r#"spec t
-data money: scale -> unit eur 1.00
+fn quantity_multiply_duration_rejected_at_rule_boundary() {
+    // Duration * Quantity and Quantity * Duration produce anonymous intermediates with unresolved
+    // dimensions. These are forbidden at rule boundaries; the user must cast with `as <unit>`.
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data money: quantity -> unit eur 1.00
 data rate: 50 eur
 data hours: 8 hours
-rule result: rate * hours"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("400"), "Expected 400, got: {}", val);
+rule result: rate * hours"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Quantity * Duration at rule boundary should be rejected: anonymous intermediate {{money:1, duration:1}}"
+    );
 }
 
 #[test]
-fn duration_multiply_scale() {
-    let code = r#"spec t
-data money: scale -> unit eur 1.00
+fn duration_multiply_quantity_rejected_at_rule_boundary() {
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data money: quantity -> unit eur 1.00
 data hours: 8 hours
 data rate: 50 eur
-rule result: hours * rate"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("400"), "Expected 400, got: {}", val);
+rule result: hours * rate"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Duration * Quantity at rule boundary should be rejected: anonymous intermediate {{duration:1, money:1}}"
+    );
 }
 
 #[test]
-fn scale_divide_duration() {
-    let code = r#"spec t
-data money: scale -> unit eur 1.00
+fn quantity_divide_duration_rejected_at_rule_boundary() {
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data money: quantity -> unit eur 1.00
 data total: 400 eur
 data hours: 8 hours
-rule result: total / hours"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("50"), "Expected 50, got: {}", val);
+rule result: total / hours"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Quantity / Duration at rule boundary should be rejected: anonymous intermediate {{money:1, duration:-1}}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -332,12 +418,29 @@ rule result: d % n"#;
 
 #[test]
 fn duration_power_number() {
+    // Exponent must be an integer literal for dimensional types; using a literal 3 directly.
     let code = r#"spec t
 data d: 2 hours
-data n: 3
-rule result: d ^ n"#;
+rule result: d ^ 3"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
     assert!(val.contains("8"), "Expected 8 hours, got: {}", val);
+}
+
+#[test]
+fn duration_power_variable_exponent_rejected() {
+    // Variable exponent for Duration ^ Number must be rejected at plan time.
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data d: 2 hours
+data n: 3
+rule result: d ^ n"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Duration ^ variable_exponent should be rejected at plan time"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -417,13 +520,13 @@ rule result: n + r"#;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Scale with Scale (same family) → Scale
+// Quantity with Quantity (same family) → Quantity
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn scale_add_scale_same_family() {
+fn quantity_add_quantity_same_family() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data a: 4 eur
 data b: 5 eur
 rule result: a + b"#;
@@ -436,9 +539,9 @@ rule result: a + b"#;
 }
 
 #[test]
-fn scale_subtract_scale_same_family() {
+fn quantity_subtract_quantity_same_family() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data a: 10 eur
 data b: 3 eur
 rule result: a - b"#;
@@ -451,9 +554,9 @@ rule result: a - b"#;
 }
 
 #[test]
-fn scale_add_scale_result_used_in_comparison() {
+fn quantity_add_quantity_result_used_in_comparison() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data a: 4 eur
 data b: 5 eur
 data threshold: 8 eur
@@ -466,9 +569,9 @@ rule over_threshold: total > threshold"#;
 }
 
 #[test]
-fn scale_add_scale_result_in_further_arithmetic() {
+fn quantity_add_quantity_result_in_further_arithmetic() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data a: 10 eur
 data b: 20 eur
 data c: 5 eur
@@ -507,9 +610,9 @@ rule result: a - b"#;
 }
 
 #[test]
-fn ratio_add_ratio_result_used_with_scale() {
+fn ratio_add_ratio_result_used_with_quantity() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
+data money: quantity -> unit eur 1.00
 data base_rate: 10%
 data surcharge: 5%
 data price: 200 eur
@@ -524,7 +627,7 @@ rule discount: price * combined_rate"#;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Date - Date → Duration (result type propagation)
+// Date - Date rejection
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
@@ -535,7 +638,7 @@ data end: 2024-01-10
 data limit: 5 days
 rule elapsed: end - start
 rule over_limit: elapsed > limit"#;
-    assert_eq!(eval_rule(code, "t", "over_limit", HashMap::new()), "true");
+    expect_plan_error(code, "Cannot subtract dates");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -614,23 +717,18 @@ fn date_subtract_date() {
 data a: 2024-01-10
 data b: 2024-01-01
 rule result: a - b"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(
-        val.contains("777600"),
-        "Expected 777600 seconds (9 days), got: {}",
-        val
-    );
+    expect_plan_error(code, "dateA...dateB");
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Scale family: parent + child (same family) → Scale
+// Quantity family: parent + child (same family) → Quantity
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
 fn same_family_parent_plus_child() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
-data budget: money -> unit jpy 160.00 -> minimum 0
+data money: quantity -> unit eur 1.00
+data budget: money -> unit jpy 160.00 -> minimum 0 eur
 data price: 10 eur
 data allowance: 5 eur
 rule result: price + allowance"#;
@@ -645,9 +743,9 @@ rule result: price + allowance"#;
 #[test]
 fn same_family_siblings() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
-data income: money -> minimum 0
-data expense: money -> minimum 0
+data money: quantity -> unit eur 1.00
+data income: money -> minimum 0 eur
+data expense: money -> minimum 0 eur
 data salary: 3000 eur
 data rent: 1200 eur
 rule remaining: salary - rent"#;
@@ -662,12 +760,123 @@ rule remaining: salary - rent"#;
 #[test]
 fn same_family_result_used_in_comparison() {
     let code = r#"spec t
-data money: scale -> unit eur 1.00
-data budget: money -> unit jpy 160.00 -> minimum 0
+data money: quantity -> unit eur 1.00
+data budget: money -> unit jpy 160.00 -> minimum 0 eur
 data price: 4 eur
 data fee: 5 eur
 data limit: 8 eur
 rule total: price + fee
 rule over_budget: total > limit"#;
     assert_eq!(eval_rule(code, "t", "over_budget", HashMap::new()), "true");
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Quantity / Quantity → Number (dimensionless)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn quantity_divide_quantity_returns_number() {
+    let code = r#"spec t
+data money: quantity -> unit eur 1.00
+data total: 10 eur
+data unit_price: 5 eur
+rule ratio: total / unit_price"#;
+    let val = eval_rule(code, "t", "ratio", HashMap::new());
+    assert!(
+        val == "2" || val == "2.00" || val.starts_with("2.0"),
+        "10 eur / 5 eur should be dimensionless 2, got: {}",
+        val
+    );
+    assert!(
+        !val.to_lowercase().contains("eur"),
+        "10 eur / 5 eur should NOT contain unit, got: {}",
+        val
+    );
+}
+
+#[test]
+fn quantity_divide_quantity_result_usable_as_number() {
+    let code = r#"spec t
+data money: quantity -> unit eur 1.00
+data revenue: 100 eur
+data cost: 50 eur
+rule margin_factor: revenue / cost
+rule doubled: margin_factor * 10"#;
+    let val = eval_rule(code, "t", "doubled", HashMap::new());
+    assert!(
+        val == "20" || val.starts_with("20"),
+        "margin_factor=2, doubled=20, got: {}",
+        val
+    );
+    assert!(
+        !val.to_lowercase().contains("eur"),
+        "number * number should not have unit, got: {}",
+        val
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Number / Quantity → Number (dimensionless)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn number_divide_quantity_returns_number() {
+    let code = r#"spec t
+data money: quantity -> unit eur 1.00
+data count: 20
+data price: 10 eur
+rule units_per_eur: count / price"#;
+    let val = eval_rule(code, "t", "units_per_eur", HashMap::new());
+    assert!(
+        val == "2" || val == "2.00" || val.starts_with("2.0"),
+        "20 / 10 eur should be dimensionless 2, got: {}",
+        val
+    );
+    assert!(
+        !val.to_lowercase().contains("eur"),
+        "number / quantity should NOT contain unit, got: {}",
+        val
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Quantity * Quantity → rejected at plan time
+// Use `(a as number) * (b as number)` to multiply quantity values.
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn quantity_multiply_quantity_rejected_at_plan_time() {
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"spec t
+data money: quantity -> unit eur 1.00
+data a: 10 eur
+data b: 5 eur
+rule product: a * b"#,
+        lemma::SourceType::Volatile,
+    );
+    assert!(
+        result.is_err(),
+        "Quantity * Quantity should be rejected at plan time"
+    );
+}
+
+#[test]
+fn quantity_multiply_quantity_via_as_number_produces_number() {
+    let code = r#"spec t
+data money: quantity -> unit eur 1.00
+data a: 10 eur
+data b: 5 eur
+rule product: (a as number) * (b as number)"#;
+    let val = eval_rule(code, "t", "product", HashMap::new());
+    assert!(
+        val.contains("50"),
+        "(a as number) * (b as number) should be 50, got: {}",
+        val
+    );
+    assert!(
+        !val.to_lowercase().contains("eur"),
+        "result should not have unit, got: {}",
+        val
+    );
 }

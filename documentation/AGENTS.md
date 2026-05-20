@@ -71,7 +71,7 @@ If you cannot finish an implementation completely, every unfinished path must ha
 
 ### 10. Use `cargo nextest run`, not `cargo test`
 
-Unit tests go in the same module as the code (to test private functions). Integration tests go in `engine/tests/`. Always run with `cargo nextest run`. From repo root, `cargo precommit` runs the full CI pipeline (versions-verify, fmt, clippy, nextest, cargo-deny).
+Unit tests go in the same module as the code (to test private functions). Engine integration tests go in `engine/tests/`; CLI integration tests in `cli/tests/`. Hex ExUnit tests live in `engine/packages/hex/test/`. Always run with `cargo nextest run`. From repo root, `cargo precommit` runs the full CI pipeline (versions-verify, mix/hex test, fmt, clippy, nextest, npm WASM build+test, cargo-deny).
 
 ---
 

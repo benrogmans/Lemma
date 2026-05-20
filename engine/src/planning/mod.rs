@@ -12,6 +12,7 @@
 pub mod discovery;
 pub mod execution_plan;
 pub mod graph;
+pub mod normalize;
 pub mod semantics;
 pub mod spec_set;
 use crate::engine::Context;
@@ -195,12 +196,17 @@ fn plan_spec(
 
         match graph::Graph::build(context, repository, spec, &dag, &effective) {
             Ok((graph, slice_types)) => {
-                let execution_plan =
-                    execution_plan::build_execution_plan(&graph, &slice_types, &effective);
-                let value_errors =
-                    execution_plan::validate_literal_data_against_types(&execution_plan);
-                spec_result.errors.extend(value_errors);
-                spec_result.plans.push(execution_plan);
+                match execution_plan::build_execution_plan(&graph, &slice_types, &effective) {
+                    Ok(execution_plan) => {
+                        let value_errors =
+                            execution_plan::validate_literal_data_against_types(&execution_plan);
+                        spec_result.errors.extend(value_errors);
+                        spec_result.plans.push(execution_plan);
+                    }
+                    Err(plan_errors) => {
+                        spec_result.errors.extend(plan_errors);
+                    }
+                }
             }
             Err(build_errors) => {
                 spec_result.errors.extend(build_errors);
@@ -387,7 +393,7 @@ data name: "Jane""#;
             .collect::<Vec<_>>()
             .join(", ");
         assert!(
-            error_string.contains("Duplicate data"),
+            error_string.contains("already used"),
             "Error should mention duplicate data: {}",
             error_string
         );
@@ -567,7 +573,6 @@ uses contract: nonexistent"#;
                     name: String::new(),
                 }),
                 constraints: None,
-                from: None,
                 value: None,
             },
             source,
@@ -608,7 +613,7 @@ uses contract: nonexistent"#;
         //   data x: money
         // spec two:
         //   with one
-        //   data one.x: 7
+        //   fill one.x: 7
         //   rule getx: one.x
         let code = r#"
 spec one
@@ -617,7 +622,7 @@ data x: money
 
 spec two
 uses one
-data one.x: 7
+fill one.x: 7
 rule getx: one.x
 "#;
 
@@ -637,7 +642,7 @@ rule getx: one.x
         );
         let execution_plan = plan_single(spec_two, &specs).expect("planning should succeed");
 
-        // Verify that one.x has type 'money' (resolved from spec one)
+        // Verify that one.x keeps its declared custom type name while resolving in spec one.
         let one_x_path = DataPath {
             segments: vec![PathSegment {
                 data: "one".to_string(),
@@ -654,8 +659,8 @@ rule getx: one.x
 
         assert_eq!(
             one_x_type.name(),
-            "money",
-            "one.x should have type 'money', got: {}",
+            "x",
+            "one.x should have declared type 'x', got: {}",
             one_x_type.name()
         );
         assert!(one_x_type.is_number(), "money should be number-based");
@@ -665,14 +670,15 @@ rule getx: one.x
     fn test_data_definition_from_spec_has_import_defining_spec() {
         let code = r#"
 spec examples
-data money: scale
+data money: quantity
   -> unit eur 1.00
 
 spec checkout
-data money: scale
+uses examples
+data money: quantity
   -> unit eur 1.00
 data local_price: money
-data imported_price: money from examples
+data imported_price: examples.money
 "#;
 
         let specs = parse(
@@ -813,10 +819,10 @@ rule total_quantity: inventory.quantity"#;
 
     #[test]
     fn test_multiple_independent_errors_are_all_reported() {
-        // A spec referencing a non-existing data import AND a non-existing
+        // A spec referencing a non-existing import AND a non-existing
         // spec should report errors for BOTH, not just stop at the first.
         let source = r#"spec demo
-data money: nonexistent_type_source.amount
+fill money: nonexistent_type_source.amount
 uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#;
@@ -844,18 +850,18 @@ rule total: helper.value + price"#;
 
         assert!(
             combined.contains("nonexistent_type_source"),
-            "Should report data import error for 'nonexistent_type_source'. Got:\n{}",
+            "Should report import error for 'nonexistent_type_source'. Got:\n{}",
             combined
         );
 
-        // Must also report the spec reference error (not just the data import error)
+        // Must also report the spec reference error (not just the import error)
         assert!(
             combined.contains("nonexistent_spec"),
             "Should report spec reference error for 'nonexistent_spec'. Got:\n{}",
             combined
         );
 
-        // Should have at least 2 distinct kinds of errors (data import + spec ref)
+        // Should have at least 2 distinct kinds of errors (import + spec ref)
         assert!(
             errors.len() >= 2,
             "Expected at least 2 errors, got {}: {}",
@@ -866,10 +872,10 @@ rule total: helper.value + price"#;
         let data_import_err = errors
             .iter()
             .find(|e| e.to_string().contains("nonexistent_type_source"))
-            .expect("data import error");
+            .expect("import error");
         let loc = data_import_err
             .location()
-            .expect("data import error should carry source location");
+            .expect("import error should carry source location");
         assert_eq!(
             loc.source_type,
             crate::parsing::source::SourceType::Volatile
@@ -877,17 +883,17 @@ rule total: helper.value + price"#;
         assert_ne!(
             (loc.span.start, loc.span.end),
             (0, 0),
-            "data import error span should not be empty"
+            "import error span should not be empty"
         );
     }
 
     #[test]
     fn test_type_error_does_not_suppress_cross_spec_data_error() {
-        // When a data import fails, errors about cross-spec data references
+        // When a import fails, errors about cross-spec data references
         // (e.g. ext.some_data where ext is a spec ref to a non-existing spec)
         // must still be reported.
         let source = r#"spec demo
-data currency: missing_spec.currency
+fill currency: missing_spec.currency
 uses ext: also_missing
 rule val: ext.some_data"#;
 
@@ -917,7 +923,7 @@ rule val: ext.some_data"#;
 
         assert!(
             combined.contains("missing_spec"),
-            "Should report data import error about 'missing_spec'. Got:\n{}",
+            "Should report import error about 'missing_spec'. Got:\n{}",
             combined
         );
 
@@ -936,7 +942,8 @@ data money: number
 data x: money
 
 spec consumer 2025-01-01
-data imported_amount: money from dep
+uses dep
+data imported_amount: dep.money
 rule passthrough: imported_amount"#;
         let specs = parse(
             source,
@@ -990,9 +997,11 @@ rule passthrough: imported_amount"#;
     fn test_spec_dependency_cycle_surfaces_as_spec_error_and_populates_results() {
         let source = r#"spec a 2025-01-01
 uses dep_b: b
+data amount: number
 
 spec b 2025-01-01
-data imported_value: amount from a
+uses src_a: a
+data imported_value: src_a.amount
 "#;
         let specs = parse(
             source,
@@ -1047,7 +1056,7 @@ rule val: x
 
 spec consumer
 uses d: dep
-data d.x: 5
+fill d.x: 5
 rule result: d.val
 "#;
         let specs = parse(
@@ -1122,9 +1131,9 @@ rule limit: threshold
 
 spec calculator
 uses r: rates
-data r.base_rate: 0.03
+fill r.base_rate: 0.03
 uses c: config
-data c.threshold: 200
+fill c.threshold: 200
 rule combined: r.rate + c.limit
 "#;
         let specs = parse(

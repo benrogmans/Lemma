@@ -41,7 +41,15 @@ fn missing_data_ordered_empty_when_all_datas_provided() {
     data.insert("has_loyalty_card".to_string(), "false".to_string());
     data.insert("age".to_string(), "30".to_string());
 
-    let response = engine.run_plan(plan, Some(&now), data, false).expect("run");
+    let response = engine
+        .run_plan(
+            plan,
+            Some(&now),
+            lemma::serialization::data_values_from_strings(data),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect("run");
     assert!(
         response.missing_data_ordered().is_empty(),
         "all data provided: {:?}",
@@ -69,7 +77,13 @@ fn missing_data_ordered_includes_product_when_no_inputs() {
         .expect("plan");
 
     let response = engine
-        .run_plan(plan, Some(&now), HashMap::new(), false)
+        .run_plan(
+            plan,
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run");
 
     let ordered = response.missing_data_ordered();

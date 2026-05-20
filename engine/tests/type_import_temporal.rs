@@ -1,9 +1,10 @@
 //! Regression test: type-only dependencies must respect temporal versioning.
 //!
-//! When spec B depends on spec A *only* via `data money from A` (no data-level
-//! spec ref), and A has multiple temporal versions with different type
-//! definitions, B must produce separate temporal slices — one per version of A
-//! that falls within B's effective range.
+//! When spec B depends on spec A *only* via qualified parent types (`uses f: A` +
+//! `data money: f.money`) without an extra data-level spec ref on `A`, and `A`
+//! has multiple temporal versions with different type definitions, B must
+//! produce separate temporal slices — one per version of A that falls within
+//! B's effective range.
 
 use lemma::{DateTimeValue, Engine};
 use std::collections::HashMap;
@@ -32,7 +33,14 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec_name, Some(effective), map, false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            map,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap()
 }
 
@@ -55,8 +63,8 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
     );
 }
 
-/// Qualified data import: `from finance 2025-02-01` pins to finance v1 (eur only)
-/// regardless of evaluation datetime. The pin freezes the type at that instant.
+/// `uses f: finance 2025-02-01` pins to finance v1 (eur only) regardless of
+/// evaluation datetime. The pin freezes the type at that instant.
 #[test]
 fn qualified_data_import_pins_to_referenced_version() {
     let mut engine = Engine::new();
@@ -65,15 +73,15 @@ fn qualified_data_import_pins_to_referenced_version() {
         .load(
             r#"
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#,
@@ -87,7 +95,8 @@ data base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-data money: money from finance 2025-02-01
+uses f: finance 2025-02-01
+data money: f.money
 data price: money
 rule doubled: price * 2
 "#,
@@ -120,9 +129,9 @@ rule doubled: price * 2
     );
 }
 
-/// Qualified data import `from finance 2025-02-01` pins to finance v1 (eur only).
-/// Using a unit from v2 (usd) must produce a validation error even after the
-/// v2 boundary, because the pin freezes the type at the qualified instant.
+/// `uses f: finance 2025-02-01` pins to finance v1 (eur only). Using a unit from
+/// v2 (usd) must produce a validation error even after the v2 boundary, because
+/// the pin freezes the type at the qualified instant.
 #[test]
 fn qualified_data_import_rejects_unit_from_later_version() {
     let mut engine = Engine::new();
@@ -131,14 +140,14 @@ fn qualified_data_import_rejects_unit_from_later_version() {
         .load(
             r#"
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 
 spec finance 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
@@ -151,7 +160,8 @@ data money: scale
         .load(
             r#"
 spec shop 2025-01-01
-data money: money from finance 2025-02-01
+uses f: finance 2025-02-01
+data money: f.money
 data price: money
 rule doubled: price * 2
 "#,
@@ -180,6 +190,7 @@ rule doubled: price * 2
             .into_iter()
             .collect(),
         false,
+        lemma::EvaluationRequest::default(),
     );
     assert!(result.is_err(), "usd should be rejected by pinned v1 type");
     let err = result.unwrap_err().to_string();
@@ -199,12 +210,12 @@ fn unranged_spec_with_type_only_dep_rejects_incompatible_interface() {
         .load(
             r#"
 spec units
-data weight: scale
+data weight: quantity
  -> unit kg 1.00
  -> decimals 1
 
 spec units 2025-06-01
-data weight: scale
+data weight: quantity
  -> unit kg 1.00
  -> unit lb 2.205
  -> decimals 1
@@ -216,7 +227,8 @@ data weight: scale
     let result = engine.load(
         r#"
 spec warehouse
-data weight: weight from units
+uses units
+data weight: units.weight
 data item_weight: weight
 rule heavy: item_weight > 100.0 kg
 "#,
@@ -241,9 +253,10 @@ rule heavy: item_weight > 100.0 kg
     );
 }
 
-/// Mixed scenario: consumer has both a data-level spec ref and a data import
-/// to the same dependency. Consumer needs separate temporal versions to satisfy
-/// the cross-spec interface contract (dep's interface changes between slices).
+/// Mixed scenario: consumer has both a data-level spec ref (`uses ref: finance`) and
+/// qualified parent types resolving through the same dependency. Consumer needs
+/// separate temporal versions to satisfy the cross-spec interface contract (dep's
+/// interface changes between slices).
 #[test]
 fn mixed_spec_ref_and_data_import_to_same_dep() {
     let mut engine = Engine::new();
@@ -252,15 +265,15 @@ fn mixed_spec_ref_and_data_import_to_same_dep() {
         .load(
             r#"
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#,
@@ -274,14 +287,16 @@ data base_price: 75.00 eur
         .load(
             r#"
 spec shop 2025-01-01
-data money: money from finance
+uses finance
 uses ref: finance
+data money: finance.money
 data price: money
 rule total: ref.base_price + price
 
 spec shop 2025-07-01
-data money: money from finance
+uses finance
 uses ref: finance
+data money: finance.money
 data price: money
 rule total: ref.base_price + price
 "#,
@@ -313,7 +328,9 @@ rule total: ref.base_price + price
         "85.00 eur",
     );
 
-    // After boundary: usd must be available from the data import
+    // After boundary: usd must be available from the qualified `f.money` type.
+    // unit usd 0.91: 1 USD = 0.91 EUR; 10 USD => 9.10 EUR.
+    // 75.00 + 9.10 = 84.10 eur.
     assert_rule_value(
         &eval_with(
             &engine,
@@ -322,12 +339,12 @@ rule total: ref.base_price + price
             vec![("price", "10.00 usd")],
         ),
         "total",
-        "84.09 eur",
+        "84.10 eur",
     );
 }
 
-/// Inline data import (`data price: money from finance`) without pinning
-/// must be rejected when the source spec's interface changes across versions.
+/// Unpinned `uses finance` + `data price: finance.money` must be rejected when the
+/// source spec's interface changes across versions.
 #[test]
 fn inline_data_import_rejects_incompatible_unpinned_dep() {
     let mut engine = Engine::new();
@@ -336,15 +353,15 @@ fn inline_data_import_rejects_incompatible_unpinned_dep() {
         .load(
             r#"
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#,
@@ -357,7 +374,8 @@ data base_price: 75.00 eur
     let result = engine.load(
         r#"
 spec shop 2025-01-01
-data price: money from finance
+uses finance
+data price: finance.money
 rule doubled: price * 2
 "#,
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
@@ -365,7 +383,7 @@ rule doubled: price * 2
 
     assert!(
         result.is_err(),
-        "Unpinned inline data import with incompatible dep interfaces must be rejected"
+        "Unpinned uses + qualified parent with incompatible dep interfaces must be rejected"
     );
     let errs = result.unwrap_err();
     let combined: String = errs
@@ -379,7 +397,7 @@ rule doubled: price * 2
     );
 }
 
-/// Data import with explicit effective datetime pins resolution to that version.
+/// Qualified `uses` with explicit effective datetime pins resolution to that version.
 #[test]
 fn data_import_with_effective_datetime_pins_version() {
     let mut engine = Engine::new();
@@ -388,15 +406,15 @@ fn data_import_with_effective_datetime_pins_version() {
         .load(
             r#"
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
 "#,
@@ -406,13 +424,14 @@ data base_price: 75.00 eur
         )
         .unwrap();
 
-    // Pin the data import to a date before the v2 boundary;
-    // even when evaluated after 2025-07-01, only eur should be available
+    // Pin `uses f: finance` to a date before the v2 boundary; even when evaluated
+    // after 2025-07-01, only eur should be available.
     engine
         .load(
             r#"
 spec shop 2025-01-01
-data money: money from finance 2025-03-01
+uses f: finance 2025-03-01
+data money: f.money
 data price: money
 rule doubled: price * 2
 "#,
@@ -420,8 +439,8 @@ rule doubled: price * 2
         )
         .unwrap();
 
-    // Evaluate after the finance boundary — but the data import is pinned
-    // to 2025-03-01 which resolves finance v1 (eur only).
+    // Evaluate after the finance boundary — but `uses f: finance 2025-03-01`
+    // resolves finance v1 (eur only).
     assert_rule_value(
         &eval_with(
             &engine,
@@ -436,7 +455,7 @@ rule doubled: price * 2
 
 /// Regression: qualified pin to early dep version must NOT silently bind to a
 /// later body. Two finance versions with incompatible types (v1=eur only,
-/// v2=eur+usd). Consumer pins to v1 via `from finance 2025-02-01`.
+/// v2=eur+usd). Consumer pins to v1 via `uses f: finance 2025-02-01`.
 /// Evaluating with `usd` in a later slice must fail (v1 has no usd).
 #[test]
 fn qualified_pin_must_not_leak_later_version_types() {
@@ -446,14 +465,14 @@ fn qualified_pin_must_not_leak_later_version_types() {
         .load(
             r#"
 spec finance
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 
 spec finance 2025-07-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
@@ -466,7 +485,8 @@ data money: scale
         .load(
             r#"
 spec shop 2025-01-01
-data money: money from finance 2025-02-01
+uses f: finance 2025-02-01
+data money: f.money
 data price: money
 rule doubled: price * 2
 "#,
@@ -483,6 +503,7 @@ rule doubled: price * 2
             .into_iter()
             .collect(),
         false,
+        lemma::EvaluationRequest::default(),
     );
     match &result {
         Err(e) => {

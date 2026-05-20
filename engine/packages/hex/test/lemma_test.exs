@@ -11,6 +11,28 @@ defmodule LemmaTest do
     unless quantity >= 50 then 15
   """
 
+  @embedded_repo "lemma"
+
+  defp embedded_stdlib_group?(group) do
+    group[:repository][:name] == @embedded_repo
+  end
+
+  defp workspace_groups(groups) do
+    Enum.reject(groups, &embedded_stdlib_group?/1)
+  end
+
+  defp embedded_stdlib_group(groups) do
+    Enum.find(groups, &embedded_stdlib_group?/1)
+  end
+
+  defp spec_count(groups) do
+    groups |> Enum.map(fn g -> length(g.specs) end) |> Enum.sum()
+  end
+
+  defp workspace_spec_count(groups) do
+    groups |> workspace_groups() |> spec_count()
+  end
+
   describe "new/0" do
     test "creates engine with default limits" do
       assert {:ok, engine} = Lemma.new()
@@ -102,8 +124,8 @@ defmodule LemmaTest do
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
       assert {:ok, groups} = Lemma.list(engine)
       assert is_list(groups)
-      assert length(groups) == 1
-      group = hd(groups)
+      assert length(workspace_groups(groups)) == 1
+      group = hd(workspace_groups(groups))
       assert group[:repository][:name] == nil
       assert group[:repository][:dependency] == nil
       assert length(group[:specs]) == 1
@@ -118,15 +140,20 @@ defmodule LemmaTest do
       assert is_map(spec[:schema]["rules"])
     end
 
-    test "empty engine returns empty list" do
+    test "fresh engine lists embedded stdlib repository" do
       {:ok, engine} = Lemma.new()
-      assert {:ok, []} = Lemma.list(engine)
+      {:ok, groups} = Lemma.list(engine)
+      embedded = embedded_stdlib_group(groups)
+      assert embedded != nil
+      assert embedded[:repository][:dependency] == @embedded_repo
+      assert hd(embedded.specs)[:name] == "si"
     end
 
     test "effective_from is nil when not set" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
-      {:ok, [group]} = Lemma.list(engine)
+      {:ok, groups} = Lemma.list(engine)
+      [group] = workspace_groups(groups)
       spec = hd(group.specs)
       assert spec[:effective_from] == nil
     end
@@ -134,7 +161,8 @@ defmodule LemmaTest do
     test "effective_to is nil for an unversioned spec (no successor)" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
-      {:ok, [group]} = Lemma.list(engine)
+      {:ok, groups} = Lemma.list(engine)
+      [group] = workspace_groups(groups)
       spec = hd(group.specs)
       assert spec[:effective_to] == nil
     end
@@ -154,8 +182,8 @@ defmodule LemmaTest do
 
       :ok = Lemma.load(engine, code, "temporal.lemma")
       {:ok, groups} = Lemma.list(engine)
-      assert length(groups) == 1
-      entries = hd(groups).specs
+      assert length(workspace_groups(groups)) == 1
+      entries = hd(workspace_groups(groups)).specs
       assert length(entries) == 2
 
       [earlier, latest] = entries
@@ -276,12 +304,13 @@ defmodule LemmaTest do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, "spec removable\ndata x: 1\nrule y: x + 1", "rm.lemma")
       {:ok, groups} = Lemma.list(engine)
-      assert length(hd(groups).specs) == 1
+      assert workspace_spec_count(groups) == 1
 
       assert :ok = Lemma.remove_spec(engine, "removable", "2025-01-01")
 
       {:ok, specs} = Lemma.list(engine)
-      assert specs == []
+      assert workspace_spec_count(specs) == 0
+      assert embedded_stdlib_group(specs) != nil
     end
 
     test "returns error for unknown spec" do
@@ -297,8 +326,9 @@ defmodule LemmaTest do
       :ok = Lemma.load(e1, "spec a\ndata x: 1\nrule y: x + 1", "a.lemma")
       {:ok, groups1} = Lemma.list(e1)
       {:ok, groups2} = Lemma.list(e2)
-      assert Enum.sum(Enum.map(groups1, fn g -> length(g.specs) end)) == 1
-      assert groups2 == []
+      assert workspace_spec_count(groups1) == 1
+      assert workspace_spec_count(groups2) == 0
+      assert embedded_stdlib_group(groups2) != nil
     end
   end
 

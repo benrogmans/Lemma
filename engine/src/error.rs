@@ -59,8 +59,8 @@ pub enum Error {
 
     /// A referenced repository is not present in the context (not loaded / not fetched).
     ///
-    /// Produced during planning when a `uses @repo ...` or `data x: … from @repo …`
-    /// refers to a repository name that has not been added to the workspace.
+    /// Produced during planning when a `uses @repository ...` reference names a repository
+    /// qualifier that has not been added to the workspace.
     MissingRepository {
         details: Box<ErrorDetails>,
         /// Full repository qualifier as written (e.g. `"@lemma/std"`).
@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn test_related_data_attribution_and_display() {
         let err = Error::validation(
-            "Unknown unit 'mete' for this scale type",
+            "Unknown unit 'mete' for this quantity type",
             Some(test_source()),
             None::<String>,
         )
@@ -759,7 +759,7 @@ mod tests {
 
         assert_eq!(err.related_data(), Some("bridge_height"));
         assert_eq!(err.kind(), ErrorKind::Validation);
-        assert_eq!(err.message(), "Unknown unit 'mete' for this scale type");
+        assert_eq!(err.message(), "Unknown unit 'mete' for this quantity type");
 
         let display = format!("{err}");
         assert!(

@@ -1,5 +1,4 @@
-use rust_decimal::Decimal;
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, ValueKind};
@@ -14,7 +13,14 @@ fn get_rule_result(
 ) -> lemma::OperationResult {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     response
         .results
@@ -29,8 +35,9 @@ fn test_duration_conversion_properties() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data duration: 60 minutes
-rule to_hours: duration in hours
+rule to_hours: duration as hours
 "#;
     engine
         .load(
@@ -46,17 +53,21 @@ rule to_hours: duration in hours
         .expect("Expected value result, got veto")
         .clone();
 
-    if let ValueKind::Duration(value, _) = &val.value {
+    if let ValueKind::Quantity(value, unit, _) = &val.value {
+        assert!(
+            unit.is_empty() || unit.to_ascii_lowercase().contains("hour"),
+            "unit={unit:?}"
+        );
         // 60 minutes = 1 hour (the conversion returns 1 hour, not 3600 seconds)
         assert_eq!(
             *value,
-            Decimal::from_str("1").unwrap(),
+            lemma::RationalInteger::new(1, 1),
             "minutes to hours conversion failed: got {}",
             value
         );
     } else {
         panic!(
-            "to_hours should be a Duration after conversion, got {:?}",
+            "to_hours should be a Quantity after conversion, got {:?}",
             val
         );
     }

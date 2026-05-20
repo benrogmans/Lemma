@@ -14,17 +14,15 @@ Rules in Lemma are transparent, deterministic, logically consistent, temporally 
 ```lemma
 spec pricing 2026-01-01
 
-data quantity : number
-data is_vip   : false
+data quantity: number
+data is_vip:   false
 
-rule discount:
-  0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless is_vip then 25%
+rule discount: 0%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
 
-rule price:
-  quantity * 20 - discount
+rule price: quantity * 20 - discount
 ```
 
 The last matching `unless` wins, mirroring how business rules, legal documents, and SOPs are written: "In principle X applies, unless Y, unless Z..."
@@ -39,7 +37,7 @@ This allows you to implement policy changes rapidly without compromising complia
 
 ### Direction
 
-Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what would satisfy this outcome?” queries), **tables** as a first-class data type for data-driven rules, and **performance** competitive with high performance programming languages.
+Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). The engine already exposes **inversion** (constraint-style “what inputs satisfy this outcome?”) via the Rust and Hex APIs; CLI and user docs for inversion are still evolving. Planned work includes **tables** as a first-class data type for data-driven rules and **performance** competitive with high performance programming languages.
 
 ### What about AI?
 
@@ -62,30 +60,27 @@ Create `shipping.lemma`:
 ```lemma
 spec shipping
 
-data money: scale
+data money: quantity
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
   -> minimum 0
 
-data weight: scale
+data weight: quantity
   -> unit kilogram 1
   -> unit gram 0.001
 
-data is_express     : true
-data package_weight : 2.5 kilogram
+data is_express:     true
+data package_weight: 2.5 kilogram
 
-rule express_fee:
-  0 eur
+rule express_fee: 0 eur
   unless is_express then 4.99 eur
 
-rule base_shipping:
-  5.99 eur
-  unless package_weight > 1 kilogram then 8.99 eur
-  unless package_weight > 5 kilogram then 15.99 eur
+rule base_shipping: 5.99 eur
+  unless package_weight > 1 kilogram  then 8.99 eur
+  unless package_weight > 5 kilogram  then 15.99 eur
 
-rule total_cost:
-  base_shipping + express_fee
+rule total_cost: base_shipping + express_fee
 ```
 
 Run it:
@@ -99,7 +94,6 @@ $ lemma run shipping
 ├───────────────┼───────────┤
 │ total_cost    ┆ 13.98 eur │
 └───────────────┴───────────┘
-Hash: 1d2e8f6d
 ```
 
 Override data from the command line:
@@ -117,7 +111,7 @@ Define custom types with units, constraints, and automatic conversion:
 ```lemma
 spec type_examples
 
-data money: scale
+data money: quantity
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
@@ -128,11 +122,11 @@ data status: text
   -> option "inactive"
 
 data discount: ratio
-  -> minimum 0
-  -> maximum 1
+  -> minimum 0%
+  -> maximum 100%
 ```
 
-**Primitive types:** `boolean`, `number`, `scale` (with units), `text`, `date`, `time`, `duration`, `ratio`
+**Primitive types:** `boolean`, `number`, `quantity` (with units; time periods via `trait duration`), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `number range`, `quantity range`, `ratio range`, `calendar range`). Import SI units with `uses lemma si` (`si.duration`, `si.length`, …).
 
 ### Spec composition
 
@@ -141,27 +135,24 @@ Reference data and rules across specs:
 ```lemma
 spec employee
 
-data years_service : 8
+data years_service: 8
 
 
 spec leave_policy
 
-data senior_threshold : 5
-data base_leave_days  : 25
-data bonus_leave_days : 5
+data base_leave_days:  25
+data bonus_leave_days: 5
+data senior_threshold: 5
 
 
 spec leave_entitlement
 
-uses employee
-
-uses leave_policy
+uses employee, leave_policy
 
 rule is_senior:
   employee.years_service >= leave_policy.senior_threshold
 
-rule annual_leave_days:
-  leave_policy.base_leave_days
+rule annual_leave_days: leave_policy.base_leave_days
   unless is_senior
     then leave_policy.base_leave_days + leave_policy.bonus_leave_days
 ```
@@ -173,20 +164,18 @@ Multiple versions of a spec can coexist. The engine resolves the correct one bas
 ```lemma
 spec pricing
 
-data base_price : 20
-data quantity   : number
+data base_price: 20
+data quantity:   number
 
-rule total:
-  base_price * quantity
+rule total: base_price * quantity
 
 
 spec pricing 2025-01-01
 
-data base_price : 25
-data quantity   : number
+data base_price: 25
+data quantity:   number
 
-rule total:
-  base_price * quantity
+rule total: base_price * quantity
 ```
 
 ```bash
@@ -201,12 +190,13 @@ When type constraints are not enough, `veto` blocks a rule entirely:
 ```lemma
 spec performance_review
 
-data start_date        : [date]
-data review_date       : [date]
-data performance_score : number -> minimum 0 -> maximum 100]
+data start_date: date
+data review_date: date
+data performance_score: number
+  -> minimum 0
+  -> maximum 100
 
-rule bonus_percentage:
-  0%
+rule bonus_percentage: 0%
   unless performance_score >= 70 then 5%
   unless performance_score >= 90 then 10%
   unless review_date < start_date
@@ -222,21 +212,19 @@ Reference shared specs from a registry with `@`:
 ```lemma
 spec invoicing
 
-data currency from @lemma/std/finance
+uses fin: @lemma/std/finance
 
-data subtotal : 250 eur
-data tax_rate : 21%
+data subtotal: 250 eur
+data tax_rate: 21%
 
-rule tax:
-  subtotal * tax_rate
+rule tax: subtotal * tax_rate
 
-rule total:
-  subtotal + tax
+rule total: subtotal + tax
 ```
 
 ```bash
 lemma fetch --all           # fetch all @... dependencies
-lemma fetch -f        # force re-fetch if content changed
+lemma fetch @lemma/std -f   # force re-fetch if content changed
 ```
 
 ## CLI
@@ -260,7 +248,7 @@ lemma fetch                                 # fetch registry dependencies
 ### HTTP Server
 
 ```bash
-lemma server --dir ./policies
+lemma server ./policies
 
 # Evaluate via query parameters
 curl "http://localhost:8012/pricing?quantity=10&is_member=true"
@@ -279,7 +267,7 @@ Routes: `GET /` (list specs), `GET /openapi.json`, `GET /docs` (interactive API 
 Live-reload with `--watch`:
 
 ```bash
-lemma server --dir ./policies --watch
+lemma server ./policies --watch
 ```
 
 ### MCP Server
@@ -314,7 +302,7 @@ docker run --rm -v "$(pwd):/specs" ghcr.io/lemma/lemma run shipping
 
 # Deploy as HTTP API
 docker run -d -p 8012:8012 -v "$(pwd):/specs" ghcr.io/lemma/lemma \
-  server --host 0.0.0.0 --port 8012
+  server /specs --host 0.0.0.0 --port 8012
 ```
 
 Supports `linux/amd64` and `linux/arm64`.
@@ -322,6 +310,7 @@ Supports `linux/amd64` and `linux/arm64`.
 ## Documentation
 
 - **[Language Guide](documentation/index.md)** -- specs, data, rules, types
+- **[Composing specs](documentation/spec_composability.md)** -- `uses`, temporal versions, pins
 - **[Reference](documentation/reference.md)** -- operators, literals, syntax
 - **[Veto Semantics](documentation/veto_semantics.md)** -- when rules produce no value
 - **[Examples](documentation/examples/)** -- example `.lemma` files
@@ -336,7 +325,7 @@ Lemma is in early development and **not yet recommended for production use**. Ex
 
 Contributions welcome! See [contributing](documentation/contributing.md) for setup and workflow.
 
-From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, then `fmt --check`, Clippy, Nextest, and cargo-deny (install [`cargo-nextest`](https://nexte.st/) and [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) first, same as CI). When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
+From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy, Nextest, WASM npm `build.js` + `test.js`, and cargo-deny (install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) first). SDK steps always run, not only when their directories change. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
 
 ## License
 

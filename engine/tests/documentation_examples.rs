@@ -3,11 +3,18 @@
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
 use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::SemanticDurationUnit;
+use lemma::planning::semantics::BaseQuantityVector;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
+
+fn decimal_lit(d: &str) -> Decimal {
+    Decimal::from_str(d).unwrap()
+}
+fn rational_lit(d: &str) -> lemma::RationalInteger {
+    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
+}
 
 fn get_rule_value(
     engine: &Engine,
@@ -17,7 +24,14 @@ fn get_rule_value(
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), data, false)
+        .run(
+            None,
+            spec_name,
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     response
         .results
@@ -84,7 +98,11 @@ fn test_01_coffee_order() {
     // total = 8.40 - 0.756 = 7.644 eur
     assert_eq!(
         total.value,
-        lemma::ValueKind::Scale(Decimal::from_str("7.644").unwrap(), "eur".to_string())
+        lemma::ValueKind::Quantity(
+            rational_lit("7.644"),
+            "eur".to_string(),
+            std::collections::BTreeMap::new()
+        )
     );
 }
 
@@ -100,7 +118,11 @@ fn test_02_library_fees() {
     let final_fee = get_rule_value(&engine, "library_fees", "final_fee", data.clone());
     assert_eq!(
         final_fee.value,
-        lemma::ValueKind::Scale(Decimal::from_str("1.25").unwrap(), "eur".to_string())
+        lemma::ValueKind::Quantity(
+            rational_lit("1.25"),
+            "eur".to_string(),
+            std::collections::BTreeMap::new()
+        )
     );
 
     let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", data);
@@ -119,22 +141,27 @@ fn test_03_recipe_scaling() {
     let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", data.clone());
     assert_eq!(
         scaling_factor.value,
-        lemma::ValueKind::Number(Decimal::from_str("2").unwrap())
+        lemma::ValueKind::Number(rational_lit("2"))
     );
 
     let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", data.clone());
     assert_eq!(
         baking_time.value,
-        lemma::ValueKind::Duration(
-            Decimal::from_str("40").unwrap(),
-            SemanticDurationUnit::Minute.clone()
+        lemma::ValueKind::Quantity(
+            rational_lit("40"),
+            "minutes".to_string(),
+            BaseQuantityVector::new(),
         )
     );
 
     let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", data);
     assert_eq!(
         oven_temp.value,
-        lemma::ValueKind::Scale(Decimal::from_str("175").unwrap(), "celsius".to_string())
+        lemma::ValueKind::Quantity(
+            rational_lit("175"),
+            "celsius".to_string(),
+            BaseQuantityVector::new(),
+        )
     );
 }
 
@@ -151,18 +178,12 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         discount_rate.value,
-        lemma::ValueKind::Ratio(
-            Decimal::from_str("0.10").unwrap(),
-            Some("percent".to_string())
-        )
+        lemma::ValueKind::Ratio(rational_lit("0.10"), Some("percent".to_string()))
     );
 
     // Test membership_benefits spec (references premium_membership)
     let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
-    assert_eq!(
-        discount.value,
-        lemma::ValueKind::Number(Decimal::from_str("15").unwrap())
-    );
+    assert_eq!(discount.value, lemma::ValueKind::Number(rational_lit("15")));
 
     let shipping_cost = get_rule_value(
         &engine,
@@ -172,7 +193,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         shipping_cost.value,
-        lemma::ValueKind::Number(Decimal::from_str("0").unwrap())
+        lemma::ValueKind::Number(rational_lit("0"))
     );
 
     let total_points = get_rule_value(
@@ -183,7 +204,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         total_points.value,
-        lemma::ValueKind::Number(Decimal::from_str("325").unwrap())
+        lemma::ValueKind::Number(rational_lit("325"))
     );
 }
 

@@ -25,7 +25,7 @@ fn rule_answer_decimal(response: &lemma::evaluation::Response) -> Decimal {
         .expect("spec defines rule answer");
     match &rr.result {
         lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => *n,
+            lemma::ValueKind::Number(n) => lemma::commit_rational_to_decimal(n).unwrap(),
             other => panic!("expected number answer, got {:?}", other),
         },
         other => panic!("expected value result, got {:?}", other),
@@ -78,10 +78,18 @@ rule answer: 99
             Some(&now),
             Default::default(),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .expect("run alpha");
     let run_beta = engine
-        .run(Some("beta"), "duped", Some(&now), Default::default(), false)
+        .run(
+            Some("beta"),
+            "duped",
+            Some(&now),
+            Default::default(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run beta");
 
     assert_eq!(

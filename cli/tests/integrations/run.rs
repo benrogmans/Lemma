@@ -401,3 +401,248 @@ rule out: true
         stdout
     );
 }
+
+#[test]
+fn test_cli_explain_scalar_conversion_format() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec test_cli_conversion_explain
+data mass: quantity
+    -> unit kilogram 1.0
+    -> unit gram 0.001
+    -> default 2 kilogram
+rule result: mass as gram
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("test_cli_conversion_explain")
+        .arg("--rules=result")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+    assert!(stdout.contains("2000 gram"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("1 kilogram is 1000 gram"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("The quantity of mass is 2 kilogram"),
+        "stdout:\n{stdout}"
+    );
+    assert!(!stdout.contains('×'), "stdout:\n{stdout}");
+    assert!(!stdout.contains("mass as gram is"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn test_cli_explain_date_range_conversion_format() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec test_cli_date_conversion_explain
+uses lemma si
+data age: date range -> default 2024-06-01...2024-06-15
+rule result: age as days
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("test_cli_date_conversion_explain")
+        .arg("--rules=result")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("14") && stdout.contains("day"),
+        "stdout:\n{stdout}"
+    );
+    assert!(stdout.contains('−'), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("2024-06-01") && stdout.contains("2024-06-15"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("The date range of age is"),
+        "stdout:\n{stdout}"
+    );
+    assert!(!stdout.contains("age as days is"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn test_cli_explain_conversion_nested_operand() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec test_cli_nested_conversion_explain
+data mass: quantity
+    -> unit kilogram 1.0
+    -> unit gram 0.001
+    -> default 2 kilogram
+rule result: (mass * 2) as gram
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("test_cli_nested_conversion_explain")
+        .arg("--rules=result")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+    assert!(stdout.contains("4000 gram"), "stdout:\n{stdout}");
+    assert!(
+        stdout.contains("1 kilogram is 1000 gram"),
+        "stdout:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("The quantity is 4 kilogram"),
+        "stdout:\n{stdout}"
+    );
+    assert!(stdout.contains("mass"), "stdout:\n{stdout}");
+}
+
+#[test]
+fn test_cli_run_rule_result_unit_conversion() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("money.lemma"),
+        r#"
+spec money
+data price: quantity
+    -> unit eur 1
+    -> unit usd 0.91
+    -> default 100 eur
+rule total: price
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("money")
+        .arg("--rules=total")
+        .arg("--as=total:usd");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("usd"))
+        .stdout(predicate::str::contains("109.89010989010989010989010989"));
+}
+
+#[test]
+fn test_cli_explain_shows_both_data_operands_in_multiply() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec product_explanation
+data price: quantity
+    -> unit eur 1
+    -> default 10 eur
+data quantity: number -> default 3
+rule product: price * quantity
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("product_explanation")
+        .arg("--rules=product")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("price is") && stdout.contains("quantity is"),
+        "explain should show both data operands, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_cli_explain_with_rule_result_as_preserves_multiply_trace() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec product_as_explanation
+data price: quantity
+    -> unit eur 1
+    -> unit usd 0.91
+    -> default 10 eur
+data quantity: number -> default 3
+rule product: price * quantity
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("product_as_explanation")
+        .arg("--rules=product")
+        .arg("--as=product:usd")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain --as should succeed: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("product as usd"),
+        "API display must not replace explain trace with synthetic label, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("price is") && stdout.contains("quantity is"),
+        "explain with --as should still show multiply data operands, got:\n{}",
+        stdout
+    );
+}

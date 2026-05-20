@@ -2,7 +2,7 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.13",
+  "version": "0.8.14",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "repository": {
@@ -31,6 +31,54 @@
           ".lemma"
         ],
         "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "lemma",
+        "scopeName": "source.lemma",
+        "path": "./syntaxes/lemma.tmLanguage.json"
+      }
+    ],
+    "semanticTokenTypes": [
+      {
+        "id": "controlKeyword",
+        "superType": "keyword",
+        "description": "Control flow keywords (unless, then, uses, and, not, in, veto, …)"
+      },
+      {
+        "id": "dataBody",
+        "superType": "type",
+        "description": "Data or fill field body after the colon (type, value, constraints)"
+      },
+      {
+        "id": "punctuation",
+        "superType": "operator",
+        "description": "Declaration colons separating field/rule names from their bodies"
+      },
+      {
+        "id": "reference",
+        "superType": "variable",
+        "description": "Identifiers referenced in rule and spec bodies"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "lemma",
+        "scopes": {
+          "namespace": ["keyword.other.namespace.lemma"],
+          "class": ["storage.type.class.lemma"],
+          "property": ["entity.name.tag.lemma"],
+          "function": ["entity.name.function.preprocessor.lemma"],
+          "string": ["string.quoted.double.lemma"],
+          "comment": ["comment.block.lemma"],
+          "keyword": ["storage.modifier.lemma"],
+          "operator": ["keyword.operator.lemma"],
+          "controlKeyword": ["keyword.control.lemma"],
+          "dataBody": ["string.unquoted.lemma"],
+          "punctuation": ["punctuation.definition.tag.lemma"],
+          "reference": ["support.type.property-name.lemma"]
+        }
       }
     ],
     "configuration": {

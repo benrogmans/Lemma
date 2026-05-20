@@ -4,6 +4,14 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+fn decimal_lit(d: &str) -> Decimal {
+    Decimal::from_str(d).unwrap()
+}
+
+fn rational_lit(d: &str) -> lemma::RationalInteger {
+    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
+}
+
 #[test]
 fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
@@ -30,7 +38,14 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "pricing",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run should succeed after load");
 
     // Check discount rule result
@@ -44,10 +59,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
         lemma::OperationResult::Value(lit) => {
             assert_eq!(
                 lit.value,
-                lemma::ValueKind::Ratio(
-                    Decimal::from_str("0.1").unwrap(),
-                    Some("percent".to_string())
-                )
+                lemma::ValueKind::Ratio(rational_lit("0.1"), Some("percent".to_string()))
             );
         }
         _ => panic!("Expected percentage for discount"),
@@ -63,7 +75,10 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
     match &price_result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(n) = &lit.value {
-                assert_eq!(*n, Decimal::from_str("180").unwrap());
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(n).unwrap(),
+                    decimal_lit("180")
+                );
             } else {
                 panic!("Expected number for price, got {:?}", price_result.result);
             }
@@ -92,7 +107,14 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "tax_calculation", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "tax_calculation",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run should succeed after load");
 
     let result = response
@@ -104,10 +126,7 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
     match &result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(_n) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Number(Decimal::from_str("108.5").unwrap())
-                );
+                assert_eq!(lit.value, lemma::ValueKind::Number(rational_lit("108.5")));
             } else {
                 panic!(
                     "Expected number for price_with_tax, got {:?}",
@@ -151,6 +170,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
             Some(&now),
             HashMap::new(),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .expect("run should succeed after load");
 
@@ -164,10 +184,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
     match &increased_result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(_n) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Number(Decimal::from_str("60").unwrap())
-                );
+                assert_eq!(lit.value, lemma::ValueKind::Number(rational_lit("60")));
             } else {
                 panic!("Expected number for increased");
             }
@@ -188,10 +205,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
     match &decreased_result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(_n) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Number(Decimal::from_str("42.5").unwrap())
-                );
+                assert_eq!(lit.value, lemma::ValueKind::Number(rational_lit("42.5")));
             } else {
                 panic!(
                     "Expected number for decreased, got {:?}",
@@ -215,10 +229,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
     match &scaled_result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(_n) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Number(Decimal::from_str("10").unwrap())
-                );
+                assert_eq!(lit.value, lemma::ValueKind::Number(rational_lit("10")));
             } else {
                 panic!("Expected number for scaled, got {:?}", scaled_result.result);
             }
@@ -251,7 +262,14 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "complex_pricing", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "complex_pricing",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run should succeed after load");
 
     // Check after_bulk (1000 - 15% = 850)
@@ -264,10 +282,7 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
     match &after_bulk_result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(_n) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Number(Decimal::from_str("850").unwrap())
-                );
+                assert_eq!(lit.value, lemma::ValueKind::Number(rational_lit("850")));
             } else {
                 panic!(
                     "Expected number for after_bulk, got {:?}",
@@ -291,10 +306,7 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
     match &final_price_result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(_n) = &lit.value {
-                assert_eq!(
-                    lit.value,
-                    lemma::ValueKind::Number(Decimal::from_str("807.5").unwrap())
-                );
+                assert_eq!(lit.value, lemma::ValueKind::Number(rational_lit("807.5")));
             } else {
                 panic!(
                     "Expected number for final_price, got {:?}",
@@ -336,7 +348,14 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "percentage_ops", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "percentage_ops",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run should succeed after load");
 
     // Check combined_discount (5% + 10% = 15%)
@@ -351,10 +370,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
             if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::ValueKind::Ratio(
-                        Decimal::from_str("0.15").unwrap(),
-                        Some("percent".to_string())
-                    )
+                    lemma::ValueKind::Ratio(rational_lit("0.15"), Some("percent".to_string()))
                 );
             } else {
                 panic!(
@@ -381,10 +397,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
             if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::ValueKind::Ratio(
-                        Decimal::from_str("0.10").unwrap(),
-                        Some("percent".to_string())
-                    )
+                    lemma::ValueKind::Ratio(rational_lit("0.10"), Some("percent".to_string()))
                 );
             } else {
                 panic!(
@@ -411,10 +424,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
             if let lemma::ValueKind::Ratio(_r, _) = &lit.value {
                 assert_eq!(
                     lit.value,
-                    lemma::ValueKind::Ratio(
-                        Decimal::from_str("0.04").unwrap(),
-                        Some("percent".to_string())
-                    )
+                    lemma::ValueKind::Ratio(rational_lit("0.04"), Some("percent".to_string()))
                 );
             } else {
                 panic!(
@@ -440,8 +450,11 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         lemma::OperationResult::Value(lit) => {
             // 20% / 5% = 4 (ratio / ratio = ratio)
             match &lit.value {
-                lemma::ValueKind::Ratio(r, unit) => {
-                    assert_eq!(*r, Decimal::from_str("4").unwrap());
+                lemma::ValueKind::Ratio(rational_val, unit) => {
+                    assert_eq!(
+                        lemma::commit_rational_to_decimal(rational_val).unwrap(),
+                        decimal_lit("4")
+                    );
                     assert_eq!(unit.as_deref(), Some("percent"));
                 }
                 _ => panic!(

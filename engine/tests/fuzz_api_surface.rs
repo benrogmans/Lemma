@@ -58,7 +58,14 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     let mut data = HashMap::new();
     data.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run(None, "fuzz_test", Some(&now), data, false);
+    let result = engine.run(
+        None,
+        "fuzz_test",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(
         result.is_err(),
         "expected validation error for 29-digit number, got {:?}",

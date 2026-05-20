@@ -16,7 +16,7 @@ data age: number -> minimum 0 -> maximum 150
     let test_spec = r#"
 spec test
 uses age
-data user_age: age.age
+fill user_age: age.age
 rule is_adult: user_age >= 18
 "#;
 
@@ -27,17 +27,21 @@ rule is_adult: user_age >= 18
         )
         .expect("add age spec");
     engine
-        .load(
-            test_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(test_spec, lemma::SourceType::Volatile)
         .expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "25".to_string());
 
-    let response = engine.run(None, "test", Some(&now), data, false)?;
+    let response = engine.run(
+        None,
+        "test",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    )?;
 
     // The data should be evaluated correctly with the imported type
 
@@ -72,7 +76,7 @@ spec age
 data age: number -> minimum 0 -> maximum 150
 "#;
 
-    // Use that type inline with additional constraints
+    // Declare slot with tighter constraint, then fill from imported type
     let test_spec = r#"
 spec test
 uses age
@@ -87,17 +91,21 @@ rule is_senior: user_age >= 65
         )
         .expect("add age spec");
     engine
-        .load(
-            test_spec,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(test_spec, lemma::SourceType::Volatile)
         .expect("add test spec");
     let now = DateTimeValue::now();
 
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "70".to_string());
 
-    let response = engine.run(None, "test", Some(&now), data, false)?;
+    let response = engine.run(
+        None,
+        "test",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    )?;
 
     // Check the rule result
     let is_senior_result = response

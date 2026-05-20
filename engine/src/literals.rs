@@ -3,41 +3,272 @@
 
 use chrono::{Datelike, Timelike};
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::BTreeMap;
 use std::fmt;
 
+use crate::computation::rational::{self, RationalInteger};
+
 // -----------------------------------------------------------------------------
-// Unit tables for Scale and Ratio types
+// Dimensional decomposition type
 // -----------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ScaleUnit {
+/// A dimensional decomposition vector. Maps quantity-type names to integer exponents.
+/// For example, velocity `{length: 1, duration: -1}` or acceleration `{length: 1, duration: -2}`.
+/// An empty map indicates a base quantity (no decomposition) until the decomposition pass runs,
+/// after which every quantity carries a non-empty vector.
+pub type BaseQuantityVector = BTreeMap<String, i32>;
+
+// -----------------------------------------------------------------------------
+// Unit tables for Quantity and Ratio types
+// -----------------------------------------------------------------------------
+
+pub fn rational_to_serialized_str(rational: &RationalInteger) -> Result<String, String> {
+    rational::rational_to_wire_str(rational).map_err(|failure| failure.to_string())
+}
+
+pub fn rational_from_parsed_decimal(decimal: Decimal) -> Result<RationalInteger, String> {
+    rational::decimal_to_rational(decimal).map_err(|failure| failure.to_string())
+}
+
+/// Serde for stored rationals: wire format is decimal string or JSON number (lifted at boundary).
+pub mod stored_rational_serde {
+    use super::{rational_from_parsed_decimal, rational_to_serialized_str, RationalInteger};
+    use rust_decimal::Decimal;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: &RationalInteger,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer
+            .serialize_str(&rational_to_serialized_str(value).map_err(serde::ser::Error::custom)?)
+    }
+
+    pub mod option {
+        use super::*;
+
+        pub fn serialize<S: Serializer>(
+            value: &Option<RationalInteger>,
+            serializer: S,
+        ) -> Result<S::Ok, S::Error> {
+            match value {
+                Some(rational) => super::serialize(rational, serializer),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Option<RationalInteger>, D::Error> {
+            Option::<Decimal>::deserialize(deserializer)?
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+/// A single unit within a Quantity type.
+///
+/// `factor` is the conversion factor: 1 of this unit equals `factor` canonical units.
+/// `derived_quantity_factors` stores `(quantity_ref, exponent)` pairs from compound unit declarations
+/// (e.g., `meter/second` produces `[("meter", 1), ("second", -1)]`). Empty for base units.
+/// `decomposition` is the dimensional decomposition vector, populated during the planning
+/// decomposition pass. It is empty until that pass completes.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct QuantityUnit {
     pub name: String,
-    pub value: Decimal,
+    /// Conversion factor: 1 of this unit equals `value` canonical units.
+    pub factor: RationalInteger,
+    pub derived_quantity_factors: Vec<(String, i32)>,
+    pub decomposition: BaseQuantityVector,
+    /// Minimum magnitude in this unit (schema/UI); canonical bound is on the type.
+    pub minimum: Option<RationalInteger>,
+    /// Maximum magnitude in this unit (schema/UI).
+    pub maximum: Option<RationalInteger>,
+    /// Default suggestion magnitude in this unit (schema/UI).
+    pub default_magnitude: Option<RationalInteger>,
+}
+
+impl Serialize for QuantityUnit {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use quantity_unit_factor_serialization::FactorSerializer;
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("QuantityUnit", 7)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("factor", &FactorSerializer::from_ratio(&self.factor))?;
+        state.serialize_field("derived_quantity_factors", &self.derived_quantity_factors)?;
+        state.serialize_field("decomposition", &self.decomposition)?;
+        if let Some(minimum) = &self.minimum {
+            state.serialize_field(
+                "minimum",
+                &rational_to_serialized_str(minimum).map_err(serde::ser::Error::custom)?,
+            )?;
+        }
+        if let Some(maximum) = &self.maximum {
+            state.serialize_field(
+                "maximum",
+                &rational_to_serialized_str(maximum).map_err(serde::ser::Error::custom)?,
+            )?;
+        }
+        if let Some(default_magnitude) = &self.default_magnitude {
+            state.serialize_field(
+                "default",
+                &rational_to_serialized_str(default_magnitude)
+                    .map_err(serde::ser::Error::custom)?,
+            )?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for QuantityUnit {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct QuantityUnitData {
+            name: String,
+            #[serde(with = "quantity_unit_factor_serialization")]
+            factor: RationalInteger,
+            #[serde(default)]
+            derived_quantity_factors: Vec<(String, i32)>,
+            #[serde(default)]
+            decomposition: BaseQuantityVector,
+            #[serde(default)]
+            minimum: Option<Decimal>,
+            #[serde(default)]
+            maximum: Option<Decimal>,
+            #[serde(default, rename = "default")]
+            default_magnitude: Option<Decimal>,
+        }
+        let data = QuantityUnitData::deserialize(deserializer)?;
+        Ok(Self {
+            name: data.name,
+            factor: data.factor,
+            derived_quantity_factors: data.derived_quantity_factors,
+            decomposition: data.decomposition,
+            minimum: data
+                .minimum
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+            maximum: data
+                .maximum
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+            default_magnitude: data
+                .default_magnitude
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+impl QuantityUnit {
+    pub fn from_decimal_factor(
+        name: String,
+        decimal_factor: Decimal,
+        derived_quantity_factors: Vec<(String, i32)>,
+    ) -> Result<Self, String> {
+        let factor =
+            rational::decimal_to_rational(decimal_factor).map_err(|failure| failure.to_string())?;
+        Ok(QuantityUnit {
+            name,
+            factor,
+            derived_quantity_factors,
+            decomposition: BaseQuantityVector::new(),
+            minimum: None,
+            maximum: None,
+            default_magnitude: None,
+        })
+    }
+
+    pub fn clear_constraint_magnitudes(&mut self) {
+        self.minimum = None;
+        self.maximum = None;
+        self.default_magnitude = None;
+    }
+
+    pub fn is_canonical_factor(&self) -> bool {
+        self.factor == rational::rational_one()
+    }
+
+    pub fn is_positive_factor(&self) -> bool {
+        let numerator = *self.factor.numer();
+        let denominator = *self.factor.denom();
+        numerator != 0 && (numerator > 0) == (denominator > 0)
+    }
+}
+
+mod quantity_unit_factor_serialization {
+    use super::RationalInteger;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct FactorSerializer {
+        numer: String,
+        denom: String,
+    }
+
+    impl FactorSerializer {
+        pub fn from_ratio(value: &RationalInteger) -> Self {
+            let reduced = value.reduced();
+            FactorSerializer {
+                numer: reduced.numer().to_string(),
+                denom: reduced.denom().to_string(),
+            }
+        }
+
+        pub fn into_ratio(self) -> Result<RationalInteger, String> {
+            let numer: i128 = self
+                .numer
+                .parse()
+                .map_err(|error: std::num::ParseIntError| error.to_string())?;
+            let denom: i128 = self
+                .denom
+                .parse()
+                .map_err(|error: std::num::ParseIntError| error.to_string())?;
+            if denom == 0 {
+                return Err("QuantityUnit conversion factor denominator cannot be zero".to_string());
+            }
+            Ok(RationalInteger::new(numer, denom).reduced())
+        }
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<RationalInteger, D::Error> {
+        FactorSerializer::deserialize(deserializer)?
+            .into_ratio()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ScaleUnits(pub Vec<ScaleUnit>);
+pub struct QuantityUnits(pub Vec<QuantityUnit>);
 
-impl ScaleUnits {
+impl QuantityUnits {
     pub fn new() -> Self {
-        ScaleUnits(Vec::new())
+        QuantityUnits(Vec::new())
     }
-    pub fn get(&self, name: &str) -> Result<&ScaleUnit, String> {
+    pub fn get(&self, name: &str) -> Result<&QuantityUnit, String> {
         self.0.iter().find(|u| u.name == name).ok_or_else(|| {
             let valid: Vec<&str> = self.0.iter().map(|u| u.name.as_str()).collect();
             format!(
-                "Unknown unit '{}' for this scale type. Valid units: {}",
+                "Unknown unit '{}' for this quantity type. Valid units: {}",
                 name,
                 valid.join(", ")
             )
         })
     }
-    pub fn iter(&self) -> std::slice::Iter<'_, ScaleUnit> {
+
+    pub fn iter(&self) -> std::slice::Iter<'_, QuantityUnit> {
         self.0.iter()
     }
-    pub fn push(&mut self, u: ScaleUnit) {
+    pub fn push(&mut self, u: QuantityUnit) {
         self.0.push(u);
     }
     pub fn is_empty(&self) -> bool {
@@ -48,30 +279,108 @@ impl ScaleUnits {
     }
 }
 
-impl Default for ScaleUnits {
+impl Default for QuantityUnits {
     fn default() -> Self {
-        ScaleUnits::new()
+        QuantityUnits::new()
     }
 }
 
-impl From<Vec<ScaleUnit>> for ScaleUnits {
-    fn from(v: Vec<ScaleUnit>) -> Self {
-        ScaleUnits(v)
+impl From<Vec<QuantityUnit>> for QuantityUnits {
+    fn from(v: Vec<QuantityUnit>) -> Self {
+        QuantityUnits(v)
     }
 }
 
-impl<'a> IntoIterator for &'a ScaleUnits {
-    type Item = &'a ScaleUnit;
-    type IntoIter = std::slice::Iter<'a, ScaleUnit>;
+impl<'a> IntoIterator for &'a QuantityUnits {
+    type Item = &'a QuantityUnit;
+    type IntoIter = std::slice::Iter<'a, QuantityUnit>;
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RatioUnit {
     pub name: String,
-    pub value: Decimal,
+    pub value: RationalInteger,
+    pub minimum: Option<RationalInteger>,
+    pub maximum: Option<RationalInteger>,
+    pub default_magnitude: Option<RationalInteger>,
+}
+
+impl Serialize for RatioUnit {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use quantity_unit_factor_serialization::FactorSerializer;
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("RatioUnit", 5)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("value", &FactorSerializer::from_ratio(&self.value))?;
+        if let Some(minimum) = &self.minimum {
+            state.serialize_field(
+                "minimum",
+                &rational_to_serialized_str(minimum).map_err(serde::ser::Error::custom)?,
+            )?;
+        }
+        if let Some(maximum) = &self.maximum {
+            state.serialize_field(
+                "maximum",
+                &rational_to_serialized_str(maximum).map_err(serde::ser::Error::custom)?,
+            )?;
+        }
+        if let Some(default_magnitude) = &self.default_magnitude {
+            state.serialize_field(
+                "default",
+                &rational_to_serialized_str(default_magnitude)
+                    .map_err(serde::ser::Error::custom)?,
+            )?;
+        }
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for RatioUnit {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct RatioUnitData {
+            name: String,
+            #[serde(with = "quantity_unit_factor_serialization")]
+            value: RationalInteger,
+            #[serde(default)]
+            minimum: Option<Decimal>,
+            #[serde(default)]
+            maximum: Option<Decimal>,
+            #[serde(default, rename = "default")]
+            default_magnitude: Option<Decimal>,
+        }
+        let data = RatioUnitData::deserialize(deserializer)?;
+        Ok(Self {
+            name: data.name,
+            value: data.value,
+            minimum: data
+                .minimum
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+            maximum: data
+                .maximum
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+            default_magnitude: data
+                .default_magnitude
+                .map(rational_from_parsed_decimal)
+                .transpose()
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+impl RatioUnit {
+    pub fn clear_constraint_magnitudes(&mut self) {
+        self.minimum = None;
+        self.maximum = None;
+        self.default_magnitude = None;
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -92,6 +401,7 @@ impl RatioUnits {
             )
         })
     }
+
     pub fn iter(&self) -> std::slice::Iter<'_, RatioUnit> {
         self.0.iter()
     }
@@ -227,19 +537,31 @@ impl fmt::Display for BooleanValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DurationUnit {
-    Year,
+pub enum CalendarUnit {
     Month,
-    Week,
-    Day,
-    Hour,
-    Minute,
-    Second,
-    Millisecond,
-    Microsecond,
+    Year,
 }
 
-impl Serialize for DurationUnit {
+impl CalendarUnit {
+    #[must_use]
+    pub fn from_keyword(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "month" | "months" => Some(Self::Month),
+            "year" | "years" => Some(Self::Year),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn canonical_factor(&self) -> RationalInteger {
+        match self {
+            Self::Month => rational::rational_one(),
+            Self::Year => RationalInteger::new(12, 1),
+        }
+    }
+}
+
+impl Serialize for CalendarUnit {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -248,7 +570,7 @@ impl Serialize for DurationUnit {
     }
 }
 
-impl<'de> Deserialize<'de> for DurationUnit {
+impl<'de> Deserialize<'de> for CalendarUnit {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -258,39 +580,21 @@ impl<'de> Deserialize<'de> for DurationUnit {
     }
 }
 
-impl fmt::Display for DurationUnit {
+impl fmt::Display for CalendarUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            DurationUnit::Year => "years",
-            DurationUnit::Month => "months",
-            DurationUnit::Week => "weeks",
-            DurationUnit::Day => "days",
-            DurationUnit::Hour => "hours",
-            DurationUnit::Minute => "minutes",
-            DurationUnit::Second => "seconds",
-            DurationUnit::Millisecond => "milliseconds",
-            DurationUnit::Microsecond => "microseconds",
+            CalendarUnit::Month => "months",
+            CalendarUnit::Year => "years",
         };
         write!(f, "{}", s)
     }
 }
 
-impl std::str::FromStr for DurationUnit {
+impl std::str::FromStr for CalendarUnit {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim().to_lowercase().as_str() {
-            "year" | "years" => Ok(DurationUnit::Year),
-            "month" | "months" => Ok(DurationUnit::Month),
-            "week" | "weeks" => Ok(DurationUnit::Week),
-            "day" | "days" => Ok(DurationUnit::Day),
-            "hour" | "hours" => Ok(DurationUnit::Hour),
-            "minute" | "minutes" => Ok(DurationUnit::Minute),
-            "second" | "seconds" => Ok(DurationUnit::Second),
-            "millisecond" | "milliseconds" => Ok(DurationUnit::Millisecond),
-            "microsecond" | "microseconds" => Ok(DurationUnit::Microsecond),
-            _ => Err(format!("Unknown duration unit: '{}'", s)),
-        }
+        Self::from_keyword(s).ok_or_else(|| format!("Unknown calendar unit: '{}'", s))
     }
 }
 
@@ -317,12 +621,21 @@ pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
+    #[serde(default)]
+    pub microsecond: u32,
     pub timezone: Option<TimezoneValue>,
 }
 
 impl fmt::Display for TimeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:02}:{:02}:{:02}", self.hour, self.minute, self.second)
+        write!(f, "{:02}:{:02}:{:02}", self.hour, self.minute, self.second)?;
+        if self.microsecond != 0 {
+            write!(f, ".{:06}", self.microsecond)?;
+        }
+        if let Some(timezone) = &self.timezone {
+            write!(f, "{}", timezone)?;
+        }
+        Ok(())
     }
 }
 
@@ -409,17 +722,20 @@ impl fmt::Display for DateTimeValue {
 }
 
 /// Literal value data (no type information). Single source of truth in literals.
+///
+/// `NumberWithUnit` is type-agnostic at parse time (`10 eur` and `50%` share this shape).
+/// Planning resolves ratio vs quantity via the unit index and target [`TypeSpecification`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Value {
     Number(Decimal),
-    Scale(Decimal, String),
+    NumberWithUnit(Decimal, String),
     Text(String),
     Date(DateTimeValue),
     Time(TimeValue),
     Boolean(BooleanValue),
-    Duration(Decimal, DurationUnit),
-    Ratio(Decimal, Option<String>),
+    Calendar(Decimal, CalendarUnit),
+    Range(Box<Value>, Box<Value>),
 }
 
 impl fmt::Display for Value {
@@ -430,12 +746,9 @@ impl fmt::Display for Value {
             Value::Date(dt) => write!(f, "{}", dt),
             Value::Boolean(b) => write!(f, "{}", b),
             Value::Time(time) => write!(f, "{}", time),
-            Value::Scale(n, u) => write!(f, "{} {}", n, u),
-            Value::Duration(n, u) => write!(f, "{} {}", n, u),
-            Value::Ratio(n, u) => match u.as_deref() {
-                Some("percent") => {
-                    let display_value = *n * Decimal::from(100);
-                    let norm = display_value.normalize();
+            Value::NumberWithUnit(n, u) => match u.as_str() {
+                "percent" => {
+                    let norm = n.normalize();
                     let s = if norm.fract().is_zero() {
                         norm.trunc().to_string()
                     } else {
@@ -443,9 +756,8 @@ impl fmt::Display for Value {
                     };
                     write!(f, "{}%", s)
                 }
-                Some("permille") => {
-                    let display_value = *n * Decimal::from(1000);
-                    let norm = display_value.normalize();
+                "permille" => {
+                    let norm = n.normalize();
                     let s = if norm.fract().is_zero() {
                         norm.trunc().to_string()
                     } else {
@@ -453,7 +765,7 @@ impl fmt::Display for Value {
                     };
                     write!(f, "{}%%", s)
                 }
-                Some(unit) => {
+                unit => {
                     let norm = n.normalize();
                     let s = if norm.fract().is_zero() {
                         norm.trunc().to_string()
@@ -462,16 +774,9 @@ impl fmt::Display for Value {
                     };
                     write!(f, "{} {}", s, unit)
                 }
-                None => {
-                    let norm = n.normalize();
-                    let s = if norm.fract().is_zero() {
-                        norm.trunc().to_string()
-                    } else {
-                        norm.to_string()
-                    };
-                    write!(f, "{}", s)
-                }
             },
+            Value::Calendar(n, u) => write!(f, "{} {}", n, u),
+            Value::Range(left, right) => write!(f, "{}...{}", left, right),
         }
     }
 }
@@ -563,24 +868,76 @@ impl std::str::FromStr for TimeValue {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Ok(t) = s.parse::<chrono::DateTime<chrono::FixedOffset>>() {
-            let offset = t.offset().local_minus_utc();
+        let trimmed = s.trim();
+
+        let (time_text, timezone) = if trimmed.ends_with('Z') || trimmed.ends_with('z') {
+            (
+                &trimmed[..trimmed.len() - 1],
+                Some(TimezoneValue {
+                    offset_hours: 0,
+                    offset_minutes: 0,
+                }),
+            )
+        } else if trimmed.len() > 1 {
+            if let Some(sign_index) = trimmed[1..].rfind(['+', '-']).map(|index| index + 1) {
+                let timezone_text = &trimmed[sign_index..];
+                if timezone_text.len() == 6
+                    && (timezone_text.starts_with('+') || timezone_text.starts_with('-'))
+                    && timezone_text.as_bytes()[3] == b':'
+                {
+                    let offset_hours: i8 = timezone_text[1..3]
+                        .parse()
+                        .map_err(|_| format!("Invalid time format: '{}'", s))?;
+                    let offset_minutes: u8 = timezone_text[4..6]
+                        .parse()
+                        .map_err(|_| format!("Invalid time format: '{}'", s))?;
+                    let signed_hours = if timezone_text.starts_with('-') {
+                        -offset_hours
+                    } else {
+                        offset_hours
+                    };
+                    (
+                        &trimmed[..sign_index],
+                        Some(TimezoneValue {
+                            offset_hours: signed_hours,
+                            offset_minutes,
+                        }),
+                    )
+                } else {
+                    (trimmed, None)
+                }
+            } else {
+                (trimmed, None)
+            }
+        } else {
+            (trimmed, None)
+        };
+
+        if let Ok(t) = chrono::NaiveTime::parse_from_str(time_text, "%H:%M:%S%.f") {
             return Ok(TimeValue {
                 hour: t.hour() as u8,
                 minute: t.minute() as u8,
                 second: t.second() as u8,
-                timezone: Some(TimezoneValue {
-                    offset_hours: (offset / 3600) as i8,
-                    offset_minutes: ((offset.abs() % 3600) / 60) as u8,
-                }),
+                microsecond: t.nanosecond() / 1000 % 1_000_000,
+                timezone,
             });
         }
-        if let Ok(t) = s.parse::<chrono::NaiveTime>() {
+        if let Ok(t) = chrono::NaiveTime::parse_from_str(time_text, "%H:%M:%S") {
             return Ok(TimeValue {
                 hour: t.hour() as u8,
                 minute: t.minute() as u8,
                 second: t.second() as u8,
-                timezone: None,
+                microsecond: 0,
+                timezone,
+            });
+        }
+        if let Ok(t) = chrono::NaiveTime::parse_from_str(time_text, "%H:%M") {
+            return Ok(TimeValue {
+                hour: t.hour() as u8,
+                minute: t.minute() as u8,
+                second: 0,
+                microsecond: 0,
+                timezone,
             });
         }
         Err(format!("Invalid time format: '{}'", s))
@@ -625,10 +982,10 @@ impl std::str::FromStr for TextLiteral {
     }
 }
 
-/// Duration magnitude: number + unit (e.g. "10 hours").
-pub(crate) struct DurationLiteral(pub Decimal, pub DurationUnit);
+/// Calendar magnitude: number + unit (e.g. "10 months").
+pub(crate) struct CalendarLiteral(pub Decimal, pub CalendarUnit);
 
-impl std::str::FromStr for DurationLiteral {
+impl std::str::FromStr for CalendarLiteral {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -636,7 +993,7 @@ impl std::str::FromStr for DurationLiteral {
         let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
         if parts.len() < 2 {
             return Err(format!(
-                "Invalid duration: '{}'. Expected format: <number> <unit> (e.g. 10 hours, 2 weeks)",
+                "Invalid calendar value: '{}'. Expected format: <number> <unit> (e.g. 10 months, 2 years)",
                 s
             ));
         }
@@ -644,18 +1001,14 @@ impl std::str::FromStr for DurationLiteral {
         let number_str = parts.join(" ");
         let n = number_str
             .parse::<NumberLiteral>()
-            .map_err(|_| format!("Invalid duration number: '{}'", number_str))?
+            .map_err(|_| format!("Invalid calendar number: '{}'", number_str))?
             .0;
         let unit = unit_str.parse()?;
-        Ok(DurationLiteral(n, unit))
+        Ok(CalendarLiteral(n, unit))
     }
 }
 
-/// Strict scale literal: `<number> <unit-name>` separated by any whitespace run.
-///
-/// Does NOT accept ratio sigils (`%`, `%%`) — those are a `Ratio` concern. See
-/// [`RatioLiteral`] for runtime ratio input parsing. Trailing tokens after the
-/// unit are rejected (no silent truncation).
+/// Parsed `<number> <unit-name>` for runtime string input (quantity and ratio types).
 pub(crate) struct NumberWithUnit(pub Decimal, pub String);
 
 impl std::str::FromStr for NumberWithUnit {
@@ -665,7 +1018,7 @@ impl std::str::FromStr for NumberWithUnit {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return Err(
-                "Scale value cannot be empty. Use a number followed by a unit (e.g. '10 eur')."
+                "Quantity value cannot be empty. Use a number followed by a unit (e.g. '10 eur')."
                     .to_string(),
             );
         }
@@ -676,19 +1029,19 @@ impl std::str::FromStr for NumberWithUnit {
             .expect("split_whitespace yields >=1 token after non-empty guard");
         let unit_part = parts.next().ok_or_else(|| {
             format!(
-                "Scale value must include a unit (e.g. '{} eur').",
+                "Quantity value must include a unit (e.g. '{} eur').",
                 number_part
             )
         })?;
         if parts.next().is_some() {
             return Err(format!(
-                "Invalid scale value: '{}'. Expected exactly '<number> <unit>', got extra tokens.",
+                "Invalid quantity value: '{}'. Expected exactly '<number> <unit>', got extra tokens.",
                 s
             ));
         }
         let n = number_part
             .parse::<NumberLiteral>()
-            .map_err(|_| format!("Invalid scale: '{}'", s))?
+            .map_err(|_| format!("Invalid quantity: '{}'", s))?
             .0;
         Ok(NumberWithUnit(n, unit_part.to_string()))
     }
@@ -698,8 +1051,8 @@ impl std::str::FromStr for NumberWithUnit {
 ///
 /// Grammar (all inputs trimmed first):
 /// - `<number>`                      → `Bare(n)`
-/// - `<number>%`  (glued, no inner whitespace) → `Percent(n / 100)`
-/// - `<number>%%` (glued, no inner whitespace) → `Permille(n / 1000)`
+/// - `<number>%`  (glued, no inner whitespace) → `Percent(n)` raw magnitude
+/// - `<number>%%` (glued, no inner whitespace) → `Permille(n)` raw magnitude
 /// - `<number> <unit-name>`          → `Named { value: n, unit: <unit-name> }`
 ///
 /// `<number>` is parsed by [`NumberLiteral`] (signed, allows `_`/`,` separators).
@@ -769,7 +1122,7 @@ impl std::str::FromStr for RatioLiteral {
                         )
                         })?
                         .0;
-                    return Ok(RatioLiteral::Permille(n / Decimal::from(1000)));
+                    return Ok(RatioLiteral::Permille(n));
                 }
                 if let Some(rest) = first.strip_suffix('%') {
                     if rest.is_empty() {
@@ -787,7 +1140,7 @@ impl std::str::FromStr for RatioLiteral {
                             )
                         })?
                         .0;
-                    return Ok(RatioLiteral::Percent(n / Decimal::from(100)));
+                    return Ok(RatioLiteral::Percent(n));
                 }
                 let n = first.parse::<NumberLiteral>().map_err(|_| {
                     format!(

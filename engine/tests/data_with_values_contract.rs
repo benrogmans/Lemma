@@ -48,7 +48,14 @@ rule r: x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("unknown key must fail");
     let s = err.to_string();
     assert!(
@@ -81,7 +88,14 @@ rule r: i.x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("spec-ref override must fail");
     let s = err.to_string();
     assert!(
@@ -110,7 +124,14 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -135,7 +156,14 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }
@@ -160,7 +188,14 @@ rule r: age
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("wrong kind must fail");
 
     assert_eq!(
@@ -191,7 +226,14 @@ rule r: n
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("violates minimum");
     let s = err.to_string();
     assert!(
@@ -220,7 +262,14 @@ rule r: n
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("violates maximum");
     let s = err.to_string();
     assert!(
@@ -249,7 +298,14 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("violates length");
     let s = err.to_string();
     assert!(
@@ -289,7 +345,14 @@ rule r: color
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("not in options");
     let s = err.to_string();
     assert!(
@@ -315,7 +378,14 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "s",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -328,7 +398,7 @@ data v: number -> default 1
 
 spec outer
 uses i: inner
-data copy: i.v
+fill copy: i.v
 rule r: copy
 "#;
     let mut engine = Engine::new();
@@ -344,7 +414,14 @@ rule r: copy
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "500");
 }
@@ -361,7 +438,7 @@ data v: number
 spec outer
 uses i: inner
 data n: number -> maximum 5
-data n: i.v
+fill n: i.v
 rule r: n
 "#;
     let mut engine = Engine::new();
@@ -380,7 +457,14 @@ rule r: n
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect_err("merged-type validation must reject 10 against LHS `maximum 5`");
     let s = err.to_string();
     assert!(

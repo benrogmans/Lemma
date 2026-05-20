@@ -3,12 +3,15 @@
 //! Evaluates expressions without recursion using a stack-based approach.
 //! All runtime errors (division by zero, etc.) result in Veto instead of errors.
 
+use super::conversion_explanation::build_conversion_steps;
 use super::explanation::{ExplanationNode, ValueSource};
 use super::operations::{ComputationKind, OperationKind, OperationResult, VetoType};
-use crate::computation::{arithmetic_operation, comparison_operation};
+use crate::computation::{
+    arithmetic_operation, comparison_operation, convert_unit, UnitResolutionContext,
+};
 use crate::planning::semantics::{
-    negated_comparison, Expression, ExpressionKind, LiteralValue, MathematicalComputation,
-    ValueKind,
+    negated_comparison, DataPath, Expression, ExpressionKind, LiteralValue,
+    MathematicalComputation, SemanticConversionTarget, Source, ValueKind,
 };
 use crate::planning::ExecutableRule;
 use std::collections::{HashMap, HashSet};
@@ -39,6 +42,74 @@ fn get_explanation_node_required(
 
 fn expr_ptr(expr: &Expression) -> usize {
     expr as *const Expression as usize
+}
+
+/// Convert a value to `target`, record operations, and build a computation explanation node.
+pub(crate) fn finish_unit_conversion(
+    value: &LiteralValue,
+    target: &SemanticConversionTarget,
+    operand_explanation: ExplanationNode,
+    data_ref: Option<&DataPath>,
+    source_location: Option<Source>,
+    context: &mut crate::evaluation::EvaluationContext,
+) -> (OperationResult, ExplanationNode) {
+    let conversion_result = convert_unit(
+        value,
+        target,
+        UnitResolutionContext::WithIndex(&context.unit_index),
+    );
+
+    match &conversion_result {
+        OperationResult::Value(converted) => {
+            let converted = converted.as_ref();
+            let kind = ComputationKind::UnitConversion {
+                target: target.clone(),
+            };
+            let conversion_steps = build_conversion_steps(
+                value,
+                target,
+                converted,
+                data_ref,
+                UnitResolutionContext::WithIndex(&context.unit_index),
+            );
+            assert!(
+                !conversion_steps.is_empty(),
+                "BUG: unit conversion succeeded but explanation steps are empty"
+            );
+            context.push_operation(OperationKind::Computation {
+                kind: kind.clone(),
+                inputs: vec![value.clone()],
+                result: converted.clone(),
+            });
+            let explanation_node = ExplanationNode::Computation {
+                kind,
+                conversion_steps,
+                original_expression: String::new(),
+                expression: String::new(),
+                result: converted.clone(),
+                source_location: source_location.clone(),
+                operands: vec![operand_explanation],
+            };
+            (conversion_result, explanation_node)
+        }
+        OperationResult::Veto(_) => (conversion_result, operand_explanation),
+    }
+}
+
+fn data_ref_for_conversion_operand<'a>(
+    value_expr: &'a Expression,
+    operand_explanation: &'a ExplanationNode,
+) -> Option<&'a DataPath> {
+    if let ExpressionKind::DataPath(data_path) = &value_expr.kind {
+        return Some(data_path);
+    }
+    match operand_explanation {
+        ExplanationNode::Value {
+            source: ValueSource::Data { data_ref },
+            ..
+        } => Some(data_ref),
+        _ => None,
+    }
 }
 
 /// Get the result of an operand expression that was already evaluated.
@@ -91,6 +162,19 @@ fn propagate_veto_explanation(
     veto_result
 }
 
+/// Evaluate branch: original expression for explanation trace, normalized for authoritative result.
+fn evaluate_branch_dual(
+    branch: &crate::planning::execution_plan::Branch,
+    context: &mut crate::evaluation::EvaluationContext,
+    explanation_operand_name: &str,
+) -> (OperationResult, ExplanationNode) {
+    let authoritative = evaluate_expression(&branch.normalized_result, context);
+    let _ = evaluate_expression(&branch.result, context);
+    let explanation_node =
+        get_explanation_node_required(context, &branch.result, explanation_operand_name);
+    (authoritative, explanation_node)
+}
+
 /// Evaluate a rule to produce its final result and explanation.
 /// After planning, evaluation is guaranteed to complete — this function never returns
 /// a Error. It produces an OperationResult (Value or Veto) and an Explanation tree.
@@ -111,7 +195,11 @@ pub(crate) fn evaluate_rule(
     // Evaluate branches in reverse order (last matching wins)
     for branch_index in (1..exec_rule.branches.len()).rev() {
         let branch = &exec_rule.branches[branch_index];
-        if let Some(ref condition) = branch.condition {
+        if let Some(condition) = branch
+            .normalized_condition
+            .as_ref()
+            .or(branch.condition.as_ref())
+        {
             let condition_result = evaluate_expression(condition, context);
             let condition_explanation =
                 get_explanation_node_required(context, condition, "condition");
@@ -176,17 +264,13 @@ pub(crate) fn evaluate_rule(
             let unless_clause_index = branch_index - 1;
 
             if matched {
-                // This unless clause matched - evaluate its result
-                let result = evaluate_expression(&branch.result, context);
+                let (result, result_explanation) = evaluate_branch_dual(branch, context, "result");
 
                 context.push_operation(OperationKind::RuleBranchEvaluated {
                     index: Some(unless_clause_index),
                     matched: true,
                     result_value: Some(result.clone()),
                 });
-
-                let result_explanation =
-                    get_explanation_node_required(context, &branch.result, "result");
 
                 // Build Branches node with this as the matched branch
                 let matched_branch = Branch {
@@ -226,18 +310,15 @@ pub(crate) fn evaluate_rule(
         }
     }
 
-    // No unless clause matched - evaluate default expression (first branch)
     let default_branch = &exec_rule.branches[0];
-    let default_result = evaluate_expression(&default_branch.result, context);
+    let (default_result, default_result_explanation) =
+        evaluate_branch_dual(default_branch, context, "default result");
 
     context.push_operation(OperationKind::RuleBranchEvaluated {
         index: None,
         matched: true,
         result_value: Some(default_result.clone()),
     });
-
-    let default_result_explanation =
-        get_explanation_node_required(context, &default_branch.result, "default result");
 
     // Default branch has no condition
     let matched_branch = Branch {
@@ -269,16 +350,14 @@ fn evaluate_rule_without_unless(
     context: &mut crate::evaluation::EvaluationContext,
 ) -> (OperationResult, crate::evaluation::explanation::Explanation) {
     let default_branch = &exec_rule.branches[0];
-    let default_result = evaluate_expression(&default_branch.result, context);
+    let (default_result, root_explanation_node) =
+        evaluate_branch_dual(default_branch, context, "default result");
 
     context.push_operation(OperationKind::RuleBranchEvaluated {
         index: None,
         matched: true,
         result_value: Some(default_result.clone()),
     });
-
-    let root_explanation_node =
-        get_explanation_node_required(context, &default_branch.result, "default result");
 
     let explanation = crate::evaluation::explanation::Explanation {
         rule_path: exec_rule.path.clone(),
@@ -316,20 +395,22 @@ fn collect_postorder(root: &Expression) -> Vec<&Expression> {
                 match &e.kind {
                     ExpressionKind::Arithmetic(left, _, right)
                     | ExpressionKind::Comparison(left, _, right)
-                    | ExpressionKind::LogicalAnd(left, right) => {
+                    | ExpressionKind::LogicalAnd(left, right)
+                    | ExpressionKind::LogicalOr(left, right)
+                    | ExpressionKind::RangeLiteral(left, right)
+                    | ExpressionKind::RangeContainment(left, right) => {
                         stack.push(Visit::Enter(right));
                         stack.push(Visit::Enter(left));
                     }
                     ExpressionKind::LogicalNegation(operand, _)
                     | ExpressionKind::UnitConversion(operand, _)
                     | ExpressionKind::MathematicalComputation(_, operand)
-                    | ExpressionKind::DateCalendar(_, _, operand) => {
+                    | ExpressionKind::ResultIsVeto(operand)
+                    | ExpressionKind::DateCalendar(_, _, operand)
+                    | ExpressionKind::PastFutureRange(_, operand) => {
                         stack.push(Visit::Enter(operand));
                     }
-                    ExpressionKind::DateRelative(_, date_expr, tolerance_expr) => {
-                        if let Some(tol) = tolerance_expr {
-                            stack.push(Visit::Enter(tol));
-                        }
+                    ExpressionKind::DateRelative(_, date_expr) => {
                         stack.push(Visit::Enter(date_expr));
                     }
                     _ => {}
@@ -546,6 +627,7 @@ fn evaluate_single_expression(
                 });
                 let explanation_node = ExplanationNode::Computation {
                     kind: ComputationKind::Arithmetic(op.clone()),
+                    conversion_steps: vec![],
                     original_expression: original_expr,
                     expression: substituted_expr,
                     result: val.as_ref().clone(),
@@ -593,7 +675,12 @@ fn evaluate_single_expression(
                 &current.source_location,
             );
 
-            let result = comparison_operation(left_val, op, right_val);
+            let result = comparison_operation(
+                left_val,
+                op,
+                right_val,
+                UnitResolutionContext::WithIndex(&context.unit_index),
+            );
 
             let left_explanation = get_explanation_node_required(context, left, "left operand");
             let right_explanation = get_explanation_node_required(context, right, "right operand");
@@ -622,6 +709,7 @@ fn evaluate_single_expression(
                 });
                 let explanation_node = ExplanationNode::Computation {
                     kind: ComputationKind::Comparison(display_op),
+                    conversion_steps: vec![],
                     original_expression: original_expr,
                     expression: substituted_expr,
                     result: display_result,
@@ -672,6 +760,34 @@ fn evaluate_single_expression(
             }
         }
 
+        ExpressionKind::LogicalOr(left, right) => {
+            let left_result = get_operand_result(results, left, "left");
+            if matches!(&left_result, OperationResult::Veto(_)) {
+                let right_result = get_operand_result(results, right, "right");
+                let right_explanation =
+                    get_explanation_node_required(context, right, "right operand");
+                context.set_explanation_node(current, right_explanation);
+                return right_result;
+            }
+
+            let left_val = unwrap_value_after_veto_check(
+                &left_result,
+                "left operand",
+                &current.source_location,
+            );
+            if matches!(&left_val.value, ValueKind::Boolean(false)) {
+                let right_result = get_operand_result(results, right, "right");
+                let right_explanation =
+                    get_explanation_node_required(context, right, "right operand");
+                context.set_explanation_node(current, right_explanation);
+                return right_result;
+            }
+
+            let left_explanation = get_explanation_node_required(context, left, "left operand");
+            context.set_explanation_node(current, left_explanation);
+            left_result
+        }
+
         ExpressionKind::LogicalNegation(operand, _) => {
             let result = get_operand_result(results, operand, "operand");
             if let OperationResult::Veto(_) = result {
@@ -700,10 +816,16 @@ fn evaluate_single_expression(
 
             let value = unwrap_value_after_veto_check(&result, "operand", &current.source_location);
             let operand_explanation = get_explanation_node_required(context, value_expr, "operand");
-
-            let conversion_result = crate::computation::convert_unit(value, target);
-
-            context.set_explanation_node(current, operand_explanation);
+            let data_ref = data_ref_for_conversion_operand(value_expr, &operand_explanation);
+            let (conversion_result, explanation_node) = finish_unit_conversion(
+                value,
+                target,
+                operand_explanation.clone(),
+                data_ref,
+                current.source_location.clone(),
+                context,
+            );
+            context.set_explanation_node(current, explanation_node);
             conversion_result
         }
 
@@ -718,6 +840,51 @@ fn evaluate_single_expression(
             let math_result = evaluate_mathematical_operator(op, value, context);
             context.set_explanation_node(current, operand_explanation);
             math_result
+        }
+
+        ExpressionKind::ResultIsVeto(operand) => {
+            let operand_result = get_operand_result(results, operand, "operand");
+            let is_vetoed = operand_result.vetoed();
+            let result = OperationResult::Value(Box::new(LiteralValue::from_bool(is_vetoed)));
+
+            let operand_explanation = get_explanation_node_required(context, operand, "operand");
+            let operand_display = match &operand_result {
+                OperationResult::Value(value) => value.to_string(),
+                OperationResult::Veto(veto) => veto.to_string(),
+            };
+            let (original_expression, expression, display_result) = if is_vetoed {
+                (
+                    format!("{operand_display} is veto"),
+                    format!("{operand_display} is veto"),
+                    LiteralValue::from_bool(true),
+                )
+            } else {
+                (
+                    format!("{operand_display} is veto"),
+                    format!("{operand_display} is not veto"),
+                    LiteralValue::from_bool(true),
+                )
+            };
+            let computation_result = result
+                .value()
+                .expect("BUG: ResultIsVeto always produces Value")
+                .clone();
+            context.push_operation(OperationKind::Computation {
+                kind: ComputationKind::ResultIsVeto,
+                inputs: vec![],
+                result: computation_result,
+            });
+            let explanation_node = ExplanationNode::Computation {
+                kind: ComputationKind::ResultIsVeto,
+                conversion_steps: vec![],
+                original_expression,
+                expression,
+                result: display_result,
+                source_location: current.source_location.clone(),
+                operands: vec![operand_explanation],
+            };
+            context.set_explanation_node(current, explanation_node);
+            result
         }
 
         ExpressionKind::Veto(veto_expr) => {
@@ -742,7 +909,7 @@ fn evaluate_single_expression(
             OperationResult::Value(Box::new(value))
         }
 
-        ExpressionKind::DateRelative(kind, date_expr, tolerance_expr) => {
+        ExpressionKind::DateRelative(kind, date_expr) => {
             let date_result = get_operand_result(results, date_expr, "date operand");
             if let OperationResult::Veto(_) = date_result {
                 return propagate_veto_explanation(
@@ -773,37 +940,9 @@ fn evaluate_single_expression(
                 _ => unreachable!("BUG: context.now() must be a Date value"),
             };
 
-            let tolerance = match tolerance_expr {
-                Some(tol_expr) => {
-                    let tol_result = get_operand_result(results, tol_expr, "tolerance operand");
-                    if let OperationResult::Veto(_) = tol_result {
-                        return propagate_veto_explanation(
-                            context,
-                            current,
-                            tol_expr,
-                            tol_result,
-                            "tolerance operand",
-                        );
-                    }
-                    let tol_val = unwrap_value_after_veto_check(
-                        &tol_result,
-                        "tolerance operand",
-                        &current.source_location,
-                    );
-                    match &tol_val.value {
-                        ValueKind::Duration(amount, unit) => Some((*amount, unit.clone())),
-                        _ => unreachable!(
-                            "BUG: date sugar tolerance with non-duration; planning should have rejected this"
-                        ),
-                    }
-                }
-                None => None,
-            };
-
             let result = crate::computation::datetime::compute_date_relative(
                 kind,
                 date_semantic,
-                tolerance.as_ref().map(|(a, u)| (a, u)),
                 now_semantic,
             );
 
@@ -856,6 +995,153 @@ fn evaluate_single_expression(
             context.set_explanation_node(current, date_explanation);
             result
         }
+
+        ExpressionKind::RangeLiteral(left, right) => {
+            let left_result = get_operand_result(results, left, "left endpoint");
+            let right_result = get_operand_result(results, right, "right endpoint");
+
+            if let OperationResult::Veto(_) = left_result {
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    left,
+                    left_result,
+                    "left endpoint",
+                );
+            }
+            if let OperationResult::Veto(_) = right_result {
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    right,
+                    right_result,
+                    "right endpoint",
+                );
+            }
+
+            let left_value = unwrap_value_after_veto_check(
+                &left_result,
+                "left endpoint",
+                &current.source_location,
+            );
+            let right_value = unwrap_value_after_veto_check(
+                &right_result,
+                "right endpoint",
+                &current.source_location,
+            );
+
+            let range_value = LiteralValue::range(left_value.clone(), right_value.clone());
+            let explanation_node = ExplanationNode::Value {
+                value: range_value.clone(),
+                source: ValueSource::Computed,
+                source_location: current.source_location.clone(),
+            };
+            context.set_explanation_node(current, explanation_node);
+            OperationResult::Value(Box::new(range_value))
+        }
+
+        ExpressionKind::PastFutureRange(kind, offset_expr) => {
+            let offset_result = get_operand_result(results, offset_expr, "offset operand");
+            if let OperationResult::Veto(_) = offset_result {
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    offset_expr,
+                    offset_result,
+                    "offset operand",
+                );
+            }
+
+            let offset_value = unwrap_value_after_veto_check(
+                &offset_result,
+                "offset operand",
+                &current.source_location,
+            );
+
+            let now_value = context.now();
+            let now_semantic = match &now_value.value {
+                ValueKind::Date(date_time) => date_time,
+                _ => unreachable!("BUG: context.now() must be a Date value"),
+            };
+
+            let result = crate::computation::datetime::evaluate_past_future_range(
+                kind,
+                offset_value,
+                now_semantic,
+            );
+
+            match &result {
+                OperationResult::Value(range_value) => {
+                    let explanation_node = ExplanationNode::Value {
+                        value: range_value.as_ref().clone(),
+                        source: ValueSource::Computed,
+                        source_location: current.source_location.clone(),
+                    };
+                    context.set_explanation_node(current, explanation_node);
+                }
+                OperationResult::Veto(_) => {
+                    let offset_explanation =
+                        get_explanation_node_required(context, offset_expr, "offset operand");
+                    context.set_explanation_node(current, offset_explanation);
+                }
+            }
+            result
+        }
+
+        ExpressionKind::RangeContainment(value_expr, range_expr) => {
+            let value_result = get_operand_result(results, value_expr, "value operand");
+            let range_result = get_operand_result(results, range_expr, "range operand");
+
+            if let OperationResult::Veto(_) = value_result {
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    value_expr,
+                    value_result,
+                    "value operand",
+                );
+            }
+            if let OperationResult::Veto(_) = range_result {
+                return propagate_veto_explanation(
+                    context,
+                    current,
+                    range_expr,
+                    range_result,
+                    "range operand",
+                );
+            }
+
+            let value_literal = unwrap_value_after_veto_check(
+                &value_result,
+                "value operand",
+                &current.source_location,
+            );
+            let range_literal = unwrap_value_after_veto_check(
+                &range_result,
+                "range operand",
+                &current.source_location,
+            );
+
+            let contained = match &range_literal.value {
+                ValueKind::Range(range_left, range_right) => crate::computation::range::check_containment(
+                    value_literal,
+                    range_left.as_ref(),
+                    range_right.as_ref(),
+                ),
+                _ => unreachable!(
+                    "BUG: range containment reached runtime with non-range operand; planning should have rejected this"
+                ),
+            };
+
+            let result_value = LiteralValue::from_bool(contained);
+            let explanation_node = ExplanationNode::Value {
+                value: result_value.clone(),
+                source: ValueSource::Computed,
+                source_location: current.source_location.clone(),
+            };
+            context.set_explanation_node(current, explanation_node);
+            OperationResult::Value(Box::new(result_value))
+        }
     }
 }
 
@@ -864,65 +1150,49 @@ fn evaluate_mathematical_operator(
     value: &LiteralValue,
     context: &mut crate::evaluation::EvaluationContext,
 ) -> OperationResult {
+    use crate::computation::decimal_math::{decimal_acos, decimal_asin, decimal_atan};
+    use rust_decimal::MathematicalOps;
+
     match &value.value {
-        ValueKind::Number(n) => {
-            use rust_decimal::prelude::ToPrimitive;
-            let float_val = match n.to_f64() {
-                Some(v) => v,
+        ValueKind::Number(stored_rational) => {
+            use crate::computation::rational::{commit_rational_to_decimal, decimal_to_rational};
+            let stored_decimal = match commit_rational_to_decimal(stored_rational) {
+                Ok(decimal) => decimal,
+                Err(_) => {
+                    return OperationResult::Veto(VetoType::computation(
+                        "Mathematical operation requires a decimal-representable input",
+                    ));
+                }
+            };
+            let decimal_result: Option<rust_decimal::Decimal> = match op {
+                MathematicalComputation::Abs => Some(stored_decimal.abs()),
+                MathematicalComputation::Floor => Some(stored_decimal.floor()),
+                MathematicalComputation::Ceil => Some(stored_decimal.ceil()),
+                MathematicalComputation::Round => Some(stored_decimal.round()),
+                MathematicalComputation::Sqrt => stored_decimal.sqrt(),
+                MathematicalComputation::Sin => stored_decimal.checked_sin(),
+                MathematicalComputation::Cos => stored_decimal.checked_cos(),
+                MathematicalComputation::Tan => stored_decimal.checked_tan(),
+                MathematicalComputation::Log => stored_decimal.checked_ln(),
+                MathematicalComputation::Exp => stored_decimal.checked_exp(),
+                MathematicalComputation::Asin => decimal_asin(stored_decimal),
+                MathematicalComputation::Acos => decimal_acos(stored_decimal),
+                MathematicalComputation::Atan => decimal_atan(stored_decimal),
+            };
+
+            let committed_decimal = match decimal_result {
+                Some(committed) => committed,
                 None => {
                     return OperationResult::Veto(VetoType::computation(
-                        "Cannot convert to float for mathematical operation",
+                        "Mathematical operation result is undefined for this input",
                     ));
                 }
             };
 
-            let math_result = match op {
-                MathematicalComputation::Sqrt => float_val.sqrt(),
-                MathematicalComputation::Sin => float_val.sin(),
-                MathematicalComputation::Cos => float_val.cos(),
-                MathematicalComputation::Tan => float_val.tan(),
-                MathematicalComputation::Asin => float_val.asin(),
-                MathematicalComputation::Acos => float_val.acos(),
-                MathematicalComputation::Atan => float_val.atan(),
-                MathematicalComputation::Log => float_val.ln(),
-                MathematicalComputation::Exp => float_val.exp(),
-                MathematicalComputation::Abs => {
-                    return OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        n.abs(),
-                        value.lemma_type.clone(),
-                    )));
-                }
-                MathematicalComputation::Floor => {
-                    return OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        n.floor(),
-                        value.lemma_type.clone(),
-                    )));
-                }
-                MathematicalComputation::Ceil => {
-                    return OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        n.ceil(),
-                        value.lemma_type.clone(),
-                    )));
-                }
-                MathematicalComputation::Round => {
-                    return OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                        n.round(),
-                        value.lemma_type.clone(),
-                    )));
-                }
-            };
-
-            let decimal_result = match rust_decimal::Decimal::from_f64_retain(math_result) {
-                Some(d) => d,
-                None => {
-                    return OperationResult::Veto(VetoType::computation(
-                        "Mathematical operation result cannot be represented",
-                    ));
-                }
-            };
-
+            let result_rational = decimal_to_rational(committed_decimal)
+                .expect("BUG: transcendental result must lift back to stored rational");
             let result_value =
-                LiteralValue::number_with_type(decimal_result, value.lemma_type.clone());
+                LiteralValue::number_with_type(result_rational, value.lemma_type.clone());
             context.push_operation(OperationKind::Computation {
                 kind: ComputationKind::Mathematical(op.clone()),
                 inputs: vec![value.clone()],

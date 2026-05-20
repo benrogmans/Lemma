@@ -1,8 +1,8 @@
-//! QA coverage for parse-time `DataValue::Definition` (schema / constraints / `from` / literals).
+//! QA coverage for parse-time `DataValue::Definition` (schema / constraints / literals).
 //!
 //! Matrix: every primitive keyword x applicable-vs-incompatible constraint.
 //! Named-typedef references: happy + unknown + name-collision with rule.
-//! `from <spec>` variants: happy + unknown typedef + unknown spec.
+//! Qualified parent types (`uses` plus `data x: alias.TypeName`): happy + unknown + errors.
 //!
 //! Tests that encode INTENDED behavior stay as written. Several are expected
 //! to be red (e.g. `text -> decimals 2` may be silently accepted). Do NOT
@@ -59,7 +59,14 @@ fn run(
     data: HashMap<String, String>,
 ) -> Result<lemma::evaluation::Response, lemma::Error> {
     let now = DateTimeValue::now();
-    engine.run(None, spec, Some(&now), data, false)
+    engine.run(
+        None,
+        spec,
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    )
 }
 
 // ─── Type-only data + missing at runtime → MissingData veto ──────────
@@ -149,10 +156,11 @@ rule r: d
 }
 
 #[test]
-fn primitive_duration_type_only_missing_vetoes() {
+fn lemma_typedef_duration_missing_data_vetoes() {
     let code = r#"
 spec s
-data d: duration
+uses lemma si
+data d: si.duration
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -534,11 +542,11 @@ rule r: small_number
 fn cross_spec_value_copy_reference_resolves() {
     let code = r#"
 spec lib
-data money: scale -> unit eur 1 -> unit usd 1.19
+data money: quantity -> unit eur 1 -> unit usd 0.84
 
 spec app
 uses lib
-data price: lib.money
+fill price: lib.money
 rule r: price
 "#;
     let mut engine = Engine::new();
@@ -554,11 +562,11 @@ rule r: price
 fn cross_spec_value_copy_unknown_data_is_rejected() {
     let code = r#"
 spec lib
-data money: scale -> unit eur 1
+data money: quantity -> unit eur 1
 
 spec app
 uses lib
-data price: lib.nonexistent
+fill price: lib.nonexistent
 rule r: price
 "#;
     let mut engine = Engine::new();
@@ -574,7 +582,7 @@ fn cross_spec_value_copy_to_unknown_spec_is_rejected() {
     let code = r#"
 spec app
 uses nonexistent_spec
-data price: nonexistent_spec.money
+fill price: nonexistent_spec.money
 rule r: price
 "#;
     let mut engine = Engine::new();

@@ -3,6 +3,7 @@ use chrono::NaiveDate;
 use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
 use lemma::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
+use lemma::{checked_mul, commit_rational_to_decimal, rational_to_display_str, RationalInteger};
 use lemma::{EffectiveDate, Engine, LemmaType, LiteralValue, TypeSpecification, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -35,6 +36,20 @@ struct NumericConstraints {
     maximum: Option<Decimal>,
     decimals: Option<u8>,
     help: String,
+}
+
+fn optional_rational_bound_for_prompt(bound: Option<RationalInteger>) -> Option<Decimal> {
+    bound.and_then(|rational| commit_rational_to_decimal(&rational).ok())
+}
+
+fn optional_quantity_bound_for_prompt(
+    bound: &Option<(RationalInteger, String)>,
+) -> Option<Decimal> {
+    optional_rational_bound_for_prompt(bound.as_ref().map(|(rational, _)| *rational))
+}
+
+fn rational_default_string(rational: &RationalInteger) -> String {
+    rational_to_display_str(rational)
 }
 
 fn get_plan_for_interactive<'a>(
@@ -230,7 +245,13 @@ fn prompt_data(
             trial.extend(collected.clone());
             trial.insert(name.clone(), input_value.clone());
 
-            match engine.run_plan_without_defaults(plan, Some(now), trial, false) {
+            match engine.run_plan_without_defaults(
+                plan,
+                Some(now),
+                lemma::serialization::data_values_from_strings(trial),
+                false,
+                lemma::EvaluationRequest::default(),
+            ) {
                 Ok(_) => {
                     collected.insert(name.clone(), input_value);
                     break;
@@ -291,7 +312,7 @@ fn prompt_value_for_type(
                 )
             }
         }
-        TypeSpecification::Scale {
+        TypeSpecification::Quantity {
             minimum,
             maximum,
             decimals,
@@ -300,12 +321,12 @@ fn prompt_value_for_type(
             ..
         } => {
             let constraints = NumericConstraints {
-                minimum: *minimum,
-                maximum: *maximum,
+                minimum: optional_quantity_bound_for_prompt(minimum),
+                maximum: optional_quantity_bound_for_prompt(maximum),
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_scale_data(data_name, &type_str, schema_default, units, &constraints)
+            prompt_quantity_data(data_name, &type_str, schema_default, units, &constraints)
         }
         TypeSpecification::Number {
             minimum,
@@ -315,8 +336,8 @@ fn prompt_value_for_type(
             ..
         } => {
             let constraints = NumericConstraints {
-                minimum: *minimum,
-                maximum: *maximum,
+                minimum: optional_rational_bound_for_prompt(*minimum),
+                maximum: optional_rational_bound_for_prompt(*maximum),
                 decimals: *decimals,
                 help: help.clone(),
             };
@@ -333,8 +354,8 @@ fn prompt_value_for_type(
             &type_str,
             schema_default,
             units,
-            *minimum,
-            *maximum,
+            optional_rational_bound_for_prompt(*minimum),
+            optional_rational_bound_for_prompt(*maximum),
             help.as_str(),
         ),
         TypeSpecification::Date { .. } => prompt_date_data(data_name, schema_default),
@@ -344,8 +365,15 @@ fn prompt_value_for_type(
                 .map(|l| l.to_string());
             prompt_simple_text(data_name, &type_str, def.as_deref(), help.as_str(), "12:34:56")
         }
-        TypeSpecification::Duration { help, .. } => {
-            prompt_duration_data(data_name, &type_str, schema_default, help.as_str())
+        TypeSpecification::Calendar { help, .. } => {
+            prompt_calendar_data(data_name, &type_str, schema_default, help.as_str())
+        }
+        TypeSpecification::NumberRange { help, .. }
+        | TypeSpecification::DateRange { help, .. }
+        | TypeSpecification::QuantityRange { help, .. }
+        | TypeSpecification::RatioRange { help, .. }
+        | TypeSpecification::CalendarRange { help, .. } => {
+            prompt_range_data(data_name, &type_str, lemma_type, schema_default, help.as_str())
         }
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Data '{}' has veto type which is not promptable", data_name)
@@ -486,6 +514,48 @@ fn prompt_simple_text(
         .context(format!("Failed to get value for {}", data_name))
 }
 
+fn prompt_range_data(
+    data_name: &str,
+    type_str: &str,
+    lemma_type: &LemmaType,
+    schema_default: Option<&LiteralValue>,
+    help: &str,
+) -> Result<String> {
+    let (left_default, right_default) = match schema_default {
+        Some(LiteralValue {
+            value: ValueKind::Range(left, right),
+            ..
+        }) => (Some(left.display_value()), Some(right.display_value())),
+        _ => (None, None),
+    };
+
+    let endpoint_example = match &lemma_type.specifications {
+        TypeSpecification::DateRange { .. } => "2024-01-01",
+        TypeSpecification::NumberRange { .. } => "0",
+        TypeSpecification::QuantityRange { .. } => "30 kilogram",
+        TypeSpecification::RatioRange { .. } => "10%",
+        TypeSpecification::CalendarRange { .. } => "18 years...67 years",
+        _ => unreachable!("BUG: prompt_range_data called with non-range type"),
+    };
+
+    let left_value = prompt_simple_text(
+        &format!("{}.start", data_name),
+        type_str,
+        left_default.as_deref(),
+        help,
+        endpoint_example,
+    )?;
+    let right_value = prompt_simple_text(
+        &format!("{}.end", data_name),
+        type_str,
+        right_default.as_deref(),
+        help,
+        endpoint_example,
+    )?;
+
+    Ok(format!("{}...{}", left_value.trim(), right_value.trim()))
+}
+
 fn prompt_number_data(
     data_name: &str,
     type_str: &str,
@@ -497,22 +567,22 @@ fn prompt_number_data(
     prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "10")
 }
 
-fn prompt_scale_data(
+fn prompt_quantity_data(
     data_name: &str,
     type_str: &str,
     schema_default: Option<&LiteralValue>,
-    units: &lemma::planning::semantics::ScaleUnits,
+    units: &lemma::planning::semantics::QuantityUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let parsed = schema_default.and_then(|lit| match &lit.value {
-        ValueKind::Scale(n, u) => Some((*n, u.as_str())),
+        ValueKind::Quantity(n, u, _decomposition) => Some((*n, u.as_str())),
         _ => None,
     });
 
     let prompt_message = format!("{} [{}]", data_name, type_str);
 
     if units.is_empty() {
-        let default_str = parsed.map(|(v, _)| v.to_string());
+        let default_str = parsed.map(|(v, _)| rational_default_string(&v));
         return prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "7.65");
     }
 
@@ -532,11 +602,7 @@ fn prompt_scale_data(
             .context(format!("Failed to get unit for {}", data_name))?
     };
 
-    let numeric_default = parsed.and_then(|(value, def_unit)| {
-        let from = units.get(def_unit).ok()?;
-        let to = units.get(&unit).ok()?;
-        Some((value * from.value / to.value).to_string())
-    });
+    let numeric_default = parsed.map(|(value, _def_unit)| rational_default_string(&value));
 
     let value_constraints = NumericConstraints {
         help: if constraints.help.is_empty() {
@@ -559,12 +625,14 @@ fn prompt_scale_data(
 fn ratio_default_numeric_for_decimal_prompt(lit: &LiteralValue) -> Option<String> {
     match &lit.value {
         ValueKind::Ratio(n, Some(u)) if u == "percent" => {
-            Some((*n * Decimal::from(100)).normalize().to_string())
+            let scaled = checked_mul(n, &RationalInteger::new(100, 1)).ok()?;
+            Some(rational_default_string(&scaled))
         }
         ValueKind::Ratio(n, Some(u)) if u == "permille" => {
-            Some((*n * Decimal::from(1000)).normalize().to_string())
+            let scaled = checked_mul(n, &RationalInteger::new(1000, 1)).ok()?;
+            Some(rational_default_string(&scaled))
         }
-        ValueKind::Ratio(n, _) => Some(n.normalize().to_string()),
+        ValueKind::Ratio(n, _) => Some(rational_default_string(n)),
         _ => None,
     }
 }
@@ -618,18 +686,17 @@ fn prompt_ratio_data(
     }
 }
 
-fn prompt_duration_data(
+fn prompt_calendar_data(
     data_name: &str,
     type_str: &str,
     schema_default: Option<&LiteralValue>,
     help: &str,
 ) -> Result<String> {
-    // If there is a default, let the user accept it.
-    if let Some(lit) = schema_default.filter(|l| matches!(l.value, ValueKind::Duration(_, _))) {
+    if let Some(lit) = schema_default.filter(|l| matches!(l.value, ValueKind::Calendar(_, _))) {
         let default = lit.to_string();
         let prompt_message = format!("{} [{}]", data_name, type_str);
         let help_message = if help.is_empty() {
-            "Example: 5 days".to_string()
+            "Example: 6 months".to_string()
         } else {
             help.to_string()
         };
@@ -637,26 +704,16 @@ fn prompt_duration_data(
             .with_help_message(&help_message)
             .with_default(&default)
             .prompt()
-            .context(format!("Failed to get duration for {}", data_name));
+            .context(format!("Failed to get calendar value for {}", data_name));
     }
 
-    // Otherwise, guide the user with a unit selector.
-    let units = vec![
-        "milliseconds",
-        "seconds",
-        "minutes",
-        "hours",
-        "days",
-        "weeks",
-        "months",
-        "years",
-    ];
-    let unit = Select::new(&format!("Select duration unit for {}", data_name), units)
+    let units = vec!["months", "years"];
+    let unit = Select::new(&format!("Select calendar unit for {}", data_name), units)
         .prompt()
-        .context(format!("Failed to get duration unit for {}", data_name))?;
+        .context(format!("Failed to get calendar unit for {}", data_name))?;
 
     let value = prompt_decimal_input(
-        &format!("Enter duration value for {}", data_name),
+        &format!("Enter calendar value for {}", data_name),
         None,
         &NumericConstraints {
             minimum: None,
@@ -664,7 +721,7 @@ fn prompt_duration_data(
             decimals: None,
             help: help.to_string(),
         },
-        "5",
+        "6",
     )?;
 
     Ok(format!("{} {}", value, unit))

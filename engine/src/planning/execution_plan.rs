@@ -8,20 +8,21 @@
 //! - `SpecSchema` is the IO contract surface for consumers (data and rule outputs).
 //!   IO compatibility is the consumer-facing guarantee.
 
+use crate::computation::UnitResolutionContext;
 use crate::parsing::ast::{EffectiveDate, LemmaRepository, LemmaSpec, MetaValue};
 use crate::parsing::source::Source;
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
-use crate::planning::semantics;
+use crate::planning::normalize::{build_unless_chain, inline_rule_refs, normalize_expression};
 use crate::planning::semantics::{
-    DataDefinition, DataPath, Expression, LemmaType, LiteralValue, RulePath, TypeSpecification,
-    ValueKind,
+    DataDefinition, DataPath, Expression, LemmaType, LiteralValue, RulePath, SemanticCalendarUnit,
+    TypeSpecification, ValueKind,
 };
 use crate::Error;
 use crate::ResourceLimits;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 /// One spec's contribution to an [`ExecutionPlan`], together with its
@@ -68,8 +69,10 @@ pub struct ExecutionPlan {
     /// Spec metadata
     pub meta: HashMap<String, MetaValue>,
 
-    /// Named types defined in or imported by this spec, in deterministic order.
-    pub named_types: BTreeMap<String, LemmaType>,
+    /// Unit name → owning quantity/ratio type (same as planner [`ResolvedSpecTypes::unit_index`]:
+    /// local types plus units from **direct** `uses` imports only; qualified re-exports skipped).
+    #[serde(default)]
+    pub unit_index: HashMap<String, LemmaType>,
 
     pub effective: EffectiveDate,
 
@@ -140,11 +143,35 @@ pub struct Branch {
     /// Condition expression (None for default branch)
     pub condition: Option<Expression>,
 
-    /// Result expression
+    /// Unless condition after normalize (authoritative for evaluation when present)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalized_condition: Option<Expression>,
+
+    /// Result expression as written (for explanation trace; `RulePath` refs preserved)
     pub result: Expression,
+
+    /// Dependencies inlined and algebraically simplified; evaluated for authoritative result
+    pub normalized_result: Expression,
 
     /// Source location for error messages (always present for branches from parsed specs)
     pub source: Source,
+}
+
+/// One expression for a rule's branch semantics (unless-chain), using normalized branch results
+/// and normalized conditions. Used for rule inlining into downstream rules.
+fn build_rule_normalized_result_expression(branches: &[Branch]) -> Expression {
+    let pairs: Vec<(Option<Expression>, Expression)> = branches
+        .iter()
+        .map(|b| {
+            let condition = b.condition.as_ref().map(|_| {
+                b.normalized_condition
+                    .clone()
+                    .expect("BUG: normalized_condition must exist when condition exists")
+            });
+            (condition, b.normalized_result.clone())
+        })
+        .collect();
+    build_unless_chain(&pairs)
 }
 
 /// Builds an execution plan from a Graph for one temporal slice.
@@ -153,12 +180,20 @@ pub(crate) fn build_execution_plan(
     graph: &Graph,
     resolved_types: &[(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)],
     effective: &EffectiveDate,
-) -> ExecutionPlan {
+) -> Result<ExecutionPlan, Vec<Error>> {
     let data = graph.build_data();
     let execution_order = graph.execution_order();
 
+    let main_spec = graph.main_spec();
+    let unit_index = resolved_types
+        .iter()
+        .find(|(_, spec, _)| Arc::ptr_eq(spec, main_spec))
+        .map(|(_, _, types)| types.unit_index.clone())
+        .unwrap_or_default();
+
     let mut executable_rules: Vec<ExecutableRule> = Vec::new();
     let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
+    let mut normalized_rule_results: HashMap<RulePath, Expression> = HashMap::new();
 
     for rule_path in execution_order {
         let rule_node = graph.rules().get(rule_path).expect(
@@ -181,13 +216,42 @@ pub(crate) fn build_execution_plan(
         }
 
         let mut executable_branches = Vec::new();
+        let unit_ctx = UnitResolutionContext::WithIndex(&unit_index);
         for (condition, result) in &rule_node.branches {
+            let inlined = inline_rule_refs(result, &normalized_rule_results);
+            let normalized_result =
+                normalize_expression(&inlined, Some(&unit_ctx)).map_err(|error| {
+                    vec![Error::validation(
+                        format!("failed to normalize rule result: {error}"),
+                        Some(rule_node.source.clone()),
+                        None::<String>,
+                    )]
+                })?;
+            let normalized_condition = match condition {
+                Some(condition) => Some(normalize_expression(condition, Some(&unit_ctx)).map_err(
+                    |error| {
+                        vec![Error::validation(
+                            format!("failed to normalize unless condition: {error}"),
+                            Some(rule_node.source.clone()),
+                            None::<String>,
+                        )]
+                    },
+                )?),
+                None => None,
+            };
             executable_branches.push(Branch {
                 condition: condition.clone(),
+                normalized_condition,
                 result: result.clone(),
+                normalized_result,
                 source: rule_node.source.clone(),
             });
         }
+
+        normalized_rule_results.insert(
+            rule_path.clone(),
+            build_rule_normalized_result_expression(&executable_branches),
+        );
 
         path_to_index.insert(rule_path.clone(), executable_rules.len());
         executable_rules.push(ExecutableRule {
@@ -199,9 +263,6 @@ pub(crate) fn build_execution_plan(
             rule_type: rule_node.rule_type.clone(),
         });
     }
-
-    let main_spec = graph.main_spec();
-    let named_types = build_type_tables(main_spec, resolved_types);
 
     let mut sources: SpecSources = Vec::new();
     for (repo, spec, _) in resolved_types.iter() {
@@ -219,7 +280,7 @@ pub(crate) fn build_execution_plan(
         }
     }
 
-    ExecutionPlan {
+    Ok(ExecutionPlan {
         spec_name: main_spec.name.clone(),
         data,
         rules: executable_rules,
@@ -229,31 +290,10 @@ pub(crate) fn build_execution_plan(
             .iter()
             .map(|f| (f.key.clone(), f.value.clone()))
             .collect(),
-        named_types,
+        unit_index,
         effective: effective.clone(),
         sources,
-    }
-}
-
-/// Build the named types table from the main spec's resolved types.
-fn build_type_tables(
-    main_spec: &Arc<LemmaSpec>,
-    resolved_types: &[(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)],
-) -> BTreeMap<String, LemmaType> {
-    let mut named_types = BTreeMap::new();
-
-    let main_resolved = resolved_types
-        .iter()
-        .find(|(_, spec, _)| Arc::ptr_eq(spec, main_spec))
-        .map(|(_, _, types)| types);
-
-    if let Some(resolved) = main_resolved {
-        for (type_name, lemma_type) in &resolved.named_types {
-            named_types.insert(type_name.clone(), lemma_type.clone());
-        }
-    }
-
-    named_types
+    })
 }
 
 /// A spec's public interface: its data (inputs) and rules (outputs) with
@@ -388,7 +428,7 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
                 parts.push(format!("maximum: {}", v));
             }
         }
-        TypeSpecification::Scale {
+        TypeSpecification::Quantity {
             minimum,
             maximum,
             decimals,
@@ -399,11 +439,11 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
             if !unit_names.is_empty() {
                 parts.push(format!("units: {}", unit_names.join(", ")));
             }
-            if let Some(v) = minimum {
-                parts.push(format!("minimum: {}", v));
+            if let Some((magnitude, unit_name)) = minimum {
+                parts.push(format!("minimum: {} {}", magnitude, unit_name));
             }
-            if let Some(v) = maximum {
-                parts.push(format!("maximum: {}", v));
+            if let Some((magnitude, unit_name)) = maximum {
+                parts.push(format!("maximum: {} {}", magnitude, unit_name));
             }
             if let Some(d) = decimals {
                 parts.push(format!("decimals: {}", d));
@@ -446,7 +486,12 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
             }
         }
         TypeSpecification::Boolean { .. }
-        | TypeSpecification::Duration { .. }
+        | TypeSpecification::NumberRange { .. }
+        | TypeSpecification::QuantityRange { .. }
+        | TypeSpecification::DateRange { .. }
+        | TypeSpecification::RatioRange { .. }
+        | TypeSpecification::CalendarRange { .. }
+        | TypeSpecification::Calendar { .. }
         | TypeSpecification::Veto { .. }
         | TypeSpecification::Undetermined => {}
     }
@@ -602,12 +647,12 @@ impl ExecutionPlan {
         self.data.get(path).and_then(|d| d.value())
     }
 
-    /// Provide string values for data.
+    /// Provide data values as JSON (convenience strings or serialized objects).
     ///
-    /// Parses each string to its expected type, validates constraints, and applies to the plan.
+    /// Parses each value to its expected type, validates constraints, and applies to the plan.
     pub fn set_data_values(
         mut self,
-        values: HashMap<String, String>,
+        values: std::collections::HashMap<String, serde_json::Value>,
         limits: &ResourceLimits,
     ) -> Result<Self, Error> {
         for (name, raw_value) in values {
@@ -640,20 +685,13 @@ impl ExecutionPlan {
                 )
             })?;
 
-            let parsed_value = crate::planning::semantics::parse_value_from_string(
+            let literal_value = crate::planning::semantics::parse_data_value_from_json(
                 &raw_value,
                 &expected_type.specifications,
+                &expected_type,
                 &data_source,
             )
             .map_err(|e| e.with_related_data(&name))?;
-            let semantic_value = semantics::value_to_semantic(&parsed_value).map_err(|msg| {
-                Error::validation(msg, Some(data_source.clone()), None::<String>)
-                    .with_related_data(&name)
-            })?;
-            let literal_value = LiteralValue {
-                value: semantic_value,
-                lemma_type: expected_type.clone(),
-            };
 
             let size = literal_value.byte_size();
             if size > limits.max_data_value_bytes {
@@ -731,9 +769,29 @@ pub(crate) fn validate_value_against_type(
     expected_type: &LemmaType,
     value: &LiteralValue,
 ) -> Result<(), String> {
+    use crate::computation::rational::{commit_rational_to_decimal, RationalInteger};
     use crate::planning::semantics::TypeSpecification;
 
-    let effective_decimals = |n: rust_decimal::Decimal| n.scale();
+    fn exceeds_decimal_places(magnitude: &RationalInteger, max_decimals: u8) -> bool {
+        match commit_rational_to_decimal(magnitude) {
+            Ok(decimal) => decimal.scale() > u32::from(max_decimals),
+            Err(_) => true,
+        }
+    }
+
+    fn format_rational(r: &RationalInteger, decimals: Option<u8>) -> String {
+        use crate::computation::rational::rational_to_display_str;
+        match commit_rational_to_decimal(r) {
+            Ok(decimal) => match decimals {
+                Some(dp) => {
+                    let rounded = decimal.round_dp(u32::from(dp));
+                    format!("{:.prec$}", rounded, prec = dp as usize)
+                }
+                None => decimal.normalize().to_string(),
+            },
+            Err(_) => rational_to_display_str(r),
+        }
+    }
 
     match (&expected_type.specifications, &value.value) {
         (
@@ -745,45 +803,81 @@ pub(crate) fn validate_value_against_type(
             },
             ValueKind::Number(n),
         ) => {
+            if let Some(d) = decimals {
+                if exceeds_decimal_places(n, *d) {
+                    return Err(format!(
+                        "{} exceeds decimals constraint {d}",
+                        format_rational(n, *decimals)
+                    ));
+                }
+            }
             if let Some(min) = minimum {
                 if n < min {
-                    return Err(format!("{} is below minimum {}", n, min));
+                    return Err(format!(
+                        "{} is below minimum {}",
+                        format_rational(n, *decimals),
+                        format_rational(min, *decimals)
+                    ));
                 }
             }
             if let Some(max) = maximum {
                 if n > max {
-                    return Err(format!("{} is above maximum {}", n, max));
-                }
-            }
-            if let Some(d) = decimals {
-                if effective_decimals(*n) > u32::from(*d) {
-                    return Err(format!("{} has more than {} decimals", n, d));
+                    return Err(format!(
+                        "{} is above maximum {}",
+                        format_rational(n, *decimals),
+                        format_rational(max, *decimals)
+                    ));
                 }
             }
             Ok(())
         }
         (
-            TypeSpecification::Scale {
+            TypeSpecification::Quantity {
                 minimum,
                 maximum,
                 decimals,
+                units,
                 ..
             },
-            ValueKind::Scale(n, _unit),
+            ValueKind::Quantity(magnitude, unit, _),
         ) => {
-            if let Some(min) = minimum {
-                if n < min {
-                    return Err(format!("{} is below minimum {}", n, min));
-                }
-            }
-            if let Some(max) = maximum {
-                if n > max {
-                    return Err(format!("{} is above maximum {}", n, max));
-                }
-            }
             if let Some(d) = decimals {
-                if effective_decimals(*n) > u32::from(*d) {
-                    return Err(format!("{} has more than {} decimals", n, d));
+                if exceeds_decimal_places(magnitude, *d) {
+                    return Err(format!(
+                        "{} {unit} exceeds decimals constraint {d}",
+                        format_rational(magnitude, *decimals)
+                    ));
+                }
+            }
+            let quantity_unit = units.get(unit)?;
+            if minimum.is_some() {
+                let unit_minimum = quantity_unit.minimum.expect(
+                    "BUG: QuantityUnit.minimum missing after type minimum set by sync_quantity_units_from_canonical",
+                );
+                if magnitude < &unit_minimum {
+                    let value_display =
+                        format!("{} {}", format_rational(magnitude, *decimals), unit);
+                    let bound_display = format!(
+                        "{} {}",
+                        format_rational(&unit_minimum, *decimals),
+                        quantity_unit.name
+                    );
+                    return Err(format!("{value_display} is below minimum {bound_display}"));
+                }
+            }
+            if maximum.is_some() {
+                let unit_maximum = quantity_unit.maximum.expect(
+                    "BUG: QuantityUnit.maximum missing after type maximum set by sync_quantity_units_from_canonical",
+                );
+                if magnitude > &unit_maximum {
+                    let value_display =
+                        format!("{} {}", format_rational(magnitude, *decimals), unit);
+                    let bound_display = format!(
+                        "{} {}",
+                        format_rational(&unit_maximum, *decimals),
+                        quantity_unit.name
+                    );
+                    return Err(format!("{value_display} is above maximum {bound_display}"));
                 }
             }
             Ok(())
@@ -817,23 +911,69 @@ pub(crate) fn validate_value_against_type(
                 minimum,
                 maximum,
                 decimals,
+                units,
                 ..
             },
-            ValueKind::Ratio(r, _unit),
+            ValueKind::Ratio(r, unit_name),
         ) => {
-            if let Some(min) = minimum {
-                if r < min {
-                    return Err(format!("{} is below minimum {}", r, min));
-                }
-            }
-            if let Some(max) = maximum {
-                if r > max {
-                    return Err(format!("{} is above maximum {}", r, max));
-                }
-            }
+            use crate::computation::rational::checked_mul;
+
             if let Some(d) = decimals {
-                if effective_decimals(*r) > u32::from(*d) {
-                    return Err(format!("{} has more than {} decimals", r, d));
+                if exceeds_decimal_places(r, *d) {
+                    return Err(format!(
+                        "{} exceeds decimals constraint {d}",
+                        format_rational(r, *decimals)
+                    ));
+                }
+            }
+            if let Some(type_minimum) = minimum {
+                if r < type_minimum {
+                    let message = match unit_name.as_deref() {
+                        Some(unit) => {
+                            let ratio_unit = units.get(unit)?;
+                            let value_per_unit = checked_mul(r, &ratio_unit.value)
+                                .map_err(|failure| failure.to_string())?;
+                            let bound_per_unit = ratio_unit.minimum.expect(
+                                "BUG: RatioUnit.minimum missing after type minimum set by sync_ratio_units_from_canonical",
+                            );
+                            format!(
+                                "{} {unit} is below minimum {} {unit}",
+                                format_rational(&value_per_unit, *decimals),
+                                format_rational(&bound_per_unit, *decimals),
+                            )
+                        }
+                        None => format!(
+                            "{} is below minimum {}",
+                            format_rational(r, *decimals),
+                            format_rational(type_minimum, *decimals),
+                        ),
+                    };
+                    return Err(message);
+                }
+            }
+            if let Some(type_maximum) = maximum {
+                if r > type_maximum {
+                    let message = match unit_name.as_deref() {
+                        Some(unit) => {
+                            let ratio_unit = units.get(unit)?;
+                            let value_per_unit = checked_mul(r, &ratio_unit.value)
+                                .map_err(|failure| failure.to_string())?;
+                            let bound_per_unit = ratio_unit.maximum.expect(
+                                "BUG: RatioUnit.maximum missing after type maximum set by sync_ratio_units_from_canonical",
+                            );
+                            format!(
+                                "{} {unit} is above maximum {} {unit}",
+                                format_rational(&value_per_unit, *decimals),
+                                format_rational(&bound_per_unit, *decimals),
+                            )
+                        }
+                        None => format!(
+                            "{} is above maximum {}",
+                            format_rational(r, *decimals),
+                            format_rational(type_maximum, *decimals),
+                        ),
+                    };
+                    return Err(message);
                 }
             }
             Ok(())
@@ -861,28 +1001,37 @@ pub(crate) fn validate_value_against_type(
             Ok(())
         }
         (
-            TypeSpecification::Duration {
+            TypeSpecification::Calendar {
                 minimum, maximum, ..
             },
-            ValueKind::Duration(value, unit),
+            ValueKind::Calendar(value, unit),
         ) => {
-            use crate::computation::units::duration_to_seconds;
-            let value_secs = duration_to_seconds(*value, unit);
-            if let Some((min_v, min_u)) = minimum {
-                let min_secs = duration_to_seconds(*min_v, min_u);
-                if value_secs < min_secs {
+            let value_months = crate::computation::units::convert_calendar_magnitude(
+                *value,
+                unit,
+                &SemanticCalendarUnit::Month,
+            );
+            if let Some((min_val, min_unit)) = minimum {
+                let min_months = crate::computation::units::convert_calendar_magnitude(
+                    *min_val,
+                    min_unit,
+                    &SemanticCalendarUnit::Month,
+                );
+                if value_months < min_months {
                     return Err(format!(
-                        "{} {} is below minimum {} {}",
-                        value, unit, min_v, min_u
+                        "{value} {unit} is below minimum {min_val} {min_unit}"
                     ));
                 }
             }
-            if let Some((max_v, max_u)) = maximum {
-                let max_secs = duration_to_seconds(*max_v, max_u);
-                if value_secs > max_secs {
+            if let Some((max_val, max_unit)) = maximum {
+                let max_months = crate::computation::units::convert_calendar_magnitude(
+                    *max_val,
+                    max_unit,
+                    &SemanticCalendarUnit::Month,
+                );
+                if value_months > max_months {
                     return Err(format!(
-                        "{} {} is above maximum {} {}",
-                        value, unit, max_v, max_u
+                        "{value} {unit} is above maximum {max_val} {max_unit}"
                     ));
                 }
             }
@@ -911,6 +1060,11 @@ pub(crate) fn validate_value_against_type(
             Ok(())
         }
         (TypeSpecification::Boolean { .. }, ValueKind::Boolean(_))
+        | (TypeSpecification::NumberRange { .. }, ValueKind::Range(_, _))
+        | (TypeSpecification::DateRange { .. }, ValueKind::Range(_, _))
+        | (TypeSpecification::QuantityRange { .. }, ValueKind::Range(_, _))
+        | (TypeSpecification::RatioRange { .. }, ValueKind::Range(_, _))
+        | (TypeSpecification::CalendarRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::Veto { .. }, _)
         | (TypeSpecification::Undetermined, _) => Ok(()),
         (spec, value_kind) => unreachable!(
@@ -953,6 +1107,7 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::computation::rational::{rational_zero, RationalInteger};
     use crate::parsing::ast::DateTimeValue;
     use crate::planning::semantics::{
         primitive_boolean, primitive_text, DataPath, LiteralValue, PathSegment, RulePath,
@@ -964,6 +1119,13 @@ mod tests {
 
     fn default_limits() -> ResourceLimits {
         ResourceLimits::default()
+    }
+
+    fn json_data(pairs: &[(&str, &str)]) -> HashMap<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), serde_json::Value::String((*v).to_string())))
+            .collect()
     }
 
     #[test]
@@ -985,14 +1147,13 @@ mod tests {
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
         let data_path = DataPath::new(vec![], "age".to_string());
 
-        let mut values = HashMap::new();
-        values.insert("age".to_string(), "30".to_string());
+        let values = json_data(&[("age", "30")]);
 
         let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
         let updated_value = updated_plan.get_data_value(&data_path).unwrap();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
-                assert_eq!(n, &rust_decimal::Decimal::from(30))
+                assert_eq!(*n, RationalInteger::new(30, 1));
             }
             other => panic!("Expected number literal, got {:?}", other),
         }
@@ -1016,8 +1177,7 @@ mod tests {
         let now = DateTimeValue::now();
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
-        let mut values = HashMap::new();
-        values.insert("age".to_string(), "thirty".to_string());
+        let values = json_data(&[("age", "thirty")]);
 
         assert!(plan.set_data_values(values, &default_limits()).is_err());
     }
@@ -1040,8 +1200,7 @@ mod tests {
         let now = DateTimeValue::now();
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
-        let mut values = HashMap::new();
-        values.insert("unknown".to_string(), "30".to_string());
+        let values = json_data(&[("unknown", "30")]);
 
         assert!(plan.set_data_values(values, &default_limits()).is_err());
     }
@@ -1067,8 +1226,7 @@ mod tests {
         let now = DateTimeValue::now();
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
-        let mut values = HashMap::new();
-        values.insert("rules.base_price".to_string(), "100".to_string());
+        let values = json_data(&[("rules.base_price", "100")]);
 
         let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
         let data_path = DataPath {
@@ -1081,7 +1239,7 @@ mod tests {
         let updated_value = updated_plan.get_data_value(&data_path).unwrap();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
-                assert_eq!(n, &rust_decimal::Decimal::from(100))
+                assert_eq!(*n, RationalInteger::new(100, 1));
             }
             other => panic!("Expected number literal, got {:?}", other),
         }
@@ -1115,7 +1273,7 @@ mod tests {
     }
 
     fn create_number_literal(n: rust_decimal::Decimal) -> LiteralValue {
-        LiteralValue::number(n)
+        LiteralValue::number_from_decimal(n)
     }
 
     fn create_boolean_literal(b: bool) -> LiteralValue {
@@ -1135,9 +1293,8 @@ mod tests {
         let max10 = crate::planning::semantics::LemmaType::primitive(
             crate::planning::semantics::TypeSpecification::Number {
                 minimum: None,
-                maximum: Some(rust_decimal::Decimal::from_str("10").unwrap()),
+                maximum: Some(RationalInteger::new(10, 1)),
                 decimals: None,
-                precision: None,
                 help: String::new(),
             },
         );
@@ -1168,13 +1325,12 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let mut values = HashMap::new();
-        values.insert("x".to_string(), "11".to_string());
+        let values = json_data(&[("x", "11")]);
 
         assert!(
             plan.set_data_values(values, &default_limits()).is_err(),
@@ -1221,13 +1377,12 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let mut values = HashMap::new();
-        values.insert("tier".to_string(), "platinum".to_string());
+        let values = json_data(&[("tier", "platinum")]);
 
         assert!(
             plan.set_data_values(values, &default_limits()).is_err(),
@@ -1236,23 +1391,27 @@ mod tests {
     }
 
     #[test]
-    fn with_values_should_enforce_scale_decimals() {
-        // Higher-standard requirement: decimals should be enforced on scale inputs,
+    fn with_values_should_enforce_quantity_decimals() {
+        // Higher-standard requirement: decimals should be enforced on quantity inputs,
         // unless the language explicitly defines rounding semantics.
         let data_path = DataPath::new(vec![], "price".to_string());
 
         let money = crate::planning::semantics::LemmaType::primitive(
-            crate::planning::semantics::TypeSpecification::Scale {
+            crate::planning::semantics::TypeSpecification::Quantity {
                 minimum: None,
                 maximum: None,
                 decimals: Some(2),
-                precision: None,
-                units: crate::planning::semantics::ScaleUnits::from(vec![
-                    crate::planning::semantics::ScaleUnit {
-                        name: "eur".to_string(),
-                        value: rust_decimal::Decimal::from_str("1.0").unwrap(),
-                    },
+                units: crate::planning::semantics::QuantityUnits::from(vec![
+                    crate::planning::semantics::QuantityUnit::from_decimal_factor(
+                        "eur".to_string(),
+                        rust_decimal::Decimal::from_str("1.0").unwrap(),
+                        Vec::new(),
+                    )
+                    .expect("eur unit factor must be exact decimal"),
                 ]),
+                traits: Vec::new(),
+                decomposition: crate::literals::BaseQuantityVector::new(),
+                canonical_unit: "eur".to_string(),
                 help: String::new(),
             },
         );
@@ -1269,8 +1428,8 @@ mod tests {
         data.insert(
             data_path.clone(),
             crate::planning::semantics::DataDefinition::Value {
-                value: crate::planning::semantics::LiteralValue::scale_with_type(
-                    rust_decimal::Decimal::from_str("0").unwrap(),
+                value: crate::planning::semantics::LiteralValue::quantity_with_type(
+                    rational_zero(),
                     "eur".to_string(),
                     money.clone(),
                 ),
@@ -1284,17 +1443,16 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let mut values = HashMap::new();
-        values.insert("price".to_string(), "1.234 eur".to_string());
+        let values = json_data(&[("price", "1.234 eur")]);
 
         assert!(
             plan.set_data_values(values, &default_limits()).is_err(),
-            "Scale decimals=2 should reject 1.234 eur"
+            "Quantity decimals=2 should reject 1.234 eur"
         );
     }
 
@@ -1318,7 +1476,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1336,7 +1494,7 @@ mod tests {
         let dep_spec = Arc::new(crate::parsing::ast::LemmaSpec::new("examples".to_string()));
         let imported_type = crate::planning::semantics::LemmaType::new(
             "salary".to_string(),
-            TypeSpecification::scale(),
+            TypeSpecification::quantity(),
             crate::planning::semantics::TypeExtends::Custom {
                 parent: "money".to_string(),
                 family: "money".to_string(),
@@ -1346,16 +1504,24 @@ mod tests {
             },
         );
 
-        let mut named_types = BTreeMap::new();
-        named_types.insert("salary".to_string(), imported_type);
+        let salary_path = DataPath::new(vec![], "salary".to_string());
+        let mut data = IndexMap::new();
+        data.insert(
+            salary_path,
+            crate::planning::semantics::DataDefinition::TypeDeclaration {
+                resolved_type: imported_type,
+                declared_default: None,
+                source: test_source(),
+            },
+        );
 
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
-            data: IndexMap::new(),
+            data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types,
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1364,9 +1530,10 @@ mod tests {
         let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
 
         let recovered = deserialized
-            .named_types
-            .get("salary")
-            .expect("salary type should be present");
+            .data
+            .get(&DataPath::new(vec![], "salary".to_string()))
+            .and_then(|d| d.schema_type())
+            .expect("salary type should be present in plan.data");
         match &recovered.extends {
             crate::planning::semantics::TypeExtends::Custom {
                 defining_spec: crate::planning::semantics::TypeDefiningSpec::Import { spec },
@@ -1400,7 +1567,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1408,17 +1575,22 @@ mod tests {
         let rule = ExecutableRule {
             path: RulePath::new(vec![], "can_drive".to_string()),
             name: "can_drive".to_string(),
-            branches: vec![Branch {
-                condition: Some(Expression::new(
-                    ExpressionKind::Comparison(
-                        Arc::new(create_data_path_expr(age_path.clone())),
-                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
-                    ),
-                    test_source(),
-                )),
-                result: create_literal_expr(create_boolean_literal(true)),
-                source: test_source(),
+            branches: vec![{
+                let result = create_literal_expr(create_boolean_literal(true));
+                Branch {
+                    condition: Some(Expression::new(
+                        ExpressionKind::Comparison(
+                            Arc::new(create_data_path_expr(age_path.clone())),
+                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                            Arc::new(create_literal_expr(create_number_literal(18.into()))),
+                        ),
+                        test_source(),
+                    )),
+                    normalized_condition: None,
+                    result: result.clone(),
+                    normalized_result: result,
+                    source: test_source(),
+                }
             }],
             needs_data: BTreeSet::from([age_path]),
             source: test_source(),
@@ -1463,7 +1635,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1513,7 +1685,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1556,7 +1728,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1565,34 +1737,49 @@ mod tests {
             path: RulePath::new(vec![], "tier".to_string()),
             name: "tier".to_string(),
             branches: vec![
-                Branch {
-                    condition: None,
-                    result: create_literal_expr(create_text_literal("bronze".to_string())),
-                    source: test_source(),
+                {
+                    let result = create_literal_expr(create_text_literal("bronze".to_string()));
+                    Branch {
+                        condition: None,
+                        normalized_condition: None,
+                        result: result.clone(),
+                        normalized_result: result,
+                        source: test_source(),
+                    }
                 },
-                Branch {
-                    condition: Some(Expression::new(
-                        ExpressionKind::Comparison(
-                            Arc::new(create_data_path_expr(points_path.clone())),
-                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                            Arc::new(create_literal_expr(create_number_literal(100.into()))),
-                        ),
-                        test_source(),
-                    )),
-                    result: create_literal_expr(create_text_literal("silver".to_string())),
-                    source: test_source(),
+                {
+                    let result = create_literal_expr(create_text_literal("silver".to_string()));
+                    Branch {
+                        condition: Some(Expression::new(
+                            ExpressionKind::Comparison(
+                                Arc::new(create_data_path_expr(points_path.clone())),
+                                crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                                Arc::new(create_literal_expr(create_number_literal(100.into()))),
+                            ),
+                            test_source(),
+                        )),
+                        normalized_condition: None,
+                        result: result.clone(),
+                        normalized_result: result,
+                        source: test_source(),
+                    }
                 },
-                Branch {
-                    condition: Some(Expression::new(
-                        ExpressionKind::Comparison(
-                            Arc::new(create_data_path_expr(points_path.clone())),
-                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                            Arc::new(create_literal_expr(create_number_literal(500.into()))),
-                        ),
-                        test_source(),
-                    )),
-                    result: create_literal_expr(create_text_literal("gold".to_string())),
-                    source: test_source(),
+                {
+                    let result = create_literal_expr(create_text_literal("gold".to_string()));
+                    Branch {
+                        condition: Some(Expression::new(
+                            ExpressionKind::Comparison(
+                                Arc::new(create_data_path_expr(points_path.clone())),
+                                crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                                Arc::new(create_literal_expr(create_number_literal(500.into()))),
+                            ),
+                            test_source(),
+                        )),
+                        normalized_condition: None,
+                        result: result.clone(),
+                        normalized_result: result,
+                        source: test_source(),
+                    }
                 },
             ],
             needs_data: BTreeSet::from([points_path]),
@@ -1620,7 +1807,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1652,7 +1839,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1660,17 +1847,22 @@ mod tests {
         let rule = ExecutableRule {
             path: RulePath::new(vec![], "doubled".to_string()),
             name: "doubled".to_string(),
-            branches: vec![Branch {
-                condition: None,
-                result: Expression::new(
+            branches: vec![{
+                let result = Expression::new(
                     ExpressionKind::Arithmetic(
                         Arc::new(create_data_path_expr(x_path.clone())),
                         crate::parsing::ast::ArithmeticComputation::Multiply,
                         Arc::new(create_literal_expr(create_number_literal(2.into()))),
                     ),
                     test_source(),
-                ),
-                source: test_source(),
+                );
+                Branch {
+                    condition: None,
+                    normalized_condition: None,
+                    result: result.clone(),
+                    normalized_result: result,
+                    source: test_source(),
+                }
             }],
             needs_data: BTreeSet::from([x_path]),
             source: test_source(),
@@ -1718,7 +1910,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1726,17 +1918,22 @@ mod tests {
         let rule = ExecutableRule {
             path: RulePath::new(vec![], "is_adult".to_string()),
             name: "is_adult".to_string(),
-            branches: vec![Branch {
-                condition: Some(Expression::new(
-                    ExpressionKind::Comparison(
-                        Arc::new(create_data_path_expr(age_path.clone())),
-                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
-                    ),
-                    test_source(),
-                )),
-                result: create_literal_expr(create_boolean_literal(true)),
-                source: test_source(),
+            branches: vec![{
+                let result = create_literal_expr(create_boolean_literal(true));
+                Branch {
+                    condition: Some(Expression::new(
+                        ExpressionKind::Comparison(
+                            Arc::new(create_data_path_expr(age_path.clone())),
+                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                            Arc::new(create_literal_expr(create_number_literal(18.into()))),
+                        ),
+                        test_source(),
+                    )),
+                    normalized_condition: None,
+                    result: result.clone(),
+                    normalized_result: result,
+                    source: test_source(),
+                }
             }],
             needs_data: BTreeSet::from([age_path]),
             source: test_source(),
@@ -1769,7 +1966,7 @@ mod tests {
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            named_types: BTreeMap::new(),
+            unit_index: HashMap::new(),
             effective,
             sources: Vec::new(),
         }
@@ -1904,7 +2101,7 @@ mod tests {
             .load(
                 r#"
                 spec pricing
-                data bridge_height: scale
+                data bridge_height: quantity
                   -> unit meter 1
                   -> default 100 meter
                 data quantity: number -> minimum 0
@@ -1943,12 +2140,12 @@ mod tests {
 
         let ty = &bh["type"];
         assert_eq!(
-            ty["kind"], "scale",
+            ty["kind"], "quantity",
             "kind tag sits on the type object itself"
         );
         assert!(
             ty["units"].is_array(),
-            "scale-only fields flatten up to top level"
+            "quantity-only fields flatten up to top level"
         );
         assert!(
             ty.get("options").is_none(),
@@ -1967,7 +2164,92 @@ mod tests {
         );
 
         let cost = &value["rules"]["cost"];
-        assert_eq!(cost["kind"], "scale", "rule types use the same flat shape");
+        assert_eq!(
+            cost["kind"], "quantity",
+            "rule types use the same flat shape"
+        );
+        assert!(
+            cost["units"].is_array() && !cost["units"].as_array().unwrap().is_empty(),
+            "quantity rule result types expose declared units"
+        );
+        assert!(
+            cost["units"][0].get("factor").is_some(),
+            "quantity rule units use factor field"
+        );
+    }
+
+    #[test]
+    fn schema_rule_result_units_contract() {
+        let mut engine = Engine::new();
+        engine
+            .load(
+                r#"
+                spec units_contract
+                data money: quantity
+                  -> unit eur 1
+                  -> unit usd 0.91
+                data rate: ratio
+                  -> unit basis_points 10000
+                  -> unit percent 100
+                  -> default 500 basis_points
+                rule total: money
+                rule rate_out: rate
+                "#,
+                crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "units_contract.lemma",
+                ))),
+            )
+            .unwrap();
+        let now = DateTimeValue::now();
+        let schema = engine
+            .get_plan(None, "units_contract", Some(&now))
+            .unwrap()
+            .schema();
+        let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
+
+        let money_units = &value["data"]["money"]["type"]["units"];
+        assert!(money_units.is_array() && !money_units.as_array().unwrap().is_empty());
+        assert!(money_units[0].get("name").is_some());
+        assert!(money_units[0].get("factor").is_some());
+        assert!(money_units[0]["factor"].get("numer").is_some());
+        assert!(money_units[0]["factor"].get("denom").is_some());
+
+        let rate_units = &value["data"]["rate"]["type"]["units"];
+        assert!(rate_units.is_array() && !rate_units.as_array().unwrap().is_empty());
+        assert!(rate_units[0].get("name").is_some());
+        assert!(rate_units[0].get("value").is_some());
+        assert!(rate_units[0]["value"].get("numer").is_some());
+        assert!(rate_units[0]["value"].get("denom").is_some());
+
+        let total_rule_units = &value["rules"]["total"]["units"];
+        let money_unit_names: Vec<_> = money_units
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["name"].as_str().unwrap())
+            .collect();
+        let total_rule_unit_names: Vec<_> = total_rule_units
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(total_rule_unit_names, money_unit_names);
+
+        let rate_out_rule_units = &value["rules"]["rate_out"]["units"];
+        let rate_unit_names: Vec<_> = rate_units
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["name"].as_str().unwrap())
+            .collect();
+        let rate_out_rule_unit_names: Vec<_> = rate_out_rule_units
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|u| u["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(rate_out_rule_unit_names, rate_unit_names);
     }
 
     #[test]

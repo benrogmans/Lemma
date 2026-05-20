@@ -137,7 +137,7 @@ rule savings_total:
   discount_amount + loyalty_discount
 
 rule savings_percent:
-  savings_total / subtotal in percent
+  (savings_total / subtotal) as percent
 
 rule is_high_value:
   price_per_unit > 50
@@ -201,13 +201,13 @@ Demonstrates: cross-spec references, field access, complex dependencies, data bi
 """
 
 uses config: stress_test_config
-data config.base_tax_rate        : 7%
-data config.luxury_tax_threshold : 1_200
-data config.max_discount_cap     : 35%
+fill config.base_tax_rate        : 7%
+fill config.luxury_tax_threshold : 1_200
+fill config.max_discount_cap     : 35%
 
 uses order: stress_test
-data order.free_shipping_threshold : 600
-data order.min_order_value         : 100
+fill order.free_shipping_threshold : 600
+fill order.min_order_value         : 100
 
 rule is_luxury_order:
   order.grand_total > config.luxury_tax_threshold
@@ -252,7 +252,7 @@ rule discount_within_cap:
   order.savings_percent <= config.max_discount_cap
 
 rule margin:
-  (order.grand_total - order.subtotal) / order.grand_total in percent
+  ((order.grand_total - order.subtotal) / order.grand_total) as percent
 
 rule is_profitable:
   margin >= config.min_profitable_margin

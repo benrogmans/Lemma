@@ -430,7 +430,7 @@
             if (kind === 'boolean') return v.boolean === true;
             if (kind === 'number') return v.number != null ? String(v.number) : display;
             if (kind === 'text') return typeof v.text === 'string' ? v.text : display;
-            if (kind === 'scale' && Array.isArray(v.scale)) return { amount: String(v.scale[0] ?? ''), unit: String(v.scale[1] ?? '') };
+            if (kind === 'quantity' && v.quantity && typeof v.quantity === 'object') return { amount: String(v.quantity.value ?? ''), unit: String(v.quantity.unit ?? '') };
             if (kind === 'ratio') {
                 if (Array.isArray(v.ratio)) return { amount: String(v.ratio[0] ?? ''), unit: (v.ratio[1] != null ? String(v.ratio[1]) : 'ratio') };
                 return { amount: display, unit: 'ratio' };
@@ -464,7 +464,7 @@
                     continue;
                 }
 
-                if (kind === 'scale') {
+                if (kind === 'quantity') {
                     if (typeof entry === 'object' && entry !== null) {
                         const amount = (entry.amount || '').toString().trim();
                         const unit = (entry.unit || '').toString().trim();
@@ -611,7 +611,7 @@
                 });
                 inputGroup.appendChild(input);
 
-            } else if (kind === 'scale') {
+            } else if (kind === 'quantity') {
                 const units = (spec && Array.isArray(spec.units)) ? spec.units : [];
                 const storedEntry = (typeof currentValue === 'object' && currentValue !== null) ? currentValue : {};
 
@@ -1146,7 +1146,7 @@
             const dataObj = serializeDataValues(key);
 
             try {
-                const response = engine.run(repo, name, [], dataObj, effective);
+                const response = engine.run(repo, name, [], dataObj, null, effective);
                 state.evalResults[key] = { success: true, response: response };
             } catch (e) {
                 state.evalResults[key] = { success: false, error: e.message || String(e) };
@@ -1264,7 +1264,7 @@
                 if (!editorEl) throw new Error('DOM element #editor not found');
 
                 const initialValue = `spec pricing
-                            type money: scale
+                            type money: quantity
                             -> unit eur 1
                             -> unit usd 1.19
 

@@ -49,7 +49,14 @@ rule out: v
         .expect("parse specs with offset on effective_from");
 
     let r = engine
-        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
+        .run(
+            None,
+            "rate",
+            Some(&utc_noon()),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("run");
     assert_rule_value(&r, "out", "1");
 }
@@ -71,7 +78,14 @@ rule out: 20
         .unwrap();
 
     let r = engine
-        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
+        .run(
+            None,
+            "rate",
+            Some(&utc_noon()),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     assert_rule_value(&r, "out", "10");
 }

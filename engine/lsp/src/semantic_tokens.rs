@@ -69,7 +69,6 @@ fn type_in_body(kind: &TokenKind) -> Option<u32> {
         | TokenKind::And
         | TokenKind::In
         | TokenKind::Type
-        | TokenKind::From
         | TokenKind::Meta
         | TokenKind::Veto
         | TokenKind::Now
@@ -80,12 +79,11 @@ fn type_in_body(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Repo => Some(IDX_CONTROL),
 
         // Type system / constraint keywords — muted; business users skip past these
-        TokenKind::ScaleKw
+        TokenKind::QuantityKw
         | TokenKind::NumberKw
         | TokenKind::TextKw
         | TokenKind::DateKw
         | TokenKind::TimeKw
-        | TokenKind::DurationKw
         | TokenKind::BooleanKw
         | TokenKind::PercentKw
         | TokenKind::RatioKw => Some(IDX_KEYWORD),
@@ -123,7 +121,7 @@ fn type_in_body(kind: &TokenKind) -> Option<u32> {
         // Comment
         TokenKind::Commentary => Some(IDX_COMMENT),
 
-        // Value-like: literals, booleans, duration units, @ in body (identifiers
+        // Value-like: literals, booleans, @ in body (identifiers
         // use [`expression_semantic_type`] → IDX_REFERENCE).
         TokenKind::At
         | TokenKind::StringLit
@@ -134,24 +132,6 @@ fn type_in_body(kind: &TokenKind) -> Option<u32> {
         | TokenKind::No
         | TokenKind::Accept
         | TokenKind::Reject
-        | TokenKind::Years
-        | TokenKind::Year
-        | TokenKind::Months
-        | TokenKind::Month
-        | TokenKind::Weeks
-        | TokenKind::Week
-        | TokenKind::Days
-        | TokenKind::Day
-        | TokenKind::Hours
-        | TokenKind::Hour
-        | TokenKind::Minutes
-        | TokenKind::Minute
-        | TokenKind::Seconds
-        | TokenKind::Second
-        | TokenKind::Milliseconds
-        | TokenKind::Millisecond
-        | TokenKind::Microseconds
-        | TokenKind::Microsecond
         | TokenKind::Permille => Some(IDX_VALUE),
 
         // Punctuation (Colon, Dot, Comma, LParen, RParen, …) — transparent
@@ -175,12 +155,11 @@ fn is_name_token(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Identifier
-            | TokenKind::ScaleKw
+            | TokenKind::QuantityKw
             | TokenKind::NumberKw
             | TokenKind::TextKw
             | TokenKind::DateKw
             | TokenKind::TimeKw
-            | TokenKind::DurationKw
             | TokenKind::BooleanKw
             | TokenKind::PercentKw
             | TokenKind::RatioKw
@@ -216,6 +195,10 @@ pub fn tokenize(text: &str) -> Vec<SemanticToken> {
                 Some((IDX_CLASS, 0))
             }
             TokenKind::Data => {
+                state = HeaderState::Data;
+                Some((IDX_PROPERTY, 0))
+            }
+            TokenKind::Fill => {
                 state = HeaderState::Data;
                 Some((IDX_PROPERTY, 0))
             }
@@ -405,7 +388,7 @@ mod tests {
 
     #[test]
     fn data_body_constraints_all_data_body_after_header() {
-        let text = "data temperature: scale\n  -> unit celsius 1.0\n  -> minimum -70 celsius";
+        let text = "data temperature: quantity\n  -> unit celsius 1.0\n  -> minimum -70 celsius";
         let types = token_types(text);
         assert_eq!(&types[..3], &[IDX_PROPERTY, IDX_PROPERTY, IDX_PUNCTUATION]);
         assert!(types.iter().skip(3).all(|&t| t == IDX_DATA_BODY));
@@ -430,10 +413,10 @@ mod tests {
     }
 
     #[test]
-    fn data_dotted_path_colon_punctuation() {
-        // data → PROPERTY, employee → PROPERTY, . transparent, name → PROPERTY, : PUNCTUATION
+    fn fill_dotted_path_colon_punctuation() {
+        // fill → PROPERTY, employee → PROPERTY, . transparent, name → PROPERTY, : PUNCTUATION
         assert_eq!(
-            token_types("data employee.name:"),
+            token_types("fill employee.name:"),
             vec![IDX_PROPERTY, IDX_PROPERTY, IDX_PROPERTY, IDX_PUNCTUATION]
         );
     }

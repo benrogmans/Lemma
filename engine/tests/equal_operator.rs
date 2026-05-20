@@ -17,7 +17,7 @@ data c: 100
 rule equal_true: a is b
 rule equal_false: a is c
 "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
 
@@ -29,6 +29,7 @@ rule equal_false: a is c
             Some(&now),
             HashMap::new(),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
@@ -53,13 +54,20 @@ data other: "world"
 rule same_greeting: greeting is "hello"
 rule different_greeting: greeting is other
 "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_equal_text", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_equal_text",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let same = response.results.get("same_greeting").unwrap();
@@ -84,7 +92,7 @@ data flag_c: false
 rule both_true: flag_a is flag_b
 rule mixed: flag_a is flag_c
 "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
 
@@ -96,6 +104,7 @@ rule mixed: flag_a is flag_c
             Some(&now),
             HashMap::new(),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
@@ -121,7 +130,7 @@ rule message: "inactive"
   unless status is "active" then "active"
   unless count is 10 then "count is 10"
 "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
 
@@ -133,6 +142,7 @@ rule message: "inactive"
             Some(&now),
             HashMap::new(),
             false,
+            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 

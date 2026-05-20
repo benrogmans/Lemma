@@ -38,9 +38,9 @@ data performance_rating : number -> minimum 0 -> maximum 5 -> default 0.0
 data years_of_service   : number -> minimum 0 -> default 0
 
 uses policy: base_policy
-data policy.bonus_pool_percentage     : 15%
-data policy.cost_of_living_adjustment : 3%
-data policy.stock_grant_percentage    : 5%
+fill policy.bonus_pool_percentage     : 15%
+fill policy.cost_of_living_adjustment : 3%
+fill policy.stock_grant_percentage    : 5%
 
 rule base_for_level:
   policy.base_salary_min * level_multiplier
@@ -101,9 +101,9 @@ data location      : "Amsterdam"
 data location_cola : 15%
 
 uses eng_policy: engineering_dept
-data eng_policy.level_multiplier   : 2.5
-data eng_policy.performance_rating : 4.2
-data eng_policy.years_of_service   : 7
+fill eng_policy.level_multiplier   : 2.5
+fill eng_policy.performance_rating : 4.2
+fill eng_policy.years_of_service   : 7
 
 rule effective_base:
   eng_policy.base_for_level * (1 + location_cola)
@@ -168,11 +168,11 @@ data on_call_rotation   : true
 data team_size          : number -> minimum 0 -> default 15
 
 uses eng_policy: engineering_dept
-data eng_policy.level_multiplier              : 4.5
-data eng_policy.performance_rating            : 4.8
-data eng_policy.policy.bonus_pool_percentage  : 20%
-data eng_policy.policy.stock_grant_percentage : 8%
-data eng_policy.years_of_service              : 12
+fill eng_policy.level_multiplier              : 4.5
+fill eng_policy.performance_rating            : 4.8
+fill eng_policy.policy.bonus_pool_percentage  : 20%
+fill eng_policy.policy.stock_grant_percentage : 8%
+fill eng_policy.years_of_service              : 12
 
 rule critical_skill_bonus:
   0

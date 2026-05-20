@@ -7,7 +7,7 @@ Pricing tiers, tax brackets, leave entitlement, eligibility checks, discount sta
 ```lemma
 spec pricing 2026-01-01
 
-data money: scale
+data money: quantity
   -> unit eur 1.00
   -> decimals 2
 
@@ -42,7 +42,7 @@ The `Response` carries every rule's value (or `veto` if no result could be compu
 - **Deterministic.** `(spec, data, effective_date) → result`. No DB, no clock, no ambient state. Same inputs → same outputs, every time.
 - **Explainable.** The `Response` tells you which rules contributed and why; pair it with the [CLI](https://github.com/lemma/lemma) for a full reasoning trace.
 - **Time-aware.** Multiple versions of the same spec coexist. Pass an `effective` date and the engine resolves the version in force on that day.
-- **Statically checked.** Type errors, missing data, cycles, scale-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
+- **Statically checked.** Type errors, missing data, cycles, quantity-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
 - **Runs anywhere V8 does.** ~2 MB WASM, no native binary, no postinstall script.
 - **Editor in a tab.** Includes an in-process language server and a Monaco adapter, so you can build a real Lemma editor experience client-side - diagnostics, completion, formatting... even without setting up a server.
 
@@ -114,7 +114,8 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `load(code, attribute?)` | Parse and validate a `.lemma` spec set. Resolves on success; rejects with `EngineError[]`. |
 | `load_batch(sources, dependency?)` | Load many sources in one planning pass (see `lemma.d.ts`). |
 | `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. Rejects with `EngineError[]`. |
-| `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Each set has `name`, `repository`, and `specs` — temporal versions as full `LemmaSpec` objects (`effective_from`, `start_line`, `source_type`, …). |
+| `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Always includes embedded `lemma` / `spec si`. |
+| `format_repository(repo)` | Canonical Lemma source for a loaded repository, formatted from the in-engine AST. Use `"lemma"` for the embedded SI stdlib. |
 | `schema(repo, name, effective?)` | `SpecSchema`; `repo` null for workspace. |
 | `run(repo, name, ruleNames, data, effective?)` | Evaluate. `rules: []` runs everything; pass an array to filter. Returns a `Response`. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |

@@ -1,4 +1,4 @@
-//! QA coverage for nested LHS paths (`data outer.inner: ...`) — the binding
+//! QA coverage for nested LHS paths (`fill outer.inner: ...` for values; `data` for slot defs) — the binding
 //! mechanism used to push values into child specs via `with` references.
 
 use lemma::evaluation::OperationResult;
@@ -60,14 +60,21 @@ data x: number
 
 spec outer
 uses i: inner
-data i.x: 42
+fill i.x: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -83,14 +90,21 @@ uses l: leaf
 
 spec outer
 uses m: middle
-data m.l.v: 7
+fill m.l.v: 7
 rule r: m.l.v
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "7");
 }
@@ -102,7 +116,7 @@ fn binding_where_first_segment_is_not_spec_ref_is_rejected() {
     let code = r#"
 spec s
 data x: number -> default 1
-data x.y: 42
+fill x.y: 42
 rule r: x
 "#;
     let mut engine = Engine::new();
@@ -121,7 +135,7 @@ data x: number
 
 spec outer
 uses i: inner
-data i.nonexistent: 42
+fill i.nonexistent: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -142,8 +156,8 @@ data x: number
 
 spec outer
 uses i: inner
-data i.x: 1
-data i.x: 2
+fill i.x: 1
+fill i.x: 2
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -172,14 +186,17 @@ rule r: i.x
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.contains("literal value") || joined.contains("data definition"),
+        joined.contains("literal value")
+            || joined.contains("data definition")
+            || joined.contains("Binding paths")
+            || joined.contains("`fill`"),
         "binding with schema definition RHS must be rejected, got: {joined}"
     );
 }
 
 #[test]
 fn binding_rhs_as_spec_reference_is_rejected() {
-    // `data i.x: spec something` triggers the migration error for removed RHS shorthand.
+    // `fill i.x: spec …` cannot use `spec` as the start of a reference (structural keyword).
     let code = r#"
 spec other
 data y: number -> default 1
@@ -190,14 +207,14 @@ data x: number
 spec outer
 uses i: inner
 uses o: other
-data i.x: spec other
+fill i.x: spec other
 rule r: i.x
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.contains("spec") || joined.contains("removed") || joined.contains("syntax"),
-        "binding RHS `spec …` shorthand must be rejected (legacy syntax removed), got: {joined}"
+        joined.contains("spec") && joined.contains("Expected a reference"),
+        "fill RHS `spec` token must not parse as a value reference, got: {joined}"
     );
 }
 
@@ -211,7 +228,7 @@ data x: number
 
 spec outer
 uses i: inner
-data i.x: 42
+fill i.x: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -220,7 +237,14 @@ rule r: i.x
     data.insert("i.x".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(
         rule_value(&resp, "r"),
@@ -240,7 +264,7 @@ uses l: leaf
 
 spec outer
 uses m: middle
-data m.l.v: 5
+fill m.l.v: 5
 rule r: m.l.v
 "#;
     let mut engine = Engine::new();
@@ -249,7 +273,14 @@ rule r: m.l.v
     data.insert("m.l.v".to_string(), "123".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(
+            None,
+            "outer",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "123");
 }
@@ -270,7 +301,14 @@ rule r: x
     let mut data = HashMap::new();
     data.insert("X".to_string(), "99".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run(None, "s", Some(&now), data, false);
+    let result = engine.run(
+        None,
+        "s",
+        Some(&now),
+        data,
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(
         result.is_err(),
         "uppercase 'X' must not match 'x'; engine silently accepted case-insensitive key"

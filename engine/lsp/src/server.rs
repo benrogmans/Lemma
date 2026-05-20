@@ -314,7 +314,6 @@ impl LanguageServer for LemmaLanguageServer {
                 for data in &consumer.data {
                     let spec_refs: Vec<&SpecRef> = match &data.value {
                         DataValue::Import(sr) => vec![sr],
-                        DataValue::Definition { from: Some(sr), .. } => vec![sr],
                         _ => Vec::new(),
                     };
 

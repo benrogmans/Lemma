@@ -10,10 +10,12 @@ fn cross_spec_data_reference_cycle_surfaces_error_not_panic() {
         .load(
             r#"
 spec a
-data x: number from b
+uses b
+data x: b.x
 
 spec b
-data x: number from a
+uses a
+data x: a.x
 "#,
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("cycle.lemma"))),
         )
@@ -38,13 +40,16 @@ fn third_spec_depending_on_cyclic_pair_gets_error_not_panic() {
         .load(
             r#"
 spec a
-data x: number from b
+uses b
+data x: b.x
 
 spec b
-data x: number from a
+uses a
+data x: a.x
 
 spec c 2025-01-01
-data y: number from b
+uses b
+data y: b.x
 rule r: y
 "#,
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(

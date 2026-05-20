@@ -22,14 +22,14 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.13"
+lemma-engine = "0.8.14"
 ```
 
 ### Minimal example
 
 ```rust
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SourceType};
+use lemma::{Engine, EvaluationRequest, SourceType};
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
@@ -46,10 +46,13 @@ engine.load(
 )?;
 
 let now = DateTimeValue::now();
-let response = engine.run("compensation",
+let response = engine.run(
+    None,
+    "compensation",
     Some(&now),
     HashMap::new(),
     false,
+    EvaluationRequest::default(),
 )?;
 
 for (rule_name, rule_result) in &response.results {
@@ -63,7 +66,7 @@ for (rule_name, rule_result) in &response.results {
 
 ```rust
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SourceType};
+use lemma::{Engine, EvaluationRequest, SourceType};
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
@@ -80,7 +83,7 @@ engine.load(
       unless destination is "international" then 25
 
     rule valid: weight <= 30 kilogram
-      unless veto "Package too heavy for shipping"
+      unless weight > 30 kilogram then veto "Package too heavy for shipping"
 
 "#,
     SourceType::Labeled("example.lemma"),
@@ -91,8 +94,19 @@ values.insert("weight".to_string(), "12 kilogram".to_string());
 values.insert("destination".to_string(), "international".to_string());
 
 let now = DateTimeValue::now();
-let response = engine.run("shipping", Some(&now), values, false)?;
+let response = engine.run(
+    None,
+    "shipping",
+    Some(&now),
+    values,
+    false,
+    EvaluationRequest::default(),
+)?;
 ```
+
+## Embedded SI stdlib
+
+`Engine::new()` loads `repo lemma` / `spec si` from [`src/lemma/si.lemma`](src/lemma/si.lemma) at compile time (import with `uses lemma si`). It always appears in [`Engine::list`](engine/src/engine.rs). Inspect formatted source with `engine.format_repository("lemma")`.
 
 ## Features
 
@@ -141,7 +155,7 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 
 ## Documentation
 
-- Language guide: <https://benrogmans.github.io/lemma/>
+- Language guide: <https://github.com/lemma/lemma/blob/main/documentation/index.md>
 - API documentation: <https://docs.rs/lemma-engine>
 - Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
 - CLI usage: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>

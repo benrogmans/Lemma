@@ -75,7 +75,7 @@ rule total_tax:
   total_income_tax + vat_tax
 
 rule effective_tax_rate:
-  total_tax / income in percent
+  (total_tax / income) as percent
   unless income is 0 then 0%
 
 rule after_tax_income:

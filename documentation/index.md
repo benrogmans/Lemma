@@ -12,11 +12,13 @@ Lemma is a declarative language for expressing rules, data, and business logic t
 ## Quick Links
 
 - [Main README](../README.md) -- installation and quick start
-- [Reference](reference.md) -- all operators, units, and types
+- [Reference](reference.md) -- all operators, units, types, and ranges
+- [Composing specs](spec_composability.md) -- `uses`, temporal versions, pins, planning checks
 - [CLI Reference](CLI.md) -- all commands and flags
 - [Examples](examples/) -- example specs
 - [Registry](registry.md) -- shared specs and `@` references
 - [Veto Semantics](veto_semantics.md) -- when rules produce no value
+- [Numeric precision](numeric_precision.md) -- exact rational arithmetic and when decimal is used
 - [WebAssembly](wasm.md) -- using Lemma in the browser
 
 ## Syntax
@@ -26,13 +28,14 @@ Lemma is whitespace-insensitive. Use formatting that makes your rules readable:
 ```lemma
 spec pricing
 
-data quantity: number
+data quantity:   number
 data base_price: 100
-data is_member: false
+data is_member:  false
 
 rule price_with_vat: base_price + 21%
 
-rule bulk_discount: quantity >= 100 and price_with_vat > 500
+rule bulk_discount:
+  quantity >= 100 and price_with_vat > 500
 
 rule discount: 0%
   unless quantity >= 10  then 10%
@@ -62,31 +65,38 @@ Specs support hierarchical naming: `contract/employment`, `company/policies/vaca
 Named values with rich types:
 
 ```lemma
-data name: "Alice"
-data age: 35
+uses lemma si
+
+data name:       "Alice"
+data age:        35
 data start_date: 2024-01-15
-data salary: 75000
-data tax_rate: 15%
+data salary:     75_000
+data tax_rate:   15%
 data is_manager: true
-data workweek: 40 hours
+data workweek:   40 hours
 ```
 
 **Type annotations** -- declare expected types without values:
 
 ```lemma
-data length: scale
+data length: quantity
   -> unit meter 1.0
   -> unit kilometer 1000.0
 
 data birth_date: date
-data distance: length
+data distance:   length
 ```
 
 Or with inline type constraints:
 
 ```lemma
-data age: number -> minimum 0 -> maximum 120
-data price: scale -> unit eur 1.00 -> unit usd 1.10
+data age: number
+  -> minimum 0
+  -> maximum 120
+
+data price: quantity
+  -> unit eur 1.00
+  -> unit usd 0.91
 ```
 
 See: [reference.md -- Type Annotations](reference.md#type-annotations)
@@ -97,7 +107,9 @@ Compute values based on data and other rules:
 
 ```lemma
 rule annual_salary: monthly_salary * 12
+
 rule is_senior: age >= 40
+
 rule total_weight: package_weight + box_weight
 ```
 
@@ -107,9 +119,9 @@ Conditional logic where **the last matching condition wins**:
 
 ```lemma
 rule discount: 0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 50 then 20%
-  unless is_vip then 25%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
 ```
 
 If a VIP customer orders 75 items, they get 25% (last matching wins), not 20%.
@@ -136,7 +148,7 @@ Use `veto` to block a rule entirely when input data is invalid:
 
 ```lemma
 rule validated_age: age
-  unless age < 0 then veto "Age must be a positive number"
+  unless age < 0   then veto "Age must be a positive number"
   unless age > 120 then veto "Invalid age value"
 ```
 
@@ -173,20 +185,22 @@ Reference data and rules across specs:
 
 ```lemma
 spec base_employee
-data name: "John Doe"
+
+data name:   "John Doe"
 data salary: 5000
 
+
 spec manager
+
 uses employee: base_employee
-data employee.name: "Alice Smith"
+
+data employee.name:   "Alice Smith"
 data employee.salary: 8000
 
 rule manager_bonus: employee.salary * 0.15
 ```
 
-Spec names may include a `.version_tag` suffix (e.g. `spec pricing.v1`). An unversioned reference resolves to the latest loaded temporal version by natural sort.
-
-See: [reference.md -- Spec References](reference.md#spec-references-uses)
+The same spec **name** may appear on several **effective-dated rows** (`spec pricing 2025-01-01`). Pin a dependency with `uses p: pricing 2025-06-01`; evaluate with `lemma run … --effective <datetime>`. See [Composing specs](spec_composability.md) and [reference.md — Spec References](reference.md#spec-references-uses).
 
 ## Expressions
 
@@ -194,6 +208,7 @@ See: [reference.md -- Spec References](reference.md#spec-references-uses)
 
 ```lemma
 rule total: (price + tax) * quantity
+
 rule compound: principal * (1 + rate) ^ years
 ```
 
@@ -203,8 +218,10 @@ Operators: `+`, `-`, `*`, `/`, `%`, `^`
 
 ```lemma
 rule status_ok: status is "approved"
+
 rule not_cancelled: status is not "cancelled"
-rule is_eligible: age >= 18 and income > 30000
+
+rule is_eligible: age >= 18 and income > 30_000
 ```
 
 Operators: `>`, `<`, `>=`, `<=`, `is`, `is not`
@@ -212,7 +229,8 @@ Operators: `>`, `<`, `>=`, `<=`, `is`, `is not`
 ### Logical
 
 ```lemma
-rule can_approve_loan: credit_score >= 650 and income_verified and not has_bankruptcy
+rule can_approve_loan:
+  credit_score >= 650 and income_verified and not has_bankruptcy
 ```
 
 Operators: `and`, `not`
@@ -220,9 +238,11 @@ Operators: `and`, `not`
 ### Mathematical
 
 ```lemma
-rule hypotenuse: sqrt(a^2 + b^2)
-rule sine_value: sin(angle)
-rule log_value: log(10)
+rule hypotenuse: sqrt (a ^ 2 + b ^ 2)
+
+rule sine_value: sin angle
+
+rule log_value: log 10
 ```
 
 Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
@@ -232,26 +252,31 @@ Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `ex
 Data define custom types using the `data` keyword with type commands:
 
 ```lemma
-data money: scale
+data money: quantity
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit usd 0.91
   -> decimals 2
   -> minimum 0
 
-data mass: scale
+data mass: quantity
   -> unit kilogram 1.0
   -> unit gram 0.001
   -> unit pound 0.453592
 
-data price: 100 eur
+data price:  100 eur
 data weight: 75 kilogram
 ```
 
-**Data imports** -- reuse types across specs:
+**Data reuse across specs** — `uses` plus qualified parent types:
 
 ```lemma
-data currency from base_types
-data discount_rate from pricing -> maximum 0.5
+uses base: base_types
+
+uses rates: pricing
+
+data currency: base.Currency
+data discount_rate: rates.Rate
+  -> maximum 0.5
 ```
 
 See: [reference.md -- User-Defined Types](reference.md#user-defined-types)
@@ -261,25 +286,30 @@ See: [reference.md -- User-Defined Types](reference.md#user-defined-types)
 Conversions work within the same type definition:
 
 ```lemma
-data money: scale
+data money: quantity
   -> unit eur 1.00
-  -> unit usd 1.10
+  -> unit usd 0.91
 
 data price: 100 eur
-rule price_usd: price in usd
+
+rule price_usd: price as usd
 ```
 
-Duration units are built-in:
+Trait-duration **quantity** types (after `uses lemma si` or an equivalent typedef) accept **quantity** literals for time periods:
 
 ```lemma
-data workweek: 40 hours
-rule workweek_days: workweek in days
+uses lemma si
+
+data workweek: si.duration
+  -> default 40 hours
+
+rule workweek_days: workweek as days
 ```
 
 Number to ratio:
 
 ```lemma
-rule as_percent: 0.25 in percent
+rule as_percent: 0.25 as percent
 ```
 
 ## Literal Types
@@ -290,18 +320,35 @@ rule as_percent: 0.25 in percent
 | **Text** | `"hello"` | String literals |
 | **Boolean** | `true`, `false`, `yes`, `no`, `accept`, `reject` | Aliases |
 | **Date** | `2024-01-15`, `2024-01-15T14:30:00Z` | ISO 8601 |
-| **Duration** | `5 hours`, `3 days`, `2 weeks` | Built-in units |
+| **Quantity** | `100 eur`, `40 hours` (when the quantity type declares matching units and, for time, `trait duration`) | User-defined quantity type with `unit` / `trait` commands |
 | **Ratio** | `15 percent`, `15%`, `5 permille`, `5%%` | Proportional values |
-| **Scale** | `100 eur`, `75 kilogram` | Requires user-defined type |
+| **Ranges** | `0...100`, `2024-01-01...2024-06-15`, `18 years...67 years` | Half-open intervals; see [reference.md — Ranges](reference.md#ranges) |
+
+## Ranges
+
+Intervals use `lo...hi` (lower inclusive, upper exclusive). Test membership with `in`, project width with `(lo...hi) as <unit>`, and declare slots with `date range`, `number range`, `quantity range`, `ratio range`, or `calendar range`.
+
+```lemma
+uses lemma si
+
+data age: 25 years
+
+rule in_working_age: age in 18 years...67 years
+
+rule days_in_q2: (2024-04-01...2024-07-01) as days
+```
+
+See: [reference.md — Ranges](reference.md#ranges)
 
 ## Date and Time
 
 ```lemma
-data today: 2024-09-30
-data deadline: 2024-12-31
+data today:        2024-09-30
+data deadline:     2024-12-31
 data meeting_time: 2024-09-30T14:30:00Z
 
 rule days_until_deadline: deadline - today
+
 rule is_overdue: today > deadline
 ```
 

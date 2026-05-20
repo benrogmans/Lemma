@@ -5,6 +5,7 @@
 //! - Domain operations: intersection, union, normalization
 //! - `extract_domains_from_constraint()`: extracts domains from constraints
 
+use crate::computation::units::UnitResolutionContext;
 use crate::planning::semantics::{
     ComparisonComputation, DataPath, LiteralValue, SemanticConversionTarget, ValueKind,
 };
@@ -505,10 +506,18 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
             Ordering::Greater => 1,
         },
 
-        (ValueKind::Duration(la, lua), ValueKind::Duration(lb, lub)) => {
-            let a_sec = crate::computation::units::duration_to_seconds(*la, lua);
-            let b_sec = crate::computation::units::duration_to_seconds(*lb, lub);
-            match a_sec.cmp(&b_sec) {
+        (ValueKind::Calendar(la, lu), ValueKind::Calendar(lb, lu2)) => {
+            let a_months = crate::computation::units::convert_calendar_magnitude(
+                *la,
+                lu,
+                &crate::planning::semantics::SemanticCalendarUnit::Month,
+            );
+            let b_months = crate::computation::units::convert_calendar_magnitude(
+                *lb,
+                lu2,
+                &crate::planning::semantics::SemanticCalendarUnit::Month,
+            );
+            match a_months.cmp(&b_months) {
                 Ordering::Less => -1,
                 Ordering::Equal => 0,
                 Ordering::Greater => 1,
@@ -521,10 +530,10 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
             Ordering::Greater => 1,
         },
 
-        (ValueKind::Scale(la, lua), ValueKind::Scale(lb, lub)) => {
+        (ValueKind::Quantity(la, lua, _), ValueKind::Quantity(lb, lub, _)) => {
             if a.lemma_type != b.lemma_type {
                 unreachable!(
-                    "BUG: lit_cmp compared different scale types ({} vs {})",
+                    "BUG: lit_cmp compared different quantity types ({} vs {})",
                     a.lemma_type.name(),
                     b.lemma_type.name()
                 );
@@ -539,16 +548,20 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
             }
 
             // Convert b to a's unit for comparison
-            let target = SemanticConversionTarget::ScaleUnit(lua.clone());
-            let converted = crate::computation::convert_unit(b, &target);
+            let target = SemanticConversionTarget::QuantityUnit(lua.clone());
+            let converted = crate::computation::convert_unit(
+                b,
+                &target,
+                UnitResolutionContext::NamedQuantityOnly,
+            );
             let converted_value = match converted {
                 OperationResult::Value(lit) => match lit.value {
-                    ValueKind::Scale(v, _) => v,
-                    _ => unreachable!("BUG: scale unit conversion returned non-scale value"),
+                    ValueKind::Quantity(v, _, _) => v,
+                    _ => unreachable!("BUG: quantity unit conversion returned non-quantity value"),
                 },
                 OperationResult::Veto(reason) => {
                     unreachable!(
-                        "BUG: scale unit conversion vetoed unexpectedly: {:?}",
+                        "BUG: quantity unit conversion vetoed unexpectedly: {:?}",
                         reason
                     )
                 }
@@ -1108,10 +1121,10 @@ fn max_bound(a: &Bound, b: &Bound) -> Bound {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
-
     fn num(n: i64) -> LiteralValue {
-        LiteralValue::number(Decimal::from(n))
+        LiteralValue::number(crate::computation::rational::RationalInteger::new(
+            n as i128, 1,
+        ))
     }
 
     fn data(name: &str) -> DataPath {

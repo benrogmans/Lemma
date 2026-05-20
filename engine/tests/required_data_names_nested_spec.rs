@@ -5,15 +5,15 @@ use lemma::Engine;
 fn necessary_data_include_nested_spec_data_for_local_rule_deps() {
     let code = r#"
 spec money
-data money: scale
+data money: quantity
   -> unit eur 1
-  -> unit usd 1.19
+  -> unit usd 0.84
 
 spec pricing
-data money: money from money
+uses money
 data quantity: 10
 data is_member: false
-data price: money
+data price: money.money
 rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
@@ -27,12 +27,7 @@ rule total: calc.total
 "#;
 
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
-        .unwrap();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "cashier", Some(&now)).unwrap();
@@ -46,10 +41,10 @@ rule total: calc.total
         schema_all.data.keys().collect::<Vec<_>>()
     );
     let price_type = &schema_all.data.get("calc.price").unwrap().lemma_type;
-    assert_eq!(
-        price_type.name(),
-        "money",
-        "Expected calc.price to have type 'money'"
+    assert!(
+        price_type.is_quantity(),
+        "Expected calc.price to be a quantity type, got {:?}",
+        price_type.name()
     );
 
     // Schema for specific rule: same result for cashier.total
@@ -59,14 +54,14 @@ rule total: calc.total
         .get("calc.price")
         .expect("schema_for_rules must include calc.price with same typing as full schema")
         .lemma_type;
+    assert!(
+        scoped_price_type.is_quantity(),
+        "scoped schema must preserve nested quantity type for calc.price"
+    );
     assert_eq!(
         scoped_price_type.name(),
-        "money",
-        "scoped schema must preserve nested data type"
-    );
-    assert!(
-        scoped_price_type.is_scale(),
-        "calc.price must remain scale money in scoped schema"
+        price_type.name(),
+        "scoped schema must match full schema type for calc.price"
     );
 }
 
@@ -76,7 +71,7 @@ fn schema_errors_on_unknown_rule() {
     engine
         .load(
             "spec test\ndata x: 1\nrule y: x",
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
+            lemma::SourceType::Volatile,
         )
         .unwrap();
     let now = DateTimeValue::now();

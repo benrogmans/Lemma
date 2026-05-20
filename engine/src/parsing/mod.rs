@@ -26,7 +26,7 @@ pub fn parse(
 
 #[cfg(test)]
 mod tests {
-    use super::parse;
+    use super::{parse, ArithmeticComputation, Expression, ExpressionKind};
     use crate::formatting::format_parse_result;
     use crate::Error;
     use crate::ResourceLimits;
@@ -344,19 +344,19 @@ rule is_adult: age >= 21"#;
     fn parse_comparisons_with_duration_unit_conversions() {
         let test_cases = vec![
             (
-                "(duration in hours) > 2",
+                "(duration as hours) > 2",
                 "duration conversion in comparison with parens",
             ),
             (
-                "(meeting_time in minutes) >= 30",
+                "(meeting_time as minutes) >= 30",
                 "duration conversion with gte",
             ),
             (
-                "(project_length in days) < 100",
+                "(project_length as days) < 100",
                 "duration conversion with lt",
             ),
             (
-                "(delay in seconds) is 60",
+                "(delay as seconds) is 60",
                 "duration conversion with equality",
             ),
             (
@@ -364,21 +364,26 @@ rule is_adult: age >= 21"#;
                 "duration conversions on both sides",
             ),
             (
-                "duration in hours > 2",
+                "duration as hours > 2",
                 "duration conversion without parens",
             ),
             (
-                "meeting_time in seconds > 3600",
+                "meeting_time as seconds > 3600",
                 "variable duration conversion in comparison",
             ),
             (
-                "project_length in days > deadline_days",
+                "project_length as days > deadline_days",
                 "two variables with duration conversion",
             ),
             (
-                "duration in hours >= 1 and duration in hours <= 8",
+                "duration as hours >= 1 and duration as hours <= 8",
                 "multiple duration comparisons",
             ),
+            (
+                "(2024-06-01...2024-06-15) as days as number >= 7",
+                "chained as conversion before comparison",
+            ),
+            ("duration as hours as number > 2", "chained as on duration"),
         ];
 
         for (expr, description) in test_cases {
@@ -396,6 +401,326 @@ rule is_adult: age >= 21"#;
                 result.err()
             );
         }
+    }
+
+    #[test]
+    fn parse_rejects_token_after_unit_conversion() {
+        let result = parse(
+            "spec test\nuses lemma si\nrule ok: (2024-06-01...2024-06-15) as days foo",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        let err = result.expect_err("expected parse error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unexpected token") && msg.contains("foo"),
+            "expected error at 'foo', got: {}",
+            msg
+        );
+        assert!(
+            !msg.contains("Expected 'data'"),
+            "should not defer to spec-level error, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn parse_unit_conversion_before_next_spec() {
+        let result = parse(
+            r#"spec pricing
+rule hourly_rate: 150 eur
+  unless loyalty is "silver" then 140 eur
+  unless loyalty is "gold" then 125 usd as eur
+
+spec other
+rule x: 1"#,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_ok(),
+            "unless branch ending with 'as' must parse before next spec: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn parse_unit_conversion_before_sibling_rule() {
+        let result = parse(
+            r#"spec s
+rule a: 100 usd as eur
+rule b: 1"#,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_ok(),
+            "rule ending with 'as' must parse before sibling rule: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn parse_unit_conversion_before_uses() {
+        let result = parse(
+            r#"spec s
+rule rate: 10 usd as eur
+uses lemma si
+rule hours: 1 hour"#,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_ok(),
+            "rule ending with 'as' must parse before uses: {:?}",
+            result.err()
+        );
+    }
+
+    /// Every token that may follow a completed rule / unless expression ending in `as`.
+    #[test]
+    fn parse_unit_conversion_before_expression_boundaries() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "sibling data",
+                r#"spec s
+rule rate: 10 usd as eur
+data price: 100 eur"#,
+            ),
+            (
+                "sibling fill",
+                r#"spec s
+rule rate: 10 usd as eur
+fill price: rate"#,
+            ),
+            (
+                "sibling meta",
+                r#"spec s
+rule rate: 10 usd as eur
+meta version: 1"#,
+            ),
+            (
+                "another unless",
+                r#"spec s
+rule rate: 10 usd
+  unless active then 5 usd as eur
+  unless premium then 3 usd as eur"#,
+            ),
+            (
+                "eof",
+                r#"spec s
+rule rate: 10 usd as eur"#,
+            ),
+            (
+                "next repo",
+                r#"spec s
+rule rate: 10 usd as eur
+
+repo other
+spec t
+rule x: 1"#,
+            ),
+            (
+                "unless then before next unless",
+                r#"spec s
+rule rate: 10 usd
+  unless a then 1 usd as eur
+  unless b then 2"#,
+            ),
+            (
+                "chained as before sibling rule",
+                r#"spec s
+rule rate: (2024-01-01...2024-01-02) as days as number
+rule other: 1"#,
+            ),
+        ];
+
+        for (label, source) in cases {
+            let result = parse(
+                source,
+                crate::parsing::source::SourceType::Volatile,
+                &ResourceLimits::default(),
+            );
+            assert!(
+                result.is_ok(),
+                "unit conversion before {label} must parse: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_plain_number_plus_converted_operand() {
+        let result = parse(
+            r#"spec test
+data c: quantity
+  -> unit eur 1
+  -> unit usd 0.84
+rule z: 5 + c as usd"#,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        let err = result.expect_err("expected parse error for 5 + c as usd");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("plain number") || msg.contains("each operand"),
+            "expected conversion-before-+ error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn parse_accepts_conversion_on_each_additive_operand() {
+        let cases: &[(&str, &str)] = &[
+            (
+                "money",
+                r#"spec test
+data c: quantity
+  -> unit eur 1
+  -> unit usd 0.84
+rule z: 5 as usd + c as usd"#,
+            ),
+            (
+                "duration + literal",
+                r#"spec test
+uses lemma si
+rule z: duration as hours + 1"#,
+            ),
+            (
+                "duration + comparison",
+                r#"spec test
+uses lemma si
+data duration: si.duration
+  -> default 1 hour
+rule z: duration as hours + 1 > 0"#,
+            ),
+            (
+                "date range + ref",
+                r#"spec test
+uses lemma si
+data age: date range
+data c: quantity
+  -> unit eur 1
+rule z: age as days + c"#,
+            ),
+        ];
+        for (label, source) in cases {
+            let result = parse(
+                source,
+                crate::parsing::source::SourceType::Volatile,
+                &ResourceLimits::default(),
+            );
+            assert!(
+                result.is_ok(),
+                "expected {label} to parse, got: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    fn rule_expression(source: &str, rule_name: &str) -> Expression {
+        let parsed = parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .expect("expected parse");
+        let spec = parsed
+            .flatten_specs()
+            .into_iter()
+            .next()
+            .expect("expected one spec");
+        spec.rules
+            .iter()
+            .find(|rule| rule.name == rule_name)
+            .unwrap_or_else(|| panic!("rule '{rule_name}' not found"))
+            .expression
+            .clone()
+    }
+
+    fn assert_multiply_range_side(expression: &Expression, range_on_left: bool, label: &str) {
+        let ExpressionKind::Arithmetic(left, ArithmeticComputation::Multiply, right) =
+            &expression.kind
+        else {
+            panic!("{label}: expected Multiply, got {:?}", expression.kind);
+        };
+        let (range, other) = if range_on_left {
+            (left.as_ref(), right.as_ref())
+        } else {
+            (right.as_ref(), left.as_ref())
+        };
+        assert!(
+            matches!(range.kind, ExpressionKind::RangeLiteral(..)),
+            "{label}: expected RangeLiteral on {} of *, got {:?}",
+            if range_on_left { "left" } else { "right" },
+            range.kind
+        );
+        assert!(
+            !matches!(other.kind, ExpressionKind::RangeLiteral(..)),
+            "{label}: expected non-range on other side of *"
+        );
+    }
+
+    #[test]
+    fn parse_range_binds_tighter_than_multiply() {
+        let base = r#"spec test
+uses lemma si
+data rate: quantity -> unit eur 1
+data period_start: 2026-01-01
+data period_end: 2026-01-02
+"#;
+        assert_multiply_range_side(
+            &rule_expression(
+                &format!("{base}rule rhs: rate * period_start...period_end"),
+                "rhs",
+            ),
+            false,
+            "rate * period_start...period_end",
+        );
+        assert_multiply_range_side(
+            &rule_expression(
+                &format!("{base}rule lhs: period_start...period_end * rate"),
+                "lhs",
+            ),
+            true,
+            "period_start...period_end * rate",
+        );
+    }
+
+    #[test]
+    fn parse_range_in_additive_term_before_plus() {
+        let expression = rule_expression(
+            r#"spec test
+uses lemma si
+data period_start: 2026-01-01
+data period_end: 2026-01-02
+rule span: period_start...period_end + 1 day"#,
+            "span",
+        );
+        let ExpressionKind::Arithmetic(left, ArithmeticComputation::Add, right) = &expression.kind
+        else {
+            panic!("expected Add, got {:?}", expression.kind);
+        };
+        assert!(matches!(left.kind, ExpressionKind::RangeLiteral(..)));
+        assert!(!matches!(right.kind, ExpressionKind::RangeLiteral(..)));
+    }
+
+    #[test]
+    fn parse_range_multiply_with_conversion_without_inner_parens() {
+        let expression = rule_expression(
+            r#"spec test
+uses lemma si
+data money: quantity -> unit eur 1
+data rate: quantity -> unit eur_per_hour eur/hour
+data hourly_rate: 50 eur_per_hour
+data period_start: 2026-01-01
+data period_end: 2026-01-02
+rule pay: (hourly_rate * period_start...period_end) as eur"#,
+            "pay",
+        );
+        let ExpressionKind::UnitConversion(inner, _) = &expression.kind else {
+            panic!("expected UnitConversion, got {:?}", expression.kind);
+        };
+        assert_multiply_range_side(inner, false, "pay");
     }
 
     #[test]
@@ -733,9 +1058,8 @@ uses a: spec_a"#;
     }
 
     #[test]
-    fn parse_data_import_with_effective_and_repository_qualifier() {
-        let input =
-            "spec consumer\ndata price: number from @lemma/std finance 2026-06-01 -> minimum 0";
+    fn parse_data_qualified_type_with_effective_and_repository_on_uses() {
+        let input = "spec consumer\nuses @lemma/std finance 2026-06-01\ndata price: finance.number -> minimum 0";
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -743,35 +1067,41 @@ uses a: spec_a"#;
         )
         .unwrap()
         .into_flattened_specs();
-        match &result[0].data[0].value {
+        let spec_ref = match &result[0].data[0].value {
+            crate::parsing::ast::DataValue::Import(sr) => sr,
+            other => panic!("expected Import on uses row, got: {:?}", other),
+        };
+        assert_eq!(spec_ref.name, "finance");
+
+        let eff = spec_ref
+            .effective
+            .as_ref()
+            .expect("expected effective datetime");
+        assert_eq!(eff.year, 2026);
+        assert_eq!(eff.month, 6);
+
+        let qualifier = spec_ref
+            .repository
+            .as_ref()
+            .expect("expected repository qualifier");
+        assert_eq!(qualifier.name, "@lemma/std");
+
+        match &result[0].data[1].value {
             crate::parsing::ast::DataValue::Definition {
                 base,
                 constraints,
-                from,
                 value,
             } => {
                 assert!(value.is_none());
                 assert_eq!(
                     base.as_ref().expect("expected base"),
-                    &crate::parsing::ast::ParentType::Primitive {
-                        primitive: crate::parsing::ast::PrimitiveKind::Number
+                    &crate::parsing::ast::ParentType::Qualified {
+                        spec_alias: "finance".into(),
+                        inner: Box::new(crate::parsing::ast::ParentType::Primitive {
+                            primitive: crate::parsing::ast::PrimitiveKind::Number,
+                        }),
                     }
                 );
-                let spec_ref = from.as_ref().expect("expected from clause");
-                assert_eq!(spec_ref.name, "finance");
-
-                let eff = spec_ref
-                    .effective
-                    .as_ref()
-                    .expect("expected effective datetime");
-                assert_eq!(eff.year, 2026);
-                assert_eq!(eff.month, 6);
-
-                let qualifier = spec_ref
-                    .repository
-                    .as_ref()
-                    .expect("expected repository qualifier");
-                assert_eq!(qualifier.name, "@lemma/std");
 
                 let cs = constraints
                     .as_ref()
@@ -805,13 +1135,12 @@ this is not valid lemma syntax @#$%
 
     // ─── Parser-level pins for DataValue variants ────────────────────
 
-    /// `data x: a.b` (local LHS, dotted RHS) must be parsed as Reference.
-    /// This is the value-copy reference form for local references.
+    /// `fill x: a.b` (local LHS, dotted RHS) must be parsed as [`DataValue::Fill`] with a reference payload.
     #[test]
-    fn parse_data_with_dotted_rhs_is_reference() {
+    fn parse_fill_with_dotted_rhs_is_fill_reference() {
         let input = r#"spec s
 data a: number -> default 1
-data x: a.something"#;
+fill x: a.something"#;
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -823,20 +1152,25 @@ data x: a.something"#;
             .data
             .iter()
             .find(|d| d.reference.name == "x")
-            .expect("data x not found")
+            .expect("fill x not found")
             .value;
         assert!(
-            matches!(x_value, crate::parsing::ast::DataValue::Reference { .. }),
-            "dotted RHS must yield DataValue::Reference, got: {:?}",
+            matches!(
+                x_value,
+                crate::parsing::ast::DataValue::Fill(
+                    crate::parsing::ast::FillRhs::Reference { .. }
+                )
+            ),
+            "dotted RHS must yield DataValue::Fill(Reference), got: {:?}",
             x_value
         );
     }
 
-    /// `data x: a.b.c.d` (3+ segment RHS) must parse and preserve segments.
+    /// `fill x: a.b.c.d` (3+ segment RHS) must parse and preserve segments.
     #[test]
-    fn parse_data_with_multi_segment_reference_rhs() {
+    fn parse_fill_with_multi_segment_reference_rhs() {
         let input = r#"spec s
-data x: alpha.beta.gamma.delta"#;
+fill x: alpha.beta.gamma.delta"#;
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -846,35 +1180,33 @@ data x: alpha.beta.gamma.delta"#;
         .into_flattened_specs();
         let value = &result[0].data[0].value;
         match value {
-            crate::parsing::ast::DataValue::Reference { target, .. } => {
+            crate::parsing::ast::DataValue::Fill(crate::parsing::ast::FillRhs::Reference {
+                target,
+                ..
+            }) => {
                 assert_eq!(target.segments, vec!["alpha", "beta", "gamma"]);
                 assert_eq!(target.name, "delta");
             }
-            other => panic!("expected Reference, got: {:?}", other),
+            other => panic!("expected Fill(Reference), got: {:?}", other),
         }
     }
 
-    /// `data x: a.b -> minimum 5` must parse as Reference WITH the
-    /// trailing constraint chain captured in `constraints`.
+    /// `fill x: a.b -> minimum 5` is rejected; constraint chains belong on `data`.
     #[test]
-    fn parse_reference_with_trailing_constraint_captures_constraints() {
+    fn parse_fill_reference_with_trailing_constraint_is_rejected() {
         let input = r#"spec s
-data x: foo.bar -> minimum 5"#;
-        let result = parse(
+fill x: foo.bar -> minimum 5"#;
+        let err = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
             &ResourceLimits::default(),
         )
-        .unwrap()
-        .into_flattened_specs();
-        let value = &result[0].data[0].value;
-        match value {
-            crate::parsing::ast::DataValue::Reference { constraints, .. } => {
-                let c = constraints.as_ref().expect("constraints expected");
-                assert_eq!(c.len(), 1, "exactly one constraint expected, got: {:?}", c);
-            }
-            other => panic!("expected Reference, got: {:?}", other),
-        }
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("fill") && msg.contains("data"),
+            "expected fill-vs-data constraint error, got: {msg}"
+        );
     }
 
     /// `data x: notdotted` (local LHS, non-dotted RHS) MUST stay a
@@ -904,13 +1236,11 @@ data x: myothertype"#;
         );
     }
 
-    /// `data x.y: notdotted` (binding LHS, non-dotted RHS) IS parsed as
-    /// Reference per the current implementation — even though the AST doc
-    /// comment claims otherwise. Pin the real behavior.
+    /// `fill x.y: notdotted` (binding LHS, non-dotted RHS) is parsed as [`DataValue::Fill`] with a reference payload.
     #[test]
-    fn parse_binding_non_dotted_rhs_is_reference() {
+    fn parse_binding_non_dotted_rhs_is_fill_reference() {
         let input = r#"spec s
-data child.slot: somename"#;
+fill child.slot: somename"#;
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -920,15 +1250,20 @@ data child.slot: somename"#;
         .into_flattened_specs();
         let value = &result[0].data[0].value;
         assert!(
-            matches!(value, crate::parsing::ast::DataValue::Reference { .. }),
-            "non-dotted RHS in binding context must yield Reference; got: {:?}",
+            matches!(
+                value,
+                crate::parsing::ast::DataValue::Fill(
+                    crate::parsing::ast::FillRhs::Reference { .. }
+                )
+            ),
+            "non-dotted RHS in binding context must yield Fill(Reference); got: {:?}",
             value
         );
     }
 
-    /// Legacy shorthand `data x: spec …` after `spec` keyword introduced; rejected.
+    /// `data x: spec …` is invalid; spec imports use `uses`.
     #[test]
-    fn parse_legacy_data_colon_spec_rhs_is_rejected() {
+    fn parse_data_colon_spec_rhs_is_rejected() {
         let result = parse(
             r#"
 spec s
@@ -938,23 +1273,23 @@ data x: spec other
             &ResourceLimits::default(),
         );
         match result {
-            Ok(_) => panic!("legacy `data x: spec other` must fail to parse"),
+            Ok(_) => panic!("`data x: spec other` must fail to parse"),
             Err(err) => {
                 let msg = err.to_string();
                 assert!(
-                    msg.contains("spec") && (msg.contains("removed") || msg.contains("syntax")),
-                    "error must indicate the legacy syntax was removed, got: {msg}"
+                    msg.contains("uses") && msg.contains("spec"),
+                    "error must direct to `uses` for spec import, got: {msg}"
                 );
             }
         }
     }
 
-    /// `data x.y: z.w` (binding LHS, dotted RHS) → Reference with two LHS
+    /// `fill x.y: z.w` (binding LHS, dotted RHS) → Reference with two LHS
     /// segments and two RHS segments.
     #[test]
     fn parse_binding_with_dotted_rhs_preserves_both_sides() {
         let input = r#"spec s
-data outer.inner: target.field"#;
+fill outer.inner: target.field"#;
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -966,16 +1301,33 @@ data outer.inner: target.field"#;
         assert_eq!(datum.reference.segments, vec!["outer"]);
         assert_eq!(datum.reference.name, "inner");
         match &datum.value {
-            crate::parsing::ast::DataValue::Reference {
+            crate::parsing::ast::DataValue::Fill(crate::parsing::ast::FillRhs::Reference {
                 target,
-                constraints,
-                ..
-            } => {
+            }) => {
                 assert_eq!(target.segments, vec!["target"]);
                 assert_eq!(target.name, "field");
-                assert!(constraints.is_none(), "no trailing constraints expected");
             }
-            other => panic!("expected Reference, got: {:?}", other),
+            other => panic!("expected Fill(Reference), got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_data_on_binding_path_is_rejected_with_fill_hint() {
+        let result = parse(
+            r#"spec s
+data outer.inner: 1"#,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        match result {
+            Ok(_) => panic!("data with binding path must not parse"),
+            Err(err) => {
+                let msg = err.to_string();
+                assert!(
+                    msg.contains("fill"),
+                    "error should steer authors toward fill; got: {msg}"
+                );
+            }
         }
     }
 

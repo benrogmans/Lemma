@@ -20,7 +20,14 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(None, spec_name, Some(effective), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap()
 }
 
@@ -231,7 +238,7 @@ rule v: 20
     assert_rule_value(&r2, "out_b", "10");
 }
 
-// --- Data imports: same subtree instant as data-level qualified ref (section 2.1) ---
+// --- Qualified parents: same subtree instant as data-level qualified ref (section 2.1) ---
 
 #[test]
 fn qualified_dep_data_import_from_child_uses_qualifier_not_slice_start() {
@@ -244,24 +251,25 @@ uses d: dep 2025-10-01
 rule out: d.doubled
 
 spec dep 2025-01-01
-data money: money from child 2025-06-01
+uses c: child 2025-06-01
+data money: c.money
 data p: 5 usd
 rule doubled: p * 2
 
 spec child 2025-01-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
  -> decimals 2
 
 spec child 2025-06-01
-data money: scale
+data money: quantity
  -> unit eur 1.00
- -> unit usd 1.10
+ -> unit usd 0.91
  -> decimals 2
 "#,
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         )
-        .expect("data import `from child` under qualified dep must resolve child at qualifier instant so `usd` exists");
+        .expect("qualified parent `c.money` under `uses c: child …` must resolve child at qualifier instant so `usd` exists");
 
     assert_rule_value(
         &eval(&engine, "consumer", &date(2025, 3, 1)),

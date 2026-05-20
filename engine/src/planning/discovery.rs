@@ -1,7 +1,7 @@
 use crate::engine::Context;
 use crate::parsing::ast::{
-    DataValue, DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, RepositoryQualifier,
-    SpecRef,
+    DataValue, DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, ParentType,
+    RepositoryQualifier, SpecRef,
 };
 use crate::parsing::source::Source;
 use crate::Error;
@@ -18,7 +18,7 @@ pub(crate) type DagSpec = (Arc<LemmaRepository>, Arc<LemmaSpec>);
 
 /// Planning-internal resolved spec reference. [`ResolvedSpecRef::repository`] is `None`
 /// for same-repository references (resolved against the consumer spec's owning repository).
-/// When `Some`, the arc is the [`LemmaRepository`] for an explicit `from` repository
+/// When `Some`, the arc is the [`LemmaRepository`] for an explicit repository
 /// qualifier target, resolved against the context's interned repositories.
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedSpecRef {
@@ -27,34 +27,59 @@ pub(crate) struct ResolvedSpecRef {
     pub effective: Option<DateTimeValue>,
 }
 
-impl ResolvedSpecRef {
-    /// Pick the repository `Arc` to use for lookup: explicit qualifier target if
-    /// present, otherwise the consumer's owning repository.
-    pub fn repository_or<'a>(
-        &'a self,
-        consumer_repository: &'a Arc<LemmaRepository>,
-    ) -> &'a Arc<LemmaRepository> {
-        self.repository.as_ref().unwrap_or(consumer_repository)
-    }
-}
-
-/// Resolve a parsed [`SpecRef`] against the active [`Context`]. Same-repository
-/// references (no explicit repository qualifier / `from` clause) leave
-/// [`ResolvedSpecRef::repository`] as `None`.
-/// Explicit qualifiers are resolved to interned repositories and stored as `Some(...)`.
-/// Unknown qualifiers become a validation error pinned to `ref_source`.
+/// Expands same-spec [`DataValue::Import`] (`uses`) aliases for bare names, then resolves
+/// a parsed [`SpecRef`] against the active [`Context`].
 ///
-/// [`SpecRef`] (second tuple element): after resolving a bare name through a top-level
-/// [`DataValue::Import`] (`uses` alias), this is that import's target [`SpecRef`].
-pub(crate) fn resolve_spec_ref_qualifier(
+/// Same-repository references (no explicit repository qualifier) leave
+/// [`ResolvedSpecRef::repository`] as `None`. Explicit qualifiers resolve to interned
+/// repositories as `Some(...)`.
+///
+/// When a bare name matches a top-level [`DataValue::Import`] (`uses` alias), the returned
+/// [`SpecRef`] (second tuple element) is that import's target [`SpecRef`].
+pub(crate) fn resolve_spec_ref_after_expanding_uses_aliases(
     context: &Context,
     spec_ref: &SpecRef,
     ref_source: Option<&Source>,
     consumer_name: &str,
     spec_context: Option<Arc<LemmaSpec>>,
 ) -> Result<(ResolvedSpecRef, SpecRef), Error> {
-    let effective_ref =
-        bare_spec_ref_after_uses_alias(spec_ref, &spec_context, ref_source, consumer_name)?;
+    let effective_ref = if spec_ref.repository.is_some() {
+        spec_ref.clone()
+    } else if let Some(consumer) = &spec_context {
+        let mut expanded: Option<SpecRef> = None;
+        for d in &consumer.data {
+            if !d.reference.segments.is_empty() {
+                continue;
+            }
+            if d.reference.name != spec_ref.name {
+                continue;
+            }
+            let DataValue::Import(inner) = &d.value else {
+                continue;
+            };
+            if spec_ref.effective.is_some()
+                && (inner.name != spec_ref.name
+                    || inner.repository != spec_ref.repository
+                    || inner.effective != spec_ref.effective)
+            {
+                return Err(Error::validation_with_context(
+                    format!(
+                        "This reference pins an effective date on `{}`, which is only a `uses` import alias in this spec. Put the effective date on the matching `uses` line (for example `uses {}: <target_spec> <datetime>`).",
+                        spec_ref.name, spec_ref.name
+                    ),
+                    ref_source.cloned(),
+                    None::<String>,
+                    spec_context.clone(),
+                    None,
+                ));
+            }
+            expanded = Some(inner.clone());
+            break;
+        }
+        expanded.unwrap_or_else(|| spec_ref.clone())
+    } else {
+        spec_ref.clone()
+    };
 
     let resolved_repository = match &effective_ref.repository {
         None => None,
@@ -79,45 +104,6 @@ pub(crate) fn resolve_spec_ref_qualifier(
         },
         effective_ref,
     ))
-}
-
-fn bare_spec_ref_after_uses_alias(
-    spec_ref: &SpecRef,
-    spec_context: &Option<Arc<LemmaSpec>>,
-    ref_source: Option<&Source>,
-    consumer_name: &str,
-) -> Result<SpecRef, Error> {
-    if spec_ref.repository.is_some() {
-        return Ok(spec_ref.clone());
-    }
-    let Some(consumer) = spec_context else {
-        return Ok(spec_ref.clone());
-    };
-    for d in &consumer.data {
-        if !d.reference.segments.is_empty() {
-            continue;
-        }
-        if d.reference.name != spec_ref.name {
-            continue;
-        }
-        let DataValue::Import(inner) = &d.value else {
-            continue;
-        };
-        if spec_ref.effective.is_some() {
-            return Err(Error::validation_with_context(
-                format!(
-                    "'{}' pins an effective date on `from {}`, but `{}` is a uses alias; pin the version on the `uses` line or use qualified `from @repository/spec <date>`",
-                    consumer_name, spec_ref.name, spec_ref.name
-                ),
-                ref_source.cloned(),
-                None::<String>,
-                spec_context.clone(),
-                None,
-            ));
-        }
-        return Ok(inner.clone());
-    }
-    Ok(spec_ref.clone())
 }
 
 fn unknown_repository_qualifier_error(
@@ -159,6 +145,13 @@ fn unknown_repository_qualifier_error(
     )
 }
 
+fn consumer_identity(spec: &LemmaSpec) -> String {
+    match &spec.effective_from {
+        EffectiveDate::Origin => spec.name.clone(),
+        EffectiveDate::DateTimeValue(datetime) => format!("{} {}", spec.name, datetime),
+    }
+}
+
 /// Resolve a `SpecRef` to the owning repository and loaded `Arc<LemmaSpec>` at the
 /// planning `effective`. Returns a [`crate::Error::MissingRepository`] when the
 /// repository qualifier is not loaded, or another planning error when the reference
@@ -167,42 +160,86 @@ pub(crate) fn resolve_spec_ref(
     context: &Context,
     spec_ref: &SpecRef,
     consumer_repository: &Arc<LemmaRepository>,
+    consumer_spec: &Arc<LemmaSpec>,
     effective: &EffectiveDate,
-    consumer_name: &str,
     ref_source: Option<Source>,
-    spec_context: Option<Arc<LemmaSpec>>,
 ) -> Result<(Arc<LemmaRepository>, Arc<LemmaSpec>), Error> {
-    let (resolved, effective_ref) = resolve_spec_ref_qualifier(
+    let consumer_name = consumer_spec.name.as_str();
+    let (resolved, effective_ref) = resolve_spec_ref_after_expanding_uses_aliases(
         context,
         spec_ref,
         ref_source.as_ref(),
         consumer_name,
-        spec_context.clone(),
+        Some(Arc::clone(consumer_spec)),
     )?;
-    let repository_arc = resolved.repository_or(consumer_repository);
+    let repository_arc = match &resolved.repository {
+        Some(explicit) => Arc::clone(explicit),
+        None => Arc::clone(consumer_repository),
+    };
     let instant = effective_ref.at(effective);
-    let spec = context
-        .spec_set(repository_arc, effective_ref.name.as_str())
-        .and_then(|ss| ss.spec_at(&instant))
-        .ok_or_else(|| {
-            let (message, suggestion) = format_missing_spec_ref(
-                consumer_name,
-                repository_arc,
-                effective_ref.name.as_str(),
-                effective_ref.repository.as_ref(),
-                &effective_ref.effective,
-                &instant,
-                context,
-            );
-            Error::validation_with_context(
-                message,
-                ref_source,
-                Some(suggestion),
-                spec_context,
-                None,
-            )
-        })?;
-    Ok((Arc::clone(repository_arc), spec))
+    let Some(spec_set) = context.spec_set(&repository_arc, effective_ref.name.as_str()) else {
+        let (message, suggestion) = format_missing_spec_ref(
+            consumer_name,
+            &repository_arc,
+            effective_ref.name.as_str(),
+            effective_ref.repository.as_ref(),
+            &effective_ref.effective,
+            &instant,
+            context,
+        );
+        return Err(Error::validation_with_context(
+            message,
+            ref_source,
+            Some(suggestion),
+            Some(Arc::clone(consumer_spec)),
+            None,
+        ));
+    };
+
+    let spec = if let Some(pin) = effective_ref.effective.as_ref() {
+        if let Some(exact) = spec_set.get_exact(Some(pin)) {
+            Some(Arc::clone(exact))
+        } else {
+            spec_set.spec_at(&EffectiveDate::DateTimeValue(pin.clone()))
+        }
+    } else {
+        spec_set.spec_at(&instant)
+    };
+
+    let spec = spec.ok_or_else(|| {
+        let (message, suggestion) = format_missing_spec_ref(
+            consumer_name,
+            &repository_arc,
+            effective_ref.name.as_str(),
+            effective_ref.repository.as_ref(),
+            &effective_ref.effective,
+            &instant,
+            context,
+        );
+        Error::validation_with_context(
+            message,
+            ref_source.clone(),
+            Some(suggestion),
+            Some(Arc::clone(consumer_spec)),
+            None,
+        )
+    })?;
+
+    if Arc::ptr_eq(consumer_spec, &spec) {
+        return Err(Error::validation_with_context(
+            format!(
+                "spec '{}' cannot reference itself via '{}'",
+                consumer_identity(consumer_spec),
+                spec_ref
+            ),
+            ref_source,
+            None::<String>,
+            Some(Arc::clone(consumer_spec)),
+            None,
+        ));
+    }
+
+    Ok((repository_arc, spec))
 }
 
 fn format_dep_qualified_name(repository: &LemmaRepository, dep_name: &str) -> String {
@@ -294,6 +331,17 @@ pub(crate) struct DependencyEdge {
     pub source: Source,
 }
 
+impl DependencyEdge {
+    pub(crate) fn as_spec_ref(&self) -> SpecRef {
+        let mut spec_ref = match &self.explicit_repository_qualifier {
+            Some(qualifier) => SpecRef::cross_repository(self.dep_name.clone(), qualifier.clone()),
+            None => SpecRef::same_repository(self.dep_name.clone()),
+        };
+        spec_ref.effective = self.explicit_effective.clone();
+        spec_ref
+    }
+}
+
 pub(crate) fn dependency_edges(
     spec: &Arc<LemmaSpec>,
     consumer_repository: &Arc<LemmaRepository>,
@@ -302,28 +350,29 @@ pub(crate) fn dependency_edges(
     let mut out = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
 
-    let mut push_edge = |spec_ref: &SpecRef, source: &Source| match resolve_spec_ref_qualifier(
-        context,
-        spec_ref,
-        Some(source),
-        spec.name.as_str(),
-        Some(Arc::clone(spec)),
-    ) {
-        Ok((resolved, effective_ref)) => {
-            let dep_repository = resolved
-                .repository
-                .clone()
-                .unwrap_or_else(|| Arc::clone(consumer_repository));
-            out.push(DependencyEdge {
-                dep_repository,
-                dep_name: resolved.name,
-                explicit_repository_qualifier: effective_ref.repository.clone(),
-                explicit_effective: resolved.effective,
-                source: source.clone(),
-            });
-        }
-        Err(e) => errors.push(e),
-    };
+    let mut push_edge =
+        |spec_ref: &SpecRef, source: &Source| match resolve_spec_ref_after_expanding_uses_aliases(
+            context,
+            spec_ref,
+            Some(source),
+            spec.name.as_str(),
+            Some(Arc::clone(spec)),
+        ) {
+            Ok((resolved, effective_ref)) => {
+                let dep_repository = match &resolved.repository {
+                    Some(r) => Arc::clone(r),
+                    None => Arc::clone(consumer_repository),
+                };
+                out.push(DependencyEdge {
+                    dep_repository,
+                    dep_name: resolved.name,
+                    explicit_repository_qualifier: effective_ref.repository.clone(),
+                    explicit_effective: resolved.effective,
+                    source: source.clone(),
+                });
+            }
+            Err(e) => errors.push(e),
+        };
 
     for data in &spec.data {
         match &data.value {
@@ -331,10 +380,13 @@ pub(crate) fn dependency_edges(
                 push_edge(spec_ref, &data.source_location);
             }
             DataValue::Definition {
-                from: Some(from_ref),
+                base: Some(ParentType::Qualified { spec_alias, .. }),
                 ..
             } => {
-                push_edge(from_ref, &data.source_location);
+                push_edge(
+                    &SpecRef::same_repository(spec_alias.clone()),
+                    &data.source_location,
+                );
             }
             _ => {}
         }
@@ -551,46 +603,35 @@ fn dfs_discover(
             .clone()
             .map_or_else(|| effective.clone(), EffectiveDate::DateTimeValue);
 
-        match context
-            .spec_set(&edge.dep_repository, &edge.dep_name)
-            .and_then(|ss| ss.spec_at(&dep_effective))
-        {
-            Some(dependency) => {
-                dfs_discover(
-                    context,
-                    Arc::clone(&dependency),
-                    &edge.dep_repository,
-                    &dep_effective,
-                    nodes,
-                    edges,
-                    errors,
-                );
-                // After recursion the dependency has been pushed; find its index.
-                let dep_index = nodes
-                    .iter()
-                    .position(|(_, s)| Arc::ptr_eq(s, &dependency))
-                    .expect("BUG: dfs_discover must have inserted dependency before returning");
-                edges.push((dep_index, spec_index));
+        let dependency = match resolve_spec_ref(
+            context,
+            &edge.as_spec_ref(),
+            consumer_repository,
+            &spec,
+            effective,
+            Some(edge.source.clone()),
+        ) {
+            Ok((_, dependency)) => dependency,
+            Err(error) => {
+                errors.push(error);
+                continue;
             }
-            None => {
-                let (message, suggestion) = format_missing_spec_ref(
-                    &spec.name,
-                    &edge.dep_repository,
-                    &edge.dep_name,
-                    edge.explicit_repository_qualifier.as_ref(),
-                    &edge.explicit_effective,
-                    &dep_effective,
-                    context,
-                );
-                errors.push(Error::validation_with_context(
-                    message,
-                    Some(edge.source),
-                    Some(suggestion),
-                    Some(Arc::clone(&spec)),
-                    None,
-                ));
-            }
-        }
+        };
+
+        dfs_discover(
+            context,
+            Arc::clone(&dependency),
+            &edge.dep_repository,
+            &dep_effective,
+            nodes,
+            edges,
+            errors,
+        );
+        let dep_index = nodes
+            .iter()
+            .position(|(_, s)| Arc::ptr_eq(s, &dependency))
+            .expect("BUG: dfs_discover must have inserted dependency before returning");
+        edges.push((dep_index, spec_index));
     }
 }
 
@@ -704,9 +745,7 @@ mod tests {
         Arc::new(s)
     }
 
-    fn consumer_alias_from_finance(
-        from_through_alias_effective: Option<DateTimeValue>,
-    ) -> LemmaSpec {
+    fn consumer_alias_from_finance() -> LemmaSpec {
         let mut s = LemmaSpec::new("with_alias".to_string());
         s.data.push(LemmaData::new(
             Reference::local("f".to_string()),
@@ -722,15 +761,11 @@ mod tests {
         s.data.push(LemmaData::new(
             Reference::local("y".to_string()),
             AstDataValue::Definition {
-                base: Some(ParentType::Custom { name: "z".into() }),
-                constraints: None,
-                from: Some(SpecRef {
-                    name: "f".to_string(),
-                    repository: None,
-                    effective: from_through_alias_effective,
-                    repository_span: None,
-                    target_span: None,
+                base: Some(ParentType::Qualified {
+                    spec_alias: "f".into(),
+                    inner: Box::new(ParentType::Custom { name: "z".into() }),
                 }),
+                constraints: None,
                 value: None,
             },
             dummy_source(),
@@ -900,7 +935,7 @@ mod tests {
         let workspace = ctx.workspace();
         ctx.insert_spec(Arc::clone(&std_repo), finance_slice_2024())
             .unwrap();
-        let consumer = Arc::new(consumer_alias_from_finance(None));
+        let consumer = Arc::new(consumer_alias_from_finance());
         ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
             .unwrap();
 
@@ -915,10 +950,9 @@ mod tests {
                 target_span: None,
             },
             &workspace,
+            &consumer,
             &effective,
-            consumer.name.as_str(),
             None,
-            Some(Arc::clone(&consumer)),
         )
         .expect("finance via uses alias");
 
@@ -926,8 +960,111 @@ mod tests {
     }
 
     #[test]
+    fn uses_implicit_alias_same_name_with_effective_resolves_on_import_target() {
+        let inner = SpecRef {
+            name: "finance".to_string(),
+            repository: None,
+            effective: Some(date(2026, 1, 1)),
+            repository_span: None,
+            target_span: None,
+        };
+        let mut consumer = LemmaSpec::new("finance".to_string());
+        consumer.effective_from = EffectiveDate::from_option(Some(date(2027, 1, 1)));
+        consumer.data.push(LemmaData::new(
+            Reference::local("finance".to_string()),
+            AstDataValue::Import(inner.clone()),
+            dummy_source(),
+        ));
+
+        let mut ctx = Context::new();
+        let workspace = ctx.workspace();
+        let mut finance_2026 = LemmaSpec::new("finance".to_string());
+        finance_2026.effective_from = EffectiveDate::from_option(Some(date(2026, 1, 1)));
+        ctx.insert_spec(Arc::clone(&workspace), Arc::new(finance_2026))
+            .unwrap();
+        let consumer_arc = Arc::new(consumer);
+        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer_arc))
+            .unwrap();
+
+        let (resolved, effective_ref) = resolve_spec_ref_after_expanding_uses_aliases(
+            &ctx,
+            &inner,
+            Some(&consumer_arc.data[0].source_location),
+            "finance",
+            Some(Arc::clone(&consumer_arc)),
+        )
+        .expect("uses finance 2026-01-01 must resolve when alias equals target name");
+
+        assert_eq!(resolved.name, "finance");
+        assert_eq!(
+            resolved.effective.as_ref(),
+            Some(&date(2026, 1, 1)),
+            "effective pin on uses line must be preserved"
+        );
+        assert_eq!(effective_ref.effective.as_ref(), Some(&date(2026, 1, 1)),);
+    }
+
+    #[test]
+    fn resolve_spec_ref_rejects_forward_pin_without_exact_slice() {
+        let mut ctx = Context::new();
+        let workspace = ctx.workspace();
+        let mut origin = LemmaSpec::new("finance".to_string());
+        origin.data.push(LemmaData::new(
+            Reference::local("rate".to_string()),
+            DataValue::Definition {
+                base: Some(ParentType::Custom {
+                    name: "number".into(),
+                }),
+                constraints: None,
+                value: None,
+            },
+            dummy_source(),
+        ));
+        ctx.insert_spec(Arc::clone(&workspace), Arc::new(origin))
+            .unwrap();
+        let mut consumer = LemmaSpec::new("finance".to_string());
+        consumer.effective_from = EffectiveDate::from_option(Some(date(2026, 5, 20)));
+        consumer.data.push(LemmaData::new(
+            Reference::local("fin".to_string()),
+            DataValue::Import(SpecRef {
+                name: "finance".into(),
+                repository: None,
+                effective: Some(date(2027, 1, 1)),
+                repository_span: None,
+                target_span: None,
+            }),
+            dummy_source(),
+        ));
+        let consumer = Arc::new(consumer);
+        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
+            .unwrap();
+
+        let err = resolve_spec_ref(
+            &ctx,
+            &SpecRef {
+                name: "finance".into(),
+                repository: None,
+                effective: Some(date(2027, 1, 1)),
+                repository_span: None,
+                target_span: None,
+            },
+            &workspace,
+            &consumer,
+            &consumer.effective_from,
+            None,
+        )
+        .expect_err("finance 2027 row does not exist");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("active at that instant") || msg.contains("cannot reference itself"),
+            "expected missing exact slice or same-body import, got: {msg}"
+        );
+    }
+
+    #[test]
     fn resolve_spec_ref_rejects_effective_on_bare_from_uses_alias() {
-        let consumer = Arc::new(consumer_alias_from_finance(Some(date(2026, 1, 1))));
+        let consumer = Arc::new(consumer_alias_from_finance());
         let mut ctx = Context::new();
         let std_repo = registry_std_repository();
         let workspace = ctx.workspace();
@@ -947,10 +1084,9 @@ mod tests {
                 target_span: None,
             },
             &workspace,
+            &consumer,
             &effective,
-            consumer.name.as_str(),
             None,
-            Some(Arc::clone(&consumer)),
         )
         .expect_err("effective pin on from + uses alias is invalid");
 
@@ -965,7 +1101,7 @@ mod tests {
         let workspace = ctx.workspace();
         ctx.insert_spec(Arc::clone(&std_repo), finance_slice_2024())
             .unwrap();
-        let consumer = Arc::new(consumer_alias_from_finance(None));
+        let consumer = Arc::new(consumer_alias_from_finance());
         ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
             .unwrap();
 
@@ -981,5 +1117,107 @@ mod tests {
             })
             .expect("edge from data y binding");
         assert_eq!(from_y.dep_name, "finance");
+    }
+
+    #[test]
+    fn dependency_edges_qualified_parent_resolves_uses_alias() {
+        let mut ctx = Context::new();
+        let workspace = ctx.workspace();
+        let child = Arc::new(LemmaSpec::new("child".to_string()));
+        let mut dep = LemmaSpec::new("dep".to_string());
+        dep.data.push(LemmaData::new(
+            Reference::local("c".to_string()),
+            DataValue::Import(SpecRef {
+                effective: Some(date(2025, 6, 1)),
+                ..SpecRef::same_repository("child")
+            }),
+            dummy_source(),
+        ));
+        dep.data.push(LemmaData::new(
+            Reference::local("money".to_string()),
+            DataValue::Definition {
+                base: Some(ParentType::Qualified {
+                    spec_alias: "c".into(),
+                    inner: Box::new(ParentType::Custom {
+                        name: "money".into(),
+                    }),
+                }),
+                constraints: None,
+                value: None,
+            },
+            dummy_source(),
+        ));
+        let dep = Arc::new(dep);
+        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&child))
+            .unwrap();
+        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&dep))
+            .unwrap();
+
+        let edges = dependency_edges(&dep, &workspace, &ctx).expect("edges");
+        assert!(
+            edges.iter().any(|e| e.dep_name == "child"),
+            "qualified `c.money` must depend on resolved spec `child`, not alias `c`: {:?}",
+            edges
+                .iter()
+                .map(|e| (&e.dep_name, &e.explicit_effective))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            !edges.iter().any(|e| e.dep_name == "c"),
+            "must not emit unresolved alias name as dependency"
+        );
+    }
+
+    #[test]
+    fn build_dag_consumer_resolves_qualified_dep_parent_via_uses_alias() {
+        let source = r#"
+spec consumer 2025-01-01
+uses d: dep 2025-01-01
+rule out: d.doubled
+
+spec dep 2025-01-01
+uses c: child 2025-06-01
+data money: c.money
+data p: 5 usd
+rule doubled: p * 2
+
+spec child 2025-01-01
+data money: quantity
+ -> unit eur 1.00
+ -> decimals 2
+
+spec child 2025-06-01
+data money: quantity
+ -> unit eur 1.00
+ -> unit usd 0.91
+ -> decimals 2
+"#;
+        let specs = crate::parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &crate::ResourceLimits::default(),
+        )
+        .expect("parse")
+        .into_flattened_specs();
+        let mut ctx = Context::new();
+        let workspace = ctx.workspace();
+        for spec in specs {
+            ctx.insert_spec(Arc::clone(&workspace), Arc::new(spec))
+                .unwrap();
+        }
+        let consumer = ctx
+            .spec_set(&workspace, "consumer")
+            .and_then(|ss| ss.spec_at(&EffectiveDate::from_option(Some(date(2025, 3, 1)))))
+            .expect("consumer");
+        let dag = build_dag_for_spec(
+            &ctx,
+            &consumer,
+            &EffectiveDate::from_option(Some(date(2025, 3, 1))),
+        )
+        .expect("DAG must not reference unresolved alias `c`");
+        let names: Vec<_> = dag.iter().map(|(_, s)| s.name.as_str()).collect();
+        assert!(names.contains(&"child"));
+        assert!(names.contains(&"dep"));
+        assert!(!names.contains(&"c"));
     }
 }

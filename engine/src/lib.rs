@@ -22,7 +22,7 @@
 //!
 //! // Evaluate the spec (all rules, no data values)
 //! let now = lemma::DateTimeValue::now();
-//! let response = engine.run(None, "example", Some(&now), std::collections::HashMap::new(), false).unwrap();
+//! let response = engine.run(None, "example", Some(&now), std::collections::HashMap::new(), false, lemma::EvaluationRequest::default()).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -60,10 +60,15 @@ pub mod planning;
 pub mod registry;
 pub mod serialization;
 pub mod spec_set_id;
+pub(crate) mod stdlib;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
+pub use computation::rational::{
+    checked_mul, commit_rational_to_decimal, decimal_to_rational, rational_to_display_str,
+    NumericFailure, NumericOperation, RationalInteger,
+};
 pub use deps::{
     dependency_cache_file, dependency_identifier_from_dependency_path, lemma_deps_dir,
     relative_dependency_cache_path,
@@ -74,6 +79,7 @@ pub use engine::{Context, Engine, Errors, ResolvedRepository};
 pub use error::{Error, ErrorKind, RequestErrorKind};
 pub use evaluation::explanation;
 pub use evaluation::operations::{OperationResult, VetoType};
+pub use evaluation::request::{parse_rule_result_conversion_strings, EvaluationRequest};
 pub use evaluation::response::{DataGroup, Response, RuleResult};
 pub use formatting::format_source;
 pub use inversion::{Bound, Domain, Target};

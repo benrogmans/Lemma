@@ -146,6 +146,7 @@ impl WasmEngine {
         spec: &str,
         rule_names: JsValue,
         data_values: JsValue,
+        rule_result_units: JsValue,
         effective: Option<String>,
     ) -> Result<JsValue, JsValue> {
         let effective_dt = effective
@@ -162,9 +163,38 @@ impl WasmEngine {
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
+        let plan = self
+            .engine
+            .get_plan(repo, spec, Some(&effective_dt))
+            .map_err(|e| error_to_js(&e))?;
+
+        let conversion_map = parse_rule_result_units(&rule_result_units).map_err(js_err)?;
+        let rule_result_units_list: Vec<String> = conversion_map
+            .into_iter()
+            .map(|(rule, unit)| format!("{rule}:{unit}"))
+            .collect();
+        let evaluation_request = if rule_result_units_list.is_empty() {
+            crate::evaluation::EvaluationRequest::default()
+        } else {
+            let joined = rule_result_units_list.join(",");
+            let strings = crate::evaluation::parse_rule_result_conversion_strings(&joined)
+                .map_err(|e| error_to_js(&e))?;
+            if !rule_names.is_empty() {
+                for rule_name in strings.keys() {
+                    if !rule_names.contains(rule_name) {
+                        return Err(js_err(format!(
+                            "Conversion for rule '{rule_name}' was requested but that rule is not in rule_names"
+                        )));
+                    }
+                }
+            }
+            crate::evaluation::EvaluationRequest::from_rule_conversion_strings(strings, plan)
+                .map_err(|e| error_to_js(&e))?
+        };
+
         let mut response = self
             .engine
-            .run(repo, spec, Some(&effective_dt), data, false)
+            .run_plan(plan, Some(&effective_dt), data, false, evaluation_request)
             .map_err(|e| error_to_js(&e))?;
 
         if !rule_names.is_empty() {
@@ -178,6 +208,14 @@ impl WasmEngine {
     #[wasm_bindgen(js_name = list)]
     pub fn list_wasm(&self) -> Result<JsValue, JsValue> {
         serialize_engine_json(&self.engine.list())
+    }
+
+    /// Canonical Lemma source for `repository`, formatted from the in-engine AST (e.g. `"lemma"`).
+    #[wasm_bindgen(js_name = format_repository)]
+    pub fn format_repository_wasm(&self, repository: &str) -> Result<String, JsValue> {
+        self.engine
+            .format_repository(repository)
+            .map_err(|e| error_to_js(&e))
     }
 
     /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
@@ -428,7 +466,17 @@ fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {
     Err("rule_names must be an array of strings".into())
 }
 
-fn parse_data_values(v: &JsValue) -> Result<HashMap<String, String>, String> {
+fn parse_rule_result_units(v: &JsValue) -> Result<HashMap<String, String>, String> {
+    if v.is_undefined() || v.is_null() {
+        return Ok(HashMap::new());
+    }
+    let map: HashMap<String, String> = serde_wasm_bindgen::from_value(v.clone()).map_err(|e| {
+        format!("rule_result_units must be a plain object of rule name to unit: {e}")
+    })?;
+    Ok(map)
+}
+
+fn parse_data_values(v: &JsValue) -> Result<HashMap<String, serde_json::Value>, String> {
     if v.is_undefined() || v.is_null() {
         return Ok(HashMap::new());
     }

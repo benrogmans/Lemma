@@ -1,11 +1,21 @@
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Bound, DataPath, Domain, Engine, LiteralValue, Target};
+use lemma::{Bound, DataPath, Domain, Engine, LiteralValue, Target, ValueKind};
+use rust_decimal::Decimal;
+
+fn ratio_percent_value(v: &LiteralValue) -> Option<Decimal> {
+    match &v.value {
+        ValueKind::Ratio(n, u) if u.as_deref() == Some("percent") => {
+            Some(lemma::commit_rational_to_decimal(n).unwrap())
+        }
+        _ => None,
+    }
+}
 
 #[test]
 fn veto_query_with_value_branches_filters_correctly() {
     let code = r#"
         spec pricing
-        data discount: percent
+        data discount: ratio
 
         rule final_price: 100
             unless discount >= 10%  then 90
@@ -22,7 +32,6 @@ fn veto_query_with_value_branches_filters_correctly() {
         )
         .unwrap();
 
-    // Query: "What discount values trigger any veto?"
     let now = DateTimeValue::now();
     let response = engine
         .invert(
@@ -34,53 +43,35 @@ fn veto_query_with_value_branches_filters_correctly() {
         )
         .expect("should invert successfully");
 
-    // Should have the matching veto solutions
-    // Should only have the two veto solutions, not the value solutions
+    let discount_path = DataPath::local("discount".to_string());
     assert_eq!(response.len(), 2, "expected only veto solutions");
 
-    let discount_path = DataPath::local("discount".to_string());
-    let fifty_percent = LiteralValue::ratio(
-        rust_decimal::Decimal::new(50, 0) / rust_decimal::Decimal::from(100),
-        Some("percent".to_string()),
-    ); // 50% = 0.50 as ratio
-    let zero_percent = LiteralValue::ratio(
-        rust_decimal::Decimal::new(0, 0),
-        Some("percent".to_string()),
-    );
+    let fifty = Decimal::new(5, 1);
+    let zero = Decimal::ZERO;
 
-    // Find the two veto solutions
     let mut found_high_discount = false;
     let mut found_negative_discount = false;
 
     for domains in &response.domains {
-        assert!(
-            !domains.is_empty(),
-            "all solutions should have domain constraints"
-        );
-
         let discount_domain = domains
             .get(&discount_path)
             .expect("solution should contain discount domain");
 
         match discount_domain {
             Domain::Range { min, max } => {
-                // Check for discount >= 50% (veto "discount too high")
-                if matches!(min, Bound::Inclusive(v) if v.as_ref() == &fifty_percent)
+                if matches!(min, Bound::Inclusive(v) if ratio_percent_value(v.as_ref()) == Some(fifty))
                     && matches!(max, Bound::Unbounded)
                 {
                     found_high_discount = true;
-                }
-                // Check for discount < 0% (veto "invalid discount")
-                else if matches!(min, Bound::Unbounded)
-                    && matches!(max, Bound::Exclusive(v) if v.as_ref() == &zero_percent)
+                } else if matches!(min, Bound::Unbounded)
+                    && matches!(max, Bound::Exclusive(v) if ratio_percent_value(v.as_ref()) == Some(zero))
                 {
                     found_negative_discount = true;
                 }
             }
             Domain::Complement(inner) => {
-                // Could be represented as Complement(Range) for discount < 0%
                 if let Domain::Range { min, max } = inner.as_ref() {
-                    if matches!(min, Bound::Inclusive(v) if v.as_ref() == &zero_percent)
+                    if matches!(min, Bound::Inclusive(v) if ratio_percent_value(v.as_ref()) == Some(zero))
                         && matches!(max, Bound::Unbounded)
                     {
                         found_negative_discount = true;

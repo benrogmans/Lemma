@@ -1,12 +1,18 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::Engine;
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     response
         .results
@@ -24,16 +30,14 @@ fn test_timezone_comparison_same_instant() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data time_nyc: 2024-03-15T10:00:00-05:00
 data time_london: 2024-03-15T15:00:00+00:00
 rule are_equal: time_nyc is time_london
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -52,16 +56,14 @@ fn test_timezone_comparison_different_instants() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data time_nyc: 2024-03-15T10:00:00-05:00
 data time_tokyo: 2024-03-15T10:00:00+09:00
 rule nyc_is_later: time_nyc > time_tokyo
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -80,15 +82,13 @@ fn test_timezone_arithmetic_preserved() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data start_time: 2024-03-15T10:00:00+01:00
 rule later: start_time + 2 hours
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -118,15 +118,13 @@ fn test_negative_timezone_offset() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data west_coast: 2024-03-15T09:00:00-08:00
 rule later: west_coast + 3 hours
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -151,15 +149,13 @@ fn test_timezone_crossing_midnight() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data evening: 2024-03-15T23:00:00+05:30
 rule next_day: evening + 2 hours
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -188,29 +184,32 @@ fn test_timezone_date_difference() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data time1: 2024-03-15T10:00:00-05:00
 data time2: 2024-03-15T16:00:00+01:00
-rule hours_diff: time2 - time1
+rule hours_diff: time1...time2 as hours
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::ValueKind::Duration(seconds, _),
+        value: lemma::ValueKind::Quantity(seconds, unit, _),
         ..
     } = get_rule_value(&engine, "test", "hours_diff")
     {
         // time1: 10:00 -05:00 = 15:00 UTC
         // time2: 16:00 +01:00 = 15:00 UTC
         // Difference should be 0
-        assert_eq!(seconds, Decimal::from(0));
+        assert_eq!(seconds, lemma::RationalInteger::new(0, 1));
+        assert!(
+            unit.is_empty() || unit.eq_ignore_ascii_case("hours"),
+            "unexpected unit {:?}",
+            unit
+        );
     } else {
-        panic!("Expected Duration value");
+        panic!("Expected Quantity duration value");
     }
 }
 
@@ -219,15 +218,13 @@ fn test_timezone_45_minute_offset() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data nepal_time: 2024-03-15T14:30:00+05:45
 rule preserved: nepal_time
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -255,15 +252,13 @@ fn test_extreme_western_timezone() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data hawaii: 2024-03-15T12:00:00-10:00
 rule later: hawaii + 1 hour
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -287,15 +282,13 @@ fn test_extreme_eastern_timezone() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
+uses lemma si
 data kiribati: 2024-03-15T12:00:00+14:00
 rule earlier: kiribati - 1 hour
     "#;
 
     engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-        )
+        .load(code, lemma::SourceType::Volatile)
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {

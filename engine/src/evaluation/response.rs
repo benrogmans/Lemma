@@ -100,7 +100,6 @@ mod tests {
         RulePath, Span,
     };
     use rust_decimal::Decimal;
-    use std::str::FromStr;
 
     fn dummy_source() -> Source {
         Source::new(
@@ -135,8 +134,8 @@ mod tests {
             "test_rule".to_string(),
             RuleResult {
                 rule: dummy_evaluated_rule("test_rule"),
-                result: OperationResult::Value(Box::new(LiteralValue::number(
-                    Decimal::from_str("42").unwrap(),
+                result: OperationResult::Value(Box::new(LiteralValue::number_from_decimal(
+                    Decimal::from(42),
                 ))),
                 data: vec![],
                 operations: vec![],

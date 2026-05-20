@@ -51,7 +51,7 @@ console.log(response.results);
 - **`Lemma()`** — async; initializes WASM once, returns an `Engine` (recommended).
 - **`init()`** — await once (browser).
 - **`initSync({ module })`** — Node + `readFileSync('…/lemma_bg.wasm')`.
-- **`Engine`** — `load`, `list`, `schema`, `run`, `format` (supported surface for now).
+- **`Engine`** — `load`, `load_batch`, `fetch`, `list`, `format_repository`, `schema`, `run`, `format`. `list()` always includes embedded repo `lemma` (`spec si`); use `format_repository("lemma")` for canonical stdlib source.
 - **`@lemmabase/lemma-engine/lsp-client`** — `LspClient`: `start()` (no args), `initialize()`, `didOpen`, `onDiagnostics`, `formatting`, `semanticTokensFull`. Call `init()` first.
 
 **Page id** (for `show` / `run`): disambiguated key `repository::name` plus optional effective (see playground `specKey`).

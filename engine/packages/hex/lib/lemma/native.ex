@@ -22,6 +22,9 @@ defmodule Lemma.Native do
   def lemma_load_batch(_resource, _sources, _dependency), do: :erlang.nif_error(:nif_not_loaded)
   def lemma_list(_resource), do: :erlang.nif_error(:nif_not_loaded)
 
+  def lemma_format_repository(_resource, _repository),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def lemma_schema(_resource, _spec, _effective_opt),
     do: :erlang.nif_error(:nif_not_loaded)
 

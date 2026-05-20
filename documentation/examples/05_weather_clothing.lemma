@@ -6,7 +6,7 @@ Shows how rules can make decisions based on conditions.
 Simple logic that's easy to understand.
 """
 
-data temperature: scale
+data temperature: quantity
   -> unit celsius 1.0
   -> minimum -70 celsius
   -> maximum 70 celsius
@@ -26,8 +26,8 @@ data comfort: text
 data wind_speed: number
   -> minimum 0
 
-data is_raining:    boolean
-data is_snowingddd: boolean
+data is_raining: boolean
+data is_snowing: boolean
 
 rule clothing_layer: "light"
   unless temperature < 5 celsius  then "very_warm"

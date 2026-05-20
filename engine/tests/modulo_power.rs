@@ -1,9 +1,6 @@
 use lemma::parsing::ast::DateTimeValue;
 use lemma::*;
-use rust_decimal::Decimal;
 use std::collections::HashMap;
-use std::str::FromStr;
-
 #[test]
 fn test_modulo_simple() {
     let mut engine = Engine::new();
@@ -21,14 +18,24 @@ rule remainder: a % b
     let now = DateTimeValue::now();
 
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let result = response.results.get("remainder").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(n) = &lit.value {
-                assert_eq!(n, &Decimal::from_str("1").unwrap())
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(n).unwrap(),
+                    rust_decimal::Decimal::ONE
+                )
             } else {
                 panic!("Expected number, got {:?}", result.result);
             }
@@ -54,14 +61,24 @@ rule result: base ^ exponent
     let now = DateTimeValue::now();
 
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let result = response.results.get("result").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(n) = &lit.value {
-                assert_eq!(n, &Decimal::from_str("8").unwrap())
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(n).unwrap(),
+                    rust_decimal::Decimal::from(8)
+                )
             } else {
                 panic!("Expected number, got {:?}", result.result);
             }
@@ -87,7 +104,14 @@ rule is_odd: (value % 2) is 1
     let now = DateTimeValue::now();
 
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
 
     let is_even = response.results.get("is_even").unwrap();
@@ -119,14 +143,24 @@ rule square_root: base ^ 0.5
     let now = DateTimeValue::now();
 
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let result = response.results.get("square_root").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(n) = &lit.value {
-                assert_eq!(n, &Decimal::from_str("2").unwrap());
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(n).unwrap(),
+                    rust_decimal::Decimal::from(2)
+                );
             } else {
                 panic!("Expected number result");
             }
@@ -152,14 +186,24 @@ rule calculation: (x % y) + (2 ^ 3)
     let now = DateTimeValue::now();
 
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .unwrap();
     let result = response.results.get("calculation").unwrap();
 
     match &result.result {
         lemma::OperationResult::Value(lit) => {
             if let lemma::ValueKind::Number(n) = &lit.value {
-                assert_eq!(n, &Decimal::from_str("9").unwrap());
+                assert_eq!(
+                    lemma::commit_rational_to_decimal(n).unwrap(),
+                    rust_decimal::Decimal::from(9)
+                );
             } else {
                 panic!("Expected number, got {:?}", result.result);
             }

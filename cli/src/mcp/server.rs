@@ -211,6 +211,12 @@ mod imp {
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: evaluate at a specific effective datetime (e.g. '2026', '2026-03', '2026-03-04', '2026-03-04T10:30:00Z')"
+                            },
+                            "conversions": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Optional quantity unit conversions as 'rule=unit' or 'rule:unit' (e.g. ['total=usd'])",
+                                "default": []
                             }
                         },
                         "required": ["spec"]
@@ -274,20 +280,23 @@ mod imp {
                 }));
                 tools.push(serde_json::json!({
                     "name": "get_spec_source",
-                    "description": "Return formatted Lemma source for a spec. Useful for inspecting or debugging the rules that produce evaluation results.",
+                    "description": "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded SI stdlib) for the whole repo, or `spec` for a workspace spec.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
+                                    "repository": {
+                                        "type": "string",
+                                        "description": "Repository qualifier (e.g. lemma). When set, returns formatted source for the entire repository."
+                                    },
                                     "spec": {
                                         "type": "string",
-                                        "description": "Spec set id"
+                                        "description": "Workspace spec set id (when repository is omitted)"
                                     },
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: get source at a specific effective datetime"
                             }
-                        },
-                        "required": ["spec"]
+                        }
                     }
                 }));
             }
@@ -409,9 +418,30 @@ mod imp {
             &self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
-            let spec_set_id = args["spec"]
-                .as_str()
-                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
+            if let Some(repo) = args
+                .get("repository")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                let source = self.engine.format_repository(repo).map_err(|e| {
+                    McpError::invalid_params(format!(
+                        "Repository '{}' not found: {}. Use list_specs to see loaded repositories.",
+                        repo, e
+                    ))
+                })?;
+                debug!("Returned formatted source for repository '{}'", repo);
+                return Ok(serde_json::json!({
+                    "content": [{
+                        "type": "text",
+                        "text": source
+                    }]
+                }));
+            }
+
+            let spec_set_id = args["spec"].as_str().ok_or_else(|| {
+                McpError::invalid_params("Missing 'spec' or 'repository' field".to_string())
+            })?;
 
             let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
@@ -471,10 +501,36 @@ mod imp {
                 })
                 .collect();
 
+            let conversions: Vec<String> = args["conversions"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             let now = resolve_effective(args)?;
+            let evaluation_request = crate::evaluation_request::build_evaluation_request(
+                &self.engine,
+                None,
+                &spec_name,
+                &now,
+                &conversions,
+                &rule_names,
+            )
+            .map_err(|e| McpError::invalid_params(e.to_string()))?;
+
             let mut response = self
                 .engine
-                .run(None, &spec_name, Some(&now), data_values, false)
+                .run(
+                    None,
+                    &spec_name,
+                    Some(&now),
+                    data_values,
+                    false,
+                    evaluation_request,
+                )
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -526,29 +582,55 @@ mod imp {
 
         fn tool_list_specs(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
             let now = resolve_effective(args)?;
-            let workspace = self.engine.get_workspace();
+            let mut sections: Vec<String> = Vec::new();
+            let mut spec_count = 0usize;
 
-            let output = if workspace.specs.is_empty() {
+            for resolved in self.engine.list() {
+                let label = crate::interactive::repo_label(resolved.repository.as_ref());
+                let repo_q = resolved.repository.name.as_deref();
+                let schemas: Vec<String> = resolved
+                    .specs
+                    .iter()
+                    .flat_map(|ss| ss.iter_specs())
+                    .filter_map(|spec| {
+                        let effective = spec
+                            .effective_from()
+                            .cloned()
+                            .unwrap_or_else(|| now.clone());
+                        self.engine
+                            .schema(repo_q, &spec.name, Some(&effective))
+                            .ok()
+                            .map(|s| s.to_string())
+                    })
+                    .collect();
+                spec_count += schemas.len();
+                if !schemas.is_empty() {
+                    sections.push(format!("Repository: {}\n\n{}", label, schemas.join("\n\n")));
+                }
+            }
+
+            let workspace_empty = self
+                .engine
+                .get_workspace()
+                .specs
+                .iter()
+                .all(|ss| ss.iter_specs().next().is_none());
+
+            let output = if spec_count == 0 {
                 if self.config.admin {
                     "No specs loaded.\n\nUse the 'add_spec' tool to load Lemma source.".to_string()
                 } else {
                     "No specs loaded.".to_string()
                 }
             } else {
-                let schemas: Vec<lemma::SpecSchema> = workspace
-                    .specs
-                    .iter()
-                    .filter_map(|ss| self.engine.schema(None, &ss.name, Some(&now)).ok())
-                    .collect();
-
-                schemas
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n\n")
+                let mut out = sections.join("\n\n---\n\n");
+                if self.config.admin && workspace_empty {
+                    out.push_str("\n\nUse the 'add_spec' tool to load workspace Lemma source.");
+                }
+                out
             };
 
-            debug!("Listed {} specs", workspace.specs.len());
+            debug!("Listed {} specs across repositories", spec_count);
 
             Ok(serde_json::json!({
                 "content": [{
@@ -681,22 +763,39 @@ mod imp {
             }
 
             ExplanationNode::Computation {
+                kind,
+                conversion_steps,
                 original_expression,
                 expression,
                 result,
                 operands,
                 ..
-            } => {
-                for op in operands {
-                    walk_explanation_node(op, steps, seen_data, seen_rules);
+            } => match kind {
+                lemma::evaluation::operations::ComputationKind::UnitConversion { .. } => {
+                    assert!(
+                        !conversion_steps.is_empty(),
+                        "BUG: UnitConversion computation must have conversion_steps"
+                    );
+                    for step in conversion_steps {
+                        steps.push(step.text.clone());
+                    }
+                    for operand in operands {
+                        walk_explanation_node(operand, steps, seen_data, seen_rules);
+                    }
                 }
-                let expr = if original_expression != expression && !original_expression.is_empty() {
-                    original_expression.as_str()
-                } else {
-                    expression.as_str()
-                };
-                steps.push(format!("{}: {}", expr, result));
-            }
+                _ => {
+                    for operand in operands {
+                        walk_explanation_node(operand, steps, seen_data, seen_rules);
+                    }
+                    let expression_text =
+                        if original_expression != expression && !original_expression.is_empty() {
+                            original_expression.as_str()
+                        } else {
+                            expression.as_str()
+                        };
+                    steps.push(format!("{}: {}", expression_text, result));
+                }
+            },
 
             ExplanationNode::Branches {
                 matched,

@@ -21,12 +21,26 @@ fn engine_run_resolves_unambiguous_spec_from_any_repo() {
         .expect("parse and plan must succeed for named-repo specs");
 
     let now = DateTimeValue::now();
-    let outcome = engine.run(None, "tax", Some(&now), HashMap::new(), false);
+    let outcome = engine.run(
+        None,
+        "tax",
+        Some(&now),
+        HashMap::new(),
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(
         outcome.is_err(),
         "run(None, name) targets workspace; spec in named repo should not be found"
     );
-    let outcome = engine.run(Some("scoped"), "tax", Some(&now), HashMap::new(), false);
+    let outcome = engine.run(
+        Some("scoped"),
+        "tax",
+        Some(&now),
+        HashMap::new(),
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(
         outcome.is_ok(),
         "run(Some(repo), name) should find spec in named repo"
@@ -52,7 +66,14 @@ rule r: x"#,
         .expect("duplicate names across repos should load");
 
     let now = DateTimeValue::now();
-    let main_run = engine.run(None, "s", Some(&now), HashMap::new(), false);
+    let main_run = engine.run(
+        None,
+        "s",
+        Some(&now),
+        HashMap::new(),
+        false,
+        lemma::EvaluationRequest::default(),
+    );
     assert!(
         main_run.is_err(),
         "bare spec name `s` is not in main repository; run must not silently pick one repo"
@@ -83,7 +104,14 @@ rule out: dep.val"#,
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "consumer", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "consumer",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default(),
+        )
         .expect("consumer should resolve cross-repo uses");
     assert!(
         response.results.contains_key("out"),
@@ -282,17 +310,38 @@ rule z: q"#,
 
     let now = DateTimeValue::now();
     assert!(engine
-        .run(None, "main_only", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "main_only",
+            Some(&now),
+            HashMap::new(),
+            false,
+            lemma::EvaluationRequest::default()
+        )
         .is_ok());
     assert!(
         engine
-            .run(None, "named_only", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "named_only",
+                Some(&now),
+                HashMap::new(),
+                false,
+                lemma::EvaluationRequest::default()
+            )
             .is_err(),
         "run(None, name) targets workspace; spec in named repo `r` should not be found"
     );
     assert!(
         engine
-            .run(Some("r"), "named_only", Some(&now), HashMap::new(), false)
+            .run(
+                Some("r"),
+                "named_only",
+                Some(&now),
+                HashMap::new(),
+                false,
+                lemma::EvaluationRequest::default()
+            )
             .is_ok(),
         "run(Some(repo), name) should find spec in named repo"
     );
@@ -479,15 +528,25 @@ fn workspace_files_can_share_repo() {
         .expect("second workspace file merges into same repo");
 
     let repos = engine.list();
-    assert!(
-        repos.len() == 2,
-        "should have two repositories: workspace and billing"
-    );
-    let billing_repo = repos
+    let billing_repos: Vec<_> = repos
         .iter()
-        .find(|r| r.repository.name == Some("billing".to_string()))
-        .unwrap();
-    assert!(billing_repo.specs.len() == 2, "should have two specs");
+        .filter(|r| r.repository.name.as_deref() == Some("billing"))
+        .collect();
+    assert_eq!(
+        billing_repos.len(),
+        1,
+        "both workspace files should merge into one billing repo, got repos: {:?}",
+        repos
+            .iter()
+            .map(|r| r.repository.name.as_deref())
+            .collect::<Vec<_>>()
+    );
+    let billing_repo = billing_repos[0];
+    assert_eq!(
+        billing_repo.specs.len(),
+        2,
+        "billing repo should have two specs"
+    );
     assert!(billing_repo.specs.iter().any(|ss| ss.name == "invoices"));
     assert!(billing_repo.specs.iter().any(|ss| ss.name == "payments"));
 }
@@ -511,9 +570,33 @@ fn dependency_and_workspace_different_names_coexist() {
         )
         .expect("dependency with different repo name should coexist");
 
-    let specs = engine.list();
+    let repos = engine.list();
     assert!(
-        specs.iter().flat_map(|r| r.specs.iter()).count() == 2,
-        "should have both workspace and dependency specs"
+        repos
+            .iter()
+            .any(|r| r.repository.name.as_deref() == Some("billing")),
+        "workspace finance_spec should live in billing repo"
+    );
+    assert!(
+        repos
+            .iter()
+            .any(|r| r.repository.name.as_deref() == Some("@jack/finance")),
+        "dependency finance_spec should live in @jack/finance repo"
+    );
+    assert!(
+        repos
+            .iter()
+            .flat_map(|r| r.specs.iter())
+            .any(|ss| ss.name == "finance_spec"),
+        "finance_spec should be loaded from workspace or dependency"
+    );
+    let finance_spec_count = repos
+        .iter()
+        .flat_map(|r| r.specs.iter())
+        .filter(|ss| ss.name == "finance_spec")
+        .count();
+    assert_eq!(
+        finance_spec_count, 2,
+        "should have finance_spec in both billing (workspace) and @jack/finance (dependency)"
     );
 }
