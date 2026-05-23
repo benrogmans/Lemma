@@ -219,7 +219,10 @@ impl Context {
     /// is loaded.
     #[must_use]
     pub fn spec_set(&self, repository: &Arc<LemmaRepository>, name: &str) -> Option<&LemmaSpecSet> {
-        self.repositories.get(repository).and_then(|m| m.get(name))
+        let canonical_name = crate::parsing::ast::ascii_lowercase_logical_name(name.to_string());
+        self.repositories
+            .get(repository)
+            .and_then(|m| m.get(&canonical_name))
     }
 
     /// All spec sets belonging to a repository. Panics if the repository is not in the map
@@ -800,6 +803,7 @@ impl Engine {
     ) -> Result<&crate::planning::ExecutionPlan, Error> {
         let effective_dt = self.effective_or_now(effective);
         let instant = EffectiveDate::DateTimeValue(effective_dt.clone());
+        let canonical_name = crate::parsing::ast::ascii_lowercase_logical_name(name.to_string());
 
         let repository = match repo {
             Some(q) => self.specs.find_repository(q).ok_or_else(|| {
@@ -811,7 +815,7 @@ impl Engine {
             None => self.specs.workspace(),
         };
 
-        let Some(spec_set) = self.specs.spec_set(&repository, name) else {
+        let Some(spec_set) = self.specs.spec_set(&repository, &canonical_name) else {
             return Err(self.spec_not_found_in_repository_error(&repository, name, &effective_dt));
         };
 
@@ -822,7 +826,7 @@ impl Engine {
         let plan_set = self
             .plan_sets
             .get(&repository)
-            .and_then(|by_name| by_name.get(name))
+            .and_then(|by_name| by_name.get(&canonical_name))
             .ok_or_else(|| {
                 Error::request_not_found(
                     format!("No execution plans for spec '{name}'"),

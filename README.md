@@ -310,6 +310,7 @@ Supports `linux/amd64` and `linux/arm64`.
 ## Documentation
 
 - **[Language Guide](documentation/index.md)** -- specs, data, rules, types
+- **[LLM guide (llms.txt)](documentation/llms.txt)** -- authoring Lemma from business logic
 - **[Composing specs](documentation/spec_composability.md)** -- `uses`, temporal versions, pins
 - **[Reference](documentation/reference.md)** -- operators, literals, syntax
 - **[Veto Semantics](documentation/veto_semantics.md)** -- when rules produce no value

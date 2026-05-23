@@ -280,7 +280,7 @@ uses lemma si
 rule value: 2 hours as eur"#,
         money = MONEY_TYPEDEF
     );
-    expect_plan_error(code, "convert");
+    expect_plan_error(code, "unknown unit");
 }
 
 #[test]

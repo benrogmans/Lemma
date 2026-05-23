@@ -539,7 +539,7 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
                 );
             }
 
-            if lua.eq_ignore_ascii_case(lub) {
+            if lua == lub {
                 return match la.cmp(lb) {
                     Ordering::Less => -1,
                     Ordering::Equal => 0,

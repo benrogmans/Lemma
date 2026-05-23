@@ -1524,7 +1524,7 @@ data y: 2"#;
     }
 
     #[test]
-    fn parse_repo_name_case_distinctness_two_repositories_not_merged() {
+    fn parse_repo_name_case_insensitive_same_repository_merged() {
         let input = "repo Foo\n\nspec a\ndata x: 1\n\nrepo foo\n\nspec b\ndata y: 2";
         let parsed = parse(
             input,
@@ -1534,9 +1534,13 @@ data y: 2"#;
         .unwrap();
         assert_eq!(
             parsed.repositories.len(),
-            2,
-            "Foo and foo must be distinct repository identities"
+            1,
+            "Foo and foo are the same repository after canonicalization"
         );
+        let specs: Vec<_> = parsed.repositories.values().next().unwrap().clone();
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].name, "a");
+        assert_eq!(specs[1].name, "b");
     }
 
     #[test]

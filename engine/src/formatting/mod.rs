@@ -2,6 +2,7 @@
 //!
 //! Formats parsed specs into canonical Lemma source text. Uses `AsLemmaSource`
 //! and `Expression::Display` for syntax; this module handles layout only.
+//! Canonical source includes ASCII-lowercase logical identifier names.
 
 use crate::parsing::ast::{
     expression_precedence, AsLemmaSource, Constraint, DataValue, Expression, ExpressionKind,
@@ -704,6 +705,19 @@ mod tests {
             timezone: None,
         });
         assert_eq!(fmt_value(&v), "14:30:45");
+    }
+
+    #[test]
+    fn test_format_source_lowercases_logical_identifiers() {
+        let source = r#"spec Test
+data Price: number -> default 1
+rule Total: price
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(formatted.contains("spec test"), "got: {formatted}");
+        assert!(formatted.contains("data price"), "got: {formatted}");
+        assert!(formatted.contains("rule total"), "got: {formatted}");
     }
 
     #[test]

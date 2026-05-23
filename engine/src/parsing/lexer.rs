@@ -808,7 +808,7 @@ pub fn conversion_target_from_token(kind: &TokenKind, fallback_text: &str) -> Co
     } else if *kind == TokenKind::NumberKw {
         ConversionTarget::Type(PrimitiveKind::Number)
     } else {
-        ConversionTarget::Unit(fallback_text.to_lowercase())
+        ConversionTarget::Unit(fallback_text.to_string())
     }
 }
 
