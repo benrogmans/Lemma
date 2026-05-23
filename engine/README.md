@@ -106,7 +106,7 @@ let response = engine.run(
 
 ## Embedded SI stdlib
 
-`Engine::new()` loads `repo lemma` / `spec si` from [`src/lemma/si.lemma`](src/lemma/si.lemma) at compile time (import with `uses lemma si`). It always appears in [`Engine::list`](engine/src/engine.rs). Inspect formatted source with `engine.format_repository("lemma")`.
+`Engine::new()` loads `repo lemma` / `spec si` from [`src/lemma/si.lemma.std`](src/lemma/si.lemma.std) at compile time (import with `uses lemma si`). The `.lemma.std` suffix keeps workspace discovery from loading it as a user spec. It always appears in [`Engine::list`](engine/src/engine.rs). Inspect formatted source with `engine.format_repository("lemma")`.
 
 ## Features
 
