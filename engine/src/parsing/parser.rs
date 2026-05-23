@@ -62,10 +62,29 @@ pub fn parse(
 
     let mut parser = Parser::new(content, source_type, limits);
     let repositories = parser.parse_file()?;
-    Ok(ParseResult {
+    let mut result = ParseResult {
         repositories,
         expression_count: parser.expression_count,
-    })
+    };
+    canonicalize_parse_result(&mut result);
+    Ok(result)
+}
+
+fn canonicalize_parse_result(result: &mut ParseResult) {
+    let old = std::mem::take(&mut result.repositories);
+    let mut new_map: IndexMap<Arc<LemmaRepository>, Vec<LemmaSpec>> = IndexMap::new();
+    for (repo, mut specs) in old {
+        let mut canonical_repo = (*repo).clone();
+        canonicalize_repository(&mut canonical_repo);
+        for spec in &mut specs {
+            canonicalize_lemma_spec(spec);
+        }
+        new_map
+            .entry(Arc::new(canonical_repo))
+            .or_default()
+            .extend(specs);
+    }
+    result.repositories = new_map;
 }
 
 struct Parser {
@@ -1028,9 +1047,7 @@ impl Parser {
         name_tok: Token,
     ) -> Result<ParentType, Error> {
         if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
-            let primitive = if self.at(&TokenKind::Identifier)?
-                && self.peek()?.text.eq_ignore_ascii_case("range")
-            {
+            let primitive = if self.at(&TokenKind::Identifier)? && self.peek()?.text == "range" {
                 let range_tok = self.peek()?.clone();
                 match kind {
                     PrimitiveKind::Date => {

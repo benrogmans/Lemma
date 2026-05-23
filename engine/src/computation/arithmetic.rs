@@ -767,7 +767,7 @@ fn quantity_add_subtract(
     right_unit: &str,
     right_type: &LemmaType,
 ) -> Result<RationalInteger, NumberArithmeticFailure> {
-    if left_unit.eq_ignore_ascii_case(right_unit) {
+    if left_unit == right_unit {
         return number_arithmetic(left_value, operator, right_value);
     }
     let left_canonical = quantity_canonical_magnitude_rational(left_value, left_unit, left_type)?;

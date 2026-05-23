@@ -328,7 +328,6 @@ fn format_quantity_units_list(units: &QuantityUnits) -> String {
 
 /// What kind of value `-> default` expects when rejecting a calendar literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum DefaultExpectation {
     QuantityUnits,
     Text,
@@ -392,7 +391,6 @@ pub(crate) fn default_value_mismatch_error(
     }
 }
 
-#[allow(dead_code)]
 fn quantity_default_unit_error(unit: &str, type_name: &str, units: &QuantityUnits) -> String {
     format!(
         "Unit '{unit}' is not defined on '{type_name}'. Valid '{type_name}' units are: {}.",
@@ -400,7 +398,6 @@ fn quantity_default_unit_error(unit: &str, type_name: &str, units: &QuantityUnit
     )
 }
 
-#[allow(dead_code)]
 fn quantity_default_wrong_shape_error(type_name: &str, traits: &[QuantityTrait]) -> String {
     let example = if traits.contains(&QuantityTrait::Duration) {
         "4 weeks"
@@ -590,25 +587,12 @@ fn ratio_bound_to_canonical_rational(
     args: &[CommandArg],
     cmd: &str,
     units: &RatioUnits,
-    type_name: &str,
 ) -> Result<RationalInteger, String> {
     use crate::computation::rational::{checked_div, decimal_to_rational};
     let lit = require_literal(args, cmd)?;
     match lit {
         crate::literals::Value::NumberWithUnit(magnitude, unit_name) => {
-            let unit = units
-                .iter()
-                .find(|u| u.name.eq_ignore_ascii_case(unit_name.as_str()))
-                .ok_or_else(|| {
-                    format!(
-                        "Unit '{unit_name}' is not defined on ratio type '{type_name}'. Valid units: {}.",
-                        units
-                            .iter()
-                            .map(|u| u.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })?;
+            let unit = units.get(unit_name.as_str())?;
             let magnitude_rational = decimal_to_rational(*magnitude)
                 .map_err(|failure| format!("{cmd} literal failed rational lift: {failure}"))?;
             checked_div(&magnitude_rational, &unit.value)
@@ -856,7 +840,7 @@ fn parse_quantity_trait(args: &[CommandArg]) -> Result<QuantityTrait, String> {
 fn validate_duration_trait_requirements(units: &QuantityUnits) -> Result<(), String> {
     let second_unit = units
         .iter()
-        .find(|unit| unit.name.eq_ignore_ascii_case("second"))
+        .find(|unit| unit.name == "second")
         .ok_or_else(|| {
             "trait duration requires a canonical 'second' unit declared before 'trait duration'"
                 .to_string()
@@ -1123,11 +1107,7 @@ impl TypeSpecification {
                             );
                         }
                     };
-                    if let Some(u) = units
-                        .0
-                        .iter_mut()
-                        .find(|u| u.name.eq_ignore_ascii_case(&unit_name))
-                    {
+                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
                         u.factor = crate::computation::rational::decimal_to_rational(value)
                             .map_err(|failure| failure.to_string())?;
                         u.derived_quantity_factors = derived_quantity_factors;
@@ -1287,11 +1267,7 @@ impl TypeSpecification {
                                 failure
                             )
                         })?;
-                    if let Some(u) = units
-                        .0
-                        .iter_mut()
-                        .find(|u| u.name.eq_ignore_ascii_case(&unit_name))
-                    {
+                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
                         u.value = value;
                     } else {
                         units.0.push(RatioUnit {
@@ -1304,8 +1280,7 @@ impl TypeSpecification {
                     }
                 }
                 TypeConstraintCommand::Minimum => {
-                    let canonical =
-                        ratio_bound_to_canonical_rational(args, "minimum", units, type_name)?;
+                    let canonical = ratio_bound_to_canonical_rational(args, "minimum", units)?;
                     sync_ratio_units_from_canonical(
                         units,
                         &canonical,
@@ -1314,8 +1289,7 @@ impl TypeSpecification {
                     *minimum = Some(canonical);
                 }
                 TypeConstraintCommand::Maximum => {
-                    let canonical =
-                        ratio_bound_to_canonical_rational(args, "maximum", units, type_name)?;
+                    let canonical = ratio_bound_to_canonical_rational(args, "maximum", units)?;
                     sync_ratio_units_from_canonical(
                         units,
                         &canonical,
@@ -1377,11 +1351,7 @@ impl TypeSpecification {
                         };
                         let value = crate::computation::rational::decimal_to_rational(value_dec)
                         .map_err(|e| format!("ratio unit value is not exactly representable as a rational: {e}"))?;
-                        if let Some(u) = units
-                            .0
-                            .iter_mut()
-                            .find(|u| u.name.eq_ignore_ascii_case(&unit_name))
-                        {
+                        if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
                             u.value = value;
                         } else {
                             units.0.push(RatioUnit {
@@ -1651,11 +1621,7 @@ impl TypeSpecification {
                             );
                         }
                     };
-                    if let Some(u) = units
-                        .0
-                        .iter_mut()
-                        .find(|u| u.name.eq_ignore_ascii_case(&unit_name))
-                    {
+                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
                         u.factor = crate::computation::rational::decimal_to_rational(value)
                             .map_err(|failure| failure.to_string())?;
                         u.derived_quantity_factors = derived_quantity_factors;
@@ -3006,6 +2972,8 @@ impl LemmaType {
     ///
     /// Used by planning (`as` on typed quantity operands) and evaluation API rule-result conversion.
     pub fn validate_quantity_result_unit(&self, target_unit: &str) -> Result<(), String> {
+        let target_unit =
+            crate::parsing::ast::ascii_lowercase_logical_name(target_unit.to_string());
         let units = match &self.specifications {
             TypeSpecification::Quantity { units, .. } => units,
             _ => {
@@ -3023,18 +2991,7 @@ impl LemmaType {
                 target_unit
             ));
         }
-        let valid: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
-        let Some(matched) = units
-            .iter()
-            .find(|unit| unit.name.eq_ignore_ascii_case(target_unit))
-        else {
-            return Err(format!(
-                "Cannot convert {} to quantity unit '{}'. Valid units: {}",
-                self.name(),
-                target_unit,
-                valid.join(", ")
-            ));
-        };
+        let matched = units.get(&target_unit)?;
         if crate::computation::rational::rational_is_zero(&matched.factor) {
             return Err(format!(
                 "Unit '{}' has a zero conversion factor in quantity type {}.",
@@ -3046,6 +3003,8 @@ impl LemmaType {
     }
 
     fn validate_ratio_result_unit(&self, target_unit: &str) -> Result<(), String> {
+        let target_unit =
+            crate::parsing::ast::ascii_lowercase_logical_name(target_unit.to_string());
         let units = match &self.specifications {
             TypeSpecification::Ratio { units, .. } => units,
             _ => {
@@ -3056,19 +3015,7 @@ impl LemmaType {
                 ));
             }
         };
-        let valid: Vec<&str> = units.0.iter().map(|unit| unit.name.as_str()).collect();
-        let Some(matched) = units
-            .0
-            .iter()
-            .find(|unit| unit.name.eq_ignore_ascii_case(target_unit))
-        else {
-            return Err(format!(
-                "Cannot convert {} to ratio unit '{}'. Valid units: {}",
-                self.name(),
-                target_unit,
-                valid.join(", ")
-            ));
-        };
+        let matched = units.get(&target_unit)?;
         if crate::computation::rational::rational_is_zero(&matched.value) {
             return Err(format!(
                 "Unit '{}' has a zero conversion value in ratio type {}.",
@@ -3182,12 +3129,9 @@ impl LemmaType {
                 self.name()
             ),
         };
-        match units
-            .iter()
-            .find(|u| u.name.eq_ignore_ascii_case(unit_name))
-        {
-            Some(QuantityUnit { factor, .. }) => factor,
-            None => {
+        match units.get(unit_name) {
+            Ok(QuantityUnit { factor, .. }) => factor,
+            Err(_) => {
                 let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
                 unreachable!(
                     "BUG: unknown unit '{}' for quantity type {} (valid: {}); planning must reject invalid conversions with Error",
@@ -3210,13 +3154,9 @@ impl LemmaType {
                 self.name()
             ),
         };
-        match units
-            .0
-            .iter()
-            .find(|u| u.name.eq_ignore_ascii_case(unit_name))
-        {
-            Some(RatioUnit { value, .. }) => value,
-            None => {
+        match units.get(unit_name) {
+            Ok(RatioUnit { value, .. }) => value,
+            Err(_) => {
                 let valid: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
                 unreachable!(
                     "BUG: unknown unit '{}' for ratio type {} (valid: {}); planning must reject invalid conversions with Error",
@@ -3698,27 +3638,14 @@ pub fn number_with_unit_to_value_kind(
     match &lemma_type.specifications {
         TypeSpecification::Ratio { units, .. } => {
             use crate::computation::rational::{checked_div, decimal_to_rational};
-            let unit = units
-                .iter()
-                .find(|u| u.name.eq_ignore_ascii_case(unit_name))
-                .ok_or_else(|| {
-                    format!(
-                        "Unit '{unit_name}' is not defined on ratio type '{}'. Valid units: {}.",
-                        lemma_type.name(),
-                        units
-                            .iter()
-                            .map(|u| u.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })?;
+            let unit = units.get(unit_name)?;
             let magnitude_rational = decimal_to_rational(magnitude)
                 .map_err(|failure| format!("ratio literal failed rational lift: {failure}"))?;
             let canonical_rational = checked_div(&magnitude_rational, &unit.value)
                 .map_err(|failure| format!("ratio literal: unit conversion failed: {failure}"))?;
             Ok(ValueKind::Ratio(
                 canonical_rational,
-                Some(unit_name.to_string()),
+                Some(unit.name.clone()),
             ))
         }
         TypeSpecification::Quantity { .. } => Ok(ValueKind::Quantity(
@@ -3743,26 +3670,14 @@ pub fn parser_value_to_value_kind(
     match (value, type_spec) {
         (Value::NumberWithUnit(magnitude, unit_name), TypeSpecification::Ratio { units, .. }) => {
             use crate::computation::rational::{checked_div, decimal_to_rational};
-            let unit = units
-                .iter()
-                .find(|u| u.name.eq_ignore_ascii_case(unit_name))
-                .ok_or_else(|| {
-                    format!(
-                        "Unit '{unit_name}' is not defined on this ratio type. Valid units: {}.",
-                        units
-                            .iter()
-                            .map(|u| u.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                })?;
+            let unit = units.get(unit_name.as_str())?;
             let magnitude_rational = decimal_to_rational(*magnitude)
                 .map_err(|failure| format!("ratio literal failed rational lift: {failure}"))?;
             let canonical_rational = checked_div(&magnitude_rational, &unit.value)
                 .map_err(|failure| format!("ratio literal: unit conversion failed: {failure}"))?;
             Ok(ValueKind::Ratio(
                 canonical_rational,
-                Some(unit_name.clone()),
+                Some(unit.name.clone()),
             ))
         }
         (Value::NumberWithUnit(magnitude, unit_name), TypeSpecification::Quantity { .. }) => {

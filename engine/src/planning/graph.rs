@@ -261,7 +261,7 @@ impl Graph {
                 Ok(out)
             }
             (TypeSpecification::Quantity { units, .. }, ValueKind::Quantity(_, unit_name, _)) => {
-                if !units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
+                if !units.iter().any(|u| u.name == *unit_name) {
                     return Err(format!(
                         "value {} cannot be used as type {}: unknown unit '{}'",
                         lit,
@@ -275,7 +275,7 @@ impl Graph {
             }
             (TypeSpecification::Ratio { units, .. }, ValueKind::Ratio(_, unit_name)) => {
                 if let Some(unit_name) = unit_name {
-                    if !units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name)) {
+                    if !units.iter().any(|u| u.name == *unit_name) {
                         return Err(format!(
                             "value {} cannot be used as type {}: unknown unit '{}'",
                             lit,
@@ -877,6 +877,15 @@ struct GraphBuilder<'a> {
     errors: Vec<Error>,
     main_spec: Arc<LemmaSpec>,
     main_repository: Arc<ast::LemmaRepository>,
+}
+
+struct RuleExpressionConversion<'a> {
+    spec: &'a Arc<LemmaSpec>,
+    data_map: &'a HashMap<String, &'a LemmaData>,
+    segments: &'a [PathSegment],
+    rule_names: &'a HashSet<&'a str>,
+    effective: &'a EffectiveDate,
+    depends_on_rules: &'a mut BTreeSet<RulePath>,
 }
 
 fn reference_error(main_spec: &Arc<LemmaSpec>, source: &Source, message: String) -> Error {
@@ -2423,16 +2432,18 @@ impl<'a> GraphBuilder<'a> {
 
         let mut branches = Vec::new();
         let mut depends_on_rules = BTreeSet::new();
-
-        let converted_expression = match self.convert_expression_and_extract_dependencies(
-            &rule.expression,
-            current_spec_arc,
+        let mut convert_ctx = RuleExpressionConversion {
+            spec: current_spec_arc,
             data_map,
-            current_segments,
-            &mut depends_on_rules,
+            segments: current_segments,
             rule_names,
             effective,
-        ) {
+            depends_on_rules: &mut depends_on_rules,
+        };
+
+        let converted_expression = match self
+            .convert_expression_and_extract_dependencies(&rule.expression, &mut convert_ctx)
+        {
             Some(expr) => expr,
             None => return,
         };
@@ -2441,24 +2452,14 @@ impl<'a> GraphBuilder<'a> {
         for unless_clause in &rule.unless_clauses {
             let converted_condition = match self.convert_expression_and_extract_dependencies(
                 &unless_clause.condition,
-                current_spec_arc,
-                data_map,
-                current_segments,
-                &mut depends_on_rules,
-                rule_names,
-                effective,
+                &mut convert_ctx,
             ) {
                 Some(expr) => expr,
                 None => return,
             };
             let converted_result = match self.convert_expression_and_extract_dependencies(
                 &unless_clause.result,
-                current_spec_arc,
-                data_map,
-                current_segments,
-                &mut depends_on_rules,
-                rule_names,
-                effective,
+                &mut convert_ctx,
             ) {
                 Some(expr) => expr,
                 None => return,
@@ -2478,50 +2479,22 @@ impl<'a> GraphBuilder<'a> {
     }
 
     /// Converts left and right expressions and accumulates rule dependencies.
-    #[allow(clippy::too_many_arguments)]
     fn convert_binary_operands(
         &mut self,
         left: &ast::Expression,
         right: &ast::Expression,
-        current_spec_arc: &Arc<LemmaSpec>,
-        data_map: &HashMap<String, &LemmaData>,
-        current_segments: &[PathSegment],
-        depends_on_rules: &mut BTreeSet<RulePath>,
-        rule_names: &HashSet<&str>,
-        effective: &EffectiveDate,
+        ctx: &mut RuleExpressionConversion<'_>,
     ) -> Option<(Expression, Expression)> {
-        let converted_left = self.convert_expression_and_extract_dependencies(
-            left,
-            current_spec_arc,
-            data_map,
-            current_segments,
-            depends_on_rules,
-            rule_names,
-            effective,
-        )?;
-        let converted_right = self.convert_expression_and_extract_dependencies(
-            right,
-            current_spec_arc,
-            data_map,
-            current_segments,
-            depends_on_rules,
-            rule_names,
-            effective,
-        )?;
+        let converted_left = self.convert_expression_and_extract_dependencies(left, ctx)?;
+        let converted_right = self.convert_expression_and_extract_dependencies(right, ctx)?;
         Some((converted_left, converted_right))
     }
 
     /// Converts an AST expression into a resolved expression and records any rule references.
-    #[allow(clippy::too_many_arguments)]
     fn convert_expression_and_extract_dependencies(
         &mut self,
         expr: &ast::Expression,
-        current_spec_arc: &Arc<LemmaSpec>,
-        data_map: &HashMap<String, &LemmaData>,
-        current_segments: &[PathSegment],
-        depends_on_rules: &mut BTreeSet<RulePath>,
-        rule_names: &HashSet<&str>,
-        effective: &EffectiveDate,
+        ctx: &mut RuleExpressionConversion<'_>,
     ) -> Option<Expression> {
         let expr_src = expr
             .source_location
@@ -2531,9 +2504,10 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::Reference(r) => {
                 let expr_source = expr_src;
                 let (segments, target_arc_opt) = if r.segments.is_empty() {
-                    (current_segments.to_vec(), None)
+                    (ctx.segments.to_vec(), None)
                 } else {
-                    let data_map_owned: HashMap<String, LemmaData> = data_map
+                    let data_map_owned: HashMap<String, LemmaData> = ctx
+                        .data_map
                         .iter()
                         .map(|(k, v)| (k.clone(), (*v).clone()))
                         .collect();
@@ -2541,17 +2515,17 @@ impl<'a> GraphBuilder<'a> {
                         &r.segments,
                         expr_source,
                         data_map_owned,
-                        current_segments.to_vec(),
-                        Arc::clone(current_spec_arc),
-                        effective,
+                        ctx.segments.to_vec(),
+                        Arc::clone(ctx.spec),
+                        ctx.effective,
                     )?;
                     (segs, Some(arc))
                 };
 
                 let (is_data, is_rule, target_spec_name_opt) = match &target_arc_opt {
                     None => {
-                        let is_data = data_map.contains_key(&r.name);
-                        let is_rule = rule_names.contains(r.name.as_str());
+                        let is_data = ctx.data_map.contains_key(&r.name);
+                        let is_rule = ctx.rule_names.contains(r.name.as_str());
                         (is_data, is_rule, None)
                     }
                     Some(target_arc) => {
@@ -2592,7 +2566,7 @@ impl<'a> GraphBuilder<'a> {
                         segments,
                         rule: r.name.clone(),
                     };
-                    depends_on_rules.insert(rule_path.clone());
+                    ctx.depends_on_rules.insert(rule_path.clone());
                     return Some(Expression {
                         kind: ExpressionKind::RulePath(rule_path),
                         source_location: expr.source_location.clone(),
@@ -2607,16 +2581,7 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::LogicalAnd(left, right) => {
-                let (l, r) = self.convert_binary_operands(
-                    left,
-                    right,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let (l, r) = self.convert_binary_operands(left, right, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
                     source_location: expr.source_location.clone(),
@@ -2624,16 +2589,7 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::Arithmetic(left, op, right) => {
-                let (l, r) = self.convert_binary_operands(
-                    left,
-                    right,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let (l, r) = self.convert_binary_operands(left, right, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
                     source_location: expr.source_location.clone(),
@@ -2641,16 +2597,7 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::Comparison(left, op, right) => {
-                let (l, r) = self.convert_binary_operands(
-                    left,
-                    right,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let (l, r) = self.convert_binary_operands(left, right, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
                     source_location: expr.source_location.clone(),
@@ -2658,20 +2605,13 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::UnitConversion(value, target) => {
-                let converted_value = self.convert_expression_and_extract_dependencies(
-                    value,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted_value =
+                    self.convert_expression_and_extract_dependencies(value, ctx)?;
 
                 let resolved_spec_types = self
                     .local_types
                     .iter()
-                    .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                    .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
                     .map(|(_, _, t)| t);
                 let unit_index = resolved_spec_types.map(|dt| &dt.unit_index);
                 let semantic_target = match conversion_target_to_semantic(target, unit_index) {
@@ -2706,15 +2646,8 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::LogicalNegation(operand, neg_type) => {
-                let converted_operand = self.convert_expression_and_extract_dependencies(
-                    operand,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted_operand =
+                    self.convert_expression_and_extract_dependencies(operand, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::LogicalNegation(
                         Arc::new(converted_operand),
@@ -2725,15 +2658,8 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::MathematicalComputation(op, operand) => {
-                let converted_operand = self.convert_expression_and_extract_dependencies(
-                    operand,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted_operand =
+                    self.convert_expression_and_extract_dependencies(operand, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::MathematicalComputation(
                         op.clone(),
@@ -2749,7 +2675,7 @@ impl<'a> GraphBuilder<'a> {
                         let Some(lt) = self
                             .local_types
                             .iter()
-                            .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                            .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
                             .map(|(_, _, t)| t)
                             .and_then(|dt| dt.unit_index.get(unit))
                         else {
@@ -2782,7 +2708,7 @@ impl<'a> GraphBuilder<'a> {
                         match self
                             .local_types
                             .iter()
-                            .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                            .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
                             .map(|(_, _, t)| t)
                             .and_then(|dt| dt.unit_index.get(unit))
                         {
@@ -2826,15 +2752,7 @@ impl<'a> GraphBuilder<'a> {
             }),
 
             ast::ExpressionKind::ResultIsVeto(operand) => {
-                let converted = self.convert_expression_and_extract_dependencies(
-                    operand,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted = self.convert_expression_and_extract_dependencies(operand, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::ResultIsVeto(Arc::new(converted)),
                     source_location: expr.source_location.clone(),
@@ -2847,15 +2765,8 @@ impl<'a> GraphBuilder<'a> {
             }),
 
             ast::ExpressionKind::DateRelative(kind, date_expr) => {
-                let converted_date = self.convert_expression_and_extract_dependencies(
-                    date_expr,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted_date =
+                    self.convert_expression_and_extract_dependencies(date_expr, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::DateRelative(*kind, Arc::new(converted_date)),
                     source_location: expr.source_location.clone(),
@@ -2863,15 +2774,8 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::DateCalendar(kind, unit, date_expr) => {
-                let converted_date = self.convert_expression_and_extract_dependencies(
-                    date_expr,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted_date =
+                    self.convert_expression_and_extract_dependencies(date_expr, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::DateCalendar(*kind, *unit, Arc::new(converted_date)),
                     source_location: expr.source_location.clone(),
@@ -2879,16 +2783,7 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::RangeLiteral(left, right) => {
-                let (l, r) = self.convert_binary_operands(
-                    left,
-                    right,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let (l, r) = self.convert_binary_operands(left, right, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::RangeLiteral(Arc::new(l), Arc::new(r)),
                     source_location: expr.source_location.clone(),
@@ -2896,15 +2791,8 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::PastFutureRange(kind, offset_expr) => {
-                let converted_offset = self.convert_expression_and_extract_dependencies(
-                    offset_expr,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let converted_offset =
+                    self.convert_expression_and_extract_dependencies(offset_expr, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::PastFutureRange(*kind, Arc::new(converted_offset)),
                     source_location: expr.source_location.clone(),
@@ -2912,16 +2800,8 @@ impl<'a> GraphBuilder<'a> {
             }
 
             ast::ExpressionKind::RangeContainment(value, range) => {
-                let (converted_value, converted_range) = self.convert_binary_operands(
-                    value,
-                    range,
-                    current_spec_arc,
-                    data_map,
-                    current_segments,
-                    depends_on_rules,
-                    rule_names,
-                    effective,
-                )?;
+                let (converted_value, converted_range) =
+                    self.convert_binary_operands(value, range, ctx)?;
                 Some(Expression {
                     kind: ExpressionKind::RangeContainment(
                         Arc::new(converted_value),
@@ -3531,12 +3411,11 @@ fn quantity_range_matches_quantity(range_type: &LemmaType, quantity_type: &Lemma
             {
                 true
             } else if quantity_decomposition.is_empty() {
-                range_units == quantity_units
-                    && range_canonical_unit.eq_ignore_ascii_case(quantity_canonical_unit)
+                range_units == quantity_units && range_canonical_unit == quantity_canonical_unit
             } else {
                 range_units == quantity_units
                     && range_decomposition == quantity_decomposition
-                    && range_canonical_unit.eq_ignore_ascii_case(quantity_canonical_unit)
+                    && range_canonical_unit == quantity_canonical_unit
             }
         }
         _ => false,
@@ -4686,10 +4565,7 @@ fn check_range_span_unit_conversion(
                 }
                 _ => unreachable!("BUG: is_ratio_range without RatioRange spec"),
             };
-            if valid
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(unit_name))
-            {
+            if valid.iter().any(|name| *name == unit_name) {
                 Ok(())
             } else {
                 Err(vec![engine_error_at_graph(
@@ -4911,7 +4787,7 @@ fn check_unit_conversion_types(
             let unit_check: Option<(bool, Vec<&str>)> = match &source_type.specifications {
                 TypeSpecification::Ratio { units, .. } => {
                     let valid: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
-                    let found = units.iter().any(|u| u.name.eq_ignore_ascii_case(unit_name));
+                    let found = units.iter().any(|u| u.name == *unit_name);
                     Some((found, valid))
                 }
                 _ => None,
@@ -8957,14 +8833,10 @@ pub fn validate_type_specifications(
                         ));
                     }
 
-                    // Validate unit names are unique within the type (case-insensitive)
-                    let lower_name = unit.name.to_lowercase();
-                    if seen_names
-                        .iter()
-                        .any(|seen| seen.to_lowercase() == lower_name)
-                    {
+                    // Validate unit names are unique within the type
+                    if seen_names.contains(&unit.name) {
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
+                            format!("Type '{}' has duplicate unit name '{}'. Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
                             spec_context.clone(),
@@ -9148,14 +9020,10 @@ pub fn validate_type_specifications(
                         ));
                     }
 
-                    // Validate unit names are unique within the type (case-insensitive)
-                    let lower_name = unit.name.to_lowercase();
-                    if seen_names
-                        .iter()
-                        .any(|seen| seen.to_lowercase() == lower_name)
-                    {
+                    // Validate unit names are unique within the type
+                    if seen_names.contains(&unit.name) {
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' has duplicate unit name '{}' (case-insensitive). Unit names must be unique within a type.", type_name, unit.name),
+                            format!("Type '{}' has duplicate unit name '{}'. Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
                             spec_context.clone(),

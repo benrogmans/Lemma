@@ -1,7 +1,8 @@
-mod support;
+#[path = "support/get_rule_value.rs"]
+mod get_rule_value;
 
+use get_rule_value::get_rule_value;
 use lemma::Engine;
-use support::get_rule_value;
 
 #[test]
 fn test_leap_year_feb_29_valid() {

@@ -16,6 +16,7 @@ Lemma is a declarative language for expressing rules, data, and business logic t
 - [Composing specs](spec_composability.md) -- `uses`, temporal versions, pins, planning checks
 - [CLI Reference](CLI.md) -- all commands and flags
 - [Examples](examples/) -- example specs
+- [LLM guide (llms.txt)](llms.txt) -- guide for AI agents authoring Lemma from business logic
 - [Registry](registry.md) -- shared specs and `@` references
 - [Veto Semantics](veto_semantics.md) -- when rules produce no value
 - [Numeric precision](numeric_precision.md) -- exact rational arithmetic and when decimal is used

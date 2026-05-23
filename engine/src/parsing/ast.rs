@@ -9,6 +9,14 @@
 //! [`LemmaRule`]/[`LemmaSpec`] use canonical Lemma source for literals via
 //! [`AsLemmaSource`] around [`Value`]. Wrap [`MetaValue`]/[`DataValue`]
 //! in [`AsLemmaSource`] when emitting round-trippable source (e.g. the formatter).
+//!
+//! Logical identifier names (spec, data, rule, unit, reference path segments) are stored
+//! as ASCII lowercase after parse. String literals and text option values are unchanged.
+
+/// Fold a logical identifier name to canonical ASCII lowercase.
+pub(crate) fn ascii_lowercase_logical_name(name: String) -> String {
+    name.to_ascii_lowercase()
+}
 
 /// Span representing a location in source code
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -161,7 +169,7 @@ impl LemmaRepository {
     #[must_use]
     pub fn new(name: Option<String>) -> Self {
         Self {
-            name,
+            name: name.map(ascii_lowercase_logical_name),
             dependency: None,
             start_line: 1,
             source_type: None,
@@ -232,7 +240,9 @@ pub struct RepositoryQualifier {
 impl RepositoryQualifier {
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into() }
+        Self {
+            name: ascii_lowercase_logical_name(name.into()),
+        }
     }
 
     /// Whether this repository qualifier refers to a registry (e.g., starts with `@`).
@@ -481,7 +491,7 @@ impl Reference {
     pub fn local(name: String) -> Self {
         Self {
             segments: Vec::new(),
-            name,
+            name: ascii_lowercase_logical_name(name),
         }
     }
 
@@ -494,8 +504,11 @@ impl Reference {
             }
         } else {
             // Safe: path is non-empty.
-            let name = path[path.len() - 1].clone();
-            let segments = path[..path.len() - 1].to_vec();
+            let name = ascii_lowercase_logical_name(path[path.len() - 1].clone());
+            let segments = path[..path.len() - 1]
+                .iter()
+                .map(|segment| ascii_lowercase_logical_name(segment.clone()))
+                .collect();
             Self { segments, name }
         }
     }
@@ -650,7 +663,7 @@ impl SpecRef {
     /// Same-repository reference: resolution uses the consumer's repository.
     pub fn same_repository(name: impl Into<String>) -> Self {
         Self {
-            name: name.into(),
+            name: ascii_lowercase_logical_name(name.into()),
             repository: None,
             effective: None,
             repository_span: None,
@@ -661,7 +674,7 @@ impl SpecRef {
     /// Cross-repository reference with an explicit repository qualifier.
     pub fn cross_repository(name: impl Into<String>, qualifier: RepositoryQualifier) -> Self {
         Self {
-            name: name.into(),
+            name: ascii_lowercase_logical_name(name.into()),
             repository: Some(qualifier),
             effective: None,
             repository_span: None,
@@ -989,7 +1002,7 @@ impl LemmaSpec {
     #[must_use]
     pub fn new(name: String) -> Self {
         Self {
-            name,
+            name: ascii_lowercase_logical_name(name),
             effective_from: EffectiveDate::Origin,
             source_type: None,
             start_line: 1,
@@ -1582,6 +1595,188 @@ impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
                 FillRhs::Reference { target } => write!(f, "{target}"),
             },
         }
+    }
+}
+
+pub(crate) fn canonicalize_value(value: &mut Value) {
+    if let Value::NumberWithUnit(_, unit) = value {
+        *unit = ascii_lowercase_logical_name(std::mem::take(unit));
+    }
+}
+
+pub(crate) fn canonicalize_reference(reference: &mut Reference) {
+    for segment in &mut reference.segments {
+        *segment = ascii_lowercase_logical_name(std::mem::take(segment));
+    }
+    reference.name = ascii_lowercase_logical_name(std::mem::take(&mut reference.name));
+}
+
+pub(crate) fn canonicalize_spec_ref(spec_ref: &mut SpecRef) {
+    spec_ref.name = ascii_lowercase_logical_name(std::mem::take(&mut spec_ref.name));
+    if let Some(qualifier) = spec_ref.repository.as_mut() {
+        qualifier.name = ascii_lowercase_logical_name(std::mem::take(&mut qualifier.name));
+    }
+}
+
+pub(crate) fn canonicalize_parent_type(parent: &mut ParentType) {
+    match parent {
+        ParentType::Custom { name } => {
+            *name = ascii_lowercase_logical_name(std::mem::take(name));
+        }
+        ParentType::Qualified { spec_alias, inner } => {
+            *spec_alias = ascii_lowercase_logical_name(std::mem::take(spec_alias));
+            canonicalize_parent_type(inner);
+        }
+        ParentType::Primitive { .. } => {}
+    }
+}
+
+pub(crate) fn canonicalize_unit_factor(factor: &mut UnitFactor) {
+    factor.quantity_ref = ascii_lowercase_logical_name(std::mem::take(&mut factor.quantity_ref));
+}
+
+pub(crate) fn canonicalize_unit_arg(unit_arg: &mut UnitArg) {
+    if let UnitArg::Expr(_, factors) = unit_arg {
+        for factor in factors {
+            canonicalize_unit_factor(factor);
+        }
+    }
+}
+
+pub(crate) fn canonicalize_command_arg(command_arg: &mut CommandArg) {
+    match command_arg {
+        CommandArg::Literal(value) => canonicalize_value(value),
+        CommandArg::Label(label) => {
+            *label = ascii_lowercase_logical_name(std::mem::take(label));
+        }
+        CommandArg::UnitExpr(unit_arg) => canonicalize_unit_arg(unit_arg),
+    }
+}
+
+pub(crate) fn canonicalize_constraints(constraints: &mut [Constraint]) {
+    for (_, args) in constraints {
+        for arg in args {
+            canonicalize_command_arg(arg);
+        }
+    }
+}
+
+pub(crate) fn canonicalize_conversion_target(target: &mut ConversionTarget) {
+    if let ConversionTarget::Unit(unit) = target {
+        *unit = ascii_lowercase_logical_name(std::mem::take(unit));
+    }
+}
+
+pub(crate) fn canonicalize_expression(expression: &mut Expression) {
+    match &mut expression.kind {
+        ExpressionKind::Literal(value) => canonicalize_value(value),
+        ExpressionKind::Reference(reference) => canonicalize_reference(reference),
+        ExpressionKind::Now => {}
+        ExpressionKind::DateRelative(_, expression) => {
+            canonicalize_expression(Arc::make_mut(expression));
+        }
+        ExpressionKind::DateCalendar(_, _, expression) => {
+            canonicalize_expression(Arc::make_mut(expression));
+        }
+        ExpressionKind::RangeLiteral(left, right) => {
+            canonicalize_expression(Arc::make_mut(left));
+            canonicalize_expression(Arc::make_mut(right));
+        }
+        ExpressionKind::PastFutureRange(_, expression) => {
+            canonicalize_expression(Arc::make_mut(expression));
+        }
+        ExpressionKind::RangeContainment(value, range) => {
+            canonicalize_expression(Arc::make_mut(value));
+            canonicalize_expression(Arc::make_mut(range));
+        }
+        ExpressionKind::LogicalAnd(left, right) => {
+            canonicalize_expression(Arc::make_mut(left));
+            canonicalize_expression(Arc::make_mut(right));
+        }
+        ExpressionKind::Arithmetic(left, _, right) => {
+            canonicalize_expression(Arc::make_mut(left));
+            canonicalize_expression(Arc::make_mut(right));
+        }
+        ExpressionKind::Comparison(left, _, right) => {
+            canonicalize_expression(Arc::make_mut(left));
+            canonicalize_expression(Arc::make_mut(right));
+        }
+        ExpressionKind::UnitConversion(expression, target) => {
+            canonicalize_expression(Arc::make_mut(expression));
+            canonicalize_conversion_target(target);
+        }
+        ExpressionKind::LogicalNegation(expression, _) => {
+            canonicalize_expression(Arc::make_mut(expression));
+        }
+        ExpressionKind::MathematicalComputation(_, expression) => {
+            canonicalize_expression(Arc::make_mut(expression));
+        }
+        ExpressionKind::Veto(_) => {}
+        ExpressionKind::ResultIsVeto(expression) => {
+            canonicalize_expression(Arc::make_mut(expression));
+        }
+    }
+}
+
+pub(crate) fn canonicalize_unless_clause(unless_clause: &mut UnlessClause) {
+    canonicalize_expression(&mut unless_clause.condition);
+    canonicalize_expression(&mut unless_clause.result);
+}
+
+pub(crate) fn canonicalize_data_value(data_value: &mut DataValue) {
+    match data_value {
+        DataValue::Definition {
+            base,
+            constraints,
+            value,
+        } => {
+            if let Some(base) = base {
+                canonicalize_parent_type(base);
+            }
+            if let Some(constraints) = constraints {
+                canonicalize_constraints(constraints);
+            }
+            if let Some(value) = value {
+                canonicalize_value(value);
+            }
+        }
+        DataValue::Import(spec_ref) => canonicalize_spec_ref(spec_ref),
+        DataValue::Fill(fill_rhs) => match fill_rhs {
+            FillRhs::Literal(value) => canonicalize_value(value),
+            FillRhs::Reference { target } => canonicalize_reference(target),
+        },
+    }
+}
+
+pub(crate) fn canonicalize_lemma_data(data: &mut LemmaData) {
+    canonicalize_reference(&mut data.reference);
+    canonicalize_data_value(&mut data.value);
+}
+
+pub(crate) fn canonicalize_lemma_rule(rule: &mut LemmaRule) {
+    rule.name = ascii_lowercase_logical_name(std::mem::take(&mut rule.name));
+    canonicalize_expression(&mut rule.expression);
+    for unless_clause in &mut rule.unless_clauses {
+        canonicalize_unless_clause(unless_clause);
+    }
+}
+
+pub(crate) fn canonicalize_lemma_spec(spec: &mut LemmaSpec) {
+    spec.name = ascii_lowercase_logical_name(std::mem::take(&mut spec.name));
+    for meta in &mut spec.meta_fields {
+        meta.key = ascii_lowercase_logical_name(std::mem::take(&mut meta.key));
+    }
+    for data in &mut spec.data {
+        canonicalize_lemma_data(data);
+    }
+    for rule in &mut spec.rules {
+        canonicalize_lemma_rule(rule);
+    }
+}
+
+pub(crate) fn canonicalize_repository(repository: &mut LemmaRepository) {
+    if let Some(name) = repository.name.take() {
+        repository.name = Some(ascii_lowercase_logical_name(name));
     }
 }
 

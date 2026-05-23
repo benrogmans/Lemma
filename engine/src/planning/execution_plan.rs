@@ -627,14 +627,18 @@ impl ExecutionPlan {
 
     /// Look up a data by its input key (e.g., "age" or "rules.base_price").
     pub fn get_data_path_by_str(&self, name: &str) -> Option<&DataPath> {
-        self.data.keys().find(|path| path.input_key() == name)
+        let canonical_name = crate::parsing::ast::ascii_lowercase_logical_name(name.to_string());
+        self.data
+            .keys()
+            .find(|path| path.input_key() == canonical_name)
     }
 
     /// Look up a local rule by its name (rule in the main spec).
     pub fn get_rule(&self, name: &str) -> Option<&ExecutableRule> {
+        let canonical_name = crate::parsing::ast::ascii_lowercase_logical_name(name.to_string());
         self.rules
             .iter()
-            .find(|r| r.name == name && r.path.segments.is_empty())
+            .find(|r| r.name == canonical_name && r.path.segments.is_empty())
     }
 
     /// Look up a rule by its full path.

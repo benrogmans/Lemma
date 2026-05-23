@@ -20,7 +20,9 @@ impl EvaluationRequest {
     ) -> Result<Self, Error> {
         let mut rule_result_units = HashMap::new();
         for (rule_name, unit_raw) in strings {
-            if rule_name.trim().is_empty() {
+            let rule_name =
+                crate::parsing::ast::ascii_lowercase_logical_name(rule_name.trim().to_string());
+            if rule_name.is_empty() {
                 return Err(Error::request(
                     "Rule name in conversion map cannot be empty",
                     None::<String>,
@@ -104,7 +106,8 @@ pub fn parse_rule_result_conversion_strings(
                 None::<String>,
             )
         })?;
-        let rule_name = rule_name.trim();
+        let rule_name =
+            crate::parsing::ast::ascii_lowercase_logical_name(rule_name.trim().to_string());
         let unit = unit.trim();
         if rule_name.is_empty() || unit.is_empty() {
             return Err(Error::request(
@@ -115,7 +118,7 @@ pub fn parse_rule_result_conversion_strings(
                 None::<String>,
             ));
         }
-        if out.contains_key(rule_name) {
+        if out.contains_key(&rule_name) {
             return Err(Error::request(
                 format!("Duplicate conversion for rule '{rule_name}'"),
                 None::<String>,

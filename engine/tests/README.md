@@ -278,7 +278,7 @@ See [cli/tests/README.md](../../cli/tests/README.md): `run`, `mcp`, `server`, `e
 
 ### Shared integration helpers
 
-[support/mod.rs](support/mod.rs) — `get_rule_value`, `eval_rule_bool`, `make_effective*` (import with `mod support;`). Used by `datetime_edge_cases`, `datetime_sugar`; extend to other datetime cluster files when editing them.
+[support/](support/) — per-file helpers (`get_rule_value`, `eval_rule_bool`, `make_effective*`). Each integration test imports only the files it needs via `#[path = "support/..."]`.
 
 ### Implementation report
 

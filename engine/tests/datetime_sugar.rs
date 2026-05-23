@@ -1,9 +1,13 @@
-mod support;
+#[path = "support/effective.rs"]
+mod effective;
+#[path = "support/eval_rule_bool.rs"]
+mod eval_rule_bool;
 
+use effective::{make_effective, make_effective_tz};
+use eval_rule_bool::eval_rule_bool;
 use lemma::parsing::ast::DateTimeValue;
 use lemma::{Engine, ValueKind};
 use std::collections::HashMap;
-use support::{eval_rule_bool, make_effective, make_effective_tz};
 
 fn eval_rule_date(
     engine: &Engine,

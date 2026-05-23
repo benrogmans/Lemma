@@ -285,12 +285,10 @@ rule r: m.l.v
     assert_eq!(rule_value(&resp, "r"), "123");
 }
 
-// ─── Override key casing: exact-match only ───────────────────────────
+// ─── Override key casing: case-insensitive API match ─────────────────
 
 #[test]
-fn user_override_key_is_case_sensitive() {
-    // `X` is not the same as `x`. Case-insensitive matching would be a
-    // bug — silently overriding the wrong field is dangerous.
+fn user_override_key_is_case_insensitive() {
     let code = r#"
 spec s
 data x: number -> default 1
@@ -301,16 +299,15 @@ rule r: x
     let mut data = HashMap::new();
     data.insert("X".to_string(), "99".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run(
-        None,
-        "s",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    );
-    assert!(
-        result.is_err(),
-        "uppercase 'X' must not match 'x'; engine silently accepted case-insensitive key"
-    );
+    let resp = engine
+        .run(
+            None,
+            "s",
+            Some(&now),
+            data,
+            false,
+            lemma::EvaluationRequest::default(),
+        )
+        .expect("evaluates");
+    assert_eq!(rule_value(&resp, "r"), "99");
 }
