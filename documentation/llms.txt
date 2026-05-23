@@ -1,0 +1,762 @@
+# Lemma
+
+> Lemma is a declarative business rule language. Translate natural-language policy into readable, deterministic `.lemma` specs. Lemma derives required inputs from rules — declare `data` with type constraints; do not invent runtime values.
+
+When a user describes business logic, your job is to produce Lemma source that humans can read and systems can evaluate. Prefer named pipeline rules over clever one-liners. Split unrelated policies into separate specs. Use `lemma schema` to verify which inputs a spec requires. For syntax not covered here, read the linked documentation.
+
+**Do not write inline comments.** Lemma has no `#`, `//`, or `--` comment syntax. Anything after `#` on a line is a parse error, not a comment. Do not annotate `data` or `rule` lines with trailing remarks.
+
+The **only** documentation allowed inside `.lemma` source is a **commentary** block: triple-quoted `"""..."""` as the **very next tokens** after the `spec` line — before `uses`, before `data`, before anything else. Nowhere else.
+
+**Mandatory spec opening order:**
+
+```
+spec <name> [<effective>]
+[""" commentary — optional, but if present must be HERE """]
+uses ...
+data ...
+rule ...
+```
+
+A common LLM mistake is putting commentary after `uses lemma si` or after the first `data` line. That is invalid and fails to parse. There is no `#`, `//`, or `--` comment syntax either. Use descriptive names for everything else. Put explanations for the user outside the code fence — never inside ` ```lemma ` blocks.
+
+---
+
+**Organization: spec → rule**
+
+Default assumption: one file, one implicit repository. Do not add `repo` blocks unless the user explicitly needs multi-namespace workspaces. Structure work as **spec → rule**.
+
+A **spec** is a namespace for `data` and `rules`. A **rule** is a named computed value. Reference other rules by name; the engine resolves whether a name is data or a rule. One file may contain multiple specs. Use hierarchical names when helpful: `spec employee/contract`. Add an effective date when law changes over time: `spec pricing 2026-01-01`. Optional **commentary** (`"""..."""`) is the sole in-source documentation mechanism. It must be the first thing after `spec <name> [<effective>]`, before any `uses`, `data`, or `rule` line.
+
+**Example A — minimal single-spec file**
+
+```lemma
+spec pricing 2026-01-01
+"""
+Pricing rules for bulk and member discounts.
+Commentary must follow the spec line; it cannot go anywhere else.
+"""
+
+data quantity:   number
+data base_price: 100
+data is_member:  false
+
+rule price_with_vat: base_price + 21%
+
+rule bulk_discount:
+  quantity >= 100 and price_with_vat > 500
+
+rule discount: 0%
+  unless quantity >= 10  then 10%
+  unless bulk_discount   then 15%
+  unless is_member       then 20%
+
+rule price_with_discount: base_price - discount
+```
+
+**Example B — multi-spec composition (same file)**
+
+```lemma
+spec base_config
+
+data standard_discount: 5%
+data tax_rate:          21%
+data base_price:        number -> minimum 0 -> default 100
+
+rule price_with_tax:   base_price * (1 + tax_rate)
+rule discounted_price: base_price * (1 - standard_discount)
+rule final_price:      base_price * (1 - standard_discount) * (1 + tax_rate)
+
+
+spec line_item
+
+data quantity: number -> minimum 0 -> default 10
+
+uses pricing: base_config
+
+rule line_total:   pricing.final_price * quantity
+rule has_discount: pricing.standard_discount > 0%
+
+
+spec simple_order
+
+uses line: line_item
+fill line.quantity: 100
+
+rule order_total:          line.line_total
+rule effective_unit_price: order_total / line.quantity
+```
+
+- `uses alias: target_spec` imports another spec in the same file.
+- Reference imported members as `alias.field` or `alias.rule_name`.
+- `fill alias.field: value` overrides a value from an imported spec. Do not use `data alias.field`.
+
+**LemmaBase — shared specs from the registry**
+
+Specs published on [LemmaBase.com](https://lemmabase.com) can be imported into your spec with `@` repository qualifiers. Search for existing libraries at [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (append your query, e.g. `?q=finance`).
+
+```lemma
+spec invoicing
+"""
+Invoice lines using a shared finance library from LemmaBase.
+"""
+
+uses fin: @lemma/std finance 2026-01-01
+
+data subtotal: 250 eur
+
+rule tax_amount: subtotal * fin.tax_rate
+```
+
+Forms:
+- `uses @user/repo spec_name` — import a registry spec (implicit alias = spec name)
+- `uses alias: @user/repo spec_name` — import with alias (`fin.field`, `fin.rule_name`)
+- `uses @user/repo spec_name 2026-01-01` — pin to an effective date
+
+Reference imported members through the alias: `fin.tax_rate`, `fin.Money`, etc. See [Registry](https://github.com/lemma/lemma/blob/main/documentation/registry.md) for fetch/resolution details.
+
+`repo` blocks namespace specs across bounded contexts (e.g. `repo accounting` / `repo billing`). Skip them in LLM-authored output unless the user asks. See [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/spec_composability.md) for cross-repo `uses` and temporal pins.
+
+---
+
+**Natural language → Lemma**
+
+User request: *"Library charges €0.25/day for regular books, €0.50 for reference, €1 for new releases. First offense gets 50% off. Grace period 3 days except new releases. Block checkout if fee exceeds €10."*
+
+Mapping:
+- book types → `data book_type` with `-> option` constraints
+- days overdue, first offense → `data` input slots
+- per-day rates → `rule daily_fee` with unless arms per book type
+- grace period → `rule is_in_grace_period`
+- fee calculation → `rule total_fee`, `rule final_fee` pipeline
+- checkout block → `rule can_checkout: yes` with `unless final_fee > 10 eur then no` (boolean, not veto)
+
+**Example C — library fees (full spec)**
+
+```lemma
+spec library_fees
+
+data money: quantity
+  -> decimals 2
+  -> unit eur 1.00
+  -> minimum 0 eur
+
+data book_kind: text
+  -> option "regular"
+  -> option "reference"
+  -> option "new_release"
+
+data book_type:        book_kind
+data is_first_offense: boolean
+data days_overdue: number
+  -> minimum 0
+
+rule daily_fee: 0 eur
+  unless book_type is "regular"     then 0.25 eur
+  unless book_type is "reference"   then 0.5 eur
+  unless book_type is "new_release" then 1 eur
+
+rule is_in_grace_period: days_overdue <= 3
+  unless book_type is "new_release" then no
+
+rule total_fee: days_overdue * daily_fee
+
+rule final_fee: total_fee
+  unless is_first_offense   then total_fee - 50%
+  unless is_in_grace_period then 0 eur
+
+rule can_checkout: yes
+  unless final_fee > 10 eur then no
+```
+
+---
+
+**Data: constraint definitions, not placeholders**
+
+`data` declares values rules may use. Constraints define validity. Type-only `data` (no literal value) is an input slot — Lemma and `lemma schema` determine what must be supplied at evaluation time. Use real domain values; never `"TODO"` or dummy placeholders.
+
+**Example D — typed data (coffee order)**
+
+```lemma
+spec coffee_order
+
+data money: quantity
+  -> decimals 2
+  -> unit eur 1.00
+  -> unit gbp 1.17
+  -> unit usd 0.84
+  -> minimum 0 eur
+
+data product: text
+  -> option "espresso"
+  -> option "latte"
+  -> option "cappuccino"
+  -> option "mocha"
+
+data size: text
+  -> option "small"
+  -> option "medium"
+  -> option "large"
+
+data age: number
+  -> maximum 100
+  -> minimum 0
+
+data number_of_cups: number
+  -> maximum 10
+
+data has_loyalty_card: boolean
+```
+
+- `age`, `number_of_cups` — type-only with bounds (input slots)
+- `money` — user-defined quantity type with units and decimals
+- `product`, `size` — text enumeration via `-> option` (prefer over veto for known sets)
+
+**Example E — data patterns**
+
+Input slot:
+```lemma
+data customer_age: number -> minimum 0 -> maximum 120
+```
+
+Fixed policy constant:
+```lemma
+data tax_rate: 21%
+```
+
+Text enumeration:
+```lemma
+data status: text
+  -> option "active"
+  -> option "inactive"
+```
+
+Typed alias:
+```lemma
+data wallet: money -> minimum 0 eur
+```
+
+With help text:
+```lemma
+data pay_period: text
+  -> option "month"
+  -> option "week"
+  -> help "How often you are paid."
+```
+
+Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> default`, `-> help`, and more. See the Reference for the full list.
+
+**Standard library — `uses lemma si`**
+
+Lemma embeds SI units in the standard library (`repo lemma`, spec `si`). Import with `uses lemma si`, then reference types as `si.mass`, `si.duration`, `si.length`, and others. Duration units (`hours`, `days`, `weeks`) require `si.duration` or an equivalent type with `-> trait duration`.
+
+```lemma
+spec logistics
+"""
+Physical shipment constraints using SI units from the standard library.
+"""
+
+uses lemma si
+
+data package_weight: si.mass
+data shift_length:      si.duration
+data route_distance:     si.length
+
+fill package_weight: 12 kilogram
+fill shift_length:      8 hours
+fill route_distance:     45 kilometer
+
+rule weight_grams:  package_weight as gram
+rule shift_hours:   shift_length as hours
+rule distance_km:   route_distance as kilometer
+
+rule is_heavy:      package_weight > 20 kilogram
+rule is_long_shift: shift_length >= 8 hours
+```
+
+Prefer `si.mass`, `si.duration`, and `si.length` over redefining kilogram, hour, or metre in every spec. Use `as <unit>` to convert within a quantity family.
+
+**Ranges — half-open intervals**
+
+Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit>`. Range kinds: `number range`, `date range`, `calendar range`, `quantity range`, `ratio range`.
+
+```lemma
+spec eligibility
+uses lemma si
+
+data employee_age:       42 years
+data performance_score:  75
+data package_weight:     si.mass
+data hire_date:          2024-01-15
+data review_date:        2024-06-30
+data discount_rate:      15%
+
+fill package_weight: 45 kilogram
+
+data eligible_band: calendar range
+  -> default 18 years...67 years
+
+data score_band: number range
+  -> default 0...100
+
+rule is_working_age: employee_age in eligible_band
+
+rule is_top_score: performance_score in 90...100
+
+rule is_heavy: package_weight in 30 kilogram...80 kilogram
+
+rule in_discount_band: discount_rate in 0%...50%
+
+rule in_q2: hire_date in 2024-04-01...2024-07-01
+
+rule review_days: (hire_date...review_date) as days
+
+rule span_years: (1990-05-20...2024-06-15) as years
+```
+
+At the upper bound, `in` is false: `67 years` is not inside `18 years...67 years`. Declare range slots on `data` when a band is reused; use inline `value in lo...hi` for one-off checks.
+
+Quantity range with a custom unit family (no SI import needed for the band type):
+
+```lemma
+data weight: quantity
+  -> unit gram 1
+  -> unit kilogram 1000
+
+data load_band: quantity range
+  -> unit kilogram 1
+  -> default 30 kilogram...80 kilogram
+
+rule inside_band: 45 kilogram in load_band
+
+rule band_width: (30 kilogram...80 kilogram) as kilogram
+```
+
+**Derived quantities — compound units**
+
+Build units from other units with `/`, `*`, and `^`. Name each derived unit, then give a compound expression. Earlier quantity types in the same spec must declare the base units referenced (`eur`, `hour`, `employee`, `results`) so Lemma can resolve dimensions. Import `uses lemma si` when compound units involve time (`eur/hour`, `results/eur/hour/employee`).
+
+```lemma
+spec contractor
+uses lemma si
+
+data money: quantity
+  -> unit eur 1.00
+
+data headcount: quantity
+  -> unit employee 1
+
+data outcome: quantity
+  -> unit results 1
+
+data wage_rate: quantity
+  -> unit eur_per_second eur/second
+  -> unit eur_per_hour eur/hour
+
+data productivity: quantity
+  -> unit result_per_employee results/eur/hour/employee
+
+data premium_per_head: quantity
+  -> unit eur_hour_per_employee eur_per_hour/employee
+
+data hours_worked: 120 hours
+data hourly_rate:  wage_rate -> default 85 eur_per_hour
+data yield_rate:   productivity -> default 3 result_per_employee
+
+rule total_payment: (hourly_rate * hours_worked) as eur
+
+rule is_high_yield: yield_rate >= 2 result_per_employee
+```
+
+Layer compound units: `eur_per_hour` builds on `eur` and `hour`; `eur_per_hour/employee` builds on `eur_per_hour` and `employee`; `results/eur/hour/employee` combines outcome, money, time, and headcount into one productivity rate. Use derived types as rule inputs — Lemma checks dimensional consistency at plan time.
+
+---
+
+**Rules and unless: last matching clause wins**
+
+Write a default expression first, then zero or more lines: `unless <condition> then <result>`. Clauses are evaluated in source order; when multiple conditions match, **the bottommost wins**. Order general cases first, specific overrides later — mirroring legal prose: "X applies, unless Y, unless Z."
+
+Use **snake_case** rule names. Boolean rules read as predicates: `is_eligible`, `can_ship`, `free_shipping_eligible`. Decompose logic into a pipeline of named rules; never one opaque expression.
+
+**Example F — overlapping unless (last wins)**
+
+```lemma
+rule discount: 0%
+  unless quantity >= 10  then 10%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
+```
+
+A VIP customer ordering 75 items gets **25%**, not 20%. Both `quantity >= 50` and `is_vip` match; the bottommost clause wins.
+
+**Example G — progressive unless chain**
+
+```lemma
+spec rules_and_unless
+
+data is_premium:   yes
+data base_price:   number -> minimum 0
+data customer_age: number -> minimum 0 -> maximum 120
+data quantity:     number -> minimum 0
+
+rule total_before_discount:
+  base_price * quantity
+
+rule discount_percentage:
+  0%
+  unless quantity >= 10 then 10%
+  unless quantity >= 20 then 15%
+  unless is_premium   then 20%
+
+rule total_after_discount:
+  total_before_discount - discount_percentage
+
+rule shipping_cost:
+  15
+  unless total_after_discount >= 100 then 10
+  unless total_after_discount >= 200 then 0
+
+rule final_total:
+  total_after_discount + shipping_cost
+```
+
+Tiered discounts, derived rules referencing prior rules, unless on computed values.
+
+**Example H — decomposed shipping pipeline**
+
+```lemma
+spec shipping_policy
+uses lemma si
+
+data destination_country: text
+  -> option "NL"
+  -> option "BE"
+  -> option "DE"
+  -> option "FR"
+  -> default "NL"
+
+data customer_tier: text
+  -> option "standard"
+  -> option "silver"
+  -> option "gold"
+  -> option "platinum"
+  -> default "gold"
+
+data destination_region: text
+data is_expedited:       boolean
+data is_hazardous:       boolean
+data is_po_box:          boolean
+data item_weight:        si.mass
+data order_total:        number -> minimum 0
+
+rule base_shipping_rate: 35
+  unless destination_country is "NL" then 22
+  unless destination_country is "BE" then 25
+  unless destination_country is "DE" then 28
+  unless destination_country is "FR" then 30
+
+rule weight_surcharge: 0
+  unless item_weight > 5 kilogram  then 7.5
+  unless item_weight > 20 kilogram
+    then veto "Item too heavy for standard shipping"
+
+rule po_box_fee: 0
+  unless is_po_box then 5
+
+rule expedited_fee: 0
+  unless is_expedited                           then 25
+  unless is_expedited and item_weight > 10 kilogram then 45
+
+rule hazardous_fee: 0
+  unless is_hazardous then 50
+  unless is_hazardous and destination_country is not "NL"
+    then veto "Cannot ship hazardous materials internationally"
+
+rule customer_discount: 0%
+  unless customer_tier is "silver"   then 10%
+  unless customer_tier is "gold"     then 20%
+  unless customer_tier is "platinum" then 30%
+
+rule free_shipping_eligible:
+  order_total >= 100 and destination_country is "NL"
+
+rule shipping_before_discount:
+  base_shipping_rate + weight_surcharge + po_box_fee
+  + expedited_fee + hazardous_fee
+
+rule shipping_discount_amount:
+  shipping_before_discount * customer_discount
+
+rule final_shipping:
+  shipping_before_discount - shipping_discount_amount
+  unless free_shipping_eligible then 0
+
+rule ships_to_location: true
+  unless is_po_box and is_hazardous
+    then veto "Cannot ship hazardous materials to PO boxes"
+  unless destination_region is "Svalbard"
+    then veto "Shipping not available to Svalbard"
+
+rule Summary: "Standard shipping"
+  unless free_shipping_eligible
+    then "Free shipping (order over €100)"
+  unless is_expedited then "Expedited shipping"
+```
+
+Each fee is its own rule. `item_weight` uses `si.mass` with kilogram thresholds. Veto clauses are placed last in `weight_surcharge` and `ships_to_location`. Boolean eligibility (`free_shipping_eligible`) is separate from amount rules.
+
+---
+
+**Veto: impossible to answer, not `false`**
+
+Veto is like Rust's `Err` — it means the rule has **no value** and propagates to dependents that need it. Use veto when the answer is impossible, not when the business answer is legitimately false.
+
+| Situation | Use |
+|-----------|-----|
+| Invalid or out-of-domain input | `unless ... then veto "reason"` |
+| Unmapped choice / no rule applies | default `veto` + unless arm per known value |
+| Normal business "no" | `false`, `no`, or `reject` |
+| Test veto without propagating | `x is veto` (returns boolean) |
+
+Place veto unless clauses **last** so they override other branches.
+
+**Example I — enumeration with default veto**
+
+```lemma
+rule selected: veto
+  unless choice_field is 1 then true
+  unless choice_field is 2 then false
+  unless choice_field is 3 then true
+```
+
+Default `veto` means cannot answer for unlisted values. Each `unless` maps a known choice. `false` is a valid business answer for choice 2.
+
+**Example J — veto lookup + propagation**
+
+```lemma
+rule base_price: veto "Unknown type of coffee"
+  unless product is "espresso"   then 2.5 eur
+  unless product is "latte"      then 3.5 eur
+  unless product is "cappuccino" then 3.5 eur
+  unless product is "mocha"      then 4 eur
+
+rule size_multiplier: veto "Unknown size of coffee"
+  unless size is "small"  then 80%
+  unless size is "medium" then 100%
+  unless size is "large"  then 120%
+
+rule price_per_cup: base_price * size_multiplier
+```
+
+If `base_price` vetoes, `price_per_cup` vetoes too because it needs that value.
+
+**Example K — veto vs boolean**
+
+WRONG — veto for a business decision:
+```lemma
+rule can_checkout: veto
+  unless fee <= 10 eur then true
+```
+
+RIGHT — veto for invalid input, boolean for business logic:
+```lemma
+rule age_validation:
+  true
+  unless customer_age < 18  then veto "Customer must be 18 or older"
+  unless customer_age > 120 then veto "Invalid age"
+
+rule can_checkout: yes
+  unless customer_age < 18 then no
+  unless fee > 10 eur then no
+```
+
+**Example L — veto propagation with unless fallback**
+
+```lemma
+rule validated_score: score
+  unless score < 0 then veto "Invalid score"
+
+rule result: validated_score
+  unless use_default then 50
+```
+
+If `validated_score` vetoes but `use_default` is true, `result = 50` because the unless branch avoids needing the vetoed value.
+
+---
+
+**Workflow checklist**
+
+1. **Scope** — one spec per coherent policy; compose with `uses` when policies relate; skip `repo` unless the user needs namespacing.
+2. **Inventory inputs** — every user-supplied fact becomes `data` with constraints.
+3. **Inventory outputs** — every answerable question becomes a `rule`.
+4. **Factor rules** — intermediate calculations as named rules in a pipeline.
+5. **Unless chains** — default first, general to specific, vetoes last.
+6. **No inline comments** — no `#`, `//`, or trailing annotations. Commentary (`"""..."""`) only as the first block after `spec <name> [<effective>]`, never after `uses` or `data`.
+7. **Validate** — would `lemma schema` list the right inputs? Do overlapping unless cases resolve to the intended bottommost value?
+8. **Defer advanced features** — registry imports from LemmaBase, temporal pins → read linked docs. Use `uses lemma si`, ranges, and compound units when the domain needs them.
+
+---
+
+**Anti-patterns**
+
+Inline comments (WRONG — `#` is not comment syntax; this fails to parse):
+```lemma
+data customer_age: number -> minimum 0 -> maximum 120  # input slot
+data tax_rate: 21%  # fixed policy constant
+rule discount: 0%  # default: no discount
+  unless quantity >= 10 then 10%  # bulk rate
+```
+
+Commentary after `uses` (WRONG — a frequent LLM mistake; fails to parse):
+```lemma
+spec wholesale_nuts_pricing
+uses lemma si
+"""
+B2B pricing calculation for a wholesale nuts supplier.
+Handles product base pricing, organic premiums, and freight shipping.
+"""
+
+data base_price: number
+```
+
+Commentary after `data` (WRONG — also fails to parse):
+```lemma
+spec pricing
+
+data quantity: number
+"""
+This is not valid commentary placement.
+"""
+
+rule discount: 0%
+```
+
+Commentary before `uses` (RIGHT):
+```lemma
+spec wholesale_nuts_pricing
+"""
+B2B pricing for a wholesale nuts supplier.
+Handles base pricing, organic premiums, volume discounts, and freight.
+"""
+
+uses lemma si
+
+data base_price: number
+```
+
+Commentary only after spec (RIGHT — no `uses`):
+```lemma
+spec pricing
+"""
+Customer age is an input; tax_rate is a fixed policy constant.
+"""
+
+data customer_age: number -> minimum 0 -> maximum 120
+data tax_rate: 21%
+
+rule discount: 0%
+  unless quantity >= 10 then 10%
+```
+
+Mega-rule (WRONG):
+```lemma
+rule final_total:
+  base_price * quantity
+  - base_price * quantity * (0% unless quantity >= 10 then 10% unless is_premium then 20%)
+  + (15 unless base_price * quantity >= 100 then 10 unless base_price * quantity >= 200 then 0)
+```
+
+Decomposed pipeline (RIGHT):
+```lemma
+rule subtotal:             base_price * quantity
+rule discount_percentage:  0% unless quantity >= 10 then 10%
+rule discount_amount:      subtotal * discount_percentage
+rule total_after_discount: subtotal - discount_amount
+rule shipping_cost:        15 unless total_after_discount >= 100 then 10
+rule final_total:          total_after_discount + shipping_cost
+```
+
+Hardcoded input (WRONG):
+```lemma
+rule discount: 10 * 0.1
+```
+
+Input as data (RIGHT):
+```lemma
+data quantity: number -> minimum 0
+rule discount: quantity * 0.1
+```
+
+Wrong unless order (WRONG — VIP gets 20%, not 25%):
+```lemma
+rule discount: 0%
+  unless is_vip          then 25%
+  unless quantity >= 50  then 20%
+```
+
+Correct order (RIGHT):
+```lemma
+rule discount: 0%
+  unless quantity >= 50  then 20%
+  unless is_vip          then 25%
+```
+
+Placeholder (WRONG):
+```lemma
+data customer_name: "TODO"
+```
+
+Type-only input (RIGHT):
+```lemma
+data customer_name: text
+```
+
+Error vs Veto: `5 and "text"` is a **planning Error** (invalid Lemma). `unless age > 120 then veto "Invalid age"` is a runtime **Veto** (valid spec, domain no-value). Do not confuse them.
+
+Unnecessary repo (WRONG):
+```lemma
+repo default
+
+spec pricing
+...
+```
+
+Single-file spec (RIGHT):
+```lemma
+spec pricing
+...
+```
+
+---
+
+## Docs
+
+- [Language guide](https://github.com/lemma/lemma/blob/main/documentation/index.md): specs, data, rules, unless, veto overview
+- [Reference](https://github.com/lemma/lemma/blob/main/documentation/reference.md): operators, types, units, ranges, `uses`
+- [Veto semantics](https://github.com/lemma/lemma/blob/main/documentation/veto_semantics.md): propagation, `is veto`
+- [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/spec_composability.md): `uses`, temporal versions, pins
+- [CLI](https://github.com/lemma/lemma/blob/main/documentation/CLI.md): `run`, `schema`, `format`
+- [Registry](https://github.com/lemma/lemma/blob/main/documentation/registry.md): LemmaBase `@user/repo` imports
+- [LemmaBase search](https://lemmabase.com/search?q=): find published registry specs
+- [Examples (documentation)](https://github.com/lemma/lemma/tree/main/documentation/examples): curated `.lemma` files
+- [Examples (integration tests)](https://github.com/lemma/lemma/tree/main/cli/tests/integrations/examples): progressive example suite
+
+## Examples by pattern
+
+- [Coffee order](https://github.com/lemma/lemma/blob/main/documentation/examples/01_coffee_order.lemma): data constraints, unless, veto enumeration
+- [Library fees](https://github.com/lemma/lemma/blob/main/documentation/examples/02_library_fees.lemma): unless chains, boolean vs veto
+- [Rules and unless](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/02_rules_and_unless.lemma): progressive unless chains
+- [Spec references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/03_spec_references.lemma): compound units (`eur/hour`), `uses lemma si`
+- [Unit conversions](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/04_unit_conversions.lemma): `si.duration`, `as` conversions
+- [Spec composition](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/11_spec_composition.lemma): multi-spec hierarchy
+- [Registry references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/12_registry_references.lemma): `uses @user/repo spec_name`
+- [Shipping policy](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/07_shipping_policy.lemma): complex decomposed rules
+
+## Optional
+
+- [LemmaBase](https://lemmabase.com): registry hosting and search
+- [Blueprint](https://github.com/lemma/lemma/blob/main/documentation/blueprint.md): architecture and pipeline
+- [Whitepaper](https://github.com/lemma/lemma/blob/main/documentation/whitepaper.md): design rationale
+- [Numeric precision](https://github.com/lemma/lemma/blob/main/documentation/numeric_precision.md): exact rational arithmetic
+- [WebAssembly](https://github.com/lemma/lemma/blob/main/documentation/wasm.md): Lemma in the browser
+- [README](https://github.com/lemma/lemma/blob/main/README.md): install, quick start
