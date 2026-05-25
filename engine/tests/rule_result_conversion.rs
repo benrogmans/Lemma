@@ -225,6 +225,66 @@ fn rejects_ratio_unit_on_quantity_rule() {
     );
 }
 
+const MULTI_RATIO_SPEC: &str = r#"
+spec finance
+data margin_pct: ratio
+  -> unit basis_points 10000
+  -> default 500 basis_points
+data insurance_pct: ratio -> default 1.5%
+rule margin_out: margin_pct
+rule insurance_out: insurance_pct
+"#;
+
+#[test]
+fn converts_ratio_rule_result_across_two_ratio_types_in_one_spec() {
+    let mut engine = lemma::Engine::new();
+    engine
+        .load(
+            MULTI_RATIO_SPEC,
+            SourceType::Path(Arc::new(std::path::PathBuf::from("finance_rates.lemma"))),
+        )
+        .expect("multi-ratio spec loads");
+
+    let now = lemma::DateTimeValue::now();
+    let plan = engine.get_plan(None, "finance", Some(&now)).expect("plan");
+    let request = EvaluationRequest::from_rule_conversion_strings(
+        HashMap::from([
+            ("margin_out".to_string(), "percent".to_string()),
+            ("insurance_out".to_string(), "percent".to_string()),
+        ]),
+        plan,
+    )
+    .expect("percent valid for both ratio rules");
+    let response = run_spec_with_request(&engine, "finance", request);
+
+    let margin = response.results.get("margin_out").expect("margin_out");
+    match &margin.result {
+        OperationResult::Value(v) => match &v.value {
+            ValueKind::Ratio(r, unit) => {
+                assert_eq!(unit.as_deref(), Some("percent"));
+                assert_eq!(*r, RationalInteger::new(1, 20), "500 bps => 5%");
+            }
+            other => panic!("expected ratio, got {other:?}"),
+        },
+        OperationResult::Veto(_) => panic!("margin_out should not veto"),
+    }
+
+    let insurance = response
+        .results
+        .get("insurance_out")
+        .expect("insurance_out");
+    match &insurance.result {
+        OperationResult::Value(v) => match &v.value {
+            ValueKind::Ratio(r, unit) => {
+                assert_eq!(unit.as_deref(), Some("percent"));
+                assert_eq!(*r, RationalInteger::new(15, 1000), "1.5%");
+            }
+            other => panic!("expected ratio, got {other:?}"),
+        },
+        OperationResult::Veto(_) => panic!("insurance_out should not veto"),
+    }
+}
+
 const PRICING_SPEC: &str = r#"
 spec pricing
 data money: quantity -> unit eur 1 -> unit usd 0.91

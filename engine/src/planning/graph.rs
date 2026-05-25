@@ -7877,6 +7877,25 @@ impl<'a> TypeResolver<'a> {
                     if existing_type.name() == resolved_type.name() {
                         continue;
                     }
+                    if let (
+                        TypeSpecification::Ratio {
+                            units: existing_units,
+                            ..
+                        },
+                        TypeSpecification::Ratio {
+                            units: new_units, ..
+                        },
+                    ) = (&existing_type.specifications, &resolved_type.specifications)
+                    {
+                        let same_factor = existing_units
+                            .iter()
+                            .find(|u| u.name == unit)
+                            .zip(new_units.iter().find(|u| u.name == unit))
+                            .is_some_and(|(eu, nu)| eu.value == nu.value);
+                        if same_factor {
+                            continue;
+                        }
+                    }
                     let existing_name: String = existing_def
                         .as_ref()
                         .map(|d| d.name.clone())
@@ -8514,7 +8533,7 @@ data r: ratio
     }
 
     #[test]
-    fn test_duplicate_ratio_unit_across_unrelated_types_errors() {
+    fn test_same_ratio_unit_same_factor_across_types_allowed() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
 data spread_a: ratio
@@ -8524,10 +8543,26 @@ data spread_b: ratio
   -> unit basis_points 10000"#,
         );
 
+        resolver
+            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .expect("same unit name and factor across ratio types must be allowed");
+    }
+
+    #[test]
+    fn test_different_ratio_unit_factor_across_types_errors() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data spread_a: ratio
+  -> unit basis_points 10000
+
+data spread_b: ratio
+  -> unit basis_points 5000"#,
+        );
+
         let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
         assert!(
             result.is_err(),
-            "unrelated ratio types must not define the same unit name"
+            "unrelated ratio types with different factors for the same unit must error"
         );
         let error_msg = result
             .unwrap_err()
@@ -8537,8 +8572,62 @@ data spread_b: ratio
             .join("; ");
         assert!(
             error_msg.contains("spread_a") && error_msg.contains("spread_b"),
-            "expected duplicate ratio unit between types, got: {}",
+            "expected ambiguous ratio unit between types, got: {}",
             error_msg
+        );
+    }
+
+    #[test]
+    fn test_multiple_builtin_ratio_types_share_percent_in_unit_index() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec targets
+data standard_margin_pct: ratio
+  -> minimum 0%
+  -> default 15%
+
+data default_credit_insurance_pct: ratio
+  -> default 1.5%"#,
+        );
+
+        resolver
+            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .expect("multiple ratio types with built-in percent must not conflict");
+    }
+
+    #[test]
+    fn test_three_ratio_types_share_builtin_and_custom_unit() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data margin: ratio -> default 10%
+data fee: ratio
+  -> unit tenths 10
+data tax: ratio -> default 1%"#,
+        );
+
+        resolver
+            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .expect("builtin percent/permille plus custom tenths on second type must load");
+    }
+
+    #[test]
+    fn test_ratio_unit_index_allows_builtin_after_two_named_types() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data first_ratio: ratio -> default 5%
+data second_ratio: ratio -> default 10%"#,
+        );
+
+        let resolved = resolver
+            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .expect("two ratio types with only builtin units");
+
+        assert!(
+            resolved.unit_index.contains_key("percent"),
+            "percent must remain in unit index"
+        );
+        assert!(
+            resolved.unit_index.contains_key("permille"),
+            "permille must remain in unit index"
         );
     }
 
