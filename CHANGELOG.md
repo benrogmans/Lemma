@@ -2,11 +2,30 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
-## Unreleased
+## [0.8.15] - 2026-05-25
+
+### Added
+
+- **Unified ratio units across types**: same unit name (e.g. `percent`, `permille`, `basis_points`) may be reused across distinct `ratio` typedefs in the same spec as long as the conversion factors match. Mismatched factors still error at planning. Built-in `percent` / `permille` collisions across multiple `data: ratio` fields are now valid; cross-type ratio rule-result conversion (`lemma run --as rule:unit`) works across the unified unit space.
+- **Ratio range defaults**: ratio ranges may declare a default literal range, e.g. `data band: ratio range -> default 10%...50%`. The default participates in schema (`SpecSchema.data[].default`) the same way scalar ratio defaults do.
+- **LSP navigation for `uses` references**: a `uses @org/repo spec` line becomes a single clickable link that jumps to the resolved dependency file in `lemma_deps/` at the spec's starting line; hover shows the LemmaBase URL. `uses lemma si` opens an on-demand snapshot at `lemma_deps/lemma.std`.
+- **`documentation/llms.txt`**: authoring guide for LLMs translating natural-language policy into Lemma specs. Linked from `documentation/index.md` and the root README.
+- **`lemma` CLI on npm**: install without Rust via `npm install -g lemma` or run ad-hoc with `npx lemma`. The umbrella `lemma` package resolves a per-platform binary from `@lemmabase/cli-{linux,darwin,win32}-{x64,arm64}` optional dependencies; no postinstall scripts, works offline once installed.
+
+### Changed
+
+- **Case-insensitive logical identifiers**: spec, data, rule, unit, and repo names are canonicalised to lowercase at parse. `repo` blocks that differ only by case are merged. API surfaces (spec lookup, data override keys, `rule_result_units` keys) lowercase inputs at the boundary; internal `eq_ignore_ascii_case` lookups are replaced with exact match on canonical names. The formatter emits identifiers in lowercase.
+- Test registry references and the `12_registry_references` integration example modernised to `uses lemma si` plus reformatted `uses @lemma/std finance` blocks.
+- Quality CI workflow declares an explicit `contents: read` permission.
+
+### Fixed
+
+- Local test runs no longer load the embedded stdlib twice (deduplicated stdlib include when validating workspaces that already reference `lemma si`).
 
 ### Breaking
 
-- Workspace dependency directory renamed from `.deps/` to `lemma_deps/`. Move any existing `.deps/` content into `lemma_deps/`; old `.deps/` directories are no longer recognised. The public `LEMMA_DEPS_DIR_NAME` constant in `lemma::deps` is the single source of truth.
+- **Workspace dependency directory renamed from `.deps/` to `lemma_deps/`**. Move any existing `.deps/` content into `lemma_deps/`; old `.deps/` directories are no longer recognised. The public `LEMMA_DEPS_DIR_NAME` constant in `lemma::deps` is the single source of truth. Embedded stdlib snapshot path moved from `engine/src/lemma/si.lemma` to `engine/src/lemma/si.lemma.std` (and surfaces in workspaces as `lemma_deps/lemma.std`).
+- **Identifier canonicalisation is lossy**: any integrator that round-tripped mixed-case identifiers through the engine (API calls, override maps, rule-result unit maps) now receives lowercase. Callers comparing identifiers case-sensitively to engine output must lowercase their side too.
 
 ## [0.8.14] - 2026-05-21
 
