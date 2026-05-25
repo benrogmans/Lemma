@@ -1116,8 +1116,8 @@ fn make_fetch_registry() -> Box<dyn lemma::registry::Registry> {
 }
 
 /// Load specs from a workspace directory (recursive walk) or a single `.lemma` path.
-/// `.deps/` `.lemma` paths load as dependencies with identifiers derived from paths under
-/// `.deps/` (e.g. `.deps/@org/repo.lemma` -> `"@org/repo"`).
+/// `lemma_deps/` `.lemma` paths load as dependencies with identifiers derived from paths under
+/// `lemma_deps/` (e.g. `lemma_deps/@org/repo.lemma` -> `"@org/repo"`).
 ///
 /// Returns rough path-entry count for workspace listing (`1` for single file, else workspace + dep paths seen).
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<usize> {

@@ -1,13 +1,17 @@
-//! Dependency cache layout under `<workdir>/.deps/`, shared by CLI fetch and LSP.
+//! Dependency layout under `<workdir>/lemma_deps/`, shared by CLI fetch and LSP.
 
 use std::path::{Path, PathBuf};
 
+/// Workspace-relative directory name holding fetched registry bundles. Committed
+/// to version control: there is no lock file, so the on-disk source is authoritative.
+pub const LEMMA_DEPS_DIR_NAME: &str = "lemma_deps";
+
 #[must_use]
 pub fn lemma_deps_dir(workdir: &Path) -> PathBuf {
-    workdir.join(".deps")
+    workdir.join(LEMMA_DEPS_DIR_NAME)
 }
 
-/// Relative path under `.deps/` for a fetched registry bundle (`GET /@id.lemma` identity includes `@`).
+/// Relative path under `lemma_deps/` for a fetched registry bundle (`GET /@id.lemma` identity includes `@`).
 #[must_use]
 pub fn relative_dependency_cache_path(registry_attribute_display: &str) -> PathBuf {
     let last_slash_position = registry_attribute_display.rfind('/');
@@ -26,7 +30,7 @@ pub fn relative_dependency_cache_path(registry_attribute_display: &str) -> PathB
     }
 }
 
-/// Derive registry dependency id from a `.deps/` `.lemma` file path (same string CLI `load_batch` passes as `dependency_id`).
+/// Derive registry dependency id from a `lemma_deps/` `.lemma` file path (same string CLI `load_batch` passes as `dependency_id`).
 #[must_use]
 pub fn dependency_identifier_from_dependency_path(
     workdir: &Path,
@@ -44,4 +48,42 @@ pub fn dependency_identifier_from_dependency_path(
 #[must_use]
 pub fn dependency_cache_file(workdir: &Path, registry_qualifier: &str) -> PathBuf {
     lemma_deps_dir(workdir).join(relative_dependency_cache_path(registry_qualifier))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lemma_deps_dir_uses_lemma_deps_segment() {
+        let root = Path::new("/tmp/workspace");
+        assert_eq!(lemma_deps_dir(root), root.join("lemma_deps"));
+        assert_eq!(LEMMA_DEPS_DIR_NAME, "lemma_deps");
+    }
+
+    #[test]
+    fn dependency_cache_file_resolves_under_lemma_deps() {
+        let root = Path::new("/tmp/workspace");
+        assert_eq!(
+            dependency_cache_file(root, "@lemma/std"),
+            root.join("lemma_deps").join("@lemma").join("std.lemma"),
+        );
+        assert_eq!(
+            dependency_cache_file(root, "@org/project/bundle"),
+            root.join("lemma_deps")
+                .join("@org")
+                .join("project")
+                .join("bundle.lemma"),
+        );
+    }
+
+    #[test]
+    fn dependency_identifier_round_trips_through_lemma_deps() {
+        let root = Path::new("/tmp/workspace");
+        let dep_file = dependency_cache_file(root, "@lemma/std");
+        assert_eq!(
+            dependency_identifier_from_dependency_path(root, &dep_file),
+            "@lemma/std",
+        );
+    }
 }

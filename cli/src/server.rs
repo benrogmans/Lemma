@@ -677,8 +677,8 @@ pub mod http {
     }
 
     /// Create a fresh engine by loading all .lemma files from the workspace
-    /// directory (including `.deps/` for cached registry dependencies).
-    /// `.deps/` files are loaded as dependencies with IDs derived from their path.
+    /// directory (including `lemma_deps/` for cached registry dependencies).
+    /// `lemma_deps/` files are loaded as dependencies with IDs derived from their path.
     async fn reload_engine(workdir: &std::path::Path) -> anyhow::Result<Engine> {
         use walkdir::WalkDir;
 

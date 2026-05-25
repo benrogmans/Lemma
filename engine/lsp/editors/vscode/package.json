@@ -30,6 +30,9 @@
         "extensions": [
           ".lemma"
         ],
+        "filenames": [
+          "lemma.std"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
