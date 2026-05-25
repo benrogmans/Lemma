@@ -60,7 +60,7 @@ pub mod planning;
 pub mod registry;
 pub mod serialization;
 pub mod spec_set_id;
-pub(crate) mod stdlib;
+pub mod stdlib;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -71,7 +71,7 @@ pub use computation::rational::{
 };
 pub use deps::{
     dependency_cache_file, dependency_identifier_from_dependency_path, lemma_deps_dir,
-    relative_dependency_cache_path,
+    relative_dependency_cache_path, LEMMA_DEPS_DIR_NAME,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use engine::collect_lemma_sources;

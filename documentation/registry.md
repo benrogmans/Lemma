@@ -10,7 +10,7 @@ You can compile Lemma without a registry for complete isolation, or implement yo
 
 The `Engine` does not hold a registry and never performs network calls. External `@...` references must be resolved before loading into the engine:
 
-- **CLI:** `lemma fetch` resolves `@` references and caches them in `.deps/` inside the workspace directory. Other commands (`run`, `server`, `schema`, `list`, `mcp`, `format`) load workspace `.lemma` files and cached deps from `.deps/`. Since there is no lock file, `.deps/` should be checked into version control.
+- **CLI:** `lemma fetch` resolves `@` references and caches them in `lemma_deps/` inside the workspace directory. Other commands (`run`, `server`, `schema`, `list`, `mcp`, `format`) load workspace `.lemma` files and cached deps from `lemma_deps/`. Since there is no lock file, `lemma_deps/` should be checked into version control.
 - **Crate users:** Call `resolve_registry_references` on a [`Context`](https://docs.rs/lemma-engine/latest/lemma/engine/struct.Context.html), then build an [`Engine`](https://docs.rs/lemma-engine/latest/lemma/engine/struct.Engine.html) and load each `(path, code)` pair with [`SourceType::Labeled`](https://docs.rs/lemma-engine/latest/lemma/engine/enum.SourceType.html) (or use [`load_batch`](https://docs.rs/lemma-engine/latest/lemma/engine/struct.Engine.html#method.load_batch) for dependency bundles).
 - **WASM / npm:** `fetch(name)` downloads registry source; call `load_batch` to load the bundle, then load workspace specs (see [npm README](../engine/packages/npm/README.md)).
 
@@ -82,7 +82,7 @@ After loading, the engine enforces **dependency isolation**: repos loaded as a d
 
 1. **Spec names are normal identifiers.** Write `spec billing`, `spec rates`, and so on — the same surface syntax as local files.
 
-2. **Cross-bundle references use `@` on `uses` targets.** To depend on another registry identifier, qualify the target (`uses x: @org/rates`, `uses std: @lemma/std/finance`, …). Unqualified references (`uses x: rates`) resolve only within **the same** repository as the importing spec.
+2. **Cross-bundle references use `@` on `uses` targets.** To depend on another registry identifier, qualify the target (`uses x: @org/rates`, `uses finance: @lemma/std/finance`, …). Unqualified references (`uses x: rates`) resolve only within **the same** repository as the importing spec.
 
 3. **Transitive loads.** The resolver fetches every unresolved repository reference until all qualifiers are satisfied. A single `.lemma` response per identifier is enough; you do not need to paste transitive dependencies into one megabundle unless your registry chooses to.
 
@@ -92,15 +92,4 @@ Registries may let authors edit friendlier forms on the server side, but what th
 
 ## LemmaBase (default registry)
 
-When the `registry` feature is enabled, **LemmaBase** is available. It resolves identifiers via `GET https://lemmabase.com/{identifier}.lemma` (identifier already contains the `@` prefix). The LSP uses `url_for_id` for clickable links.
-
----
-
-## Summary
-
-| Goal | What to do |
-|------|------------|
-| Implement a registry | Implement the `Registry` trait. |
-| Resolve dependencies | Call `resolve_registry_references`, then `engine.load()` / `engine.load_batch()` with the merged sources map. |
-| Use no registry | Pass all files to `engine.load()` (in a loop) or `engine.load_batch()`. Unresolved `@...` refs fail during planning. |
-| Inspect embedded SI stdlib | `engine.format_repository("lemma")` after `Engine::new()`; import types with `uses lemma si` in specs. |
+When the `registry` feature is enabled, **LemmaBase** is available. It resolves identifiers via `GET https://lemmabase.com/{identifier}.lemma` (identifier already contains the `@` prefix). The LSP uses `url_for_id` to turn the repository qualifier (e.g. `@lemma/std`) into a LemmaBase URL; the spec name (e.g. `finance`) links to the locally fetched bundle under `<workspace>/lemma_deps/`.

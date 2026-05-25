@@ -2,6 +2,12 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## Unreleased
+
+### Breaking
+
+- Workspace dependency directory renamed from `.deps/` to `lemma_deps/`. Move any existing `.deps/` content into `lemma_deps/`; old `.deps/` directories are no longer recognised. The public `LEMMA_DEPS_DIR_NAME` constant in `lemma::deps` is the single source of truth.
+
 ## [0.8.14] - 2026-05-21
 
 - Branch on failed rules: `is veto` / `is not veto` (e.g. `unless price is veto then fallback`).
