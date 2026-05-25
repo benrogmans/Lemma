@@ -568,6 +568,171 @@ fn ratio_display_none_vs_percent_unit() {
 // Section 5 — Ratio ranges with multiple ratio data fields
 // -----------------------------------------------------------------------------
 
+fn assert_range_endpoints_canonical_ratio(
+    lit: &LiteralValue,
+    ctx: &str,
+    expected_left_canonical: &str,
+    expected_left_unit: Option<&str>,
+    expected_right_canonical: &str,
+    expected_right_unit: Option<&str>,
+) {
+    let (left, right) = match &lit.value {
+        ValueKind::Range(left, right) => (left.as_ref(), right.as_ref()),
+        other => panic!("{ctx}: expected Range, got {other:?}"),
+    };
+    assert!(
+        left.lemma_type.is_ratio(),
+        "{ctx}: left endpoint lemma_type must be ratio, got {} (specs={:?})",
+        left.lemma_type.name(),
+        left.lemma_type.specifications,
+    );
+    assert!(
+        right.lemma_type.is_ratio(),
+        "{ctx}: right endpoint lemma_type must be ratio, got {} (specs={:?})",
+        right.lemma_type.name(),
+        right.lemma_type.specifications,
+    );
+    assert_ratio_exact(
+        left,
+        &format!("{ctx} left"),
+        expected_left_canonical,
+        expected_left_unit,
+    );
+    assert_ratio_exact(
+        right,
+        &format!("{ctx} right"),
+        expected_right_canonical,
+        expected_right_unit,
+    );
+}
+
+#[test]
+fn ratio_range_default_with_percent_endpoints_canonical() {
+    let code = r#"
+spec policy
+data allowed_band: ratio range -> default 10%...50%
+rule band: allowed_band
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code, "ratio_range_default_pct.lemma");
+
+    let now = DateTimeValue::now();
+    let plan = engine
+        .get_plan(None, "policy", Some(&now))
+        .expect("plan must build with ratio range default");
+    let path = lemma::DataPath::local("allowed_band".into());
+    let def = plan.data.get(&path).expect("allowed_band in plan.data");
+    let suggestion = def
+        .default_suggestion()
+        .expect("ratio range typedef must surface declared default");
+    assert!(
+        matches!(
+            &suggestion.lemma_type.specifications,
+            TypeSpecification::RatioRange { .. }
+        ),
+        "default suggestion lemma_type must be RatioRange, got {:?}",
+        suggestion.lemma_type.specifications
+    );
+    assert_range_endpoints_canonical_ratio(
+        &suggestion,
+        "ratio_range_default percent",
+        "0.10",
+        Some("percent"),
+        "0.50",
+        Some("percent"),
+    );
+}
+
+#[test]
+fn ratio_range_default_with_basis_points_endpoints_canonical() {
+    let code = r#"
+spec policy
+data allowed_band: ratio range
+  -> unit basis_points 10000
+  -> default 200 basis_points...3500 basis_points
+rule band: allowed_band
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code, "ratio_range_default_bps.lemma");
+
+    let now = DateTimeValue::now();
+    let plan = engine
+        .get_plan(None, "policy", Some(&now))
+        .expect("plan must build with custom-unit ratio range default");
+    let path = lemma::DataPath::local("allowed_band".into());
+    let def = plan.data.get(&path).expect("allowed_band in plan.data");
+    let suggestion = def
+        .default_suggestion()
+        .expect("ratio range typedef must surface declared default");
+    assert_range_endpoints_canonical_ratio(
+        &suggestion,
+        "ratio_range_default basis_points",
+        "0.02",
+        Some("basis_points"),
+        "0.35",
+        Some("basis_points"),
+    );
+}
+
+#[test]
+fn ratio_range_default_runtime_uses_canonical_endpoints() {
+    let code = r#"
+spec policy
+data allowed_band: ratio range -> default 10%...50%
+data candidate: ratio -> default 25%
+rule in_default_band: candidate in allowed_band
+rule out_of_band: 5% in allowed_band
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code, "ratio_range_default_runtime.lemma");
+
+    let response = run_spec(&engine, "policy", HashMap::new());
+    assert_bool(
+        rule_value(&response, "in_default_band"),
+        "in_default_band",
+        true,
+    );
+    assert_bool(rule_value(&response, "out_of_band"), "out_of_band", false);
+}
+
+#[test]
+fn ratio_range_default_endpoints_must_be_ratio_not_quantity() {
+    let code = r#"
+spec policy
+data allowed_band: ratio range -> default 10%...50%
+rule band: allowed_band
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code, "ratio_range_endpoint_typing.lemma");
+
+    let now = DateTimeValue::now();
+    let plan = engine.get_plan(None, "policy", Some(&now)).expect("plan");
+    let path = lemma::DataPath::local("allowed_band".into());
+    let def = plan.data.get(&path).expect("allowed_band in plan.data");
+    let suggestion = def
+        .default_suggestion()
+        .expect("declared default must exist");
+
+    let (left, right) = match &suggestion.value {
+        ValueKind::Range(l, r) => (l.as_ref(), r.as_ref()),
+        other => panic!("expected Range, got {other:?}"),
+    };
+    for (label, endpoint) in [("left", left), ("right", right)] {
+        assert!(
+            !matches!(
+                &endpoint.lemma_type.specifications,
+                TypeSpecification::Quantity { .. }
+            ),
+            "{label} endpoint must not be lifted as Quantity for a percent literal in a ratio range default",
+        );
+        assert!(
+            matches!(&endpoint.value, ValueKind::Ratio(_, _)),
+            "{label} endpoint ValueKind must be Ratio (got {:?})",
+            endpoint.value
+        );
+    }
+}
+
 #[test]
 fn ratio_range_typedef_with_second_ratio_field_loads() {
     let code = r#"
