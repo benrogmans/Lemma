@@ -25,7 +25,7 @@ workspace = true
 default = []
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "=0.8.14", path = ".." }
+lemma = { package = "lemma-engine", version = "=0.8.15", path = ".." }
 async-trait = "0.1"
 serde_json.workspace = true
 
@@ -50,7 +50,7 @@ default-features = false
 features = ["runtime-agnostic"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.104"
+wasm-bindgen = "=0.2.121"
 wasm-bindgen-futures = { version = "0.4", features = ["futures-core-03-stream"] }
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["WritableStream"] }

@@ -1,0 +1,81 @@
+# lemma
+
+> **A language that means business.** Command-line interface for [Lemma](https://github.com/lemma/lemma).
+
+Run Lemma without installing anything globally:
+
+```bash
+npx lemma help
+```
+
+Or install globally:
+
+```bash
+npm install -g lemma
+lemma --help
+```
+
+## How it works
+
+This package is a thin Node.js launcher. The actual `lemma` binary is shipped as a platform-specific optional dependency (one of `@lemmabase/cli-linux-x64`, `@lemmabase/cli-linux-arm64`, `@lemmabase/cli-darwin-x64`, `@lemmabase/cli-darwin-arm64`, `@lemmabase/cli-win32-x64`). npm installs only the package matching your OS and CPU; the launcher then `exec`s the native binary directly. No download steps, no `postinstall` scripts, works offline.
+
+## Supported platforms
+
+- Linux x86_64 (musl, statically linked)
+- Linux aarch64 (musl, statically linked)
+- macOS x86_64
+- macOS aarch64 (Apple Silicon)
+- Windows x86_64
+
+If your platform is not supported, install via Cargo instead:
+
+```bash
+cargo install lemma-cli
+```
+
+## Common commands
+
+```bash
+npx lemma run shipping
+npx lemma run tax_calculation --rules=tax_owed
+npx lemma run tax_calculation income=75000 filing_status="married"
+npx lemma list
+npx lemma schema pricing
+npx lemma server ./examples --port 8012
+```
+
+Each command supports `--help`.
+
+## Documentation
+
+- CLI reference: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>
+- Language guide: <https://github.com/lemma/lemma/blob/main/documentation/index.md>
+- Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
+
+## Local development
+
+To rebuild and test this package locally:
+
+```bash
+cargo build --release -p lemma-cli
+mkdir -p /tmp/lemma-bins/linux-x64
+cp target/release/lemma /tmp/lemma-bins/linux-x64/lemma
+node cli/packages/npm/build.js --binaries /tmp/lemma-bins
+cd cli/packages/npm/dist/lemma && npm pack --dry-run
+```
+
+End-to-end smoke test:
+
+```bash
+cd cli/packages/npm/dist
+npm pack ./lemma ./platforms/linux-x64
+mkdir -p /tmp/lemma-smoke && cd /tmp/lemma-smoke
+npm init -y >/dev/null
+npm install /path/to/cli/packages/npm/dist/lemma-*.tgz \
+            /path/to/cli/packages/npm/dist/lemmabase-cli-linux-x64-*.tgz
+npx lemma --help
+```
+
+## License
+
+Apache-2.0

@@ -76,7 +76,14 @@ jobs:
           body: |
             ## Installation
 
-            Download the binary for your platform from the assets below, or install from source:
+            Download the binary for your platform from the assets below, or install via npm:
+
+            ```bash
+            npm install -g lemma@${{ needs.detect-version-changes.outputs.version }}
+            # or: npx lemma@${{ needs.detect-version-changes.outputs.version }} --help
+            ```
+
+            Or install from source:
 
             ```bash
             cargo install lemma-cli@${{ needs.detect-version-changes.outputs.version }}
@@ -331,6 +338,75 @@ jobs:
 
       - name: Publish to npm
         working-directory: engine/packages/npm/dist
+        run: npm publish --provenance --access public
+
+  publish-npm-cli:
+    name: Publish CLI to npm
+    needs: [detect-version-changes, create-release, build-cli-binaries]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.build-cli-binaries.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download CLI binaries from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          TAG="cli-v${VERSION}"
+          ROOT=/tmp/lemma-binaries
+          mkdir -p \
+            "$ROOT/linux-x64" \
+            "$ROOT/linux-arm64" \
+            "$ROOT/darwin-x64" \
+            "$ROOT/darwin-arm64" \
+            "$ROOT/win32-x64"
+
+          gh release download "$TAG" -p "lemma-x86_64-unknown-linux-musl.tar.gz"   -D /tmp
+          gh release download "$TAG" -p "lemma-aarch64-unknown-linux-musl.tar.gz"  -D /tmp
+          gh release download "$TAG" -p "lemma-x86_64-apple-darwin.tar.gz"         -D /tmp
+          gh release download "$TAG" -p "lemma-aarch64-apple-darwin.tar.gz"        -D /tmp
+          gh release download "$TAG" -p "lemma-x86_64-pc-windows-msvc.zip"         -D /tmp
+
+          tar xzf /tmp/lemma-x86_64-unknown-linux-musl.tar.gz  -C "$ROOT/linux-x64"
+          tar xzf /tmp/lemma-aarch64-unknown-linux-musl.tar.gz -C "$ROOT/linux-arm64"
+          tar xzf /tmp/lemma-x86_64-apple-darwin.tar.gz        -C "$ROOT/darwin-x64"
+          tar xzf /tmp/lemma-aarch64-apple-darwin.tar.gz       -C "$ROOT/darwin-arm64"
+          unzip -o /tmp/lemma-x86_64-pc-windows-msvc.zip       -d "$ROOT/win32-x64"
+
+          for d in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            test -f "$ROOT/$d/lemma" || { echo "missing $ROOT/$d/lemma"; exit 1; }
+          done
+          test -f "$ROOT/win32-x64/lemma.exe" || { echo "missing $ROOT/win32-x64/lemma.exe"; exit 1; }
+
+      - name: Build npm packages
+        run: node cli/packages/npm/build.js --binaries /tmp/lemma-binaries
+
+      - name: Publish platform packages
+        working-directory: cli/packages/npm/dist/platforms
+        run: |
+          set -euo pipefail
+          for d in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
+            echo "Publishing @lemmabase/cli-$d"
+            (cd "$d" && npm publish --provenance --access public)
+          done
+
+      - name: Publish umbrella package
+        working-directory: cli/packages/npm/dist/lemma
         run: npm publish --provenance --access public
 
   publish-vscode:
