@@ -503,6 +503,59 @@ fn lift_parser_decimal(decimal: rust_decimal::Decimal) -> Result<RationalInteger
         .map_err(|failure| format!("literal failed rational lift: {failure}"))
 }
 
+/// Element spec for a range type, used for parsing endpoints and lifting literal endpoints.
+/// Returns the per-endpoint primitive spec (e.g. `RatioRange { units }` -> `Ratio { units }`).
+pub fn range_element_type_specification(
+    range_spec: &TypeSpecification,
+) -> Option<TypeSpecification> {
+    match range_spec {
+        TypeSpecification::NumberRange { .. } => Some(TypeSpecification::number()),
+        TypeSpecification::QuantityRange {
+            units,
+            decomposition,
+            canonical_unit,
+            ..
+        } => Some(TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: units.clone(),
+            traits: Vec::new(),
+            decomposition: decomposition.clone(),
+            canonical_unit: canonical_unit.clone(),
+            help: String::new(),
+        }),
+        TypeSpecification::DateRange { .. } => Some(TypeSpecification::date()),
+        TypeSpecification::CalendarRange { .. } => Some(TypeSpecification::calendar()),
+        TypeSpecification::RatioRange { units, .. } => Some(TypeSpecification::Ratio {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: units.clone(),
+            help: String::new(),
+        }),
+        _ => None,
+    }
+}
+
+/// Lift a parser literal range endpoint to a [`LiteralValue`] with the element's primitive type.
+/// Routes [`Value::NumberWithUnit`] through [`parser_value_to_value_kind`] so ratio endpoints
+/// (e.g. `10%` in a `ratio range`) canonicalize to ratios, not anonymous quantities.
+fn lift_range_endpoint(
+    value: &crate::parsing::ast::Value,
+    element_spec: &TypeSpecification,
+) -> Result<LiteralValue, String> {
+    use crate::parsing::ast::Value;
+    let kind = match value {
+        Value::NumberWithUnit(_, _) => parser_value_to_value_kind(value, element_spec)?,
+        _ => value_to_semantic(value)?,
+    };
+    Ok(LiteralValue {
+        value: kind,
+        lemma_type: LemmaType::primitive(element_spec.clone()),
+    })
+}
+
 fn literal_value_from_parser_value(
     value: &crate::parsing::ast::Value,
 ) -> Result<LiteralValue, String> {
@@ -1307,19 +1360,15 @@ impl TypeSpecification {
                         crate::literals::Value::Number(d) => {
                             ValueKind::Ratio(lift_parser_decimal(*d)?, None)
                         }
-                        crate::literals::Value::NumberWithUnit(magnitude, unit_name) => {
-                            let lemma_type = LemmaType {
-                                name: Some(type_name.to_string()),
-                                specifications: TypeSpecification::Ratio {
-                                    decimals: *decimals,
-                                    minimum: *minimum,
-                                    maximum: *maximum,
-                                    units: units.clone(),
-                                    help: help.clone(),
-                                },
-                                extends: TypeExtends::Primitive,
+                        crate::literals::Value::NumberWithUnit(_, _) => {
+                            let element_spec = TypeSpecification::Ratio {
+                                decimals: *decimals,
+                                minimum: *minimum,
+                                maximum: *maximum,
+                                units: units.clone(),
+                                help: help.clone(),
                             };
-                            number_with_unit_to_value_kind(*magnitude, unit_name, &lemma_type)?
+                            parser_value_to_value_kind(lit, &element_spec)?
                         }
                         _ => {
                             return Err("Please provide a ratio value, for example `-> default 0.25` or `-> default 25%`.".to_string());
@@ -1373,8 +1422,15 @@ impl TypeSpecification {
                             DefaultExpectation::RatioRange,
                             None,
                         )?;
-                        let left = literal_value_from_parser_value(left)?;
-                        let right = literal_value_from_parser_value(right)?;
+                        let element_spec = TypeSpecification::Ratio {
+                            decimals: None,
+                            minimum: None,
+                            maximum: None,
+                            units: units.clone(),
+                            help: String::new(),
+                        };
+                        let left = lift_range_endpoint(left, &element_spec)?;
+                        let right = lift_range_endpoint(right, &element_spec)?;
                         if !left.lemma_type.is_ratio() || !right.lemma_type.is_ratio() {
                             return Err(
                                 "Please provide a ratio range, for example `-> default 10%...50%`."
@@ -1841,25 +1897,9 @@ pub fn parse_value_from_string(
             .parse::<crate::literals::NumberLiteral>()
             .map(|n| Value::Number(n.0))
             .map_err(to_err),
-        TypeSpecification::NumberRange { .. } => parse_range_value(TypeSpecification::number()),
         TypeSpecification::Quantity { .. } => {
             parse_number_unit(value_str, type_spec).map_err(to_err)
         }
-        TypeSpecification::QuantityRange {
-            units,
-            decomposition,
-            canonical_unit,
-            ..
-        } => parse_range_value(TypeSpecification::Quantity {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units: units.clone(),
-            traits: Vec::new(),
-            decomposition: decomposition.clone(),
-            canonical_unit: canonical_unit.clone(),
-            help: String::new(),
-        }),
         TypeSpecification::Boolean { .. } => value_str
             .parse::<BooleanValue>()
             .map(Value::Boolean)
@@ -1868,7 +1908,6 @@ pub fn parse_value_from_string(
             let date = value_str.parse::<DateTimeValue>().map_err(to_err)?;
             Ok(Value::Date(date))
         }
-        TypeSpecification::DateRange { .. } => parse_range_value(TypeSpecification::date()),
         TypeSpecification::Time { .. } => {
             let time = value_str.parse::<TimeValue>().map_err(to_err)?;
             Ok(Value::Time(time))
@@ -1877,19 +1916,19 @@ pub fn parse_value_from_string(
             .parse::<crate::literals::CalendarLiteral>()
             .map(|d| Value::Calendar(d.0, d.1))
             .map_err(to_err),
-        TypeSpecification::CalendarRange { .. } => {
-            parse_range_value(TypeSpecification::calendar())
-        }
         TypeSpecification::Ratio { .. } => {
             parse_number_unit(value_str, type_spec).map_err(to_err)
         }
-        TypeSpecification::RatioRange { units, .. } => parse_range_value(TypeSpecification::Ratio {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units: units.clone(),
-            help: String::new(),
-        }),
+        TypeSpecification::NumberRange { .. }
+        | TypeSpecification::QuantityRange { .. }
+        | TypeSpecification::DateRange { .. }
+        | TypeSpecification::CalendarRange { .. }
+        | TypeSpecification::RatioRange { .. } => {
+            let element_spec = range_element_type_specification(type_spec).unwrap_or_else(|| {
+                unreachable!("BUG: range_element_type_specification missing arm for known range type")
+            });
+            parse_range_value(element_spec)
+        }
         TypeSpecification::Veto { .. } => Err(to_err(
             "Veto type cannot be parsed from string".to_string(),
         )),
