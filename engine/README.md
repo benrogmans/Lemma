@@ -6,7 +6,7 @@ Lemma Engine is the Rust crate behind the Lemma language. It lets you parse, val
 
 ## Status
 
-Lemma is still early-stage and **not yet recommended for production use**. Expect breaking changes, evolving semantics, and incomplete tooling while the project matures.
+Lemma is pre-1.0. The language and APIs are stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
 
 ## Why Lemma?
 

@@ -6,7 +6,7 @@ This package provides the `lemma` CLI for running, inspecting, and serving Lemma
 
 ## Status
 
-Lemma is still early-stage and **not yet recommended for production use**. Expect breaking changes and evolving commands while the toolchain stabilizes.
+Lemma is pre-1.0. The CLI is stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
 
 ## Installation
 

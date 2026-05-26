@@ -139,7 +139,7 @@ In the browser, the registry must allow your origin (CORS). Use `https` or `http
 
 ## Status
 
-Lemma is in early development. Expect breaking changes between minor versions; **don't put it in front of paying customers yet**. Production-readiness tracking lives in the [main repo](https://github.com/lemma/lemma).
+Lemma is pre-1.0. The WASM API is stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
 
 ## Related
 

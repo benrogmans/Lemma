@@ -320,7 +320,7 @@ Supports `linux/amd64` and `linux/arm64`.
 
 ## Status
 
-Lemma is in early development and **not yet recommended for production use**. Expect breaking changes and evolving semantics.
+Lemma is pre-1.0. The language and APIs are stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](CHANGELOG.md) before upgrading.
 
 ## Contributing
 
