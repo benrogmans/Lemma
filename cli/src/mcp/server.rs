@@ -1,6 +1,6 @@
 mod imp {
     use anyhow::Result;
-    use lemma::parsing::ast::DateTimeValue;
+    use lemma::DateTimeValue;
     use lemma::Engine;
     use serde::{Deserialize, Serialize};
     use std::io::{self, BufRead, Write};
@@ -280,7 +280,7 @@ mod imp {
                 }));
                 tools.push(serde_json::json!({
                     "name": "get_spec_source",
-                    "description": "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded SI stdlib) for the whole repo, or `spec` for a workspace spec.",
+                    "description": "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded units stdlib) for the whole repo, or `spec` for a workspace spec.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -443,7 +443,7 @@ mod imp {
                 McpError::invalid_params("Missing 'spec' or 'repository' field".to_string())
             })?;
 
-            let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
+            let spec_name = lemma::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
@@ -454,7 +454,7 @@ mod imp {
                 ))
             })?;
 
-            let source = lemma::formatting::format_specs(std::slice::from_ref(spec.as_ref()));
+            let source = lemma::format_specs(std::slice::from_ref(spec.as_ref()));
 
             debug!("Returned source for spec '{}'", spec_name);
 
@@ -480,7 +480,7 @@ mod imp {
                 ));
             }
 
-            let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
+            let spec_name = lemma::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
@@ -501,36 +501,11 @@ mod imp {
                 })
                 .collect();
 
-            let conversions: Vec<String> = args["conversions"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-
             let now = resolve_effective(args)?;
-            let evaluation_request = crate::evaluation_request::build_evaluation_request(
-                &self.engine,
-                None,
-                &spec_name,
-                &now,
-                &conversions,
-                &rule_names,
-            )
-            .map_err(|e| McpError::invalid_params(e.to_string()))?;
 
             let mut response = self
                 .engine
-                .run(
-                    None,
-                    &spec_name,
-                    Some(&now),
-                    data_values,
-                    false,
-                    evaluation_request,
-                )
+                .run(None, &spec_name, Some(&now), data_values, true)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -546,18 +521,15 @@ mod imp {
 
             for result in response.results.values() {
                 output.push_str(&format!("{}: ", result.rule.name));
-                match &result.result {
-                    lemma::OperationResult::Value(value) => {
-                        output.push_str(&value.to_string());
-                    }
-                    lemma::OperationResult::Veto(reason) => {
-                        output.push_str(&format!("veto ({})", reason));
-                    }
+                if result.vetoed {
+                    output.push_str(result.veto_reason.as_deref().unwrap_or("Vetoed"));
+                } else {
+                    output.push_str(result.display.as_deref().unwrap_or(""));
                 }
                 output.push('\n');
 
-                if let Some(explanation) = &result.explanation {
-                    let steps = format_explanation_steps(explanation);
+                if let Some(trace) = &result.trace {
+                    let steps = format_explanation_steps(trace);
                     if !steps.is_empty() {
                         output.push_str("\nReasoning:\n");
                         output.push_str(&steps);
@@ -651,7 +623,7 @@ mod imp {
                 ));
             }
 
-            let spec_name = lemma::spec_set_id::parse_spec_set_id(spec_set_id.trim())
+            let spec_name = lemma::parse_spec_set_id(spec_set_id.trim())
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
@@ -706,7 +678,7 @@ mod imp {
     // ── Explanation formatting ─────────────────────────────────────────────
 
     /// Linearise an explanation tree into plain-English reasoning steps.
-    fn format_explanation_steps(explanation: &lemma::explanation::Explanation) -> String {
+    fn format_explanation_steps(explanation: &lemma::EvaluationTrace) -> String {
         let mut steps = Vec::new();
         let mut seen_data = std::collections::HashSet::new();
         let mut seen_rules = std::collections::HashSet::new();
@@ -720,17 +692,17 @@ mod imp {
     }
 
     fn walk_explanation_node(
-        node: &lemma::explanation::ExplanationNode,
+        node: &lemma::TraceNode,
         steps: &mut Vec<String>,
         seen_data: &mut std::collections::HashSet<String>,
         seen_rules: &mut std::collections::HashSet<String>,
     ) {
-        use lemma::explanation::{ExplanationNode, ValueSource};
+        use lemma::{TraceNode, TraceValueSource};
 
         match node {
-            ExplanationNode::Value {
+            TraceNode::Value {
                 value,
-                source: ValueSource::Data { data_ref },
+                source: TraceValueSource::Data { data_ref },
                 ..
             } => {
                 let key = data_ref.to_string();
@@ -739,9 +711,9 @@ mod imp {
                 }
             }
 
-            ExplanationNode::Value { .. } => {}
+            TraceNode::Value { .. } => {}
 
-            ExplanationNode::RuleReference {
+            TraceNode::RuleReference {
                 rule_path,
                 result,
                 expansion,
@@ -762,16 +734,15 @@ mod imp {
                 }
             }
 
-            ExplanationNode::Computation {
+            TraceNode::Computation {
                 kind,
                 conversion_steps,
-                original_expression,
                 expression,
                 result,
                 operands,
                 ..
             } => match kind {
-                lemma::evaluation::operations::ComputationKind::UnitConversion { .. } => {
+                lemma::ComputationKind::UnitConversion { .. } => {
                     assert!(
                         !conversion_steps.is_empty(),
                         "BUG: UnitConversion computation must have conversion_steps"
@@ -787,17 +758,11 @@ mod imp {
                     for operand in operands {
                         walk_explanation_node(operand, steps, seen_data, seen_rules);
                     }
-                    let expression_text =
-                        if original_expression != expression && !original_expression.is_empty() {
-                            original_expression.as_str()
-                        } else {
-                            expression.as_str()
-                        };
-                    steps.push(format!("{}: {}", expression_text, result));
+                    steps.push(format!("{}: {}", expression, result));
                 }
             },
 
-            ExplanationNode::Branches {
+            TraceNode::Branches {
                 matched,
                 non_matched,
                 ..
@@ -836,26 +801,7 @@ mod imp {
                 walk_explanation_node(&matched.result, steps, seen_data, seen_rules);
             }
 
-            ExplanationNode::Condition {
-                original_expression,
-                expression,
-                result,
-                operands,
-                ..
-            } => {
-                for op in operands {
-                    walk_explanation_node(op, steps, seen_data, seen_rules);
-                }
-                let expr = if original_expression != expression && !original_expression.is_empty() {
-                    original_expression.as_str()
-                } else {
-                    expression.as_str()
-                };
-                let verdict = if *result { "true" } else { "false" };
-                steps.push(format!("{} is {}", expr, verdict));
-            }
-
-            ExplanationNode::Veto { message, .. } => match message {
+            TraceNode::Veto { message, .. } => match message {
                 Some(msg) => steps.push(format!("veto: {}", msg)),
                 None => steps.push("veto".to_string()),
             },
@@ -865,16 +811,16 @@ mod imp {
     /// Walk an explanation node collecting only data values (no reasoning steps).
     /// Used to gather data from branch conditions before emitting branch decisions.
     fn collect_branch_data(
-        node: &lemma::explanation::ExplanationNode,
+        node: &lemma::TraceNode,
         steps: &mut Vec<String>,
         seen_data: &mut std::collections::HashSet<String>,
     ) {
-        use lemma::explanation::{ExplanationNode, ValueSource};
+        use lemma::{TraceNode, TraceValueSource};
 
         match node {
-            ExplanationNode::Value {
+            TraceNode::Value {
                 value,
-                source: ValueSource::Data { data_ref },
+                source: TraceValueSource::Data { data_ref },
                 ..
             } => {
                 let key = data_ref.to_string();
@@ -882,16 +828,15 @@ mod imp {
                     steps.push(format!("{}: {}", key, value));
                 }
             }
-            ExplanationNode::Condition { operands, .. }
-            | ExplanationNode::Computation { operands, .. } => {
+            TraceNode::Computation { operands, .. } => {
                 for op in operands {
                     collect_branch_data(op, steps, seen_data);
                 }
             }
-            ExplanationNode::RuleReference { expansion, .. } => {
+            TraceNode::RuleReference { expansion, .. } => {
                 collect_branch_data(expansion, steps, seen_data);
             }
-            ExplanationNode::Branches {
+            TraceNode::Branches {
                 matched,
                 non_matched,
                 ..
@@ -909,34 +854,19 @@ mod imp {
     }
 
     /// Extract the human-readable expression from any explanation node.
-    fn node_expression(node: &lemma::explanation::ExplanationNode) -> String {
-        use lemma::explanation::{ExplanationNode, ValueSource};
+    fn node_expression(node: &lemma::TraceNode) -> String {
+        use lemma::{TraceNode, TraceValueSource};
 
         match node {
-            ExplanationNode::Condition {
-                original_expression,
-                expression,
-                ..
-            }
-            | ExplanationNode::Computation {
-                original_expression,
-                expression,
-                ..
-            } => {
-                if original_expression != expression && !original_expression.is_empty() {
-                    original_expression.clone()
-                } else {
-                    expression.clone()
-                }
-            }
-            ExplanationNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
-            ExplanationNode::Value {
-                source: ValueSource::Data { data_ref },
+            TraceNode::Computation { expression, .. } => expression.clone(),
+            TraceNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
+            TraceNode::Value {
+                source: TraceValueSource::Data { data_ref },
                 ..
             } => data_ref.to_string(),
-            ExplanationNode::Value { value, .. } => value.to_string(),
-            ExplanationNode::Branches { .. } => "branch".to_string(),
-            ExplanationNode::Veto { message, .. } => {
+            TraceNode::Value { value, .. } => value.to_string(),
+            TraceNode::Branches { .. } => "branch".to_string(),
+            TraceNode::Veto { message, .. } => {
                 message.clone().unwrap_or_else(|| "veto".to_string())
             }
         }

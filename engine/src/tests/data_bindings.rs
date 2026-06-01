@@ -1,4 +1,4 @@
-use crate::parsing::ast::{DataValue, FillRhs};
+use crate::parsing::ast::{DataValue, WithRhs};
 use crate::parsing::parse;
 
 #[test]
@@ -32,9 +32,9 @@ uses contract: employment_contract"#;
 fn test_parse_with_and_data_bindings() {
     let input = r#"spec person
 uses contract: employment_contract
-fill contract.start_date: 2024-02-01
+with contract.start_date: 2024-02-01
 data declaration_probe: date
-fill contract.employment_type: "contractor"
+with contract.employment_type: "contractor"
 uses base: base_contract"#;
     let result = parse(
         input,
@@ -65,13 +65,13 @@ uses base: base_contract"#;
         ])
     );
     match &result[0].data[1].value {
-        DataValue::Fill(FillRhs::Literal(lit)) => {
+        DataValue::With(WithRhs::Literal(lit)) => {
             assert!(
                 matches!(lit, crate::parsing::ast::Value::Date(_)),
-                "Expected Date literal in fill"
+                "Expected Date literal in with"
             );
         }
-        other => panic!("Expected fill with date literal, got {:?}", other),
+        other => panic!("Expected with with date literal, got {:?}", other),
     }
 
     assert_eq!(
@@ -100,10 +100,10 @@ uses base: base_contract"#;
         ])
     );
     match &result[0].data[3].value {
-        DataValue::Fill(FillRhs::Literal(crate::parsing::ast::Value::Text(s))) => {
+        DataValue::With(WithRhs::Literal(crate::parsing::ast::Value::Text(s))) => {
             assert_eq!(s, "contractor");
         }
-        other => panic!("Expected fill with text literal, got {:?}", other),
+        other => panic!("Expected with with text literal, got {:?}", other),
     }
 
     assert_eq!(

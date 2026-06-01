@@ -6,7 +6,7 @@ Demonstrates calculations and scaling.
 Quantity a recipe up or down based on servings needed.
 """
 
-uses lemma si
+uses lemma units
 
 data temperature: quantity
   -> unit celsius 1.0

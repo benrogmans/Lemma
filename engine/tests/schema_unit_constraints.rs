@@ -1,16 +1,13 @@
 //! Per-unit minimum/maximum/default magnitudes on quantity and ratio schema units.
 
-use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::{QuantityUnit, RatioUnit, TypeSpecification};
+use lemma::DateTimeValue;
 use lemma::Engine;
+use lemma::{QuantityUnit, RatioUnit, TypeSpecification};
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
 fn decimal_lit(s: &str) -> Decimal {
-    Decimal::from_str(s).unwrap()
-}
-fn rational_lit(d: &str) -> lemma::RationalInteger {
-    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
+    Decimal::from_str(s).expect("BUG: test decimal literal must parse")
 }
 
 fn load(engine: &mut Engine, code: &str, path: &str) {
@@ -87,8 +84,8 @@ rule out: cost_per_unit
             minimum, maximum, ..
         } => {
             let unit = qty_unit(&entry.lemma_type.specifications, "eur_per_kilo");
-            assert_eq!(unit.minimum, Some(rational_lit("1.2")));
-            assert_eq!(unit.maximum, Some(rational_lit("2")));
+            assert_eq!(unit.minimum_decimal(), Some(decimal_lit("1.2")));
+            assert_eq!(unit.maximum_decimal(), Some(decimal_lit("2")));
             assert_eq!(minimum.as_ref().unwrap().1, "eur_per_kilo");
             assert_eq!(maximum.as_ref().unwrap().1, "eur_per_kilo");
         }
@@ -113,9 +110,9 @@ rule out: mass
     let schema = engine.schema(None, "s", Some(&now)).expect("schema");
     let entry = schema.data.get("mass").expect("data");
     let gram = qty_unit(&entry.lemma_type.specifications, "gram");
-    assert_eq!(gram.minimum, Some(rational_lit("1000")));
+    assert_eq!(gram.minimum_decimal(), Some(decimal_lit("1000")));
     let kg = qty_unit(&entry.lemma_type.specifications, "kilogram");
-    assert_eq!(kg.minimum, Some(rational_lit("1")));
+    assert_eq!(kg.minimum_decimal(), Some(decimal_lit("1")));
 }
 
 #[test]
@@ -138,14 +135,16 @@ rule out: price
             Some(&now),
             std::collections::HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .expect("eval");
-    let result = response.results[0]
-        .result
-        .value()
-        .expect("value")
-        .to_string();
+    let result = response
+        .results
+        .values()
+        .next()
+        .expect("rule result")
+        .display
+        .clone()
+        .expect("display");
     assert!(
         result.contains("10") && result.to_lowercase().contains("eur"),
         "expected 10 eur, got {result}"
@@ -168,7 +167,7 @@ rule out: r
     let schema = engine.schema(None, "s", Some(&now)).expect("schema");
     let entry = schema.data.get("r").expect("data");
     let unit = ratio_unit(&entry.lemma_type.specifications, "basis_points");
-    assert_eq!(unit.minimum, Some(rational_lit("500")));
+    assert_eq!(unit.minimum_decimal(), Some(decimal_lit("500")));
 
     let json = serde_json::to_value(&entry.lemma_type).expect("serde");
     let units = json["units"].as_array().expect("units array");
@@ -177,12 +176,10 @@ rule out: r
         .find(|u| u["name"] == "basis_points")
         .expect("basis_points row");
     assert_eq!(bps["minimum"].as_str(), Some("500"));
-    match &entry.lemma_type.specifications {
-        TypeSpecification::Ratio { minimum, .. } => {
-            assert_eq!(*minimum, Some(rational_lit("0.05")));
-        }
-        other => panic!("expected Ratio, got {other:?}"),
-    }
+    assert_eq!(
+        entry.lemma_type.specifications.minimum_decimal(),
+        Some(decimal_lit("0.05"))
+    );
 }
 
 #[test]
@@ -203,8 +200,8 @@ rule out: money
     let entry = schema.data.get("money").expect("data");
     let eur = qty_unit(&entry.lemma_type.specifications, "eur");
     let usd = qty_unit(&entry.lemma_type.specifications, "usd");
-    assert_eq!(eur.default_magnitude, Some(rational_lit("4")));
-    assert_eq!(usd.default_magnitude, Some(rational_lit("2")));
+    assert_eq!(eur.default_magnitude_decimal(), Some(decimal_lit("4")));
+    assert_eq!(usd.default_magnitude_decimal(), Some(decimal_lit("2")));
 }
 
 #[test]
@@ -228,8 +225,8 @@ rule r: here
     let entry = schema.data.get("here").expect("here");
     let usd = qty_unit(&entry.lemma_type.specifications, "usd");
     let eur = qty_unit(&entry.lemma_type.specifications, "eur");
-    assert_eq!(usd.default_magnitude, Some(rational_lit("10")));
-    assert_eq!(eur.default_magnitude, Some(rational_lit("20")));
+    assert_eq!(usd.default_magnitude_decimal(), Some(decimal_lit("10")));
+    assert_eq!(eur.default_magnitude_decimal(), Some(decimal_lit("20")));
 }
 
 #[test]
@@ -279,12 +276,11 @@ rule r: mass
         .expect("plan")
         .schema();
     let json = serde_json::to_string(&schema).expect("serialize");
-    let round_tripped: lemma::planning::execution_plan::SpecSchema =
-        serde_json::from_str(&json).expect("deserialize");
+    let round_tripped: lemma::SpecSchema = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(schema, round_tripped);
     let entry = round_tripped.data.get("mass").expect("mass");
     let gram = qty_unit(&entry.lemma_type.specifications, "gram");
-    assert_eq!(gram.minimum, Some(rational_lit("1000")));
+    assert_eq!(gram.minimum_decimal(), Some(decimal_lit("1000")));
 }
 
 const COMPOUND_COST_PER_UNIT_SPEC: &str = r#"
@@ -297,13 +293,6 @@ data cost_per_unit: quantity
   -> maximum 2.00 eur_per_kilo
 rule out: cost_per_unit
 "#;
-
-fn canonical_magnitude(
-    magnitude: &lemma::RationalInteger,
-    factor: &lemma::RationalInteger,
-) -> lemma::RationalInteger {
-    lemma::checked_mul(magnitude, factor).expect("canonical lift")
-}
 
 #[test]
 fn compound_quantity_maximum_converts_per_unit_across_units() {
@@ -321,22 +310,16 @@ fn compound_quantity_maximum_converts_per_unit_across_units() {
     let eur_per_kilo = qty_unit(&entry.lemma_type.specifications, "eur_per_kilo");
     let usd_per_tonne = qty_unit(&entry.lemma_type.specifications, "usd_per_tonne");
 
-    assert_eq!(eur_per_kilo.maximum, Some(rational_lit("2")));
+    assert_eq!(eur_per_kilo.maximum_decimal(), Some(decimal_lit("2")));
     assert_ne!(
-        usd_per_tonne.maximum,
-        Some(rational_lit("2")),
+        usd_per_tonne.maximum_decimal(),
+        Some(decimal_lit("2")),
         "usd_per_tonne maximum must be converted from eur_per_kilo bound, not copied as 2"
     );
 
-    let usd_per_tonne_max = usd_per_tonne
-        .maximum
-        .as_ref()
-        .expect("usd_per_tonne maximum");
-    let eur_per_kilo_max_canonical =
-        canonical_magnitude(eur_per_kilo.maximum.as_ref().unwrap(), &eur_per_kilo.factor);
-    let usd_per_tonne_max_canonical = canonical_magnitude(usd_per_tonne_max, &usd_per_tonne.factor);
     assert_eq!(
-        usd_per_tonne_max_canonical, eur_per_kilo_max_canonical,
+        usd_per_tonne.maximum_canonical_decimal(),
+        eur_per_kilo.maximum_canonical_decimal(),
         "per-unit maxima must represent the same canonical bound"
     );
 
@@ -374,15 +357,15 @@ rule out: cost_per_unit
 
     let usd_per_tonne = qty_unit(&entry.lemma_type.specifications, "usd_per_tonne");
     assert_eq!(
-        usd_per_tonne.maximum,
-        Some(rational_lit("2")),
+        usd_per_tonne.maximum_decimal(),
+        Some(decimal_lit("2")),
         "maximum declared in usd_per_tonne must stay 2 in that unit"
     );
 }
 
 const TRI_COMPOUND_COST_SPEC: &str = r#"
 spec s
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1
@@ -416,25 +399,16 @@ fn tri_compound_quantity_maximum_converts_per_unit_across_units() {
     let eur_per_kilo_hour = qty_unit(&entry.lemma_type.specifications, "eur_per_kilo_hour");
     let usd_per_ton_hour = qty_unit(&entry.lemma_type.specifications, "usd_per_ton_hour");
 
-    assert_eq!(eur_per_kilo_hour.maximum, Some(rational_lit("2")));
+    assert_eq!(eur_per_kilo_hour.maximum_decimal(), Some(decimal_lit("2")));
     assert_ne!(
-        usd_per_ton_hour.maximum,
-        Some(rational_lit("2")),
+        usd_per_ton_hour.maximum_decimal(),
+        Some(decimal_lit("2")),
         "usd_per_ton_hour maximum must be converted from eur_per_kilo_hour bound, not copied as 2"
     );
 
-    let usd_per_ton_hour_max = usd_per_ton_hour
-        .maximum
-        .as_ref()
-        .expect("usd_per_ton_hour maximum");
-    let eur_per_kilo_hour_max_canonical = canonical_magnitude(
-        eur_per_kilo_hour.maximum.as_ref().unwrap(),
-        &eur_per_kilo_hour.factor,
-    );
-    let usd_per_ton_hour_max_canonical =
-        canonical_magnitude(usd_per_ton_hour_max, &usd_per_ton_hour.factor);
     assert_eq!(
-        usd_per_ton_hour_max_canonical, eur_per_kilo_hour_max_canonical,
+        usd_per_ton_hour.maximum_canonical_decimal(),
+        eur_per_kilo_hour.maximum_canonical_decimal(),
         "per-unit maxima must represent the same canonical bound across three referenced quantities"
     );
 }

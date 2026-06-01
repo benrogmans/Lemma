@@ -59,8 +59,8 @@ data money: ratio -> decimals 2
 
 spec cashier
 uses F: finance
-fill till: F.money
-rule total: till
+with F.money: 10%
+rule total: F.money
 "#;
     engine
         .load_batch(

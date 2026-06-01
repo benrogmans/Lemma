@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, Error};
 use std::collections::HashMap;
 
@@ -175,14 +175,7 @@ fn test_runtime_error_division_by_zero() {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .expect("Division by zero should return Veto, not Error");
 
     let result_rule = response
@@ -192,20 +185,17 @@ fn test_runtime_error_division_by_zero() {
         .expect("result rule should exist");
 
     assert!(
-        result_rule.result.vetoed(),
-        "Division by zero should return Veto, got: {:?}",
-        result_rule.result
+        result_rule.vetoed,
+        "Division by zero should return Veto, got veto_reason: {:?}",
+        result_rule.veto_reason
     );
 
-    if let lemma::OperationResult::Veto(lemma::VetoType::Computation { message }) =
-        &result_rule.result
-    {
-        assert!(
-            message.to_lowercase().contains("division") || message.to_lowercase().contains("zero"),
-            "Veto message should mention division or zero, got: {}",
-            message
-        );
-    }
+    let message = result_rule.veto_reason.as_deref().expect("veto_reason");
+    assert!(
+        message.to_lowercase().contains("division") || message.to_lowercase().contains("zero"),
+        "Veto message should mention division or zero, got: {}",
+        message
+    );
 }
 
 // ============================================================================
@@ -375,14 +365,7 @@ fn test_division_by_zero_returns_veto_with_message() {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .expect("Should return Veto, not Error");
 
     let result_rule = response
@@ -391,17 +374,17 @@ fn test_division_by_zero_returns_veto_with_message() {
         .find(|r| r.rule.name == "result")
         .expect("result rule should exist");
 
-    match &result_rule.result {
-        lemma::OperationResult::Veto(lemma::VetoType::Computation { message }) => {
-            assert!(
-                message.to_lowercase().contains("zero")
-                    || message.to_lowercase().contains("division"),
-                "Veto message should mention zero or division, got: {}",
-                message
-            );
-        }
-        other => panic!("Expected Veto, got: {:?}", other),
-    }
+    assert!(
+        result_rule.vetoed,
+        "Expected Veto, got display: {:?}",
+        result_rule.display
+    );
+    let message = result_rule.veto_reason.as_deref().expect("veto_reason");
+    assert!(
+        message.to_lowercase().contains("zero") || message.to_lowercase().contains("division"),
+        "Veto message should mention zero or division, got: {}",
+        message
+    );
 }
 
 #[test]
@@ -599,4 +582,119 @@ data x: 1
         joined.contains("app") && joined.contains("dep"),
         "expected both spec names in coverage error: {joined}"
     );
+}
+
+// ============================================================================
+// TYPE NAME CASING - planning errors must use Display (lowercase) not Debug
+// ============================================================================
+//
+// LemmaType implements Display returning the lowercase Lemma type name
+// (`number`, `boolean`, `text`, ...). User-facing planning errors must use
+// `{}` not `{:?}` so the Rust enum variant names (`Number`, `Boolean`, ...)
+// never leak into messages shown to spec authors.
+
+fn assert_lowercase_type_in_errors(joined: &str, expected_lower: &[&str], banned: &[&str]) {
+    for token in expected_lower {
+        assert!(
+            joined.contains(token),
+            "expected lowercase '{token}' in error: {joined}"
+        );
+    }
+    for token in banned {
+        assert!(
+            !joined.contains(token),
+            "error must not leak Rust Debug variant '{token}': {joined}"
+        );
+    }
+    assert!(
+        !joined.contains("LemmaType {") && !joined.contains("specifications:"),
+        "error must not leak LemmaType Debug syntax: {joined}"
+    );
+}
+
+fn load_and_join_errors(code: &str) -> String {
+    let mut engine = Engine::new();
+    let errs = engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect_err("expected planning to fail");
+    errs.iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+#[test]
+fn compare_number_with_text_uses_lowercase_type_names() {
+    let joined = load_and_join_errors(
+        r#"
+spec test
+rule r: 1 > "x"
+"#,
+    );
+    assert!(
+        joined.contains("Cannot compare"),
+        "expected comparison error: {joined}"
+    );
+    assert_lowercase_type_in_errors(&joined, &["number", "text"], &["Number", "Text"]);
+}
+
+#[test]
+fn logical_and_non_boolean_left_uses_lowercase() {
+    let joined = load_and_join_errors(
+        r#"
+spec test
+rule r: 1 and true
+"#,
+    );
+    assert!(
+        joined.contains("Logical AND requires boolean left operand"),
+        "expected AND non-boolean error: {joined}"
+    );
+    assert_lowercase_type_in_errors(&joined, &["number"], &["Number"]);
+}
+
+#[test]
+fn logical_negation_non_boolean_uses_lowercase() {
+    let joined = load_and_join_errors(
+        r#"
+spec test
+rule r: not 1
+"#,
+    );
+    assert!(
+        joined.contains("Logical negation requires boolean operand"),
+        "expected negation error: {joined}"
+    );
+    assert_lowercase_type_in_errors(&joined, &["number"], &["Number"]);
+}
+
+#[test]
+fn unless_condition_non_boolean_uses_lowercase() {
+    let joined = load_and_join_errors(
+        r#"
+spec test
+rule r: 0
+  unless 1 then 1
+"#,
+    );
+    assert!(
+        joined.contains("Unless clause condition") && joined.contains("must be boolean"),
+        "expected unless-condition error: {joined}"
+    );
+    assert_lowercase_type_in_errors(&joined, &["number"], &["Number"]);
+}
+
+#[test]
+fn math_function_requires_number_uses_lowercase() {
+    let joined = load_and_join_errors(
+        r#"
+spec test
+rule r: sqrt true
+"#,
+    );
+    assert!(
+        joined.contains("Mathematical function requires number operand"),
+        "expected math-function operand error: {joined}"
+    );
+    assert_lowercase_type_in_errors(&joined, &["boolean"], &["Boolean"]);
 }

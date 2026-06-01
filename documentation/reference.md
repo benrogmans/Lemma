@@ -55,39 +55,24 @@ Bare `veto` in `is veto` is not `veto "message"` (that form is only a rule/unles
 
 Note: Mathematical operators are prefix operators, not functions. Parentheses are optional.
 
-### Unit Conversion
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `as` | Convert units | `elapsed as hours`, `price as usd` |
+### Type cast (`as`)
 
-The `as` operator converts between units:
-- **Quantity types** (including **trait duration** quantities for time periods): units must be declared on the type (`unit` / `trait duration` with canonical `second`)
-- **Number to ratio**: `0.5 as percent` converts to `50 percent`
+Chained casts nest left-to-right: `expr as unit₁ as unit₂ … as number`.
 
-```lemma
-data money: quantity
-  -> unit eur 1.00
-  -> unit usd 0.91
+| Form | Description | Example |
+|------|-------------|---------|
+| `as <unit>` | Convert, relabel, or construct a quantity/ratio in that unit | `mass as gram`, `5 as eur`, `rate as hours` |
+| `as number` | Strip to raw magnitude (requires explicit unit on prior step for quantities/ranges) | `10 eur as number`, `span as days as number` |
 
-data price: 100 eur
+Same-family conversion applies factors (`2 kilogram as gram` → `2000 gram`). Cross-family relabel keeps magnitude (`5 eur as kg` → `5 kg`).
 
-rule price_usd: price as usd
-```
+`as` binds tighter than `*`, `/`, and `%`. In `balance / rate as month`, the `as month` applies to `rate`, not to the quotient. To convert the result of an arithmetic expression, use parentheses: `(balance / rate) as month`.
 
-```lemma
-uses lemma si
+Literal quantities and ratios carry an explicit unit, so `10 eur as number` and `25% as number` plan without an extra unit step. Named data references need the full chain: `amount as eur as number`, not `amount as number`.
 
-data workweek: si.duration
-  -> default 40 hours
+Date, quantity, and **time** ranges cannot use bare `as number` (unit is ambiguous). Project span width with `as <unit> as number` — e.g. `start...end as days as number`, `(09:00...17:00) as hours as number`, `(30 kilogram...35 kilogram) as stone as number`. Calendar span units are singular `year` and `month`. Duration span units (`days`, `hours`, `seconds`, …) require `uses lemma units` when not declared locally.
 
-rule workweek_days: workweek as days
-```
-
-Unit conversion explanations (`as`) expose ordered `conversion_steps` on each `unit_conversion` computation node in the explanation tree (JSON/WASM/API). Each step has a `role`: `outcome` (converted result), `rule` (unit equivalence such as `1 kilogram is 1000 gram`, or a range span such as `2024-06-15 − 2024-06-01 = 14 days`), then `source` (what was converted, e.g. `The quantity of mass is 2 kilogram`). Clients render these steps; the CLI is one renderer. Arithmetic and comparison nodes keep `expression` / `original_expression`; `unit_conversion` nodes use `conversion_steps` only.
-
-Explanation JSON is a **tree**: walk `operands`, `conversion_steps`, and `expansion` on `rule_reference` nodes. Do not rely on a single top-level `expression` for `unit_conversion` nodes.
-
-**Display unit conversion** (`lemma run --as`, HTTP `as_units`, `rule_result_units` in WASM/API) changes only the **displayed** `result` on that rule (and `explanation.result` to match). `explanation.tree` stays the evaluation audit in computed units (in-rule `as`, arithmetic, data bindings). Dependent rules still see the unconverted value. HTTP: start the server with `--explanations` and send `x-explanations: true` on evaluate requests.
+Number ranges allow bare `as number` (span width with no unit).
 
 ## Spec References (`uses`)
 
@@ -97,9 +82,6 @@ Reference other specs with the `uses` keyword. For how unpinned vs pinned import
 - `uses spec_name` — alias defaults to the last path segment of the target name.
 - `uses alias: spec_name` — explicit alias.
 - `uses spec_name 2025-01-01` — temporal pin (ISO datetime or bare year `YYYY` → Jan 1 00:00).
-- `uses a, b, c` — comma-separated bare imports (no aliases, no temporal pins).
-
-Comma-separated form is for quick bare imports only. For aliases or temporal pins, use separate `uses` lines.
 
 Spec names cannot contain a period. Versioning is **temporal only** — multiple rows of the same name with different `effective_from` datetimes.
 
@@ -125,7 +107,7 @@ uses p: pricing
 rule total: p.base_price
 ```
 
-Evaluating **`order`** before May 2025 uses `base_price: 100`; from 2025 onward, `120`. See [Composing specs](spec_composability.md) for unpinned vs pinned imports.
+Evaluating **`order`** before 2025-01-01 uses `base_price: 100`; from 2025-01-01 onward, `120`. See [Composing specs](spec_composability.md) for unpinned vs pinned imports.
 
 ### Pinning and evaluation instant
 
@@ -168,7 +150,7 @@ Registry references use the `@` prefix:
 ```lemma
 spec ledger_spec
 
-uses fin: @lemma/std/finance
+uses fin: @lemma/std finance
 
 data ledger: fin.Money
 ```
@@ -186,9 +168,9 @@ Lemma provides these primitive types:
 - **`date`** - ISO 8601 dates
 - **`date range`** - half-open date/datetime intervals
 - **`time`** - time values
+- **`time range`** - half-open time-of-day intervals (`09:00...17:00`)
 - **`ratio`** - proportional values (percent, permille)
 - **`ratio range`** - half-open ratio intervals
-- **`calendar range`** - half-open intervals in calendar units (`years`, `months`); see [Ranges](#ranges)
 
 Numbers are stored and computed as **exact rationals** (ℚ); API output is a **decimal string**. See [Numeric precision](numeric_precision.md).
 
@@ -197,7 +179,7 @@ Numbers are stored and computed as **exact rationals** (ℚ); API output is a **
 Ranges express **half-open** intervals: **lower inclusive, upper exclusive**. Containment uses `in`:
 
 ```lemma
-uses lemma si
+uses lemma units
 
 data age:   25 years
 data score: 50
@@ -217,18 +199,27 @@ At the upper bound, `in` is false (`67 years` is not inside `18 years...67 years
 | Type | Endpoints | Typical use |
 |------|-----------|-------------|
 | **`date range`** | Dates or datetimes (`2024-01-01...2024-06-15`) | Employment periods, billing windows |
+| **`time range`** | Times (`09:00...17:00`) | Business hours, shift windows |
 | **`number range`** | Dimensionless numbers (`0...100`) | Scores, tiers |
-| **`quantity range`** | Quantities in one unit family (`30 kilogram...35 kilogram`) | Weight bands, duration bands (with `trait duration`) |
+| **`quantity range`** | Quantities in one unit family (`30 kilogram...35 kilogram`) | Weight bands, duration bands (with `trait duration`), money bands |
 | **`ratio range`** | Ratios (`0%...50%`) | Allowed discount bands |
-| **`calendar range`** | Calendar units only (`18 years...67 years`, `1 year...2 years`) | Age bands, policy windows in years/months |
 
-**`calendar range`** endpoints must use **calendar** units (`years`, `months`). Do not mix calendar and duration units in one literal (`12 years...7 days` is a planning error). Do not mix dates and calendar endpoints (`2024-01-01...18 years` is rejected). **`date + calendar range`** is rejected; use **`date range`** or duration quantities for date arithmetic.
+Any **rangeable named quantity type** can also be declared with a `range` suffix, e.g. `data estimated: money range` or `data band: units.calendar -> default 18 year...67 year` (specializes to a quantity range with that type's units).
+
+**Calendar intervals** use month/year units from `uses lemma units` (`units.calendar`). Inline literals (`18 year...67 year`) and `in` work like other ranges. Endpoints must be calendar units (`year`, `month`, and declared plurals). Do not mix calendar and duration units in one literal (`12 year...7 day` is a planning error). Do not mix dates and calendar endpoints (`2024-01-01...18 year` is rejected).
+
+**Time ranges** are half-open like all ranges. Endpoints must share the same timezone (including both absent). Literal order does not imply midnight wraparound: `22:00...02:00` is ordered `[02:00, 22:00)` with an 20-hour span, not an overnight window.
 
 Declare range slots on `data`:
 
 ```lemma
-data band: calendar range
-  -> default 18 years...67 years
+uses lemma units
+
+data band: units.calendar
+  -> default 18 year...67 year
+
+data window: time range
+  -> default 09:00...17:00
 
 data period: date range
   -> default 2024-01-01...2024-12-31
@@ -244,7 +235,7 @@ data tier: number range
 Parentheses around a range literal or expression, then **`as`**, yield the **width** of the interval in the target unit (a scalar), not another range:
 
 ```lemma
-uses lemma si
+uses lemma units
 
 rule days_between: (2024-06-01...2024-06-15) as days
 
@@ -255,11 +246,12 @@ rule span_years: (1990-05-20...2024-06-15) as years
 
 | Range type | `as` targets (examples) | Notes |
 |------------|-------------------------|--------|
-| **date range** | `days`, `months`, `years`, duration units, `number` | Calendar-aware where applicable |
+| **date range** | `days`, `months`, `years`, duration units, calendar units | Calendar-aware where applicable |
+| **time range** | Duration units only (`hours`, `minutes`, `seconds`, …) | No calendar units; bare `as number` rejected |
 | **number range** | `number`, duration units | |
-| **quantity range** | Same-family quantity units; duration ranges → duration units | Mass/money ranges do not span `as days` |
+| **quantity range** | Same-family quantity units (mass, money, duration, calendar, …) | Cross-family span (e.g. mass range `as days`) is rejected at planning |
 | **ratio range** | Ratio units (`percent`, …) | |
-| **calendar range** | — | Span **`as`** is **not** supported (width uses month arithmetic, not quantity units) |
+| **calendar interval** (inline or `units.calendar` / `units.calendar` default) | Same-family calendar units | Span uses month/year arithmetic via quantity-range machinery |
 
 ### Range arithmetic and comparison
 
@@ -275,7 +267,7 @@ rule extended: 2024-01-01...2024-06-15 + 1 months
 
 Date endpoints can be built from separate `date` values: `hire_date...today`.
 
-For **trait-duration** quantities, import SI types with `uses lemma si` so literals like `25 years` and `18 years...67 years` resolve (`si.duration`).
+For **trait-duration** quantities, import SI types with `uses lemma units` so literals like `25 years` and `18 years...67 years` resolve (`units.duration`).
 
 ## User-Defined Types
 
@@ -334,15 +326,19 @@ In execution-plan **schema JSON**, `quantity` and `ratio` types expose type-leve
 - `help "<text>"` - Add help text
 - `default <value>` - Set default value
 
-**For `date range`, `number range`, `quantity range`, `ratio range`, and `calendar range`:**
+**For `date range`, `number range`, `quantity range`, `time range`, and `ratio range`:**
 - `help "<text>"` - Add help text
 - `default <lo>...<hi>` - Default interval (half-open)
 
 **For `quantity range` only:** `unit <name> <value>` — same as `quantity` (endpoints must share one unit family).
 
 **For `quantity` types with `-> trait duration` (time periods):**
-- `trait duration` (after canonical `second` unit) — see embedded `spec si` (`uses lemma si`, type `si.duration`)
+- `trait duration` (after canonical `second` unit) — see embedded `spec units` (`uses lemma units`, type `units.duration`)
 - `minimum <value>` / `maximum <value>` / `default <value>` use the same quantity literal rules as other quantities
+
+**For `quantity` types with `-> trait calendar` (calendar periods):**
+- `trait calendar` (after canonical `month` unit) — see `units.calendar` in `uses lemma units`, or `units.calendar` via `uses lemma units`
+- `default <lo>...<hi>` with calendar units specializes the slot to `quantity range` at planning
 
 **For `boolean` type:**
 - `help "<text>"` - Add help text
@@ -423,108 +419,71 @@ data price: quantity
   -> decimals 2
 ```
 
-## Value-copy references (`fill`)
+## Setting data on an imported spec (`with`)
 
-**`fill`** assigns a literal or copies the value of another data slot or rule
-result into a name. It can define a new slot (`fill license2: l.other`) or
-override a value on an existing `data` row (`data x: number` then `fill x: 42`).
-Constraint chains (`-> ...`) belong on **`data` only**, not on `fill`.
+**`with`** sets a literal or reference on a **data slot of a spec you `uses`**. The left-hand side must be an import path (`alias.field` or `alias.nested.field`). Local names (`with x: …`) are rejected — use **`data`** for slots in the current spec.
 
-Surface forms:
-
-1. **Dotted RHS** — `fill license2: law.other`. A dotted right-hand side is
-   never a type name, so it always means "copy from this data or rule path."
-2. **Non-dotted RHS with a binding LHS** — `fill i.slot: src`. When the
-   left-hand side has path segments, the right-hand side is a value-copy
-   reference to a name in the enclosing spec, not a type.
-
-`data x: someident` (LHS without segments, RHS without dots) declares a slot
-or parent type; `someident` is a typedef name or keyword, not a copy.
+Constraint chains (`-> ...`) belong on **`data` only**, not on `with`.
 
 ```lemma
-spec law
+spec base_employee
+data name: text
+data monthly_salary: number
 
-data other: number
-  -> default 42
+spec specific_employee
+uses employee: base_employee
+with employee.name: "Alice Smith"
+with employee.monthly_salary: 7_500
 
-
-spec license
-
-uses l: law
-
-fill license2: l.other
-
-rule check: license2 > 10
+rule employee_summary: employee.name
 ```
 
-Copies can target a **rule**; the rule's evaluated result is the value copied.
-Rule-target references resolve lazily on first read once the target rule has
-been evaluated.
-
-```lemma
-spec pricing
-
-data base: 100 eur
-
-rule discounted: base * (1 - 10%)
-
-
-spec invoice
-
-uses p: pricing
-
-fill line_total: p.discounted
-
-rule due: line_total
-```
-
-When a slot needs constraints or a default, declare them on `data`, then copy
-with `fill`:
+Read imported data or rules in expressions without `with` when you do not need to override values:
 
 ```lemma
 spec outer
-
-uses p: pricing
-
-data clamped: ratio
-  -> minimum 0 percent
-  -> maximum 100 percent
-
-fill clamped: p.discounted
-data fallback: ratio
-  -> default 0 percent
-
-fill fallback: p.rate
+uses i: inner
+rule r: i.x
 ```
 
-### Binding form
+### Scenario parameters (same import, different values)
 
-When the LHS is a binding path, `fill` copies from the enclosing spec into
-the bound child. The bound child must exist in the referenced spec and its
-declared type must be compatible with the source.
+```lemma
+spec pricing
+data price: 100
+data discount: 0%
+rule final_price: price * (1 - discount)
+
+spec scenarios
+uses retail: pricing
+with retail.discount: 5%
+
+uses wholesale: pricing
+with wholesale.discount: 15%
+with wholesale.price: 80
+
+rule retail_final: retail.final_price
+rule wholesale_final: wholesale.final_price
+```
+
+### Binding with a local source
+
+When the RHS is a name in the enclosing spec (not a dotted import path), the LHS must still be an import path:
 
 ```lemma
 spec inner
-
 data slot: number
   -> minimum 0
   -> maximum 100
 
-
 spec outer
-
 uses i: inner
-
 data src: 42
-
-fill i.slot: src
-
+with i.slot: src
 rule r: i.slot
 ```
 
-The merged type that `fill` must satisfy is the binding's declared type
-(`inner.slot`'s `number -> minimum 0 -> maximum 100`), not just the
-target's looser type (`src`'s anonymous number).
+`data x: someident` (local LHS, non-dotted RHS) declares a slot or parent type; `someident` is a typedef name, not a value copy.
 
 ## Boolean Literals
 

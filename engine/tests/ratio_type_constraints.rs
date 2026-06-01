@@ -3,10 +3,9 @@
 //! Parser emits `N label` as `Value::NumberWithUnit`; planning must resolve against
 //! the typedef's `RatioUnits` (same as quantity constraints after scale rename).
 
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::TypeSpecification;
+use lemma::DateTimeValue;
 use lemma::Engine;
+use lemma::TypeSpecification;
 use lemma::ValueKind;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -14,9 +13,6 @@ use std::str::FromStr;
 
 fn decimal_lit(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap()
-}
-fn rational_lit(d: &str) -> lemma::RationalInteger {
-    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
 }
 
 fn load(engine: &mut Engine, code: &str) {
@@ -58,25 +54,20 @@ fn ratio_minimum_custom_unit_loads_with_canonical_bounds() {
     let schema = engine.schema(None, "s", Some(&now)).expect("schema");
     let entry = schema.data.get("r").expect("data r");
     match &entry.lemma_type.specifications {
-        TypeSpecification::Ratio {
-            minimum,
-            maximum,
-            units,
-            ..
-        } => {
+        TypeSpecification::Ratio { units, .. } => {
             assert_eq!(
-                *minimum,
-                Some(rational_lit("0.05")),
+                entry.lemma_type.specifications.minimum_decimal(),
+                Some(decimal_lit("0.05")),
                 "500 basis_points / 10000"
             );
             assert_eq!(
-                *maximum,
-                Some(rational_lit("1")),
+                entry.lemma_type.specifications.maximum_decimal(),
+                Some(decimal_lit("1")),
                 "10000 basis_points / 10000"
             );
             let bps = units.get("basis_points").expect("basis_points unit");
-            assert_eq!(bps.minimum, Some(rational_lit("500")));
-            assert_eq!(bps.maximum, Some(rational_lit("10000")));
+            assert_eq!(bps.minimum_decimal(), Some(decimal_lit("500")));
+            assert_eq!(bps.maximum_decimal(), Some(decimal_lit("10000")));
         }
         other => panic!("expected Ratio type, got {:?}", other),
     }
@@ -112,6 +103,90 @@ rule out: r
 }
 
 #[test]
+fn ratio_bare_default_rejected_at_load() {
+    let code = r#"
+spec s
+data r: ratio -> default 0.015
+rule out: r
+"#;
+    let mut engine = Engine::new();
+    let err = engine
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "ratio_constraints.lemma",
+            ))),
+        )
+        .expect_err("bare number default on ratio must fail");
+    let s = err
+        .errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    assert!(
+        s.contains("default") && (s.contains("unit") || s.contains("%")),
+        "expected ratio default unit syntax error, got: {s}"
+    );
+}
+
+#[test]
+fn ratio_bare_maximum_rejected_at_load() {
+    let code = r#"
+spec s
+data r: ratio -> maximum 1
+rule out: r
+"#;
+    let mut engine = Engine::new();
+    let err = engine
+        .load(
+            code,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "ratio_constraints.lemma",
+            ))),
+        )
+        .expect_err("bare number maximum on ratio must fail");
+    let s = err
+        .errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    assert!(
+        s.contains("maximum") && (s.contains("unit") || s.contains("%")),
+        "expected ratio maximum unit syntax error, got: {s}"
+    );
+}
+
+#[test]
+fn ratio_default_percent_loads() {
+    let code = r#"
+spec s
+data r: ratio -> default 1.5%
+rule out: r
+"#;
+    let mut engine = Engine::new();
+    load(&mut engine, code);
+
+    let now = DateTimeValue::now();
+    let schema = engine.schema(None, "s", Some(&now)).expect("schema");
+    let entry = schema.data.get("r").expect("data r");
+    let default = entry.default.as_ref().expect("declared default");
+    match &default.value {
+        ValueKind::Ratio(n, u) => {
+            assert_eq!(
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("0.015")
+            );
+            assert_eq!(u.as_deref(), Some("percent"));
+        }
+        other => panic!("expected Ratio default, got {:?}", other),
+    }
+}
+
+#[test]
 fn ratio_minimum_percent_constraint_loads() {
     let code = r#"
 spec s
@@ -124,12 +199,10 @@ rule out: r
     let now = DateTimeValue::now();
     let schema = engine.schema(None, "s", Some(&now)).expect("schema");
     let entry = schema.data.get("r").expect("data r");
-    match &entry.lemma_type.specifications {
-        TypeSpecification::Ratio { minimum, .. } => {
-            assert_eq!(*minimum, Some(rational_lit("0.10")));
-        }
-        other => panic!("expected Ratio type, got {:?}", other),
-    }
+    assert_eq!(
+        entry.lemma_type.specifications.minimum_decimal(),
+        Some(decimal_lit("0.10"))
+    );
 }
 
 #[test]
@@ -141,17 +214,12 @@ fn ratio_minimum_custom_unit_override_enforced() {
     data.insert("r".to_string(), "400 basis_points".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("400 bps < 500 bps minimum");
-    let message = err.to_string();
+    let resp = engine
+        .run(None, "s", Some(&now), data, true)
+        .expect("400 bps < 500 bps minimum must complete with veto");
+    let rr = resp.results.get("out").expect("rule out");
+    assert!(rr.vetoed, "400 bps < 500 bps minimum must veto");
+    let message = rr.veto_reason.clone().expect("veto reason");
     assert!(
         message.contains("minimum") || message.to_lowercase().contains("below"),
         "expected minimum violation, got: {message}"
@@ -189,7 +257,7 @@ rule out: r
     match &default.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("0.05")
             );
             assert_eq!(u.as_deref(), Some("basis_points"));
@@ -208,27 +276,30 @@ fn ratio_minimum_custom_unit_override_accepts_at_bound() {
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, true)
         .expect("500 bps meets minimum");
     let rr = resp.results.get("out").expect("rule out");
-    match &rr.result {
-        OperationResult::Value(v) => match &v.value {
-            ValueKind::Ratio(n, u) => {
-                assert_eq!(
-                    lemma::commit_rational_to_decimal(n).unwrap(),
-                    decimal_lit("0.05")
-                );
-                assert_eq!(u.as_deref(), Some("basis_points"));
-            }
-            other => panic!("expected Ratio, got {:?}", other),
-        },
-        OperationResult::Veto(v) => panic!("unexpected veto: {v}"),
+    if rr.vetoed {
+        panic!(
+            "unexpected veto: {}",
+            rr.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    let lit = rr
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        ValueKind::Ratio(n, u) => {
+            assert_eq!(
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("0.05")
+            );
+            assert_eq!(u.as_deref(), Some("basis_points"));
+        }
+        other => panic!("expected Ratio, got {:?}", other),
     }
 }

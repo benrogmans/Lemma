@@ -25,14 +25,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), HashMap::new(), false)
         .unwrap()
 }
 
@@ -47,14 +40,7 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            map,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), map, false)
         .unwrap()
 }
 
@@ -63,17 +49,20 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("rule '{}' not in results", rule));
-    let val = result
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("rule '{}' is Veto, expected Value", rule));
+    if result.vetoed {
+        panic!(
+            "rule '{}' is Veto: {}",
+            rule,
+            result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
     assert_eq!(
-        val.to_string(),
-        expected,
-        "rule '{}': expected {}, got {}",
+        result.display.as_deref(),
+        Some(expected),
+        "rule '{}': expected {}, got {:?}",
         rule,
         expected,
-        val
+        result.display
     );
 }
 
@@ -1410,7 +1399,7 @@ data threshold: number
             r#"
 spec consumer 2025-01-01
 uses c: cfg
-fill c.threshold: 50
+with c.threshold: 50
 rule t: c.threshold
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(

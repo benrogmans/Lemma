@@ -33,14 +33,7 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            map,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), map, false)
         .unwrap()
 }
 
@@ -49,17 +42,20 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("rule '{}' not in results", rule));
-    let val = result
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("rule '{}' is Veto, expected Value", rule));
+    if result.vetoed {
+        panic!(
+            "rule '{}' is Veto: {}",
+            rule,
+            result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
     assert_eq!(
-        val.to_string(),
-        expected,
-        "rule '{}': expected {}, got {}",
+        result.display.as_deref(),
+        Some(expected),
+        "rule '{}': expected {}, got {:?}",
         rule,
         expected,
-        val
+        result.display
     );
 }
 
@@ -182,21 +178,23 @@ rule doubled: price * 2
     );
 
     // usd must fail: pin locks to finance v1 which only has eur
-    let result = engine.run(
-        None,
-        "shop",
-        Some(&date(2025, 9, 1)),
-        vec![("price".to_string(), "10.00 usd".to_string())]
-            .into_iter()
-            .collect(),
-        false,
-        lemma::EvaluationRequest::default(),
-    );
-    assert!(result.is_err(), "usd should be rejected by pinned v1 type");
-    let err = result.unwrap_err().to_string();
+    let response = engine
+        .run(
+            None,
+            "shop",
+            Some(&date(2025, 9, 1)),
+            vec![("price".to_string(), "10.00 usd".to_string())]
+                .into_iter()
+                .collect(),
+            false,
+        )
+        .expect("usd override must complete with veto, not Error");
+    let doubled = response.results.get("doubled").expect("doubled");
+    assert!(doubled.vetoed, "usd should be rejected by pinned v1 type");
+    let reason = doubled.veto_reason.as_deref().expect("veto reason");
     assert!(
-        err.contains("Unknown unit") && err.contains("usd"),
-        "error should mention unknown unit 'usd', got: {err}"
+        reason.contains("Unknown unit") && reason.contains("usd"),
+        "veto should mention unknown unit 'usd', got: {reason}"
     );
 }
 
@@ -503,7 +501,6 @@ rule doubled: price * 2
             .into_iter()
             .collect(),
         false,
-        lemma::EvaluationRequest::default(),
     );
     match &result {
         Err(e) => {
@@ -517,8 +514,8 @@ rule doubled: price * 2
             // If the engine returns Ok, every rule result must NOT have a successful
             // value using usd — that would mean the pin leaked v2's types.
             for (rule, r) in &resp.results {
-                if let Some(val) = r.result.value() {
-                    let s = val.to_string();
+                if !r.vetoed {
+                    let s = r.display.as_deref().unwrap_or("");
                     assert!(
                         !s.contains("usd"),
                         "rule '{rule}' produced {s} — usd must not be accepted when pinned to finance v1"

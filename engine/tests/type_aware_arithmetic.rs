@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -32,18 +32,17 @@ rule test_passes: price_after_discount is expected
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let price_after_discount = response.results.get("price_after_discount").unwrap();
     assert_eq!(
-        price_after_discount.result.value().unwrap().to_string(),
+        price_after_discount.display.clone().expect("display"),
         "150"
     );
 
     let test_passes = response.results.get("test_passes").unwrap();
-    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
+    assert_eq!(test_passes.display.clone().expect("display"), "true");
 }
 
 #[test]
@@ -76,15 +75,14 @@ rule test_passes: price_with_markup is expected
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let price_with_markup = response.results.get("price_with_markup").unwrap();
-    assert_eq!(price_with_markup.result.value().unwrap().to_string(), "110");
+    assert_eq!(price_with_markup.display.clone().expect("display"), "110");
 
     let test_passes = response.results.get("test_passes").unwrap();
-    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
+    assert_eq!(test_passes.display.clone().expect("display"), "true");
 }
 
 #[test]
@@ -117,15 +115,14 @@ rule test_passes: result is expected
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let result = response.results.get("result").unwrap();
-    assert_eq!(result.result.value().unwrap().to_string(), "150");
+    assert_eq!(result.display.clone().expect("display"), "150");
 
     let test_passes = response.results.get("test_passes").unwrap();
-    assert_eq!(test_passes.result.value().unwrap().to_string(), "true");
+    assert_eq!(test_passes.display.clone().expect("display"), "true");
 }
 
 #[test]
@@ -159,15 +156,14 @@ rule test_passes: final_price is expected
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let discount_amount = response.results.get("discount_amount").unwrap();
-    assert_eq!(discount_amount.result.value().unwrap().to_string(), "50");
+    assert_eq!(discount_amount.display.clone().expect("display"), "50");
 
     let final_price = response.results.get("final_price").unwrap();
-    assert_eq!(final_price.result.value().unwrap().to_string(), "150");
+    assert_eq!(final_price.display.clone().expect("display"), "150");
 }
 
 #[test]
@@ -203,13 +199,12 @@ rule test_passes: after_second is expected
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let after_first = response.results.get("after_first").unwrap();
-    assert_eq!(after_first.result.value().unwrap().to_string(), "80");
+    assert_eq!(after_first.display.clone().expect("display"), "80");
 
     let after_second = response.results.get("after_second").unwrap();
-    assert_eq!(after_second.result.value().unwrap().to_string(), "72");
+    assert_eq!(after_second.display.clone().expect("display"), "72");
 }

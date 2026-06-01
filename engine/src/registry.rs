@@ -10,16 +10,19 @@
 //! Input to all methods is the full repository name as it appears in source
 //! (e.g. `"@org/project"` including the `@` prefix).
 
-use crate::engine::Context;
-use crate::error::Error;
-use crate::limits::ResourceLimits;
-use crate::parsing::ast::{
-    DataValue, DateTimeValue, LemmaRepository, RepositoryQualifier, SpecRef,
-};
-use crate::parsing::source::Source;
-use std::collections::{HashMap, HashSet};
+use crate::parsing::ast::{DateTimeValue, LemmaRepository};
 use std::fmt;
 use std::sync::Arc;
+
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+use {
+    crate::engine::Context,
+    crate::error::Error,
+    crate::limits::ResourceLimits,
+    crate::parsing::ast::{DataValue, RepositoryQualifier, SpecRef},
+    crate::parsing::source::Source,
+    std::collections::{HashMap, HashSet},
+};
 
 // ---------------------------------------------------------------------------
 // Trait and types
@@ -345,7 +348,7 @@ impl Registry for LemmaBase {
 /// Errors are fatal: any registry failure or any unresolved qualifier produces
 /// errors that are returned to the caller without partial loads being silently
 /// retained.
-#[cfg(feature = "registry")]
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 pub async fn resolve_registry_references(
     ctx: &mut Context,
     sources: &mut HashMap<crate::parsing::source::SourceType, String>,
@@ -447,11 +450,13 @@ pub async fn resolve_registry_references(
 
 /// A collected registry repository reference needing fetch.
 #[derive(Debug, Clone)]
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 struct RegistryReference {
     repository: RepositoryQualifier,
     source: Source,
 }
 
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 fn collect_repository_qualifiers_from_spec_ref(
     spec_ref: &SpecRef,
     source: &Source,
@@ -479,6 +484,7 @@ fn collect_repository_qualifiers_from_spec_ref(
 }
 
 /// Collect every distinct registry repository qualifier referenced by specs in `ctx`.
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 fn find_missing_repositories(
     ctx: &Context,
     already_requested: &HashSet<String>,
@@ -514,6 +520,7 @@ fn find_missing_repositories(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::Engine;
 
     /// A test Registry that returns predefined bundles keyed by name.
     struct TestRegistry {
@@ -577,7 +584,8 @@ data price: 100"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in &local_specs {
             store
@@ -591,19 +599,14 @@ data price: 100"#;
         );
 
         let registry = TestRegistry::new();
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
-        assert_eq!(store.len(), 2, "embedded spec si plus workspace example");
+        assert_eq!(store.len(), 2, "embedded spec units plus workspace example");
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "example"));
-        assert!(names.iter().any(|n| n == "si"));
+        assert!(names.iter().any(|n| n == "units"));
     }
 
     #[tokio::test]
@@ -618,7 +621,8 @@ rule value: external.quantity"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -639,20 +643,15 @@ spec helper
 data quantity: 42"#,
         );
 
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "helper"));
-        assert!(names.iter().any(|n| n == "si"));
+        assert!(names.iter().any(|n| n == "units"));
     }
 
     #[tokio::test]
@@ -667,7 +666,8 @@ rule value: external.quantity"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -687,14 +687,9 @@ rule value: external.quantity"#;
 data quantity: 42"#,
         );
 
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
         let ext_repo = store
             .find_repository("@org/project")
@@ -756,7 +751,8 @@ uses a: @org/project spec_a"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -783,21 +779,16 @@ spec spec_b
 data value: 99"#,
         );
 
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
         assert_eq!(store.len(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "spec_a"));
         assert!(names.iter().any(|n| n == "spec_b"));
-        assert!(names.iter().any(|n| n == "si"));
+        assert!(names.iter().any(|n| n == "units"));
     }
 
     #[tokio::test]
@@ -811,7 +802,8 @@ uses a: @org/project spec_a"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -835,21 +827,16 @@ spec spec_b
 data value: 99"#,
         );
 
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
         assert_eq!(store.len(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "spec_a"));
         assert!(names.iter().any(|n| n == "spec_b"));
-        assert!(names.iter().any(|n| n == "si"));
+        assert!(names.iter().any(|n| n == "units"));
     }
 
     #[tokio::test]
@@ -863,7 +850,8 @@ uses external: @org/project missing"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -878,13 +866,9 @@ uses external: @org/project missing"#;
 
         let registry = TestRegistry::new(); // empty — no bundles
 
-        let result = resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await;
+        let result =
+            resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+                .await;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
         let errs = result.unwrap_err();
@@ -933,7 +917,8 @@ data money: finance.money"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -948,13 +933,9 @@ data money: finance.money"#;
 
         let registry = TestRegistry::new(); // empty — no bundles
 
-        let result = resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await;
+        let result =
+            resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+                .await;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
         let errors = result.unwrap_err();
@@ -994,7 +975,8 @@ uses b: @org/shared shared"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -1015,19 +997,14 @@ spec shared
 data value: 1"#,
         );
 
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
         assert_eq!(store.len(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "shared"));
-        assert!(names.iter().any(|n| n == "si"));
+        assert!(names.iter().any(|n| n == "units"));
     }
 
     #[tokio::test]
@@ -1043,7 +1020,8 @@ data price: money"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut store = Context::new();
+        let mut engine = Engine::new();
+        let store = engine.specs_mut();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
@@ -1067,20 +1045,15 @@ data money: quantity
  -> decimals 2"#,
         );
 
-        resolve_registry_references(
-            &mut store,
-            &mut sources,
-            &registry,
-            &ResourceLimits::default(),
-        )
-        .await
-        .unwrap();
+        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
+            .await
+            .unwrap();
 
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "finance"));
-        assert!(names.iter().any(|n| n == "si"));
+        assert!(names.iter().any(|n| n == "units"));
     }
 
     // -----------------------------------------------------------------------

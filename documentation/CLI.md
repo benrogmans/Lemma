@@ -8,7 +8,7 @@ title: CLI Guide
 ## Installation
 
 ```bash
-cargo install lemma-cli
+cargo install lemma
 ```
 
 ## Commands
@@ -28,8 +28,7 @@ lemma run [[repo] spec] [name=value ...] [--prefix PATH] [--rules=RULES] [option
 **Options:**
 - `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
 - `--rules <rules>` -- comma-separated rule names (omit to evaluate all)
-- `--as <rule:unit>` -- convert a **named quantity** rule’s displayed result to another unit declared on that rule’s type (repeatable; e.g. `--as total:usd`). Dependent rules still use the unconverted value; `--explain` still shows the evaluation trace (not a synthetic `rule as unit` root). With `--rules`, every `--as` rule must appear in the rule list.
-- `-o, --output <format>` -- `table` (default) or `json`
+- `--json` -- output results as JSON (default: human-readable table)
 - `-x, --explain` -- show data and reasoning
 - `-i, --interactive` -- guided spec/rule/data selection
 - `--effective <datetime>` -- evaluate at effective datetime (e.g. `2025`, `2025-03`, `2025-03-04`)
@@ -41,37 +40,56 @@ lemma run pricing
 lemma run pricing --rules=total,tax
 lemma run --prefix ./policies nl/tax/net_salary --rules=net_salary -x
 lemma run pricing quantity=10 is_vip=true
-lemma run pricing -o json
+lemma run pricing --json
 lemma run pricing -x
 lemma run pricing --effective 2025-01-01
-lemma run pricing --as total:usd
 lemma run -i
 lemma run '@lemma/std' finance
 ```
 
-### `lemma schema` -- spec schema (data and rules)
+### `lemma schema` -- spec schema (data types, constraints, and rules)
 
-Shows data and rules.
-
-```bash
-lemma schema [source] [spec] [--effective <datetime>]
-```
-
-### `lemma list` -- list workspace specs and repositories
-
-Lists specs in the **workspace (main) repository** only, then a **Repositories** section for loaded named/registry repos. Optional first positional is a workspace directory if it exists on disk; otherwise a single positional is a **repository** qualifier (e.g. `@lemma/std`). With an explicit workspace path, pass `[REPO]` as the second positional. (`lemma run` uses `--prefix` for the workspace instead.)
+Shows data inputs with types and constraints (minimum, maximum, units, decimals, text options), bound values, defaults, and rule result types.
 
 ```bash
-lemma list [source] [REPO] [--effective <datetime>]
+lemma schema [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]
 ```
 
-Examples:
+**Options:**
+- `[repo]` -- optional repository qualifier (e.g. `@lemma/std`)
+- `[spec]` -- spec name (omit when workspace has a single spec)
+- `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
+- `--effective <datetime>` -- effective datetime for temporal specs
+- `--json` -- output schema as JSON (default: human-readable table)
+
+**Examples:**
+
+```bash
+lemma schema pricing
+lemma schema --prefix ./policies net_salary
+lemma schema --prefix tax.lemma calculator
+lemma schema '@lemma/std' finance
+lemma schema pricing --json
+```
+
+### `lemma list` -- list loaded specs by repository
+
+Lists every loaded spec, grouped by repository. Local specs (no repository qualifier) are printed unindented; named repositories (including embedded `lemma`) appear as headers with indented spec names.
+
+```bash
+lemma list [--prefix PATH] [--json]
+```
+
+**Options:**
+- `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
+- `--json` -- output listing as JSON array of `{ "repository", "specs" }` (default: human-readable text)
+
+**Examples:**
 
 ```bash
 lemma list
-lemma list '@lemma/std'
-lemma list ./project spec_composition
-lemma list lemma    # print formatted embedded SI stdlib (repo lemma, spec si)
+lemma list --prefix ./project
+lemma list --json
 ```
 
 ### `lemma fetch` -- fetch registry dependencies
@@ -79,11 +97,12 @@ lemma list lemma    # print formatted embedded SI stdlib (repo lemma, spec si)
 Resolves `@...` references and downloads specs from the registry.
 
 ```bash
-lemma fetch [source] --all            # resolve all @... references
-lemma fetch [source] <dependency> -f  # fetch a specific dependency (e.g. @lemma/std)
+lemma fetch [--prefix PATH] --all
+lemma fetch [--prefix PATH] <dependency> -f
 ```
 
 **Options:**
+- `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
 - `-a, --all` -- fetch all @... references in the workspace
 - `-f, --force` -- overwrite existing specs when content has changed on the registry
 
@@ -100,11 +119,11 @@ lemma format [paths...] [--check] [--stdout]
 ### `lemma server` -- start HTTP server
 
 ```bash
-lemma server [source] [--host <host>] [-p <port>] [--watch] [--explanations]
+lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanations]
 ```
 
 **Options:**
-- `[source]` -- workspace directory or `.lemma` file (default: `.`)
+- `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
 - `--host <host>` -- bind address (default: `127.0.0.1`)
 - `-p, --port <port>` -- port (default: `8012`)
 - `--watch` -- live-reload on `.lemma` file changes
@@ -115,7 +134,6 @@ lemma server [source] [--host <host>] [-p <port>] [--watch] [--explanations]
 | Method | Route | Description |
 |--------|-------|-------------|
 | GET | `/{spec}?data=value` | Evaluate all rules (data as query params) |
-| GET | `/{spec}?as_units=rule:unit,...` | Optional quantity rule-result unit conversion (comma-separated) |
 | POST | `/{spec}` | Evaluate all rules (data as JSON body) |
 | GET/POST | `/{spec}/{rules}` | Evaluate specific rules (comma-separated) |
 | GET | `/` | List all specs with schemas |
@@ -126,10 +144,9 @@ lemma server [source] [--host <host>] [-p <port>] [--watch] [--explanations]
 **Example:**
 
 ```bash
-lemma server [source] --watch
+lemma server --prefix ./policies --watch
 
 curl "http://localhost:8012/pricing?quantity=10&is_member=true"
-curl "http://localhost:8012/pricing?as_units=total:usd"
 
 curl -X POST http://localhost:8012/pricing \
   -H "Content-Type: application/json" \
@@ -141,16 +158,16 @@ curl -X POST http://localhost:8012/pricing \
 AI assistant integration via [Model Context Protocol](https://modelcontextprotocol.io) over stdio.
 
 ```bash
-lemma mcp [source] [--admin]
+lemma mcp [--prefix PATH] [--admin]
 ```
 
 **Options:**
-- `[source]` — workspace directory or `.lemma` file; omit to start without loading from disk
+- `--prefix <path>` — workspace directory or `.lemma` file; omit to start without loading from disk
 - `--admin` — enable admin tools: `add_spec`, `get_spec_source` (read-only by default)
 
 ## Workspace
 
-A workspace is a directory containing `.lemma` files. All commands that accept a `[source]` argument (or `--prefix`) load every `.lemma` file recursively from that directory, plus any registry deps from the global cache.
+A workspace is a directory containing `.lemma` files. Commands that load specs use `--prefix` to select the workspace (default: current directory). Every `.lemma` file is loaded recursively from that directory, plus any registry deps from the global cache.
 
 ```
 policies/

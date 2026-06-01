@@ -18,7 +18,7 @@ data ...
 rule ...
 ```
 
-A common LLM mistake is putting commentary after `uses lemma si` or after the first `data` line. That is invalid and fails to parse. There is no `#`, `//`, or `--` comment syntax either. Use descriptive names for everything else. Put explanations for the user outside the code fence — never inside ` ```lemma ` blocks.
+A common LLM mistake is putting commentary after `uses lemma units` or after the first `data` line. That is invalid and fails to parse. There is no `#`, `//`, or `--` comment syntax either. Use descriptive names for everything else. Put explanations for the user outside the code fence — never inside ` ```lemma ` blocks.
 
 ---
 
@@ -81,7 +81,7 @@ rule has_discount: pricing.standard_discount > 0%
 spec simple_order
 
 uses line: line_item
-fill line.quantity: 100
+with line.quantity: 100
 
 rule order_total:          line.line_total
 rule effective_unit_price: order_total / line.quantity
@@ -89,7 +89,7 @@ rule effective_unit_price: order_total / line.quantity
 
 - `uses alias: target_spec` imports another spec in the same file.
 - Reference imported members as `alias.field` or `alias.rule_name`.
-- `fill alias.field: value` overrides a value from an imported spec. Do not use `data alias.field`.
+- `with alias.field: value` sets data on an imported spec. Do not use `data alias.field`. Local `with name: …` is rejected — use `data name: …` for local slots.
 
 **LemmaBase — shared specs from the registry**
 
@@ -246,9 +246,9 @@ data pay_period: text
 
 Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> default`, `-> help`, and more. See the Reference for the full list.
 
-**Standard library — `uses lemma si`**
+**Standard library — `uses lemma units`**
 
-Lemma embeds SI units in the standard library (`repo lemma`, spec `si`). Import with `uses lemma si`, then reference types as `si.mass`, `si.duration`, `si.length`, and others. Duration units (`hours`, `days`, `weeks`) require `si.duration` or an equivalent type with `-> trait duration`.
+Lemma embeds SI units in the standard library (`repo lemma`, spec `units`). Import with `uses lemma units`, then reference types as `units.mass`, `units.duration`, `units.length`, and others. Duration units (`hours`, `days`, `weeks`) require `units.duration` or an equivalent type with `-> trait duration`.
 
 ```lemma
 spec logistics
@@ -256,15 +256,11 @@ spec logistics
 Physical shipment constraints using SI units from the standard library.
 """
 
-uses lemma si
+uses lemma units
 
-data package_weight: si.mass
-data shift_length:      si.duration
-data route_distance:     si.length
-
-fill package_weight: 12 kilogram
-fill shift_length:      8 hours
-fill route_distance:     45 kilometer
+data package_weight: 12 kilogram
+data shift_length:      8 hours
+data route_distance:     45 kilometer
 
 rule weight_grams:  package_weight as gram
 rule shift_hours:   shift_length as hours
@@ -274,27 +270,25 @@ rule is_heavy:      package_weight > 20 kilogram
 rule is_long_shift: shift_length >= 8 hours
 ```
 
-Prefer `si.mass`, `si.duration`, and `si.length` over redefining kilogram, hour, or metre in every spec. Use `as <unit>` to convert within a quantity family.
+Prefer `units.mass`, `units.duration`, and `units.length` over redefining kilogram, hour, or metre in every spec. Convert within a family with `as <unit>`; strip to a bare number with a chain: `amount as eur as number`. Cross-family relabel keeps magnitude: `5 eur as kg` → `5 kg`.
 
 **Ranges — half-open intervals**
 
-Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit>`. Range kinds: `number range`, `date range`, `calendar range`, `quantity range`, `ratio range`.
+Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>` when the result should stay unit-labelled). Bare `as number` on date/quantity ranges is rejected. Range typedefs: `number range`, `date range`, `quantity range`, `ratio range`. Calendar month/year intervals use `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar` with a range default.
 
 ```lemma
 spec eligibility
-uses lemma si
+uses lemma units
 
-data employee_age:       42 years
+data employee_age:       42 year
 data performance_score:  75
-data package_weight:     si.mass
+data package_weight:     45 kilogram
 data hire_date:          2024-01-15
 data review_date:        2024-06-30
 data discount_rate:      15%
 
-fill package_weight: 45 kilogram
-
-data eligible_band: calendar range
-  -> default 18 years...67 years
+data eligible_band: units.calendar
+  -> default 18 year...67 year
 
 data score_band: number range
   -> default 0...100
@@ -334,11 +328,11 @@ rule band_width: (30 kilogram...80 kilogram) as kilogram
 
 **Derived quantities — compound units**
 
-Build units from other units with `/`, `*`, and `^`. Name each derived unit, then give a compound expression. Earlier quantity types in the same spec must declare the base units referenced (`eur`, `hour`, `employee`, `results`) so Lemma can resolve dimensions. Import `uses lemma si` when compound units involve time (`eur/hour`, `results/eur/hour/employee`).
+Build units from other units with `/`, `*`, and `^`. Name each derived unit, then give a compound expression. Earlier quantity types in the same spec must declare the base units referenced (`eur`, `hour`, `employee`, `results`) so Lemma can resolve dimensions. Import `uses lemma units` when compound units involve time (`eur/hour`, `results/eur/hour/employee`).
 
 ```lemma
 spec contractor
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1.00
@@ -426,7 +420,7 @@ Tiered discounts, derived rules referencing prior rules, unless on computed valu
 
 ```lemma
 spec shipping_policy
-uses lemma si
+uses lemma units
 
 data destination_country: text
   -> option "NL"
@@ -446,7 +440,7 @@ data destination_region: text
 data is_expedited:       boolean
 data is_hazardous:       boolean
 data is_po_box:          boolean
-data item_weight:        si.mass
+data item_weight:        units.mass
 data order_total:        number -> minimum 0
 
 rule base_shipping_rate: 35
@@ -503,7 +497,7 @@ rule Summary: "Standard shipping"
   unless is_expedited then "Expedited shipping"
 ```
 
-Each fee is its own rule. `item_weight` uses `si.mass` with kilogram thresholds. Veto clauses are placed last in `weight_surcharge` and `ships_to_location`. Boolean eligibility (`free_shipping_eligible`) is separate from amount rules.
+Each fee is its own rule. `item_weight` uses `units.mass` with kilogram thresholds. Veto clauses are placed last in `weight_surcharge` and `ships_to_location`. Boolean eligibility (`free_shipping_eligible`) is separate from amount rules.
 
 ---
 
@@ -593,7 +587,7 @@ If `validated_score` vetoes but `use_default` is true, `result = 50` because the
 5. **Unless chains** — default first, general to specific, vetoes last.
 6. **No inline comments** — no `#`, `//`, or trailing annotations. Commentary (`"""..."""`) only as the first block after `spec <name> [<effective>]`, never after `uses` or `data`.
 7. **Validate** — would `lemma schema` list the right inputs? Do overlapping unless cases resolve to the intended bottommost value?
-8. **Defer advanced features** — registry imports from LemmaBase, temporal pins → read linked docs. Use `uses lemma si`, ranges, and compound units when the domain needs them.
+8. **Defer advanced features** — registry imports from LemmaBase, temporal pins → read linked docs. Use `uses lemma units`, ranges, and compound units when the domain needs them.
 
 ---
 
@@ -610,7 +604,7 @@ rule discount: 0%  # default: no discount
 Commentary after `uses` (WRONG — a frequent LLM mistake; fails to parse):
 ```lemma
 spec wholesale_nuts_pricing
-uses lemma si
+uses lemma units
 """
 B2B pricing calculation for a wholesale nuts supplier.
 Handles product base pricing, organic premiums, and freight shipping.
@@ -639,7 +633,7 @@ B2B pricing for a wholesale nuts supplier.
 Handles base pricing, organic premiums, volume discounts, and freight.
 """
 
-uses lemma si
+uses lemma units
 
 data base_price: number
 ```
@@ -746,8 +740,8 @@ spec pricing
 - [Coffee order](https://github.com/lemma/lemma/blob/main/documentation/examples/01_coffee_order.lemma): data constraints, unless, veto enumeration
 - [Library fees](https://github.com/lemma/lemma/blob/main/documentation/examples/02_library_fees.lemma): unless chains, boolean vs veto
 - [Rules and unless](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/02_rules_and_unless.lemma): progressive unless chains
-- [Spec references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/03_spec_references.lemma): compound units (`eur/hour`), `uses lemma si`
-- [Unit conversions](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/04_unit_conversions.lemma): `si.duration`, `as` conversions
+- [Spec references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/03_spec_references.lemma): compound units (`eur/hour`), `uses lemma units`
+- [Unit conversions](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/04_unit_conversions.lemma): `units.duration`, `as` conversions
 - [Spec composition](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/11_spec_composition.lemma): multi-spec hierarchy
 - [Registry references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/12_registry_references.lemma): `uses @user/repo spec_name`
 - [Shipping policy](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/07_shipping_policy.lemma): complex decomposed rules

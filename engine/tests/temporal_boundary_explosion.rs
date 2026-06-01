@@ -43,18 +43,11 @@ rule out: s.v
 
     for month in 1..=12 {
         let d = date(2025, month, 5);
-        let r = engine.run(
-            None,
-            "consumer",
-            Some(&d),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        );
+        let r = engine.run(None, "consumer", Some(&d), HashMap::new(), false);
         assert!(r.is_ok(), "month {month}: {:?}", r.err());
         let resp = r.unwrap();
         let rule = resp.results.get("out").expect("out");
-        let v = rule.result.value().expect("value");
+        let v = rule.display.clone().expect("display");
         assert_eq!(v.to_string(), "1", "month {month}");
     }
 }

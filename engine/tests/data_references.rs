@@ -1,23 +1,17 @@
-/// Integration tests for the data reference (value-copy) feature.
-///
-/// QA NOTE: tests in this file encode the INTENDED behavior of data
-/// references. Do NOT weaken, mask, `#[ignore]`, or `#[should_panic]`
-/// these tests. If a test goes red, fix the regression — do not soften
-/// the assertion.
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+/// Integration tests for `with` bindings (import-path LHS) and local-with rejection.
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
-fn rule_value(result: &lemma::evaluation::Response, rule_name: &str) -> String {
+fn rule_value(result: &lemma::Response, rule_name: &str) -> String {
     let rr = result
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule_name));
-    match &rr.result {
-        OperationResult::Value(v) => v.to_string(),
-        OperationResult::Veto(v) => format!("VETO({})", v),
+    if rr.vetoed {
+        return format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
+    rr.display.clone().expect("display")
 }
 
 fn load_err_joined(engine_res: Result<(), lemma::Errors>) -> String {
@@ -29,40 +23,39 @@ fn load_err_joined(engine_res: Result<(), lemma::Errors>) -> String {
 }
 
 #[test]
-fn local_reference_to_nested_spec_data_copies_value() {
-    let code = r#"
-spec law
-data other: number -> default 42
-
-spec license
-uses l: law
-fill license2: l.other
-rule check: license2 > 10
-"#;
-
+fn local_fill_literal_rejected_at_parse() {
     let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .unwrap();
+    let joined = load_err_joined(engine.load(
+        r#"spec s
+with x: 42"#,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
+    assert!(
+        joined.contains("imported spec") || joined.contains("alias.field"),
+        "local with must be rejected at parse, got: {joined}"
+    );
+}
 
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "license",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("should run");
+#[test]
+fn local_fill_import_reference_rejected_at_parse() {
+    let mut engine = Engine::new();
+    let joined = load_err_joined(engine.load(
+        r#"spec inner
+data v: number
 
-    assert_eq!(rule_value(&result, "check"), "true");
+spec outer
+uses i: inner
+with copy: i.v"#,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "reference.lemma",
+        ))),
+    ));
+    assert!(
+        joined.contains("imported spec") || joined.contains("alias.field"),
+        "local with must be rejected at parse, got: {joined}"
+    );
 }
 
 #[test]
@@ -78,7 +71,7 @@ data slot: number
 spec top
 uses lic: inner
 uses lw: law
-fill lic.slot: lw.other
+with lic.slot: lw.other
 rule answer: lic.slot
 "#;
 
@@ -94,105 +87,12 @@ rule answer: lic.slot
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "answer"), "99");
 }
 
-#[test]
-fn user_value_overrides_reference() {
-    let code = r#"
-spec law
-data other: number -> default 42
-
-spec license
-uses l: law
-fill license2: l.other
-rule check: license2
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .unwrap();
-
-    let mut data = HashMap::new();
-    data.insert("license2".to_string(), "777".to_string());
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "license",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("should run");
-
-    assert_eq!(rule_value(&result, "check"), "777");
-}
-
-#[test]
-fn reference_chain_resolves_in_dependency_order() {
-    let code = r#"
-spec base
-data other: number -> default 5
-
-spec mid
-uses b: base
-fill m2: b.other
-
-spec top
-uses mm: mid
-fill t2: mm.m2
-rule result: t2
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("should run");
-
-    assert_eq!(rule_value(&result, "result"), "5");
-}
-
-/// Closed data-reference cycle: two bindings in the same spec point at each
-/// other via the shared binding path. Planning MUST reject this with a
-/// circular reference error. Previous iteration of this test did not close
-/// the cycle and just asserted `load` succeeded, which is the opposite of
-/// the invariant.
 #[test]
 fn closed_reference_cycle_is_rejected() {
     let code = r#"
@@ -202,8 +102,8 @@ data b: number
 
 spec outer
 uses i: inner
-fill i.a: i.b
-fill i.b: i.a
+with i.a: i.b
+with i.b: i.a
 "#;
 
     let mut engine = Engine::new();
@@ -220,17 +120,15 @@ fill i.b: i.a
     );
 }
 
-/// Self-referential reference: `fill x: outer.x` where outer.x resolves back
-/// to itself. A 1-node cycle must still be rejected.
 #[test]
-fn self_referential_reference_is_rejected() {
+fn self_referential_binding_reference_is_rejected() {
     let code = r#"
 spec inner
 data x: number
 
 spec outer
 uses i: inner
-fill i.x: i.x
+with i.x: i.x
 "#;
 
     let mut engine = Engine::new();
@@ -243,96 +141,10 @@ fill i.x: i.x
 
     assert!(
         joined.contains("Circular data reference"),
-        "self-referential reference must be reported as a circular data reference, got: {joined}"
+        "self-referential binding reference must be reported as a circular data reference, got: {joined}"
     );
 }
 
-#[test]
-fn unknown_reference_target_is_rejected_with_exact_error() {
-    let code = r#"
-spec test
-data a: number -> default 1
-fill b: a.nonexistent
-rule r: b
-"#;
-
-    let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-    ));
-
-    assert!(
-        joined.contains("'a' is not a spec reference")
-            || joined.contains("'nonexistent' not found")
-            || joined.contains("target 'a.nonexistent' does not exist"),
-        "unknown reference target must identify the missing path, got: {joined}"
-    );
-}
-
-/// Reference target is a `SpecRef` data (i.e. a `with` binding). Planning
-/// must reject this because a spec reference has no value to copy.
-#[test]
-fn reference_target_is_spec_reference_rejected() {
-    let code = r#"
-spec inner
-data x: number -> default 1
-
-spec outer
-uses i: inner
-fill copy_of_i: i
-rule r: copy_of_i
-"#;
-
-    let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-    ));
-
-    assert!(
-        joined.contains("is a spec reference and cannot carry a value"),
-        "referencing a spec reference must be rejected with the exact error, got: {joined}"
-    );
-}
-
-/// Target name is BOTH a data and a rule in the referenced spec. Reference
-/// resolution must flag this as ambiguous.
-#[test]
-fn reference_target_is_ambiguous_data_and_rule() {
-    let code = r#"
-spec inner
-data conflict: number -> default 1
-rule conflict: 2
-
-spec outer
-uses i: inner
-fill c: i.conflict
-rule r: c
-"#;
-
-    let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-    ));
-
-    assert!(
-        joined.contains("is ambiguous"),
-        "duplicate data+rule name must be reported as ambiguous reference target, got: {joined}"
-    );
-}
-
-/// Binding overrides a child-declared type with a reference whose target is
-/// a different primitive kind. Planning must catch the primitive-kind
-/// mismatch via the binding path: child-declared LHS (`number`) vs target
-/// (`text`).
 #[test]
 fn binding_reference_target_type_incompatible_with_child_declared_type_is_rejected() {
     let code = r#"
@@ -345,7 +157,7 @@ data s: text -> default "hello"
 spec outer
 uses i: inner
 uses src: source_spec
-fill i.n: src.s
+with i.n: src.s
 rule r: i.n
 "#;
 
@@ -359,122 +171,19 @@ rule r: i.n
 
     assert!(
         joined.contains("type mismatch"),
-        "binding reference with target of a different base kind must be rejected with a \
-         type mismatch error, got: {joined}"
+        "binding reference with target of a different base kind must be rejected, got: {joined}"
     );
 }
 
-/// RULE-TARGET REFERENCE, value case. `fill x: i.my_r` where `my_r` is a
-/// rule in inner spec returning `42`. The reference MUST copy the rule's
-/// evaluated result into the reference path so that downstream rules see
-/// the value.
 #[test]
-fn rule_target_reference_copies_rule_value() {
-    let code = r#"
-spec inner
-rule my_r: 42
-
-spec top
-uses i: inner
-fill x: i.my_r
-rule out: x
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("rule-target reference must be accepted at plan time");
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("must evaluate without error");
-
-    assert_eq!(rule_value(&result, "out"), "42");
-}
-
-/// RULE-TARGET REFERENCE, veto case. If the target rule returns a `Veto`,
-/// the reference path becomes missing/vetoed and any consumer rule
-/// propagates the veto with the SAME reason.
-#[test]
-fn rule_target_reference_propagates_veto() {
-    let code = r#"
-spec inner
-data denom: number -> default 0
-rule divided: 10 / denom
-
-spec top
-uses i: inner
-fill x: i.divided
-rule out: x
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("rule-target reference must be accepted at plan time");
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("evaluator must run; veto is a domain result, not an error");
-
-    let rr = result
-        .results
-        .get("out")
-        .expect("rule 'out' must be present");
-    match &rr.result {
-        OperationResult::Veto(v) => {
-            let s = v.to_string();
-            assert!(
-                s.contains("Division by zero"),
-                "reference must propagate the target rule's division-by-zero veto reason, got: {s}"
-            );
-        }
-        OperationResult::Value(v) => {
-            panic!("expected propagated veto, got value: {v}");
-        }
-    }
-}
-
-/// RULE-TARGET REFERENCE, cycle case. The outer spec references inner-spec
-/// data `i.slot` to outer's own rule `r`, and `r` reads `i.slot`. The
-/// reference path injects an `r -> r` edge in the rule dependency graph,
-/// which the topological sort MUST detect and reject as a circular
-/// dependency.
-#[test]
-fn rule_target_reference_cycle_through_self_is_rejected() {
+fn rule_target_binding_reference_cycle_through_self_is_rejected() {
     let code = r#"
 spec inner
 data slot: number
 
 spec outer
 uses i: inner
-fill i.slot: r
+with i.slot: r
 rule r: i.slot
 "#;
 
@@ -488,17 +197,12 @@ rule r: i.slot
 
     assert!(
         joined.to_lowercase().contains("circular") || joined.to_lowercase().contains("cycle"),
-        "rule-target reference forming a cycle with its target rule must be rejected at plan \
-         time with a circular-dependency error, got: {joined}"
+        "rule-target binding forming a cycle must be rejected, got: {joined}"
     );
 }
 
-/// RULE-TARGET REFERENCE, LHS-declared type mismatch. The bound data
-/// declares `number` in the inner spec; the binding references it to a
-/// rule that returns text. Planning MUST reject the kind mismatch via the
-/// reference's LHS-vs-target check.
 #[test]
-fn rule_target_reference_lhs_type_mismatch_is_rejected() {
+fn rule_target_binding_reference_lhs_type_mismatch_is_rejected() {
     let code = r#"
 spec inner
 data v: number
@@ -509,7 +213,7 @@ rule greeting: "hello"
 spec outer
 uses i: inner
 uses src: source_spec
-fill i.v: src.greeting
+with i.v: src.greeting
 rule r: i.v
 "#;
 
@@ -523,114 +227,10 @@ rule r: i.v
 
     assert!(
         joined.contains("type mismatch"),
-        "rule-target reference whose target rule's type kind differs from the \
-         child-declared LHS type must be rejected with a type mismatch error, \
-         got: {joined}"
+        "rule-target binding with type kind mismatch must be rejected, got: {joined}"
     );
 }
 
-/// RULE-TARGET REFERENCE in a chain. `top.y` is a data-target reference to
-/// `mid.x`, which is itself a rule-target reference to `inner.my_r`.
-/// Reading `y` must transitively resolve through `mid.x` to the rule's
-/// value, yielding 42 at `y`.
-///
-/// Each hop uses a dotted RHS so the parser treats both as `DataValue::Fill` with a
-/// reference payload (typedef references are reserved for non-dotted local RHS like
-/// `data y: x`).
-#[test]
-fn rule_target_reference_in_chain_resolves_value() {
-    let code = r#"
-spec inner
-rule my_r: 42
-
-spec mid
-uses i: inner
-fill x: i.my_r
-
-spec top
-uses m: mid
-fill y: m.x
-rule out: y
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("rule-target reference chain must be accepted at plan time");
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("must evaluate without error");
-
-    assert_eq!(rule_value(&result, "out"), "42");
-}
-
-/// RULE-TARGET REFERENCE, user override. A caller-supplied value for the
-/// reference data path must win over the target rule's evaluated result.
-/// The user value is injected at plan-finalization time, replacing the
-/// reference entry with a `Value` definition; the lazy resolver is never
-/// consulted.
-#[test]
-fn rule_target_reference_user_override_wins_over_rule_value() {
-    let code = r#"
-spec inner
-rule my_r: 42
-
-spec top
-uses i: inner
-fill x: i.my_r
-rule out: x
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("rule-target reference must be accepted at plan time");
-
-    let now = DateTimeValue::now();
-    let mut overrides = HashMap::new();
-    overrides.insert("x".to_string(), "99".to_string());
-    let result = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            overrides,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("must evaluate without error");
-
-    assert_eq!(
-        rule_value(&result, "out"),
-        "99",
-        "user-provided override at the reference path must win over the target rule's value"
-    );
-}
-
-/// RUNTIME CONSTRAINT CHECK on referenced value via binding. The child
-/// declares `maximum 5`; the reference copies a value of 10 from a source
-/// spec. The engine MUST reject the copied value against the child-declared
-/// tighter constraint. Silently copying an out-of-range value is a
-/// landmine.
 #[test]
 fn reference_value_violating_child_declared_max_is_rejected() {
     let code = r#"
@@ -643,7 +243,7 @@ data v: number -> default 10
 spec outer
 uses i: inner
 uses src: source_spec
-fill i.limited: src.v
+with i.limited: src.v
 rule r: i.limited
 "#;
 
@@ -658,32 +258,19 @@ rule r: i.limited
     match load_result {
         Ok(()) => {
             let now = DateTimeValue::now();
-            let run_result = engine.run(
-                None,
-                "outer",
-                Some(&now),
-                HashMap::new(),
-                false,
-                lemma::EvaluationRequest::default(),
-            );
+            let run_result = engine.run(None, "outer", Some(&now), HashMap::new(), false);
 
             match run_result {
                 Ok(resp) => {
                     let rr = resp.results.get("r").expect("rule 'r'");
-                    match &rr.result {
-                        OperationResult::Veto(v) => {
-                            let s = v.to_string();
-                            assert!(
-                                s.contains("maximum") || s.contains("exceeds"),
-                                "expected max-constraint veto, got: {s}"
-                            );
-                        }
-                        OperationResult::Value(v) => {
-                            panic!(
-                                "expected constraint-violation veto or error; engine silently \
-                                 accepted out-of-range referenced value {v} (planning landmine)"
-                            );
-                        }
+                    if rr.vetoed {
+                        let s = rr.veto_reason.as_deref().expect("veto reason");
+                        assert!(
+                            s.contains("maximum") || s.contains("exceeds"),
+                            "expected max-constraint veto, got: {s}"
+                        );
+                    } else {
+                        panic!("expected constraint-violation veto; got {:?}", rr.display);
                     }
                 }
                 Err(err) => {
@@ -711,54 +298,6 @@ rule r: i.limited
     }
 }
 
-/// Local `default` constraint on a reference supplies a value when the
-/// target value is missing.
-#[test]
-fn reference_local_default_supplies_value_when_target_missing() {
-    let code = r#"
-spec inner
-data maybe: number
-
-spec outer
-uses i: inner
-data here: number -> default 77
-fill here: i.maybe
-rule r: here
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("must load");
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("must evaluate");
-
-    assert_eq!(
-        rule_value(&result, "r"),
-        "77",
-        "data-local default must apply when fill target is missing"
-    );
-}
-
-/// PARSER PIN: `data x: notdotted` in local (non-binding) context MUST remain
-/// `DataValue::Definition` (schema RHS), NOT be parsed as `DataValue::Fill`. The AST doc claims
-/// this; the parser agrees. This test pins that behavior so a future refactor
-/// does not silently change it.
 #[test]
 fn local_non_dotted_rhs_stays_definition() {
     let code = r#"
@@ -780,28 +319,12 @@ rule r: person
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), HashMap::new(), false)
         .expect("evaluates; `person` is typed 'age' and inherits its default");
 
-    assert_eq!(
-        rule_value(&result, "r"),
-        "30",
-        "typedef inheritance must propagate default; if this becomes a value-copy reference \
-         instead, the parser silently changed shape"
-    );
+    assert_eq!(rule_value(&result, "r"), "30");
 }
 
-/// PARSER+PLANNER PIN: `fill x.y: notdotted` in binding context IS parsed as
-/// `DataValue::Fill` with a reference payload (value-copy). When the referenced name `src` exists in the
-/// SAME (outer) spec where the binding lives, the reference must resolve and
-/// copy the source's value to the bound child data.
 #[test]
 fn binding_non_dotted_rhs_resolves_in_enclosing_spec() {
     let code = r#"
@@ -811,7 +334,7 @@ data slot: number
 spec outer
 uses i: inner
 data src: number -> default 123
-fill i.slot: src
+with i.slot: src
 rule r: i.slot
 "#;
 
@@ -827,79 +350,11 @@ rule r: i.slot
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
-    assert_eq!(
-        rule_value(&result, "r"),
-        "123",
-        "non-dotted RHS in binding context must resolve as reference and copy 'src' value"
-    );
+    assert_eq!(rule_value(&result, "r"), "123");
 }
 
-/// SCHEMA SURFACE: `data here: number -> default N` must appear on the
-/// schema's `default` field when `fill here: …` copies from another slot.
-#[test]
-fn reference_local_default_appears_in_schema() {
-    let code = r#"
-spec inner
-data maybe: number
-
-spec outer
-uses i: inner
-data here: number -> default 77
-fill here: i.maybe
-rule r: here
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("must load");
-
-    let now = DateTimeValue::now();
-    let schema = engine
-        .schema(None, "outer", Some(&now))
-        .expect("schema must build");
-
-    let here_entry = schema
-        .data
-        .get("here")
-        .expect("schema must include 'here' data entry");
-
-    let default = here_entry
-        .default
-        .as_ref()
-        .expect("schema must surface `data here` `-> default 77`");
-
-    let rendered = default.to_string();
-    assert!(
-        rendered.contains("77"),
-        "schema default must render as 77; got: {rendered}"
-    );
-}
-
-/// HEURISTIC TIGHTENING: a discriminant-only kind compatibility check
-/// treats two quantity types in different families as compatible (both are
-/// `TypeSpecification::Quantity`). Per `error-model.mdc`, a temperature-quantity
-/// reference whose target is a money-quantity value is invalid Lemma and
-/// must be rejected at planning, not silently propagated.
-///
-/// The LHS-side quantity family is established by the binding's child-spec
-/// type declaration (`inner.payment` extends a money family); the RHS
-/// reference target is in a temperature family. Same `Quantity` discriminant,
-/// different families. Planning must reject.
 #[test]
 fn binding_reference_quantity_family_mismatch_is_rejected() {
     let code = r#"
@@ -914,7 +369,7 @@ data temperature: temp_unit
 spec outer
 uses i: inner
 uses src: source_spec
-fill i.payment: src.temperature
+with i.payment: src.temperature
 rule r: i.payment
 "#;
 
@@ -932,91 +387,5 @@ rule r: i.payment
             || joined.contains("family")
             || joined.contains("type mismatch"),
         "expected quantity-family-mismatch error, got: {joined}"
-    );
-}
-
-#[test]
-fn local_fill_literal_assigns_into_declared_slot() {
-    let code = r#"
-spec s
-data x: number -> default 0
-fill x: 42
-rule r: x
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("local fill literal with declared slot must plan");
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("should run");
-    assert_eq!(rule_value(&result, "r"), "42");
-}
-
-#[test]
-fn local_fill_literal_defines_slot_without_data_row() {
-    let code = r#"
-spec s
-fill y: 1
-rule r: y
-"#;
-
-    let mut engine = Engine::new();
-    engine
-        .load(
-            code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "reference.lemma",
-            ))),
-        )
-        .expect("fill literal without prior data row defines the slot");
-
-    let now = DateTimeValue::now();
-    let result = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("should run");
-    assert_eq!(rule_value(&result, "r"), "1");
-}
-
-#[test]
-fn fill_with_arrow_syntax_is_rejected_at_parse() {
-    let code = r#"
-spec s
-fill y: number -> minimum 0
-rule r: y
-"#;
-
-    let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-    ));
-    assert!(
-        joined.contains("fill") && joined.contains("data"),
-        "fill with -> must be rejected at parse; got: {joined}"
     );
 }

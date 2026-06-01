@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, TypeSpecification};
 use std::collections::HashMap;
 
@@ -13,7 +13,7 @@ data salary: number
 
     let test_spec = r#"
 spec test
-fill salary: money.salary
+with salary: money.salary
 rule total: salary
 "#;
 
@@ -29,8 +29,8 @@ rule total: salary
 
     let err_msg = err.errors[0].to_string();
     assert!(
-        err_msg.contains("Data 'money' not found"),
-        "Unexpected error message: {}",
+        err_msg.contains("imported spec") || err_msg.contains("alias.field"),
+        "local with without import path must be rejected at parse: {}",
         err_msg
     );
 }
@@ -82,14 +82,7 @@ rule total: age + adult_age + twenties
     data.insert("twenties".to_string(), "25".to_string());
 
     let response = engine
-        .run(
-            None,
-            "test_types",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test_types", Some(&now), data, false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "test_types");
@@ -101,7 +94,7 @@ rule total: age + adult_age + twenties
         .expect("total rule not found");
 
     // 25 + 30 + 25 = 80
-    assert_eq!(total_rule.result.value().unwrap().to_string(), "80");
+    assert_eq!(total_rule.display.clone().expect("display"), "80");
 }
 
 #[test]
@@ -127,18 +120,11 @@ rule x: pi
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "finance",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "finance", Some(&now), HashMap::new(), false)
         .expect("run finance");
 
     let rule_x = response.results.get("x").expect("rule x");
-    assert_eq!(rule_x.result.value().unwrap().to_string(), "3.14");
+    assert_eq!(rule_x.display.clone().expect("display"), "3.14");
 }
 
 /// Regression test: quantity type with `-> default` before `-> unit` must work.

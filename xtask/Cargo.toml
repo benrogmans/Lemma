@@ -8,7 +8,9 @@ license.workspace = true
 
 [dependencies]
 semver = "1"
+serde.workspace = true
 serde_json.workspace = true
+rust_decimal.workspace = true
 toml_edit = "0.22"
 
 [[bin]]

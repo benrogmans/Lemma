@@ -9,7 +9,7 @@ IMPORTANT: Unless clauses use "last matching wins" semantics.
 More specific conditions should come after more general ones.
 """
 
-uses lemma si
+uses lemma units
 
 data country: text
   -> option "NL"

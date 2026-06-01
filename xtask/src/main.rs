@@ -1,3 +1,4 @@
+mod bench_report;
 mod hex_standalone;
 mod lsp;
 mod versions;
@@ -148,7 +149,7 @@ fn precommit() {
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone"
+        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo run -p xtask -- bench-report"
     );
 }
 
@@ -208,6 +209,18 @@ fn main() {
             let rest: Vec<String> = args.collect();
             if let Err(e) = lsp::run(&root, &rest) {
                 eprintln!("lsp: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("bench-report") => {
+            if args.next().is_some() {
+                eprintln!("bench-report: takes no arguments");
+                usage();
+                std::process::exit(1);
+            }
+            let root = versions::workspace_root();
+            if let Err(e) = bench_report::run(&root) {
+                eprintln!("bench-report: {e}");
                 std::process::exit(1);
             }
         }

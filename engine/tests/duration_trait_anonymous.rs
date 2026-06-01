@@ -1,4 +1,4 @@
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -39,19 +39,15 @@ fn eval_literal(
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), HashMap::new(), true)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -65,6 +61,30 @@ fn eval_rule(
     effective: &DateTimeValue,
 ) -> String {
     eval_literal(code, spec_name, rule_name, effective).to_string()
+}
+
+fn eval_rule_quantity_unit(
+    code: impl AsRef<str>,
+    spec_name: &str,
+    rule_name: &str,
+    unit: &str,
+    effective: &DateTimeValue,
+) -> String {
+    let code = code.as_ref();
+    let mut engine = Engine::new();
+    engine.load(code, source()).expect("Should parse and plan");
+    let response = engine
+        .run(None, spec_name, Some(effective), HashMap::new(), true)
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .cloned()
+        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
 }
 
 fn eval_bool(
@@ -189,25 +209,33 @@ fn is_numeric_context_character(character: char) -> bool {
 #[test]
 fn anon_date_range_to_hours() {
     let code = r#"spec test
-uses lemma si
-rule value: (2024-01-01...2024-01-02) as hours"#;
+uses lemma units
+rule value: (2024-01-01...2024-01-02) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["24", "hour"]);
+    assert_contains_all(&value, &["24"]);
 }
 
 #[test]
 fn anon_date_range_to_minutes() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2024-01-01...2024-01-02) as minutes"#;
-    let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["1440", "minute"]);
+    assert_eq!(
+        eval_rule_quantity_unit(
+            code,
+            "test",
+            "value",
+            "minutes",
+            &effective(2026, 3, 8, 12, 0, 0)
+        ),
+        "1440"
+    );
 }
 
 #[test]
 fn anon_date_range_compare_named_duration() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: (2024-01-01...2024-01-02) >= 12 hours"#;
     assert!(eval_bool(
         code,
@@ -220,7 +248,7 @@ rule ok: (2024-01-01...2024-01-02) >= 12 hours"#;
 #[test]
 fn anon_date_range_compare_named_duration_equal() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: (2024-01-01...2024-01-02) >= 1 day"#;
     assert!(eval_bool(
         code,
@@ -233,89 +261,88 @@ rule ok: (2024-01-01...2024-01-02) >= 1 day"#;
 #[test]
 fn anon_sum_of_two_date_ranges_to_named_duration() {
     let code = r#"spec test
-uses lemma si
-rule value: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) as hours"#;
+uses lemma units
+rule value: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["48", "hour"]);
+    assert_contains_all(&value, &["48"]);
 }
 
 #[test]
 fn anon_date_range_plus_named_duration() {
     let code = r#"spec test
-uses lemma si
-rule value: ((2024-01-01...2024-01-02) + 2 hours) as hours"#;
+uses lemma units
+rule value: ((2024-01-01...2024-01-02) + 2 hours) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["26", "hour"]);
+    assert_contains_all(&value, &["26"]);
 }
 
 #[test]
 fn anon_named_duration_plus_date_range() {
     let code = r#"spec test
-uses lemma si
-rule value: (2 hours + (2024-01-01...2024-01-02)) as hours"#;
+uses lemma units
+rule value: (2 hours + (2024-01-01...2024-01-02)) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["26", "hour"]);
+    assert_contains_all(&value, &["26"]);
 }
 
 #[test]
 fn anon_date_range_times_number() {
     let code = r#"spec test
-uses lemma si
-rule value: ((2024-01-01...2024-01-02) * 2) as hours"#;
+uses lemma units
+rule value: (2 * (2024-01-01...2024-01-02 as hours)) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["48", "hour"]);
+    assert_contains_all(&value, &["48"]);
 }
 
 #[test]
 fn anon_number_times_date_range() {
     let code = r#"spec test
-uses lemma si
-rule value: (2 * (2024-01-01...2024-01-02)) as hours"#;
+uses lemma units
+rule value: (2 * (2024-01-01...2024-01-02 as hours)) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["48", "hour"]);
+    assert_contains_all(&value, &["48"]);
 }
 
 #[test]
 fn anon_datetime_minus_time_to_named_duration() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2024-01-01T03:30:00Z - 01:00:00) as minutes"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["150", "minute"]);
 }
 
 #[test]
-fn anon_time_minus_time_to_named_duration() {
+fn anon_time_minus_time_rejected_with_datetime_range_suggestion() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (14:30:00 - 13:00:00) as minutes"#;
-    let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["90", "minute"]);
+    expect_plan_error(code, "datetime range");
 }
 
 #[test]
 fn anon_reversed_date_range_span_is_absolute_hours() {
     let code = r#"spec test
-uses lemma si
-rule value: (2024-01-02...2024-01-01) as hours"#;
+uses lemma units
+rule value: (2024-01-02...2024-01-01) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["24", "hour"]);
+    assert_contains_all(&value, &["24"]);
 }
 
 #[test]
 fn anon_explicit_temporal_window_plus_named_duration() {
     let code = r#"spec test
-uses lemma si
-rule value: ((now - 7 days...now) + 2 hours) as hours"#;
+uses lemma units
+rule value: ((now - 7 days...now) + 2 hours) as hours as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
-    assert_contains_all(&value, &["170", "hour"]);
+    assert_contains_all(&value, &["170"]);
 }
 
 #[test]
 fn anon_date_range_to_unrelated_unit_rejected() {
     let code = format!(
         r#"spec test
-uses lemma si
+uses lemma units
 {money}
 rule value: (2024-01-01...2024-01-02) as eur"#,
         money = MONEY_TYPEDEF
@@ -326,24 +353,31 @@ rule value: (2024-01-01...2024-01-02) as eur"#,
 #[test]
 fn anon_date_range_compare_to_bare_number_rejected() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: (2024-01-01...2024-01-02) > 5"#;
     expect_plan_error(code, "number");
 }
 
 #[test]
-fn anon_sum_to_bare_number_conversion_rejected() {
+fn date_range_sum_promotes_to_duration_and_strips_to_canonical_seconds() {
+    // `(range + range)` produces a duration-decomp quantity. Chained `as seconds as number`
+    // yields canonical seconds (2 days = 172800 seconds).
     let code = r#"spec test
-uses lemma si
-rule value: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) as number"#;
-    expect_plan_error(code, "as number");
+uses lemma units
+rule value: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) as seconds as number"#;
+    let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
+    assert!(
+        value.contains("172800"),
+        "expected canonical seconds (172800), got: {}",
+        value
+    );
 }
 
 #[test]
 fn anon_result_compare_to_unrelated_quantity_rejected() {
     let code = format!(
         r#"spec test
-uses lemma si
+uses lemma units
 {money}
 rule ok: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) > 5 eur"#,
         money = MONEY_TYPEDEF
@@ -355,10 +389,10 @@ rule ok: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) > 5 eur"#,
 fn anon_result_plus_unrelated_quantity_rejected() {
     let code = format!(
         r#"spec test
-uses lemma si
+uses lemma units
 {money}
 rule value: (2024-01-01...2024-01-02) + 5 eur"#,
         money = MONEY_TYPEDEF
     );
-    expect_plan_error(code, "unrelated");
+    expect_plan_error(code, "date range");
 }

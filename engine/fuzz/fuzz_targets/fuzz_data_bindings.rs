@@ -2,7 +2,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use lemma::Engine;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use std::collections::HashMap;
 
 fuzz_target!(|data: &[u8]| {
@@ -22,7 +22,7 @@ rule doubled: x * 2
             let mut data = HashMap::new();
             data.insert("x".to_string(), s.to_string());
             let now = DateTimeValue::now();
-            let _ = engine.run(None, "fuzz_test", Some(&now), data, false, lemma::EvaluationRequest::default());
+            let _ = engine.run(None, "fuzz_test", Some(&now), data, false);
         }
     }
 });

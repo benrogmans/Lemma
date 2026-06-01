@@ -23,7 +23,7 @@ fn mcp_session(
     let mut cmd = Command::new(bin);
     cmd.arg("mcp");
     if let Some(p) = workdir {
-        cmd.arg(p);
+        cmd.arg("--prefix").arg(p);
     }
     if admin {
         cmd.arg("--admin");
@@ -362,7 +362,9 @@ fn test_mcp_get_spec_source_embedded_lemma_repository() {
         .as_str()
         .expect("get_spec_source should return text");
     assert!(
-        text.contains("repo lemma") && text.contains("spec si") && text.contains("trait duration"),
+        text.contains("repo lemma")
+            && text.contains("spec units")
+            && text.contains("trait duration"),
         "Should return formatted embedded stdlib, got: {text}"
     );
 }
@@ -781,7 +783,7 @@ fn test_mcp_list_specs_empty_workspace() {
         .expect("list_specs should return text");
 
     assert!(
-        text.contains("Repository: lemma") && text.contains("Spec: si"),
+        text.contains("Repository: lemma") && text.contains("Spec: units"),
         "embedded stdlib must appear in list_specs, got: {text}"
     );
 }
@@ -812,7 +814,7 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
         .expect("list_specs should return text");
 
     assert!(
-        text.contains("Repository: lemma") && text.contains("Spec: si"),
+        text.contains("Repository: lemma") && text.contains("Spec: units"),
         "embedded stdlib must appear, got: {text}"
     );
     assert!(
@@ -844,7 +846,7 @@ fn test_mcp_omit_path_no_disk_at_startup() {
         .as_str()
         .expect("list_specs should return text");
     assert!(
-        text.contains("Repository: lemma") && text.contains("Spec: si"),
+        text.contains("Repository: lemma") && text.contains("Spec: units"),
         "embedded stdlib must appear when no workspace path, got: {text}"
     );
     assert!(text.contains("add_spec"));

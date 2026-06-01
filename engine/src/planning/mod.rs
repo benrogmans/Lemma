@@ -9,6 +9,7 @@
 //! - Interface contract: data (inputs) + rules (outputs), including full type constraints.
 //!   Cross-spec bindings must satisfy this contract at planning time.
 
+pub mod data_input;
 pub mod discovery;
 pub mod execution_plan;
 pub mod graph;
@@ -18,15 +19,10 @@ pub mod spec_set;
 use crate::engine::Context;
 use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::Error;
+pub use data_input::DataValueInput;
 pub use execution_plan::ExecutionPlanSet;
-pub use execution_plan::{Branch, ExecutableRule, ExecutionPlan, SpecSchema};
+pub use execution_plan::{ExecutableRule, ExecutionPlan, SpecSchema};
 use indexmap::IndexMap;
-pub use semantics::{
-    negated_comparison, ArithmeticComputation, ComparisonComputation, Data, DataDefinition,
-    DataPath, DataValue, Expression, ExpressionKind, LemmaType, LiteralValue, LogicalComputation,
-    MathematicalComputation, NegationType, PathSegment, RulePath, Source, Span, TypeDefiningSpec,
-    TypeExtends, ValueKind, VetoExpression,
-};
 pub use spec_set::LemmaSpecSet;
 use std::sync::Arc;
 
@@ -195,13 +191,16 @@ fn plan_spec(
         };
 
         match graph::Graph::build(context, repository, spec, &dag, &effective) {
-            Ok((graph, slice_types)) => {
-                match execution_plan::build_execution_plan(&graph, &slice_types, &effective) {
+            Ok((graph, mut slice_types)) => {
+                match execution_plan::build_execution_plan(&graph, &mut slice_types, &effective) {
                     Ok(execution_plan) => {
                         let value_errors =
                             execution_plan::validate_literal_data_against_types(&execution_plan);
-                        spec_result.errors.extend(value_errors);
-                        spec_result.plans.push(execution_plan);
+                        if value_errors.is_empty() {
+                            spec_result.plans.push(execution_plan);
+                        } else {
+                            spec_result.errors.extend(value_errors);
+                        }
                     }
                     Err(plan_errors) => {
                         spec_result.errors.extend(plan_errors);
@@ -613,7 +612,7 @@ uses contract: nonexistent"#;
         //   data x: money
         // spec two:
         //   with one
-        //   fill one.x: 7
+        //   with one.x: 7
         //   rule getx: one.x
         let code = r#"
 spec one
@@ -622,7 +621,7 @@ data x: money
 
 spec two
 uses one
-fill one.x: 7
+with one.x: 7
 rule getx: one.x
 "#;
 
@@ -822,7 +821,8 @@ rule total_quantity: inventory.quantity"#;
         // A spec referencing a non-existing import AND a non-existing
         // spec should report errors for BOTH, not just stop at the first.
         let source = r#"spec demo
-fill money: nonexistent_type_source.amount
+uses type_src: nonexistent_type_source
+with type_src.amount: 10
 uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#;
@@ -893,7 +893,8 @@ rule total: helper.value + price"#;
         // (e.g. ext.some_data where ext is a spec ref to a non-existing spec)
         // must still be reported.
         let source = r#"spec demo
-fill currency: missing_spec.currency
+uses cur: missing_spec
+with cur.currency: 10
 uses ext: also_missing
 rule val: ext.some_data"#;
 
@@ -1056,7 +1057,7 @@ rule val: x
 
 spec consumer
 uses d: dep
-fill d.x: 5
+with d.x: 5
 rule result: d.val
 "#;
         let specs = parse(
@@ -1131,9 +1132,9 @@ rule limit: threshold
 
 spec calculator
 uses r: rates
-fill r.base_rate: 0.03
+with r.base_rate: 0.03
 uses c: config
-fill c.threshold: 200
+with c.threshold: 200
 rule combined: r.rate + c.limit
 "#;
         let specs = parse(

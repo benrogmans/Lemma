@@ -9,7 +9,7 @@ This example demonstrates:
 - Duration-aware arithmetic
 """
 
-uses lemma si
+uses lemma units
 
 data container_volume    : 5
 data contract_term       : 52 weeks

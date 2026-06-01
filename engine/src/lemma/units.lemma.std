@@ -1,10 +1,11 @@
 repo lemma
 
-spec si
+spec units
 """
-SI base units.
+SI base units and calendar periods.
 Duration units are canonical `second` (not `hour`).
 Length units are canonical `metre` (not `kilometer`).
+Calendar units are canonical `month` (not `year`).
 """
 
 data duration: quantity
@@ -71,3 +72,10 @@ data substance: quantity
 data luminous_intensity: quantity
   -> unit candela 1
   -> unit candelas 1
+
+data calendar: quantity
+  -> unit month 1
+  -> unit months 1
+  -> unit year 12
+  -> unit years 12
+  -> trait calendar

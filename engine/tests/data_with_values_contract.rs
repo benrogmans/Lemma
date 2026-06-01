@@ -7,24 +7,49 @@
 //!   - schema-backed [`DataDefinition::TypeDeclaration`] → success
 //!   - Value → replaces literal
 //!   - Reference → replaces reference target copy
-//!   - validation failures per primitive
-//!   - related_data attribution in errors
+//!   - validation failures per primitive → Veto on dependent rules
+//!   - invalid override reasons surface in rule veto text
 
-use lemma::error::ErrorKind;
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
-fn rule_value(result: &lemma::evaluation::Response, name: &str) -> String {
+fn assert_rule_vetoed(
+    result: Result<lemma::Response, lemma::Error>,
+    rule_name: &str,
+    reason_contains: &str,
+) -> String {
+    let resp = result.unwrap_or_else(|err| {
+        panic!("run must complete with veto, not abort with Error — got: {err}")
+    });
+    let rr = resp
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("rule '{rule_name}' not found"));
+    assert!(
+        rr.vetoed,
+        "rule '{rule_name}' must veto on invalid override, got {:?}",
+        rr.display
+    );
+    let reason = rr.veto_reason.clone().expect("veto reason");
+    if !reason_contains.is_empty() {
+        assert!(
+            reason.contains(reason_contains),
+            "expected '{reason_contains}' in veto reason, got: {reason}"
+        );
+    }
+    reason
+}
+
+fn rule_value(result: &lemma::Response, name: &str) -> String {
     let rr = result
         .results
         .get(name)
         .unwrap_or_else(|| panic!("rule '{}' not found", name));
-    match &rr.result {
-        OperationResult::Value(v) => v.to_string(),
-        OperationResult::Veto(v) => format!("VETO({})", v),
+    if rr.vetoed {
+        return format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
+    rr.display.clone().expect("display")
 }
 
 #[test]
@@ -48,14 +73,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, false)
         .expect_err("unknown key must fail");
     let s = err.to_string();
     assert!(
@@ -88,14 +106,7 @@ rule r: i.x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), data, false)
         .expect_err("spec-ref override must fail");
     let s = err.to_string();
     assert!(
@@ -124,14 +135,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -156,14 +160,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }
@@ -187,23 +184,11 @@ rule r: age
     data.insert("age".to_string(), "thirty".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("wrong kind must fail");
-
-    assert_eq!(
-        err.related_data(),
-        Some("age"),
-        "related_data attribution must point at the failing data name"
+    assert_rule_vetoed(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "number",
     );
-    assert_eq!(err.kind(), ErrorKind::Validation);
 }
 
 #[test]
@@ -225,20 +210,10 @@ rule r: n
     data.insert("n".to_string(), "5".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("violates minimum");
-    let s = err.to_string();
-    assert!(
-        s.contains("minimum") || s.contains("at least"),
-        "expected minimum-violation message, got: {s}"
+    assert_rule_vetoed(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "minimum",
     );
 }
 
@@ -261,20 +236,10 @@ rule r: n
     data.insert("n".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("violates maximum");
-    let s = err.to_string();
-    assert!(
-        s.contains("maximum") || s.contains("at most") || s.contains("exceeds"),
-        "expected maximum-violation message, got: {s}"
+    assert_rule_vetoed(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "maximum",
     );
 }
 
@@ -297,20 +262,10 @@ rule r: msg
     data.insert("msg".to_string(), "way too long".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("violates length");
-    let s = err.to_string();
-    assert!(
-        s.contains("length"),
-        "expected length-violation message, got: {s}"
+    assert_rule_vetoed(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "length",
     );
 }
 
@@ -344,20 +299,10 @@ rule r: color
     data.insert("color".to_string(), "purple".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("not in options");
-    let s = err.to_string();
-    assert!(
-        s.contains("option") || s.contains("not allowed") || s.contains("valid"),
-        "expected options-violation message, got: {s}"
+    assert_rule_vetoed(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "option",
     );
 }
 
@@ -378,14 +323,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -398,8 +336,8 @@ data v: number -> default 1
 
 spec outer
 uses i: inner
-fill copy: i.v
-rule r: copy
+with i.v: 42
+rule r: i.v
 "#;
     let mut engine = Engine::new();
     engine
@@ -410,18 +348,11 @@ rule r: copy
         .unwrap();
 
     let mut data = HashMap::new();
-    data.insert("copy".to_string(), "500".to_string());
+    data.insert("i.v".to_string(), "500".to_string());
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "500");
 }
@@ -433,42 +364,28 @@ fn override_on_reference_still_validates_against_merged_type() {
     // not just the target's type.
     let code = r#"
 spec inner
+data n: number -> maximum 5
 data v: number
 
 spec outer
 uses i: inner
-data n: number -> maximum 5
-fill n: i.v
-rule r: n
+with i.n: i.v
+rule r: i.n
 "#;
     let mut engine = Engine::new();
     let load_result = engine.load(
         code,
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
     );
-    if load_result.is_err() {
-        // Planning might reject this particular shape (LHS+reference redeclare);
-        // if so, test ends here (shape-specific error is not our concern).
-        return;
-    }
+    load_result.expect("binding with i.n must plan");
 
     let mut data = HashMap::new();
-    data.insert("n".to_string(), "10".to_string());
+    data.insert("i.n".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("merged-type validation must reject 10 against LHS `maximum 5`");
-    let s = err.to_string();
-    assert!(
-        s.contains("maximum") || s.contains("at most") || s.contains("exceeds"),
-        "merged-type validation should have rejected 10, got: {s}"
+    assert_rule_vetoed(
+        engine.run(None, "outer", Some(&now), data, false),
+        "r",
+        "maximum",
     );
 }

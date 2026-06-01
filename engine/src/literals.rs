@@ -200,6 +200,41 @@ impl QuantityUnit {
         let denominator = *self.factor.denom();
         numerator != 0 && (numerator > 0) == (denominator > 0)
     }
+
+    /// Conversion factor as decimal (schema unit factors always commit).
+    pub fn factor_decimal(&self) -> Decimal {
+        rational::commit_rational_to_decimal(&self.factor)
+            .expect("BUG: quantity unit factor must commit to decimal")
+    }
+
+    #[must_use]
+    pub fn minimum_decimal(&self) -> Option<Decimal> {
+        self.minimum
+            .as_ref()
+            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+    }
+
+    #[must_use]
+    pub fn maximum_decimal(&self) -> Option<Decimal> {
+        self.maximum
+            .as_ref()
+            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+    }
+
+    #[must_use]
+    pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
+        self.default_magnitude
+            .as_ref()
+            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+    }
+
+    /// Maximum bound lifted to canonical units via `maximum * factor`.
+    #[must_use]
+    pub fn maximum_canonical_decimal(&self) -> Option<Decimal> {
+        let maximum = self.maximum.as_ref()?;
+        let canonical = rational::checked_mul(maximum, &self.factor).ok()?;
+        rational::commit_rational_to_decimal(&canonical).ok()
+    }
 }
 
 mod quantity_unit_factor_serialization {
@@ -276,6 +311,30 @@ impl QuantityUnits {
     }
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+    pub fn map<F: FnMut(QuantityUnit) -> QuantityUnit>(self, f: F) -> Self {
+        QuantityUnits(self.0.into_iter().map(f).collect())
+    }
+}
+
+impl QuantityUnit {
+    pub fn with_decomposition(self, decomposition: BaseQuantityVector) -> Self {
+        Self {
+            decomposition,
+            ..self
+        }
+    }
+    pub fn with_factor(self, factor: RationalInteger) -> Self {
+        Self { factor, ..self }
+    }
+    pub fn with_derived_quantity_factors(
+        self,
+        derived_quantity_factors: Vec<(String, i32)>,
+    ) -> Self {
+        Self {
+            derived_quantity_factors,
+            ..self
+        }
     }
 }
 
@@ -380,6 +439,41 @@ impl RatioUnit {
         self.minimum = None;
         self.maximum = None;
         self.default_magnitude = None;
+    }
+
+    /// Unit scale as decimal (schema ratio unit values always commit).
+    pub fn value_decimal(&self) -> Decimal {
+        rational::commit_rational_to_decimal(&self.value)
+            .expect("BUG: ratio unit value must commit to decimal")
+    }
+
+    #[must_use]
+    pub fn minimum_decimal(&self) -> Option<Decimal> {
+        self.minimum
+            .as_ref()
+            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+    }
+
+    #[must_use]
+    pub fn maximum_decimal(&self) -> Option<Decimal> {
+        self.maximum
+            .as_ref()
+            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+    }
+
+    #[must_use]
+    pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
+        self.default_magnitude
+            .as_ref()
+            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+    }
+
+    /// Maximum bound lifted to canonical ratio space via `maximum * value`.
+    #[must_use]
+    pub fn maximum_canonical_decimal(&self) -> Option<Decimal> {
+        let maximum = self.maximum.as_ref()?;
+        let canonical = rational::checked_mul(maximum, &self.value).ok()?;
+        rational::commit_rational_to_decimal(&canonical).ok()
     }
 }
 
@@ -536,68 +630,6 @@ impl fmt::Display for BooleanValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CalendarUnit {
-    Month,
-    Year,
-}
-
-impl CalendarUnit {
-    #[must_use]
-    pub fn from_keyword(s: &str) -> Option<Self> {
-        match s.trim().to_lowercase().as_str() {
-            "month" | "months" => Some(Self::Month),
-            "year" | "years" => Some(Self::Year),
-            _ => None,
-        }
-    }
-
-    #[must_use]
-    pub fn canonical_factor(&self) -> RationalInteger {
-        match self {
-            Self::Month => rational::rational_one(),
-            Self::Year => RationalInteger::new(12, 1),
-        }
-    }
-}
-
-impl Serialize for CalendarUnit {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for CalendarUnit {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        s.parse().map_err(serde::de::Error::custom)
-    }
-}
-
-impl fmt::Display for CalendarUnit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let s = match self {
-            CalendarUnit::Month => "months",
-            CalendarUnit::Year => "years",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-impl std::str::FromStr for CalendarUnit {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_keyword(s).ok_or_else(|| format!("Unknown calendar unit: '{}'", s))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
@@ -734,7 +766,6 @@ pub enum Value {
     Date(DateTimeValue),
     Time(TimeValue),
     Boolean(BooleanValue),
-    Calendar(Decimal, CalendarUnit),
     Range(Box<Value>, Box<Value>),
 }
 
@@ -775,7 +806,6 @@ impl fmt::Display for Value {
                     write!(f, "{} {}", s, unit)
                 }
             },
-            Value::Calendar(n, u) => write!(f, "{} {}", n, u),
             Value::Range(left, right) => write!(f, "{}...{}", left, right),
         }
     }
@@ -979,32 +1009,6 @@ impl std::str::FromStr for TextLiteral {
             ));
         }
         Ok(TextLiteral(s.to_string()))
-    }
-}
-
-/// Calendar magnitude: number + unit (e.g. "10 months").
-pub(crate) struct CalendarLiteral(pub Decimal, pub CalendarUnit);
-
-impl std::str::FromStr for CalendarLiteral {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let trimmed = s.trim();
-        let mut parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() < 2 {
-            return Err(format!(
-                "Invalid calendar value: '{}'. Expected format: <number> <unit> (e.g. 10 months, 2 years)",
-                s
-            ));
-        }
-        let unit_str = parts.pop().unwrap();
-        let number_str = parts.join(" ");
-        let n = number_str
-            .parse::<NumberLiteral>()
-            .map_err(|_| format!("Invalid calendar number: '{}'", number_str))?
-            .0;
-        let unit = unit_str.parse()?;
-        Ok(CalendarLiteral(n, unit))
     }
 }
 

@@ -1,31 +1,28 @@
 //! Pure Rust evaluation engine for Lemma
 //!
 //! Executes pre-validated execution plans in dependency order.
-//! The execution plan is self-contained with all rules flattened into branches.
-//! The evaluator executes rules linearly without recursion or tree traversal.
+//! Authoritative results come from normalized decision tables; when `explain` is
+//! enabled, original branches are also evaluated to build a full trace tree.
 
-pub mod conversion_explanation;
-pub mod explanation;
+pub mod conversion_trace;
+pub mod evaluation_trace;
 pub mod expression;
 pub mod operations;
-pub mod request;
 pub mod response;
 
-use crate::computation::units::{convert_unit, UnitResolutionContext};
-use crate::evaluation::explanation::{ExplanationNode, ValueSource};
 use crate::evaluation::operations::VetoType;
 use crate::evaluation::response::EvaluatedRule;
 use crate::planning::execution_plan::validate_value_against_type;
 use crate::planning::semantics::{
-    Data, DataDefinition, DataPath, DataValue, Expression, LemmaType, LiteralValue,
-    ReferenceTarget, RulePath, ValueKind,
+    Data, DataDefinition, DataPath, DataValue, LemmaType, LiteralValue, ReferenceTarget, RulePath,
+    ValueKind,
 };
 use crate::planning::ExecutionPlan;
 use indexmap::IndexMap;
-pub use operations::{ComputationKind, OperationKind, OperationRecord, OperationResult};
-pub use request::{parse_rule_result_conversion_strings, EvaluationRequest};
+pub use operations::OperationResult;
 pub use response::{DataGroup, Response, RuleResult};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub(crate) const DECIMAL_VALUE_LIMIT_VETO_MESSAGE: &str =
     "Calculated result exceeds decimal value limit";
@@ -36,8 +33,7 @@ fn literal_value_committable_to_decimal_wire(value: &LiteralValue) -> bool {
     match &value.value {
         ValueKind::Number(rational)
         | ValueKind::Ratio(rational, _)
-        | ValueKind::Calendar(rational, _) => commit_rational_to_decimal(rational).is_ok(),
-        ValueKind::Quantity(rational, _, _) => commit_rational_to_decimal(rational).is_ok(),
+        | ValueKind::Quantity(rational, _) => commit_rational_to_decimal(rational).is_ok(),
         ValueKind::Range(left, right) => {
             literal_value_committable_to_decimal_wire(left)
                 && literal_value_committable_to_decimal_wire(right)
@@ -61,13 +57,15 @@ fn ensure_rule_result_within_decimal_wire_limit(result: OperationResult) -> Oper
     }
 }
 
-/// Evaluation context for storing intermediate results
-pub(crate) struct EvaluationContext {
+/// Evaluation context for storing intermediate results during one plan run.
+///
+/// Borrows the [`ExecutionPlan`] for expression-scope units ([`ExecutionPlan::expression_unit_index`])
+/// and signature disambiguation. Rule-result materialization uses each rule's [`ExecutableRule::rule_type`].
+pub(crate) struct EvaluationContext<'plan> {
+    plan: &'plan ExecutionPlan,
     data_values: HashMap<DataPath, LiteralValue>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
-    rule_explanations: HashMap<RulePath, crate::evaluation::explanation::Explanation>,
-    operations: Option<Vec<crate::evaluation::operations::OperationRecord>>,
-    explanation_nodes: HashMap<usize, crate::evaluation::explanation::ExplanationNode>,
+    rule_explanations: HashMap<RulePath, crate::evaluation::evaluation_trace::EvaluationTrace>,
     now: LiteralValue,
     /// Map of rule-target reference data paths to their target rule path.
     /// Used by [`Self::lazy_rule_reference_resolve`] at first read of the
@@ -87,15 +85,13 @@ pub(crate) struct EvaluationContext {
     /// Merged `resolved_type` per reference data path, used to validate
     /// rule-target reference values lazily in
     /// [`Self::lazy_rule_reference_resolve`].
-    reference_types: HashMap<DataPath, LemmaType>,
-    /// Maps each quantity unit name to its owning `LemmaType` (post-decomp).
-    /// Cloned from [`ExecutionPlan::unit_index`]. Used by the `as <unit>` evaluation path
-    /// to resolve anonymous intermediate quantity values into named typed values.
-    pub(crate) unit_index: HashMap<String, LemmaType>,
+    reference_types: HashMap<DataPath, Arc<LemmaType>>,
+    /// Data paths read during evaluation (successful reads only).
+    used_data_paths: HashSet<DataPath>,
 }
 
-impl EvaluationContext {
-    fn new(plan: &ExecutionPlan, now: LiteralValue, record_operations: bool) -> Self {
+impl<'plan> EvaluationContext<'plan> {
+    fn new(plan: &'plan ExecutionPlan, now: LiteralValue) -> Self {
         let mut data_values: HashMap<DataPath, LiteralValue> = plan
             .data
             .iter()
@@ -105,17 +101,27 @@ impl EvaluationContext {
         let rule_references: HashMap<DataPath, RulePath> =
             build_transitive_rule_references(&plan.data);
 
-        let reference_types: HashMap<DataPath, LemmaType> = plan
+        let reference_types: HashMap<DataPath, Arc<LemmaType>> = plan
             .data
             .iter()
             .filter_map(|(path, def)| match def {
                 DataDefinition::Reference { resolved_type, .. } => {
-                    Some((path.clone(), resolved_type.clone()))
+                    Some((path.clone(), Arc::clone(resolved_type)))
                 }
                 _ => None,
             })
             .collect();
-        let mut reference_vetoes: HashMap<DataPath, VetoType> = HashMap::new();
+        let mut reference_vetoes: HashMap<DataPath, VetoType> = plan
+            .data
+            .iter()
+            .filter_map(|(path, def)| {
+                if let DataDefinition::Violated { reason, .. } = def {
+                    Some((path.clone(), VetoType::computation(reason.clone())))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         // Resolve data-target references: copy the target's value into the
         // reference path. Must happen in dependency order so reference-of-
@@ -148,9 +154,9 @@ impl EvaluationContext {
                     if let Some(value_kind) = copied_kind {
                         let value = LiteralValue {
                             value: value_kind,
-                            lemma_type: resolved_type.clone(),
+                            lemma_type: Arc::clone(resolved_type),
                         };
-                        match validate_value_against_type(resolved_type, &value) {
+                        match validate_value_against_type(resolved_type.as_ref(), &value) {
                             Ok(()) => {
                                 data_values.insert(reference_path.clone(), value);
                             }
@@ -167,7 +173,7 @@ impl EvaluationContext {
                     } else if let Some(dv) = local_default {
                         let value = LiteralValue {
                             value: dv.clone(),
-                            lemma_type: resolved_type.clone(),
+                            lemma_type: Arc::clone(resolved_type),
                         };
                         data_values.insert(reference_path.clone(), value);
                     }
@@ -192,24 +198,32 @@ impl EvaluationContext {
             }
         }
 
-        let unit_index = plan.unit_index.clone();
-
         Self {
+            plan,
             data_values,
             rule_results: HashMap::new(),
             rule_explanations: HashMap::new(),
-            operations: if record_operations {
-                Some(Vec::new())
-            } else {
-                None
-            },
-            explanation_nodes: HashMap::new(),
             now,
             rule_references,
             reference_vetoes,
             reference_types,
-            unit_index,
+            used_data_paths: HashSet::new(),
         }
+    }
+
+    pub(crate) fn record_data_use(&mut self, data_path: &DataPath) {
+        self.used_data_paths.insert(data_path.clone());
+    }
+
+    fn used_data_values(&self) -> HashMap<DataPath, LiteralValue> {
+        self.used_data_paths
+            .iter()
+            .filter_map(|path| {
+                self.data_values
+                    .get(path)
+                    .map(|value| (path.clone(), value.clone()))
+            })
+            .collect()
     }
 
     /// Resolve a rule-target reference data path lazily from the already-
@@ -275,40 +289,17 @@ impl EvaluationContext {
         self.data_values.get(data_path)
     }
 
-    fn push_operation(&mut self, kind: OperationKind) {
-        if let Some(ref mut ops) = self.operations {
-            ops.push(OperationRecord { kind });
-        }
-    }
-
-    fn set_explanation_node(
-        &mut self,
-        expression: &Expression,
-        node: crate::evaluation::explanation::ExplanationNode,
-    ) {
-        self.explanation_nodes
-            .insert(expression as *const Expression as usize, node);
-    }
-
-    fn get_explanation_node(
-        &self,
-        expression: &Expression,
-    ) -> Option<&crate::evaluation::explanation::ExplanationNode> {
-        self.explanation_nodes
-            .get(&(expression as *const Expression as usize))
-    }
-
     fn get_rule_explanation(
         &self,
         rule_path: &RulePath,
-    ) -> Option<&crate::evaluation::explanation::Explanation> {
+    ) -> Option<&crate::evaluation::evaluation_trace::EvaluationTrace> {
         self.rule_explanations.get(rule_path)
     }
 
     fn set_rule_explanation(
         &mut self,
         rule_path: RulePath,
-        explanation: crate::evaluation::explanation::Explanation,
+        explanation: crate::evaluation::evaluation_trace::EvaluationTrace,
     ) {
         self.rule_explanations.insert(rule_path, explanation);
     }
@@ -347,52 +338,6 @@ fn build_transitive_rule_references(
     out
 }
 
-fn collect_used_data_from_explanation(
-    node: &ExplanationNode,
-    out: &mut HashMap<DataPath, LiteralValue>,
-) {
-    match node {
-        ExplanationNode::Value {
-            value,
-            source: ValueSource::Data { data_ref },
-            ..
-        } => {
-            out.entry(data_ref.clone()).or_insert_with(|| value.clone());
-        }
-        ExplanationNode::Value { .. } => {}
-        ExplanationNode::RuleReference { expansion, .. } => {
-            collect_used_data_from_explanation(expansion.as_ref(), out);
-        }
-        ExplanationNode::Computation { operands, .. } => {
-            for op in operands {
-                collect_used_data_from_explanation(op, out);
-            }
-        }
-        ExplanationNode::Branches {
-            matched,
-            non_matched,
-            ..
-        } => {
-            if let Some(ref cond) = matched.condition {
-                collect_used_data_from_explanation(cond, out);
-            }
-            collect_used_data_from_explanation(&matched.result, out);
-            for nm in non_matched {
-                collect_used_data_from_explanation(&nm.condition, out);
-                if let Some(ref res) = nm.result {
-                    collect_used_data_from_explanation(res, out);
-                }
-            }
-        }
-        ExplanationNode::Condition { operands, .. } => {
-            for op in operands {
-                collect_used_data_from_explanation(op, out);
-            }
-        }
-        ExplanationNode::Veto { .. } => {}
-    }
-}
-
 #[cfg(test)]
 mod runtime_invariant_tests {
     use super::*;
@@ -418,7 +363,7 @@ data v: number -> default 5
 spec outer
 uses i: inner
 uses src: source_spec
-fill i.slot: src.v
+with i.slot: src.v
 rule r: i.slot
 "#;
         let mut engine = Engine::new();
@@ -447,7 +392,7 @@ rule r: i.slot
             .expect("plan must contain the reference for `i.slot`");
 
         let resolved_type = match plan_basis.data.get(&reference_path).expect("entry exists") {
-            DataDefinition::Reference { resolved_type, .. } => resolved_type.clone(),
+            DataDefinition::Reference { resolved_type, .. } => Arc::clone(resolved_type),
             _ => unreachable!("filter above kept only Reference entries"),
         };
 
@@ -457,9 +402,9 @@ rule r: i.slot
             value: crate::planning::semantics::ValueKind::Date(
                 crate::planning::semantics::date_time_to_semantic(&now),
             ),
-            lemma_type: crate::planning::semantics::primitive_date().clone(),
+            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
-        let context = EvaluationContext::new(&plan, now_lit, false);
+        let context = EvaluationContext::new(&plan, now_lit);
 
         let stored = context
             .data_values
@@ -490,20 +435,25 @@ impl Evaluator {
     /// `Value` (stored `Decimal` semantics) or `Veto` for impossible data (e.g. division
     /// by zero). Panics indicate engine bugs, not user-facing failures.
     ///
-    /// When `record_operations` is true, each rule's evaluation records a trace of
-    /// operations (data used, rules used, computations, branch evaluations) into
-    /// `RuleResult::operations`. When false, no trace is recorded.
+    /// When `explain` is true, each rule is evaluated on both the normalized decision
+    /// table and the original branches (with a debug assertion that they agree), and
+    /// each rule's [`RuleResult::trace`] is included in the response (serialized as
+    /// `explanation`). When `explain` is false, only the normalized path runs.
     pub(crate) fn evaluate(
         &self,
         plan: &ExecutionPlan,
         now: LiteralValue,
-        record_operations: bool,
-        request: &request::EvaluationRequest,
+        explain: bool,
     ) -> Response {
-        let mut context = EvaluationContext::new(plan, now, record_operations);
+        let effective = match &now.value {
+            ValueKind::Date(date) => date.to_string(),
+            other => panic!("BUG: evaluation now must be a date, got {other:?}"),
+        };
+        let mut context = EvaluationContext::new(plan, now);
 
         let mut response = Response {
             spec_name: plan.spec_name.clone(),
+            effective,
             spec_hash: None,
             spec_effective_from: None,
             spec_effective_to: None,
@@ -513,41 +463,13 @@ impl Evaluator {
 
         // Execute each rule in topological order (already sorted by ExecutionPlan)
         for exec_rule in &plan.rules {
-            if let Some(ref mut ops) = context.operations {
-                ops.clear();
-            }
-            context.explanation_nodes.clear();
-
-            let (mut result, mut explanation) = expression::evaluate_rule(exec_rule, &mut context);
+            let (mut result, mut explanation) =
+                expression::evaluate_rule(exec_rule, &mut context, explain);
 
             context
                 .rule_results
                 .insert(exec_rule.path.clone(), result.clone());
             context.set_rule_explanation(exec_rule.path.clone(), explanation.clone());
-
-            if let Some(target) = request.rule_result_units.get(&exec_rule.name) {
-                if let OperationResult::Value(value) = &result {
-                    let converted = convert_unit(
-                        value.as_ref(),
-                        target,
-                        UnitResolutionContext::WithIndex(&context.unit_index),
-                    );
-                    match converted {
-                        OperationResult::Veto(_) => {
-                            unreachable!(
-                                "BUG: rule '{}' unit conversion to '{}' vetoed after request validation",
-                                exec_rule.name, target
-                            );
-                        }
-                        OperationResult::Value(_) => {
-                            result = converted.clone();
-                            explanation.result = converted;
-                        }
-                    }
-                }
-            }
-
-            let rule_operations = context.operations.clone().unwrap_or_default();
 
             if !exec_rule.path.segments.is_empty() {
                 continue;
@@ -555,7 +477,7 @@ impl Evaluator {
 
             result = ensure_rule_result_within_decimal_wire_limit(result);
             if matches!(result, OperationResult::Veto(_)) {
-                explanation = crate::evaluation::explanation::Explanation {
+                explanation = crate::evaluation::evaluation_trace::EvaluationTrace {
                     rule_path: exec_rule.path.clone(),
                     source: Some(exec_rule.source.clone()),
                     result: result.clone(),
@@ -563,34 +485,21 @@ impl Evaluator {
                 };
             }
 
-            let unless_branches: Vec<(Option<Expression>, Expression)> = exec_rule.branches[1..]
-                .iter()
-                .map(|b| (b.condition.clone(), b.result.clone()))
-                .collect();
-
-            response.add_result(RuleResult {
-                rule: EvaluatedRule {
+            response.add_result(RuleResult::from_operation_result(
+                EvaluatedRule {
                     name: exec_rule.name.clone(),
                     path: exec_rule.path.clone(),
-                    default_expression: exec_rule.branches[0].result.clone(),
-                    unless_branches,
                     source_location: exec_rule.source.clone(),
-                    rule_type: exec_rule.rule_type.clone(),
+                    rule_type: (*exec_rule.rule_type).clone(),
                 },
                 result,
-                data: vec![],
-                operations: rule_operations,
-                explanation: Some(explanation),
-                rule_type: exec_rule.rule_type.clone(),
-            });
+                exec_rule.rule_type.as_ref(),
+                plan.expression_unit_index(),
+                if explain { Some(explanation) } else { None },
+            ));
         }
 
-        let mut used_data: HashMap<DataPath, LiteralValue> = HashMap::new();
-        for rule_result in response.results.values() {
-            if let Some(ref explanation) = rule_result.explanation {
-                collect_used_data_from_explanation(explanation.tree.as_ref(), &mut used_data);
-            }
-        }
+        let mut used_data = context.used_data_values();
 
         // Build data list in definition order (plan.data is an IndexMap)
         let data_list: Vec<Data> = plan

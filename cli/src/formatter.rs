@@ -1,14 +1,15 @@
-use lemma::evaluation::explanation::{
-    ConversionExplanationStep, ExplanationNode, NonMatchedBranch, ValueSource,
-};
-use lemma::evaluation::operations::ComputationKind;
-use lemma::planning::semantics::{DataPath, DataValue, ValueKind};
 use lemma::{
-    commit_rational_to_decimal, rational_to_display_str, ExecutionPlan, LiteralValue,
-    OperationResult, RationalInteger, Response, RuleResult, SpecSchema,
+    type_detail_lines, BindingDataValue, ComputationKind, ConversionTraceStep, DataEntry,
+    LiteralValue, OperationResult, Response, RulePath, RuleResult, SpecSchema, TraceBranch,
+    TraceNode, TraceNonMatchedBranch, TraceValueSource, ValueKind,
 };
 use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
+
+pub struct RepositorySpecGroup<'a> {
+    pub repository: Option<&'a str>,
+    pub specs: &'a [String],
+}
 
 #[derive(Clone, Copy)]
 enum Connector {
@@ -48,7 +49,7 @@ impl Formatter {
                 .values()
                 .next()
                 .expect("BUG: len==1 but no values");
-            return format!("{}\n", self.format_result_inline(&result.result));
+            return format!("{}\n", self.format_rule_display(result));
         }
 
         let mut table = Table::new();
@@ -58,8 +59,7 @@ impl Formatter {
         for result in response.results.values() {
             table.add_row(vec![
                 Cell::new(&result.rule.name).set_alignment(CellAlignment::Left),
-                Cell::new(self.format_result_inline(&result.result))
-                    .set_alignment(CellAlignment::Left),
+                Cell::new(self.format_rule_display(result)).set_alignment(CellAlignment::Left),
             ]);
         }
         format!("{}\n", table)
@@ -82,160 +82,121 @@ impl Formatter {
         output
     }
 
-    pub fn format_spec_inspection(&self, plan: &ExecutionPlan) -> String {
-        let local_data_paths: Vec<&DataPath> =
-            plan.data.keys().filter(|p| p.segments.is_empty()).collect();
+    pub fn format_spec_schema(&self, schema: &SpecSchema) -> String {
+        let mut output = String::new();
 
-        let mut table = Table::new();
-        table.load_preset(presets::UTF8_FULL);
-        table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
-        table.set_style(super_table::TableComponent::HorizontalLines, '─');
-
-        table.add_row(vec![
-            Cell::new(&plan.spec_name).set_alignment(CellAlignment::Left)
-        ]);
-
-        let mut content_lines = Vec::new();
-
-        if !local_data_paths.is_empty() {
-            content_lines.push("data".to_string());
-            for (i, path) in local_data_paths.iter().enumerate() {
-                let prefix = if i == local_data_paths.len() - 1 {
-                    "└─"
-                } else {
-                    "├─"
-                };
-                content_lines.push(format!("{} {}", prefix, path.data));
-            }
+        // Spec header: name on first line, then optional indented lines
+        output.push_str(&schema.spec);
+        output.push('\n');
+        if let Some(commentary) = &schema.commentary {
+            output.push_str(&format!("  {}\n", commentary));
+        }
+        if let Some(effective) = &schema.effective {
+            output.push_str(&format!("  effective: {}\n", effective));
+        }
+        if schema.versions.len() > 1 {
+            let version_strs: Vec<String> = schema.versions.iter().map(|v| v.to_string()).collect();
+            output.push_str(&format!("  versions: {}\n", version_strs.join(", ")));
         }
 
-        if !plan.rules.is_empty() {
-            content_lines.push("rules".to_string());
-            for (i, rule) in plan.rules.iter().enumerate() {
-                let prefix = if i == plan.rules.len() - 1 {
-                    "└─"
-                } else {
-                    "├─"
-                };
-                content_lines.push(format!("{} {}", prefix, rule.name));
-            }
+        if schema.data.is_empty() && schema.rules.is_empty() {
+            output.push_str("\n  (no data or rules)\n");
+            return output;
         }
 
-        table.add_row(vec![
-            Cell::new(content_lines.join("\n")).set_alignment(CellAlignment::Left)
-        ]);
-
-        format!("{}\n", table)
-    }
-
-    pub fn format_workspace_summary(&self, source_count: usize, schemas: &[SpecSchema]) -> String {
-        let mut output = String::new();
-        let spec_count = schemas.len();
-        let source_word = if source_count == 1 {
-            "source"
-        } else {
-            "sources"
-        };
-        let spec_word = if spec_count == 1 { "spec" } else { "specs" };
-        output.push_str(&format!(
-            "Found {} {} in {} {}\n",
-            spec_count, spec_word, source_count, source_word
-        ));
-        output.push_str(&self.format_spec_schema_tables(schemas));
-        output
-    }
-
-    /// Tables only (no preamble). Used when listing a single repository; context is the header above.
-    pub fn format_spec_schema_tables(&self, schemas: &[SpecSchema]) -> String {
-        let mut output = String::new();
-        for schema in schemas {
+        // Data section
+        if !schema.data.is_empty() {
             output.push('\n');
-
-            let mut table = Table::new();
-            table.load_preset(presets::UTF8_FULL);
-
-            table.set_style(super_table::TableComponent::HeaderLines, '─');
-            table.set_style(super_table::TableComponent::LeftHeaderIntersection, '├');
-            table.set_style(super_table::TableComponent::MiddleHeaderIntersections, '┼');
-            table.set_style(super_table::TableComponent::RightHeaderIntersection, '┤');
-            table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
-            table.set_style(super_table::TableComponent::HorizontalLines, '─');
-
-            table.set_header(vec![
-                Cell::new(&schema.spec).set_alignment(CellAlignment::Left),
-                Cell::new(""),
-                Cell::new(""),
-            ]);
-
-            if schema.data.is_empty() && schema.rules.is_empty() {
-                table.add_row(vec![
-                    Cell::new("(no data or rules)").set_alignment(CellAlignment::Left),
-                    Cell::new(""),
-                    Cell::new(""),
-                ]);
-                output.push_str(&table.to_string());
-                continue;
-            }
-
-            let mut col_name = Vec::new();
-            let mut col_type = Vec::new();
-            let mut col_default = Vec::new();
-
-            if !schema.data.is_empty() {
-                col_name.push("Data".to_string());
-                col_type.push(String::new());
-                col_default.push(String::new());
-                for (name, entry) in &schema.data {
-                    col_name.push(format!("  {}", name));
-                    col_type.push(entry.lemma_type.name());
-                    col_default.push(match (&entry.bound_value, &entry.default) {
-                        (Some(b), Some(d)) => format!("{}, default {}", b, d),
-                        (Some(b), None) => b.to_string(),
-                        (None, Some(d)) => d.to_string(),
-                        (None, None) => String::new(),
-                    });
+            output.push_str("Data\n");
+            let max_name_width = schema.data.keys().map(|name| name.len()).max().unwrap_or(0);
+            for (name, entry) in &schema.data {
+                let first_line = Self::build_entry_first_line(name, entry);
+                output.push_str(&format!(
+                    "  {:<width$}  {}\n",
+                    name,
+                    first_line,
+                    width = max_name_width
+                ));
+                let property_indent = " ".repeat(2 + max_name_width + 2 + 2);
+                for line in type_detail_lines(&entry.lemma_type.specifications) {
+                    output.push_str(&format!("{}{}\n", property_indent, line));
+                }
+                let help = entry.lemma_type.specifications.help();
+                if !help.is_empty() {
+                    output.push_str(&format!("{}help: {}\n", property_indent, help));
                 }
             }
+        }
 
-            if !schema.data.is_empty() && !schema.rules.is_empty() {
-                col_name.push(String::new());
-                col_type.push(String::new());
-                col_default.push(String::new());
-            }
-
-            if !schema.rules.is_empty() {
-                col_name.push("Rules".to_string());
-                col_type.push(String::new());
-                col_default.push(String::new());
-                for (name, rule_type) in &schema.rules {
-                    col_name.push(format!("  {}", name));
-                    col_type.push(rule_type.name());
-                    col_default.push(String::new());
+        // Rules section
+        if !schema.rules.is_empty() {
+            output.push('\n');
+            output.push_str("Rules\n");
+            let max_name_width = schema
+                .rules
+                .keys()
+                .map(|name| name.len())
+                .max()
+                .unwrap_or(0);
+            for (name, rule_type) in &schema.rules {
+                let mut detail = rule_type.specifications.to_string();
+                if let Some(ref type_name) = rule_type.name {
+                    if type_name != name {
+                        detail.push_str(&format!(" ({})", type_name));
+                    }
                 }
+                output.push_str(&format!(
+                    "  {:<width$}  {}\n",
+                    name,
+                    detail,
+                    width = max_name_width
+                ));
             }
-
-            table.add_row(vec![
-                Cell::new(col_name.join("\n")).set_alignment(CellAlignment::Left),
-                Cell::new(col_type.join("\n")).set_alignment(CellAlignment::Left),
-                Cell::new(col_default.join("\n")).set_alignment(CellAlignment::Left),
-            ]);
-
-            output.push_str(&table.to_string());
         }
 
         output
     }
 
-    pub fn format_repositories_summary(&self, repos: &[(String, usize)]) -> String {
-        if repos.is_empty() {
-            return String::new();
+    fn build_entry_first_line(data_name: &str, entry: &DataEntry) -> String {
+        let mut line = entry.lemma_type.specifications.to_string();
+        if let Some(ref type_name) = entry.lemma_type.name {
+            if type_name != data_name {
+                line.push_str(&format!(" ({})", type_name));
+            }
         }
-        let mut s = String::from("\nRepositories:\n");
-        for (name, count) in repos {
-            let word = if *count == 1 { "spec" } else { "specs" };
-            s.push_str(&format!("  {} ({} {})\n", name, count, word));
+        if let Some(bound) = &entry.bound_value {
+            line.push_str(&format!(" = {}", bound));
+        } else if let Some(default) = &entry.default {
+            line.push_str(&format!(" = {}", default));
         }
-        s
+        line
+    }
+
+    pub fn format_repository_spec_list(&self, groups: &[RepositorySpecGroup<'_>]) -> String {
+        let mut output = String::new();
+        for (index, group) in groups.iter().enumerate() {
+            if index > 0 {
+                output.push('\n');
+            }
+            match group.repository {
+                None => {
+                    for spec in group.specs {
+                        output.push_str(spec);
+                        output.push('\n');
+                    }
+                }
+                Some(repository) => {
+                    output.push_str(repository);
+                    output.push('\n');
+                    for spec in group.specs {
+                        output.push_str("  ");
+                        output.push_str(spec);
+                        output.push('\n');
+                    }
+                }
+            }
+        }
+        output
     }
 
     fn format_data_tree(&self, data_groups: &[lemma::DataGroup], spec_name: &str) -> String {
@@ -279,7 +240,7 @@ impl Formatter {
 
         for data in &group.data {
             let value_str = match &data.value {
-                DataValue::Definition { bound_value, .. } => bound_value
+                BindingDataValue::Definition { bound_value, .. } => bound_value
                     .as_ref()
                     .map(|lit| self.format_literal(lit))
                     .unwrap_or_default(),
@@ -296,9 +257,9 @@ impl Formatter {
         )
     }
 
-    fn data_type_str(value: &DataValue) -> String {
+    fn data_type_str(value: &BindingDataValue) -> String {
         match value {
-            DataValue::Definition { schema_type, .. } => schema_type.name(),
+            BindingDataValue::Definition { schema_type, .. } => schema_type.name(),
         }
     }
 
@@ -313,8 +274,8 @@ impl Formatter {
         let mut rows: Vec<String> = Vec::new();
         let mut expanded: HashSet<String> = HashSet::new();
 
-        if let Some(explanation) = &result.explanation {
-            self.render_node(explanation.tree.as_ref(), "", &mut rows, &mut expanded);
+        if let Some(trace) = &result.trace {
+            self.render_node(trace.tree.as_ref(), "", &mut rows, &mut expanded);
         }
 
         let mut table = Table::new();
@@ -325,7 +286,7 @@ impl Formatter {
         let header = format!(
             "{}: {}",
             result.rule.name,
-            self.highlight_value(&self.format_result_inline(&result.result))
+            self.highlight_value(&self.format_rule_display(result))
         );
         table.add_row(vec![Cell::new(&header).set_alignment(CellAlignment::Left)]);
 
@@ -345,7 +306,7 @@ impl Formatter {
 
     fn render_node(
         &self,
-        node: &ExplanationNode,
+        node: &TraceNode,
         indent: &str,
         rows: &mut Vec<String>,
         expanded: &mut HashSet<String>,
@@ -356,10 +317,10 @@ impl Formatter {
             indent,
         };
         match node {
-            ExplanationNode::Value { value, source, .. } => {
+            TraceNode::Value { value, source, .. } => {
                 self.render_value(value, source, &mut ctx);
             }
-            ExplanationNode::RuleReference {
+            TraceNode::RuleReference {
                 rule_path,
                 result,
                 expansion,
@@ -367,11 +328,10 @@ impl Formatter {
             } => {
                 self.render_rule_reference(rule_path, result, expansion, Connector::Last, &mut ctx);
             }
-            ExplanationNode::Computation {
+            TraceNode::Computation {
                 kind,
                 conversion_steps,
                 expression,
-                original_expression,
                 operands,
                 ..
             } => match kind {
@@ -379,26 +339,17 @@ impl Formatter {
                     self.render_unit_conversion_computation(conversion_steps, operands, &mut ctx);
                 }
                 _ => {
-                    self.render_computation(expression, original_expression, operands, &mut ctx);
+                    self.render_computation(expression, operands, &mut ctx);
                 }
             },
-            ExplanationNode::Branches {
+            TraceNode::Branches {
                 matched,
                 non_matched,
                 ..
             } => {
                 self.render_branches(matched, non_matched, &mut ctx);
             }
-            ExplanationNode::Condition {
-                expression,
-                original_expression,
-                result,
-                operands,
-                ..
-            } => {
-                self.render_condition(expression, original_expression, *result, operands, &mut ctx);
-            }
-            ExplanationNode::Veto { message, .. } => {
+            TraceNode::Veto { message, .. } => {
                 self.render_veto(message, &mut ctx);
             }
         }
@@ -406,7 +357,7 @@ impl Formatter {
 
     fn render_node_with_connector(
         &self,
-        node: &ExplanationNode,
+        node: &TraceNode,
         indent: &str,
         connector: Connector,
         rows: &mut Vec<String>,
@@ -418,12 +369,12 @@ impl Formatter {
             indent,
         };
         match node {
-            ExplanationNode::Value { value, source, .. } => {
+            TraceNode::Value { value, source, .. } => {
                 let display = match source {
-                    ValueSource::Data { data_ref } => {
+                    TraceValueSource::Data { data_ref } => {
                         format!("{} is {}", data_ref, self.format_literal_inline(value))
                     }
-                    ValueSource::Literal | ValueSource::Computed => {
+                    TraceValueSource::Literal | TraceValueSource::Computed => {
                         self.format_literal_inline(value)
                     }
                 };
@@ -434,7 +385,7 @@ impl Formatter {
                     display
                 ));
             }
-            ExplanationNode::RuleReference {
+            TraceNode::RuleReference {
                 rule_path,
                 result,
                 expansion,
@@ -454,21 +405,28 @@ impl Formatter {
         }
     }
 
-    fn render_value(&self, value: &LiteralValue, source: &ValueSource, ctx: &mut RenderContext) {
+    fn render_value(
+        &self,
+        value: &LiteralValue,
+        source: &TraceValueSource,
+        ctx: &mut RenderContext,
+    ) {
         let display = match source {
-            ValueSource::Data { data_ref } => {
+            TraceValueSource::Data { data_ref } => {
                 format!("{} is {}", data_ref, self.format_literal_inline(value))
             }
-            ValueSource::Literal | ValueSource::Computed => self.format_literal_inline(value),
+            TraceValueSource::Literal | TraceValueSource::Computed => {
+                self.format_literal_inline(value)
+            }
         };
         ctx.rows.push(format!("{}└─ {}", ctx.indent, display));
     }
 
     fn render_rule_reference(
         &self,
-        rule_path: &lemma::planning::semantics::RulePath,
+        rule_path: &RulePath,
         result: &OperationResult,
-        expansion: &ExplanationNode,
+        expansion: &TraceNode,
         connector: Connector,
         ctx: &mut RenderContext,
     ) {
@@ -490,8 +448,8 @@ impl Formatter {
 
     fn render_unit_conversion_computation(
         &self,
-        conversion_steps: &[ConversionExplanationStep],
-        operands: &[ExplanationNode],
+        conversion_steps: &[ConversionTraceStep],
+        operands: &[TraceNode],
         ctx: &mut RenderContext,
     ) {
         assert!(
@@ -543,11 +501,10 @@ impl Formatter {
     fn render_computation(
         &self,
         expression: &str,
-        original_expression: &str,
-        operands: &[ExplanationNode],
+        operands: &[TraceNode],
         ctx: &mut RenderContext,
     ) {
-        push_expression_header_lines(ctx.rows, ctx.indent, expression, original_expression);
+        ctx.rows.push(format!("{}└─ {}", ctx.indent, expression));
 
         let child_indent = format!("{}   ", ctx.indent);
         let expandable = Self::collect_expandable_operands(operands);
@@ -571,16 +528,16 @@ impl Formatter {
 
     /// Recursively flatten nested Computation operands so that
     /// `(a + b) + c` expands as `[a, b, c]` instead of nesting.
-    fn collect_expandable_operands(operands: &[ExplanationNode]) -> Vec<&ExplanationNode> {
+    fn collect_expandable_operands(operands: &[TraceNode]) -> Vec<&TraceNode> {
         let mut result = Vec::new();
         for op in operands {
             match op {
-                ExplanationNode::Value { source, .. } => {
-                    if matches!(source, ValueSource::Data { .. }) {
+                TraceNode::Value { source, .. } => {
+                    if matches!(source, TraceValueSource::Data { .. }) {
                         result.push(op);
                     }
                 }
-                ExplanationNode::Computation {
+                TraceNode::Computation {
                     operands: nested, ..
                 } => {
                     result.extend(Self::collect_expandable_operands(nested));
@@ -593,38 +550,38 @@ impl Formatter {
 
     fn render_branches(
         &self,
-        matched: &lemma::evaluation::explanation::Branch,
-        non_matched: &[NonMatchedBranch],
+        matched: &TraceBranch,
+        non_matched: &[TraceNonMatchedBranch],
         ctx: &mut RenderContext,
     ) {
-        enum BranchItem<'a> {
-            Matched(&'a lemma::evaluation::explanation::Branch),
-            NonMatched(&'a NonMatchedBranch),
+        enum TraceBranchItem<'a> {
+            Matched(&'a TraceBranch),
+            NonMatched(&'a TraceNonMatchedBranch),
         }
 
-        let mut all_branches: Vec<((bool, usize), BranchItem)> = Vec::new();
+        let mut all_branches: Vec<((bool, usize), TraceBranchItem)> = Vec::new();
 
         let matched_key = match matched.clause_index {
             None => (false, 0),
             Some(idx) => (true, idx),
         };
-        all_branches.push((matched_key, BranchItem::Matched(matched)));
+        all_branches.push((matched_key, TraceBranchItem::Matched(matched)));
 
         for branch in non_matched {
             let key = match branch.clause_index {
                 None => (false, 0),
                 Some(idx) => (true, idx),
             };
-            all_branches.push((key, BranchItem::NonMatched(branch)));
+            all_branches.push((key, TraceBranchItem::NonMatched(branch)));
         }
 
         all_branches.sort_by_key(|((is_some, idx), _)| (*is_some, *idx));
 
         // Collect non-matched branches so we can deduplicate operand expansion across them.
-        let non_matched_branches: Vec<&NonMatchedBranch> = all_branches
+        let non_matched_branches: Vec<&TraceNonMatchedBranch> = all_branches
             .iter()
             .filter_map(|(_, item)| {
-                if let BranchItem::NonMatched(b) = item {
+                if let TraceBranchItem::NonMatched(b) = item {
                     Some(*b)
                 } else {
                     None
@@ -634,7 +591,7 @@ impl Formatter {
 
         for (_, branch_item) in &all_branches {
             match branch_item {
-                BranchItem::Matched(branch) => {
+                TraceBranchItem::Matched(branch) => {
                     let has_condition = branch.condition.is_some();
 
                     if let Some(condition) = &branch.condition {
@@ -645,7 +602,7 @@ impl Formatter {
                         ));
                     }
 
-                    if !matches!(branch.result.as_ref(), ExplanationNode::Value { .. }) {
+                    if !matches!(branch.result.as_ref(), TraceNode::Value { .. }) {
                         let result_indent = if has_condition {
                             format!("{}   ", ctx.indent)
                         } else {
@@ -654,7 +611,7 @@ impl Formatter {
                         self.render_node(&branch.result, &result_indent, ctx.rows, ctx.expanded);
                     }
                 }
-                BranchItem::NonMatched(branch) => {
+                TraceBranchItem::NonMatched(branch) => {
                     ctx.rows.push(format!(
                         "{}→ {}",
                         ctx.indent,
@@ -690,18 +647,17 @@ impl Formatter {
 
     /// Collect RuleReference operands from condition nodes, deduplicated by rule path (first occurrence order).
     fn collect_operands_dedup<'a>(
-        condition_nodes: impl Iterator<Item = &'a ExplanationNode>,
-    ) -> Vec<&'a ExplanationNode> {
+        condition_nodes: impl Iterator<Item = &'a TraceNode>,
+    ) -> Vec<&'a TraceNode> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for node in condition_nodes {
-            let operands: &[ExplanationNode] = match node {
-                ExplanationNode::Computation { operands, .. }
-                | ExplanationNode::Condition { operands, .. } => operands.as_ref(),
+            let operands: &[TraceNode] = match node {
+                TraceNode::Computation { operands, .. } => operands.as_ref(),
                 _ => continue,
             };
             for op in operands {
-                if let ExplanationNode::RuleReference { rule_path, .. } = op {
+                if let TraceNode::RuleReference { rule_path, .. } = op {
                     if seen.insert(rule_path.to_string()) {
                         out.push(op);
                     }
@@ -709,36 +665,6 @@ impl Formatter {
             }
         }
         out
-    }
-
-    fn render_condition(
-        &self,
-        expression: &str,
-        original_expression: &str,
-        _result: bool,
-        operands: &[ExplanationNode],
-        ctx: &mut RenderContext,
-    ) {
-        push_expression_header_lines(ctx.rows, ctx.indent, expression, original_expression);
-
-        let child_indent = format!("{}   ", ctx.indent);
-        let expandable = Self::collect_expandable_operands(operands);
-
-        let len = expandable.len();
-        for (i, child) in expandable.iter().enumerate() {
-            let connector = if i == len - 1 {
-                Connector::Last
-            } else {
-                Connector::Branch
-            };
-            self.render_node_with_connector(
-                child,
-                &child_indent,
-                connector,
-                ctx.rows,
-                ctx.expanded,
-            );
-        }
     }
 
     fn render_veto(&self, message: &Option<String>, ctx: &mut RenderContext) {
@@ -763,6 +689,19 @@ impl Formatter {
         }
     }
 
+    fn format_rule_display(&self, result: &RuleResult) -> String {
+        if result.vetoed {
+            return result
+                .veto_reason
+                .clone()
+                .expect("BUG: vetoed rule result must have veto_reason");
+        }
+        result
+            .display
+            .clone()
+            .expect("BUG: non-veto rule result must have display after materialization")
+    }
+
     fn format_result_inline(&self, result: &OperationResult) -> String {
         match result {
             OperationResult::Value(v) => self.format_literal_inline(v),
@@ -771,56 +710,19 @@ impl Formatter {
     }
 
     fn format_literal_inline(&self, lit: &LiteralValue) -> String {
-        match &lit.value {
-            ValueKind::Number(n) => {
-                let decimals_opt = lit.lemma_type.decimal_places();
-                format_rational(n, decimals_opt)
-            }
-            ValueKind::Quantity(n, unit, _decomposition) => {
-                let decimals_opt = lit.lemma_type.decimal_places();
-                format!("{} {}", format_rational(n, decimals_opt), unit)
-            }
-            ValueKind::Ratio(r, unit_opt) => {
-                if unit_opt.is_some() {
-                    lit.display_value()
-                } else {
-                    format_rational(r, lit.lemma_type.decimal_places())
-                }
-            }
-            ValueKind::Text(s) => format!("\"{}\"", s),
-            ValueKind::Boolean(b) => b.to_string(),
-            ValueKind::Date(d) => d.to_string(),
-            ValueKind::Time(t) => t.to_string(),
-            ValueKind::Calendar(value, unit) => {
-                format!("{} {}", format_rational(value, None), unit)
-            }
-            ValueKind::Range(left, right) => {
-                format!(
-                    "{}...{}",
-                    self.format_literal_inline(left.as_ref()),
-                    self.format_literal_inline(right.as_ref())
-                )
-            }
-        }
+        lit.display_value()
     }
 
-    fn extract_condition_text(&self, node: &ExplanationNode) -> String {
+    fn extract_condition_text(&self, node: &TraceNode) -> String {
         match node {
-            ExplanationNode::Computation {
-                original_expression,
-                ..
-            } => original_expression.clone(),
-            ExplanationNode::Condition {
-                original_expression,
-                ..
-            } => original_expression.clone(),
-            ExplanationNode::Value { value, source, .. } => match source {
-                ValueSource::Data { data_ref } => data_ref.to_string(),
-                ValueSource::Literal | ValueSource::Computed => value.to_string(),
+            TraceNode::Computation { expression, .. } => expression.clone(),
+            TraceNode::Value { value, source, .. } => match source {
+                TraceValueSource::Data { data_ref } => data_ref.to_string(),
+                TraceValueSource::Literal | TraceValueSource::Computed => value.to_string(),
             },
-            ExplanationNode::RuleReference { rule_path, .. } => rule_path.to_string(),
-            ExplanationNode::Branches { .. } => "<branches>".to_string(),
-            ExplanationNode::Veto { message, .. } => {
+            TraceNode::RuleReference { rule_path, .. } => rule_path.to_string(),
+            TraceNode::Branches { .. } => "<branches>".to_string(),
+            TraceNode::Veto { message, .. } => {
                 message.clone().unwrap_or_else(|| "veto".to_string())
             }
         }
@@ -832,81 +734,5 @@ impl Formatter {
 
     fn highlight_value(&self, text: &str) -> String {
         format!("\x1b[38;2;80;180;220m{}\x1b[0m", text)
-    }
-}
-
-/// One line when simplified expression equals source; two lines when they differ.
-fn push_expression_header_lines(
-    rows: &mut Vec<String>,
-    indent: &str,
-    expression: &str,
-    original_expression: &str,
-) {
-    if expression == original_expression {
-        rows.push(format!("{}└─ {}", indent, expression));
-    } else {
-        rows.push(format!("{}├─ {}", indent, expression));
-        rows.push(format!("{}└─ {}", indent, original_expression));
-    }
-}
-
-fn format_rational(rational: &RationalInteger, decimals: Option<u8>) -> String {
-    match commit_rational_to_decimal(rational) {
-        Ok(decimal) => format_decimal(&decimal, decimals),
-        Err(_) => rational_to_display_str(rational),
-    }
-}
-
-fn format_decimal(d: &rust_decimal::Decimal, decimals: Option<u8>) -> String {
-    match decimals {
-        Some(decimals) => {
-            // Fixed-decimal formatting, preserving trailing zeros.
-            let rounded = d.round_dp(decimals as u32);
-            let mut s = rounded.to_string();
-            if decimals == 0 {
-                if let Some(dot) = s.find('.') {
-                    s.truncate(dot);
-                }
-                return s;
-            }
-            if let Some(dot_pos) = s.find('.') {
-                let current_decimals = s.len() - dot_pos - 1;
-                if current_decimals < decimals as usize {
-                    s.push_str(&"0".repeat(decimals as usize - current_decimals));
-                }
-            } else {
-                s.push('.');
-                s.push_str(&"0".repeat(decimals as usize));
-            }
-            s
-        }
-        None => {
-            // No decimals specified: do not force rounding; remove trailing zeros.
-            let normalized = d.normalize();
-            if normalized.fract().is_zero() {
-                normalized.trunc().to_string()
-            } else {
-                normalized.to_string()
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::push_expression_header_lines;
-
-    #[test]
-    fn expression_header_single_line_when_expression_equals_original() {
-        let mut rows = Vec::new();
-        push_expression_header_lines(&mut rows, "", "3000 * 12", "3000 * 12");
-        assert_eq!(rows, vec!["└─ 3000 * 12"]);
-    }
-
-    #[test]
-    fn expression_header_two_lines_when_simplified_differs_from_source() {
-        let mut rows = Vec::new();
-        push_expression_header_lines(&mut rows, "", "36000", "3000 * 12");
-        assert_eq!(rows, vec!["├─ 36000", "└─ 3000 * 12"]);
     }
 }

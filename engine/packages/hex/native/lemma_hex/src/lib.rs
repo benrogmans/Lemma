@@ -3,12 +3,10 @@
 mod error_encoding;
 
 use error_encoding::encode_error;
-use lemma::inversion::{Target, TargetOp};
-use lemma::parsing::ast::{DateTimeValue, LemmaRepository, Value};
-use lemma::planning::semantics::{
-    value_to_semantic, LiteralValue, SemanticDateTime, SemanticTimezone,
+use lemma::{
+    collect_lemma_sources, DateTimeValue, Engine, ExecutionPlanSerialized, LemmaRepository,
+    LiteralValue, OperationResult, ResourceLimits, SourceType, Target, TargetOp,
 };
-use lemma::{collect_lemma_sources, Engine, OperationResult, ResourceLimits, SourceType};
 use rustler::types::atom;
 use rustler::types::MapIterator;
 use rustler::{Encoder, Env, NifResult, OwnedBinary, Resource, ResourceArc, Term};
@@ -28,7 +26,7 @@ fn load(env: Env, _info: Term) -> bool {
 
 #[rustler::nif]
 fn lemma_new<'a>(env: Env<'a>, limits_term: Option<Term<'a>>) -> NifResult<Term<'a>> {
-    let mut engine = match limits_term {
+    let engine = match limits_term {
         None => Engine::new(),
         Some(term) => {
             if term.as_c_arg() == atom::nil().as_c_arg() {
@@ -40,9 +38,6 @@ fn lemma_new<'a>(env: Env<'a>, limits_term: Option<Term<'a>>) -> NifResult<Term<
             }
         }
     };
-    engine.replan().map_err(|e| {
-        rustler::Error::RaiseTerm(Box::new(format!("Initial planning failed: {e}")))
-    })?;
     let resource = ResourceArc::new(LemmaEngineResource(Mutex::new(engine)));
     Ok((rustler::Atom::from_str(env, "ok")?, resource).encode(env))
 }
@@ -359,14 +354,7 @@ fn lemma_run<'a>(
         None => None,
     };
     let values = map_term_to_data_values(data_values)?;
-    match engine.run(
-        None,
-        &spec,
-        effective,
-        values,
-        false,
-        lemma::EvaluationRequest::default(),
-    ) {
+    match engine.run(None, &spec, effective, values, false) {
         Ok(response) => {
             let json = serde_json::to_vec(&response).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Response serialization failed: {}", e)))
@@ -478,7 +466,7 @@ fn lemma_execution_plan<'a>(
             }
         }
     };
-    let json = serde_json::to_vec(&plan).map_err(|e| {
+    let json = serde_json::to_vec(&ExecutionPlanSerialized::from(&plan)).map_err(|e| {
         rustler::Error::RaiseTerm(Box::new(format!(
             "Execution plan serialization failed: {}",
             e
@@ -725,34 +713,14 @@ fn decode_target<'a>(env: Env<'a>, term: Term<'a>) -> Result<Target, rustler::Er
 }
 
 fn parse_value_string_to_literal(s: &str) -> Result<LiteralValue, rustler::Error> {
-    if let Ok(b) = s.parse::<lemma::parsing::ast::BooleanValue>() {
-        let value = Value::Boolean(b);
-        let value_kind = value_to_semantic(&value).map_err(|e| {
-            rustler::Error::RaiseTerm(Box::new(format!("Value conversion failed: {}", e)))
-        })?;
-        return Ok(LiteralValue {
-            value: value_kind,
-            lemma_type: lemma::planning::semantics::primitive_boolean().clone(),
-        });
+    if let Ok(b) = s.parse::<bool>() {
+        return Ok(LiteralValue::from_bool(b));
     }
     if let Ok(d) = rust_decimal::Decimal::from_str(s) {
         return Ok(LiteralValue::number_from_decimal(d));
     }
     if let Ok(dt) = s.parse::<DateTimeValue>() {
-        let sem_dt = SemanticDateTime {
-            year: dt.year,
-            month: dt.month,
-            day: dt.day,
-            hour: dt.hour,
-            minute: dt.minute,
-            second: dt.second,
-            microsecond: dt.microsecond,
-            timezone: dt.timezone.as_ref().map(|tz| SemanticTimezone {
-                offset_hours: tz.offset_hours,
-                offset_minutes: tz.offset_minutes,
-            }),
-        };
-        return Ok(LiteralValue::date(sem_dt));
+        return Ok(LiteralValue::from_datetime(&dt));
     }
     Ok(LiteralValue::text(s.to_string()))
 }

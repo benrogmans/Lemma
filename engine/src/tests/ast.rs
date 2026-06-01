@@ -57,14 +57,13 @@ fn test_literal_value_to_primitive_type() {
                 default_magnitude: None,
             }]),
             traits: vec![QuantityTrait::Duration],
-            decomposition: BaseQuantityVector::new(),
-            canonical_unit: "second".to_string(),
+            decomposition: None,
             help: String::new(),
         },
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::quantity_with_type(one, "second".to_string(), dur_type)
+        LiteralValue::quantity_with_type(one, "second".to_string(), std::sync::Arc::new(dur_type))
             .lemma_type
             .name(),
         "duration"
@@ -97,12 +96,8 @@ fn test_comparison_operator_display() {
 #[test]
 fn test_conversion_target_display() {
     assert_eq!(
-        format!("{}", ConversionTarget::Unit("hours".to_string())),
-        "hours"
-    );
-    assert_eq!(
-        format!("{}", ConversionTarget::Unit("eur".to_string())),
-        "eur"
+        format!("{}", ConversionTarget::Type(PrimitiveKind::Number)),
+        "Number"
     );
 }
 
@@ -177,6 +172,7 @@ fn test_type_serialization() {
 #[test]
 fn test_literal_value_display_value() {
     let ten = RationalInteger::new(10, 1);
+    let ten_hours_canonical = RationalInteger::new(36_000, 1);
 
     assert_eq!(
         LiteralValue::text("hello".to_string()).display_value(),
@@ -251,14 +247,18 @@ fn test_literal_value_display_value() {
                 default_magnitude: None,
             }]),
             traits: vec![QuantityTrait::Duration],
-            decomposition: BaseQuantityVector::new(),
-            canonical_unit: "second".to_string(),
+            decomposition: None,
             help: String::new(),
         },
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::quantity_with_type(ten, "hours".to_string(), dur_type).display_value(),
+        LiteralValue::quantity_with_type(
+            ten_hours_canonical,
+            "hours".to_string(),
+            std::sync::Arc::new(dur_type),
+        )
+        .display_value(),
         "10 hours"
     );
 }

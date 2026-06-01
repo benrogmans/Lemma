@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, Error};
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ data age: number -> minimum 0 -> maximum 150
     let test_spec = r#"
 spec test
 uses age
-fill user_age: age.age
+data user_age: age.age
 rule is_adult: user_age >= 18
 "#;
 
@@ -34,14 +34,7 @@ rule is_adult: user_age >= 18
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "25".to_string());
 
-    let response = engine.run(
-        None,
-        "test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    )?;
+    let response = engine.run(None, "test", Some(&now), data, false)?;
 
     // The data should be evaluated correctly with the imported type
 
@@ -52,16 +45,11 @@ rule is_adult: user_age >= 18
         .find(|r| r.rule.name == "is_adult")
         .expect("is_adult rule not found");
 
-    match &is_adult_result.result {
-        lemma::OperationResult::Value(lit) => {
-            if let lemma::ValueKind::Boolean(b) = &lit.value {
-                assert!(*b, "25 >= 18 should be true");
-            } else {
-                panic!("Expected boolean result");
-            }
-        }
-        _ => panic!("Expected boolean result"),
-    }
+    assert_eq!(
+        is_adult_result.boolean,
+        Some(true),
+        "25 >= 18 should be true"
+    );
 
     Ok(())
 }
@@ -76,7 +64,7 @@ spec age
 data age: number -> minimum 0 -> maximum 150
 "#;
 
-    // Declare slot with tighter constraint, then fill from imported type
+    // Declare slot with tighter constraint, then with from imported type
     let test_spec = r#"
 spec test
 uses age
@@ -98,14 +86,7 @@ rule is_senior: user_age >= 65
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "70".to_string());
 
-    let response = engine.run(
-        None,
-        "test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    )?;
+    let response = engine.run(None, "test", Some(&now), data, false)?;
 
     // Check the rule result
     let is_senior_result = response
@@ -114,16 +95,11 @@ rule is_senior: user_age >= 65
         .find(|r| r.rule.name == "is_senior")
         .expect("is_senior rule not found");
 
-    match &is_senior_result.result {
-        lemma::OperationResult::Value(lit) => {
-            if let lemma::ValueKind::Boolean(b) = &lit.value {
-                assert!(*b, "70 >= 65 should be true");
-            } else {
-                panic!("Expected boolean result");
-            }
-        }
-        _ => panic!("Expected boolean result"),
-    }
+    assert_eq!(
+        is_senior_result.boolean,
+        Some(true),
+        "70 >= 65 should be true"
+    );
 
     Ok(())
 }

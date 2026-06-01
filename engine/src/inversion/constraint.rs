@@ -11,7 +11,7 @@
 use crate::computation::units::UnitResolutionContext;
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, DataPath, Expression, ExpressionKind,
-    LiteralValue, SemanticConversionTarget, ValueKind,
+    LiteralValue, ValueKind,
 };
 use crate::{Error, OperationResult};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
@@ -418,26 +418,6 @@ fn try_rewrite_comparison_to_atomic(
     let left = constant_fold_expression(left).unwrap_or_else(|| left.clone());
     let right = constant_fold_expression(right).unwrap_or_else(|| right.clone());
 
-    // Strip a top-level unit conversion wrapper when comparing against a literal.
-    // This is safe because quantity/duration comparisons are unit-normalized during evaluation/domain checks.
-    let (left, right) = match (&left.kind, &right.kind) {
-        (ExpressionKind::UnitConversion(inner, target), ExpressionKind::Literal(_)) => {
-            if is_monotone_unit_conversion_target(target) {
-                ((**inner).clone(), right.clone())
-            } else {
-                (left.clone(), right.clone())
-            }
-        }
-        (ExpressionKind::Literal(_), ExpressionKind::UnitConversion(inner, target)) => {
-            if is_monotone_unit_conversion_target(target) {
-                (left.clone(), (**inner).clone())
-            } else {
-                (left.clone(), right.clone())
-            }
-        }
-        _ => (left.clone(), right.clone()),
-    };
-
     // We can only rewrite comparisons where one side is a literal and the other side contains data.
     let (expr, mut op_norm, lit) = match (&left.kind, &right.kind) {
         (ExpressionKind::Literal(l), _) => {
@@ -468,15 +448,6 @@ fn try_rewrite_comparison_to_atomic(
         op: op_norm,
         value: Arc::new(new_value),
     })
-}
-
-fn is_monotone_unit_conversion_target(target: &SemanticConversionTarget) -> bool {
-    matches!(
-        target,
-        SemanticConversionTarget::Calendar(_)
-            | SemanticConversionTarget::QuantityUnit(_)
-            | SemanticConversionTarget::RatioUnit(_)
-    )
 }
 
 fn collect_data_paths(expr: &Expression, out: &mut Vec<DataPath>) {
@@ -574,9 +545,17 @@ fn fold_arithmetic_literals(
     op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> Option<LiteralValue> {
+    use crate::computation::arithmetic::SignatureIndex;
     use crate::computation::arithmetic_operation;
+    use std::collections::HashMap;
 
-    match arithmetic_operation(left, op, right) {
+    // Constant folding here is a partial evaluator over already-typed literals; signature
+    // resolution is not invoked because the resulting literal carries its own signature on
+    // its lemma_type and the constraint solver only cares about the value's identity.
+    let unit_index: HashMap<String, std::sync::Arc<crate::planning::semantics::LemmaType>> =
+        HashMap::new();
+    let signature_index = SignatureIndex::new();
+    match arithmetic_operation(left, op, right, &unit_index, &signature_index) {
         OperationResult::Value(lit) => Some(lit.as_ref().clone()),
         OperationResult::Veto(_) => None,
     }
@@ -603,13 +582,6 @@ fn isolate_linear_comparison(
 
     match &expr.kind {
         ExpressionKind::DataPath(fp) if fp == unknown => Some((op.clone(), bound.clone())),
-
-        // Strip top-level monotone unit conversion wrappers.
-        ExpressionKind::UnitConversion(inner, target)
-            if is_monotone_unit_conversion_target(target) =>
-        {
-            isolate_linear_comparison(inner, unknown, op, bound)
-        }
 
         ExpressionKind::Arithmetic(left, arithmetic_op, right) => {
             let left_contains = contains_data(left, unknown);

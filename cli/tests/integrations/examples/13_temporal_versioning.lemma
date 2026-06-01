@@ -59,7 +59,8 @@ resolved temporally from the kennismigrant spec — the
 version active at evaluation time is used automatically.
 """
 
-uses money, kennismigrant
+uses money
+uses kennismigrant
 
 data salary: money.salary
 data applicant_age: number

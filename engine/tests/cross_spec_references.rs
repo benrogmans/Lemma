@@ -1,5 +1,4 @@
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -27,14 +26,7 @@ rule total: base_data.price * base_data.quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let total = response
         .results
@@ -42,7 +34,7 @@ rule total: base_data.price * base_data.quantity
         .find(|r| r.rule.name == "total")
         .unwrap();
 
-    assert_eq!(total.result.value().unwrap().to_string(), "500");
+    assert_eq!(total.display.clone().expect("display"), "500");
 }
 
 /// Test cross-spec rule reference
@@ -69,14 +61,7 @@ rule derived_value: base_data.doubled + 10
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let derived_value = response
         .results
@@ -84,7 +69,7 @@ rule derived_value: base_data.doubled + 10
         .find(|r| r.rule.name == "derived_value")
         .unwrap();
 
-    assert_eq!(derived_value.result.value().unwrap().to_string(), "110");
+    assert_eq!(derived_value.display.clone().expect("display"), "110");
 }
 
 /// Test cross-spec rule reference with dependencies
@@ -112,14 +97,7 @@ rule manager_bonus: employee.annual_salary * 0.15
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "manager",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "manager", Some(&now), HashMap::new(), false)
         .unwrap();
     let bonus = response
         .results
@@ -127,7 +105,7 @@ rule manager_bonus: employee.annual_salary * 0.15
         .find(|r| r.rule.name == "manager_bonus")
         .unwrap();
 
-    assert_eq!(bonus.result.value().unwrap().to_string(), "9000");
+    assert_eq!(bonus.display.clone().expect("display"), "9000");
 }
 
 /// Test data binding with cross-spec rule reference
@@ -145,8 +123,8 @@ rule total: price * quantity
     let derived_spec = r#"
 spec derived
 uses config: base
-fill config.price: 200
-fill config.quantity: 3
+with config.price: 200
+with config.quantity: 3
 rule derived_total: config.total
 "#;
 
@@ -157,14 +135,7 @@ rule derived_total: config.total
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let total = response
         .results
@@ -172,7 +143,7 @@ rule derived_total: config.total
         .find(|r| r.rule.name == "derived_total")
         .unwrap();
 
-    assert_eq!(total.result.value().unwrap().to_string(), "600");
+    assert_eq!(total.display.clone().expect("display"), "600");
 }
 
 /// Test nested cross-spec rule references
@@ -212,14 +183,7 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let total = response
         .results
@@ -227,7 +191,7 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
         .find(|r| r.rule.name == "total_days")
         .unwrap();
 
-    assert_eq!(total.result.value().unwrap().to_string(), "8");
+    assert_eq!(total.display.clone().expect("display"), "8");
 }
 
 /// Test cross-spec rule reference in unless clause
@@ -256,14 +220,7 @@ rule status: "invalid"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let status = response
         .results
@@ -271,7 +228,7 @@ rule status: "invalid"
         .find(|r| r.rule.name == "status")
         .unwrap();
 
-    assert_eq!(status.result.value().unwrap().to_string(), "valid");
+    assert_eq!(status.display.clone().expect("display"), "valid");
 }
 
 /// Test that we can mix cross-spec data and rule references
@@ -298,14 +255,7 @@ rule combined: base_data.input + base_data.calculated
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let combined = response
         .results
@@ -313,7 +263,7 @@ rule combined: base_data.input + base_data.calculated
         .find(|r| r.rule.name == "combined")
         .unwrap();
 
-    assert_eq!(combined.result.value().unwrap().to_string(), "150");
+    assert_eq!(combined.display.clone().expect("display"), "150");
 }
 
 /// Test cross-spec data binding with multiple levels (should work)
@@ -331,8 +281,8 @@ data z: 30
     let derived_spec = r#"
 spec derived
 uses b: base
-fill b.x: 100
-fill b.y: 200
+with b.x: 100
+with b.y: 200
 rule sum: b.x + b.y + b.z
 "#;
 
@@ -343,14 +293,7 @@ rule sum: b.x + b.y + b.z
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let sum = response
         .results
@@ -360,7 +303,7 @@ rule sum: b.x + b.y + b.z
 
     // x=100 (overridden), y=200 (overridden), z=30 (original)
     // 100 + 200 + 30 = 330
-    assert_eq!(sum.result.value().unwrap().to_string(), "330");
+    assert_eq!(sum.display.clone().expect("display"), "330");
 }
 
 /// Test simple data binding without rule references (should work)
@@ -377,8 +320,8 @@ data quantity: 5
     let derived_spec = r#"
 spec derived
 uses config: base
-fill config.price: 200
-fill config.quantity: 3
+with config.price: 200
+with config.quantity: 3
 rule total: config.price * config.quantity
 "#;
 
@@ -389,14 +332,7 @@ rule total: config.price * config.quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "derived",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "derived", Some(&now), HashMap::new(), false)
         .unwrap();
     let total = response
         .results
@@ -405,7 +341,7 @@ rule total: config.price * config.quantity
         .unwrap();
 
     // Should be 200 * 3 = 600 (using overridden data values)
-    assert_eq!(total.result.value().unwrap().to_string(), "600");
+    assert_eq!(total.display.clone().expect("display"), "600");
 }
 
 /// Test that different data paths to the same rule produce different results
@@ -431,7 +367,7 @@ uses base: example2
 rule total1: base.base.total
 
 uses base2: example2
-fill base2.base.price: 79
+with base2.base.price: 79
 rule total2: base2.base.total
 "#;
 
@@ -447,14 +383,7 @@ rule total2: base2.base.total
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "example3",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "example3", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let total1 = response
@@ -470,10 +399,10 @@ rule total2: base2.base.total
         .unwrap();
 
     // total1 uses original price: 99 * 1.21 = 119.79
-    assert_eq!(total1.result.value().unwrap().to_string(), "119.79");
+    assert_eq!(total1.display.clone().expect("display"), "119.79");
 
     // total2 uses overridden price: 79 * 1.21 = 95.59
-    assert_eq!(total2.result.value().unwrap().to_string(), "95.59");
+    assert_eq!(total2.display.clone().expect("display"), "95.59");
 }
 
 #[test]
@@ -493,14 +422,7 @@ rule total: p.base_price
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "order",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "order", Some(&now), HashMap::new(), false)
         .unwrap();
     let total = response
         .results
@@ -509,7 +431,7 @@ rule total: p.base_price
         .unwrap();
 
     assert_eq!(
-        total.result.value().unwrap().to_string(),
+        total.display.clone().expect("display"),
         "200",
         "Spec ref should evaluate against the referenced pricing spec"
     );
@@ -521,11 +443,12 @@ fn cross_spec_dependency_rules_excluded_from_results() {
 
     let base_spec = r#"
 spec base_employee
+uses lemma units
 data monthly_salary: 5000
-data employment_duration: 3 years
+data employment_duration: 3 year
 rule annual_salary: monthly_salary * 12
 rule is_eligible_for_bonus: false
-  unless employment_duration >= 1 years then true
+  unless employment_duration >= 1 year then true
 "#;
 
     let derived_spec = r#"
@@ -543,14 +466,7 @@ rule employee_summary: employee.monthly_salary
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "specific_employee",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "specific_employee", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let mut result_names: Vec<&str> = response.results.keys().map(|k| k.as_str()).collect();
@@ -567,11 +483,9 @@ rule employee_summary: employee.monthly_salary
             .results
             .get("salary_with_bonus")
             .unwrap()
-            .result
-            .value()
-            .unwrap()
-            .to_string(),
-        "66000"
+            .display
+            .as_deref(),
+        Some("66000")
     );
 }
 
@@ -592,14 +506,7 @@ rule total: p.base_price
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "order",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "order", Some(&now), HashMap::new(), false)
         .unwrap();
     let total = response
         .results
@@ -608,7 +515,7 @@ rule total: p.base_price
         .unwrap();
 
     assert_eq!(
-        total.result.value().unwrap().to_string(),
+        total.display.clone().expect("display"),
         "150",
         "Spec ref should evaluate against the referenced pricing spec"
     );
@@ -618,9 +525,9 @@ rule total: p.base_price
 fn cross_spec_lemma_duration_unless_short_is_yes_when_one_hour() {
     let code = r#"
 spec t
-uses lemma si
+uses lemma units
 rule short: yes
-  unless si.duration >= 2 hours then no
+  unless units.duration >= 2 hours then no
 "#;
 
     let mut engine = Engine::new();
@@ -629,44 +536,36 @@ rule short: yes
         .expect("spec must load");
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
-    data.insert("si.duration".to_string(), "1 hour".to_string());
+    data.insert("units.duration".to_string(), "1 hour".to_string());
 
     let resp = engine
-        .run(
-            None,
-            "t",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "t", Some(&now), data, false)
         .expect("evaluation must run");
 
     let short = resp
         .results
         .get("short")
         .expect("rule 'short' must be present");
-    match &short.result {
-        OperationResult::Value(v) => {
-            let out = v.to_string();
-            assert!(
-                out == "yes" || out == "true",
-                "expected short = yes when si.duration is 1 hour, got: {out}"
-            );
-        }
-        OperationResult::Veto(v) => {
-            panic!("expected short = yes when si.duration is 1 hour, got veto: {v}");
-        }
+    if short.vetoed {
+        panic!(
+            "expected short = yes when units.duration is 1 hour, got veto: {}",
+            short.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
     }
+    let out = short.display.clone().expect("display");
+    assert!(
+        out == "yes" || out == "true",
+        "expected short = yes when units.duration is 1 hour, got: {out}"
+    );
 }
 
 #[test]
 fn cross_spec_lemma_duration_unless_short_is_no_when_three_hours() {
     let code = r#"
 spec t
-uses lemma si
+uses lemma units
 rule short: yes
-  unless si.duration >= 2 hours then no
+  unless units.duration >= 2 hours then no
 "#;
 
     let mut engine = Engine::new();
@@ -675,33 +574,25 @@ rule short: yes
         .expect("spec must load");
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
-    data.insert("si.duration".to_string(), "3 hours".to_string());
+    data.insert("units.duration".to_string(), "3 hours".to_string());
 
     let resp = engine
-        .run(
-            None,
-            "t",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "t", Some(&now), data, false)
         .expect("evaluation must run");
 
     let short = resp
         .results
         .get("short")
         .expect("rule 'short' must be present");
-    match &short.result {
-        OperationResult::Value(v) => {
-            let out = v.to_string();
-            assert!(
-                out == "no" || out == "false",
-                "expected short = no when si.duration is 3 hours, got: {out}"
-            );
-        }
-        OperationResult::Veto(v) => {
-            panic!("expected short = no when si.duration is 3 hours, got veto: {v}");
-        }
+    if short.vetoed {
+        panic!(
+            "expected short = no when units.duration is 3 hours, got veto: {}",
+            short.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
     }
+    let out = short.display.clone().expect("display");
+    assert!(
+        out == "no" || out == "false",
+        "expected short = no when units.duration is 3 hours, got: {out}"
+    );
 }

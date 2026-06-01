@@ -2,7 +2,7 @@
 //!
 //! Unit-resolution and PerSliceTypeResolver behavior tests live in `src/planning/types.rs`.
 
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, Response};
 use std::collections::HashMap;
 
@@ -12,14 +12,11 @@ fn rule_value_str(response: &Response, name: &str) -> String {
         .get(name)
         .unwrap_or_else(|| panic!("rule '{name}' missing from results"));
     assert!(
-        !r.result.vetoed(),
+        !r.vetoed,
         "rule '{name}' must not veto, got {:?}",
-        r.result
+        r.veto_reason
     );
-    r.result
-        .value()
-        .unwrap_or_else(|| panic!("rule '{name}' must produce a value"))
-        .to_string()
+    r.display.clone().expect("display")
 }
 
 #[test]
@@ -49,23 +46,16 @@ rule quotient: price1 / price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, true)
         .expect("Should evaluate");
 
     for name in ["total", "difference"] {
         let r = response.results.get(name).expect(name);
-        assert!(
-            !r.result.vetoed(),
-            "{name} must not veto for valid quantity inputs"
-        );
+        assert!(!r.vetoed, "{name} must not veto for valid quantity inputs");
         let v = r
+            .trace
+            .as_ref()
+            .expect("explanation")
             .result
             .value()
             .unwrap_or_else(|| panic!("{name} must produce a value"));
@@ -77,11 +67,11 @@ rule quotient: price1 / price2"#;
     {
         let name = "quotient";
         let r = response.results.get(name).expect(name);
-        assert!(
-            !r.result.vetoed(),
-            "{name} must not veto for valid quantity inputs"
-        );
+        assert!(!r.vetoed, "{name} must not veto for valid quantity inputs");
         let v = r
+            .trace
+            .as_ref()
+            .expect("explanation")
             .result
             .value()
             .unwrap_or_else(|| panic!("{name} must produce a value"));
@@ -94,10 +84,9 @@ rule quotient: price1 / price2"#;
         .results
         .get("total")
         .unwrap()
-        .result
-        .value()
-        .unwrap()
-        .to_string();
+        .display
+        .clone()
+        .expect("display");
     assert!(
         total_s.contains("15") && total_s.to_lowercase().contains("eur"),
         "10 eur + 5 eur => ~15 eur, got {total_s}"
@@ -106,10 +95,9 @@ rule quotient: price1 / price2"#;
         .results
         .get("difference")
         .unwrap()
-        .result
-        .value()
-        .unwrap()
-        .to_string();
+        .display
+        .clone()
+        .expect("display");
     assert!(
         diff_s.contains("5") && diff_s.to_lowercase().contains("eur"),
         "10 eur - 5 eur => ~5 eur, got {diff_s}"
@@ -118,10 +106,9 @@ rule quotient: price1 / price2"#;
         .results
         .get("quotient")
         .unwrap()
-        .result
-        .value()
-        .unwrap()
-        .to_string();
+        .display
+        .clone()
+        .expect("display");
     assert!(
         quot_s.contains("2"),
         "10 eur / 5 eur => ratio 2 in display, got {quot_s}"
@@ -152,14 +139,7 @@ rule divided: price / multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -198,14 +178,7 @@ rule divided: multiplier / price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -240,14 +213,7 @@ rule result: ratio_value * multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -277,14 +243,7 @@ rule result: ratio_value * price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -317,14 +276,7 @@ rule result: price * ratio_value"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -358,14 +310,7 @@ rule is_equal: price1 is price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "is_greater"), "true");
@@ -403,14 +348,7 @@ rule power: a ^ 2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let add = rule_value_str(&response, "add");
@@ -478,14 +416,7 @@ rule power: a ^ b"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "add"), "13");
@@ -529,14 +460,7 @@ rule total: with_tax * quantity"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let disc = rule_value_str(&response, "discounted");
@@ -581,14 +505,7 @@ rule result: quantity_value * number_value"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, false)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");

@@ -50,3 +50,17 @@ workspace = true
 proptest = "1.4"
 insta = "1.34"
 tokio.workspace = true
+criterion = { version = "0.8", features = ["html_reports"] }
+stats_alloc = "0.1"
+
+[[bench]]
+name = "evaluate"
+harness = false
+
+[[bench]]
+name = "memory"
+harness = false
+
+[[bench]]
+name = "outputs"
+harness = false

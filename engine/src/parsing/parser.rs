@@ -3,9 +3,9 @@ use crate::limits::ResourceLimits;
 use crate::parsing::ast::{try_parse_type_constraint_command, *};
 use crate::parsing::lexer::{
     can_be_label, can_be_reference_segment, can_be_repository_qualifier_segment,
-    conversion_target_from_token, is_boolean_keyword, is_math_function, is_spec_body_keyword,
-    is_structural_keyword, is_type_keyword, token_kind_to_boolean_value, token_kind_to_primitive,
-    Lexer, LexerCheckpoint, Token, TokenKind,
+    is_boolean_keyword, is_math_function, is_spec_body_keyword, is_structural_keyword,
+    is_type_keyword, token_is_calendar_period_marker, token_kind_to_boolean_value,
+    token_kind_to_primitive, Lexer, LexerCheckpoint, Token, TokenKind,
 };
 use crate::parsing::source::Source;
 use indexmap::IndexMap;
@@ -164,6 +164,23 @@ impl Parser {
         }
     }
 
+    fn at_calendar_period_marker(&mut self) -> Result<bool, Error> {
+        Ok(token_is_calendar_period_marker(self.peek()?))
+    }
+
+    fn expect_calendar_period_marker(&mut self) -> Result<Token, Error> {
+        let token = self.next()?;
+        if token_is_calendar_period_marker(&token) {
+            Ok(token)
+        } else {
+            Err(self.error_at_token(&token, "Expected 'calendar' (date-period predicate marker)"))
+        }
+    }
+
+    fn next_calendar_period_marker(&mut self) -> Result<Token, Error> {
+        self.expect_calendar_period_marker()
+    }
+
     fn error_at_token(&self, token: &Token, message: impl Into<String>) -> Error {
         Error::parsing(
             message,
@@ -309,8 +326,8 @@ impl Parser {
                     let datum = self.parse_data()?;
                     data.push(datum);
                 }
-                TokenKind::Fill => {
-                    let datum = self.parse_fill()?;
+                TokenKind::With => {
+                    let datum = self.parse_with()?;
                     data.push(datum);
                 }
                 TokenKind::Rule => {
@@ -331,7 +348,7 @@ impl Parser {
                 }
                 TokenKind::Uses => {
                     let uses_data = self.parse_uses_statement()?;
-                    data.extend(uses_data);
+                    data.push(uses_data);
                 }
                 TokenKind::Spec | TokenKind::Repo | TokenKind::Eof => break,
                 _ => {
@@ -339,7 +356,7 @@ impl Parser {
                     return Err(self.error_at_token_with_suggestion(
                         &token,
                         format!(
-                            "Expected 'data', 'fill', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
+                            "Expected 'data', 'with', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
                             token.text
                         ),
                         "Check the spelling or add the appropriate keyword",
@@ -705,8 +722,8 @@ impl Parser {
             let tok = self.peek()?.clone();
             return Err(self.error_at_token_with_suggestion(
                 &tok,
-                "Dotted paths require `fill`; `data` declares types and values on local names only.",
-                "Use `fill path.to.slot: <value or reference>` to assign on an imported or nested slot.",
+                "Dotted paths require `with`; `data` declares types and values on local names only.",
+                "Use `with path.to.slot: <value or reference>` to assign on an imported or nested slot.",
             ));
         }
 
@@ -718,9 +735,9 @@ impl Parser {
         Ok(LemmaData::new(reference, value, source))
     }
 
-    fn parse_fill(&mut self) -> Result<LemmaData, Error> {
-        let fill_token = self.expect(&TokenKind::Fill)?;
-        let start_span = fill_token.span.clone();
+    fn parse_with(&mut self) -> Result<LemmaData, Error> {
+        let with_token = self.expect(&TokenKind::With)?;
+        let start_span = with_token.span.clone();
 
         let reference = self.parse_reference()?;
         for segment in reference
@@ -731,14 +748,22 @@ impl Parser {
             crate::limits::check_max_length(
                 segment,
                 self.max_data_name_length,
-                "fill",
+                "with",
                 Some(Source::new(self.source_type(), start_span.clone())),
             )?;
         }
 
+        if reference.segments.is_empty() {
+            return Err(self.error_at_token_with_suggestion(
+                &with_token,
+                "`with` must target data on an imported spec (`with alias.field: …`), not a local name.",
+                "Use `data name: …` for local slots, or `with alias.field: …` to set data on a spec you `uses`.",
+            ));
+        }
+
         self.expect(&TokenKind::Colon)?;
 
-        let value = self.parse_fill_value()?;
+        let value = self.parse_with_value()?;
 
         let span = self.span_covering(&start_span, &self.last_span);
         let source = self.make_source(span);
@@ -746,19 +771,19 @@ impl Parser {
         Ok(LemmaData::new(reference, value, source))
     }
 
-    fn fill_rhs_starts_as_literal(&self, kind: &TokenKind) -> bool {
+    fn with_rhs_starts_as_literal(&self, kind: &TokenKind) -> bool {
         matches!(
             kind,
             TokenKind::StringLit | TokenKind::NumberLit | TokenKind::Minus | TokenKind::Plus
         ) || is_boolean_keyword(kind)
     }
 
-    fn parse_fill_value(&mut self) -> Result<DataValue, Error> {
+    fn parse_with_value(&mut self) -> Result<DataValue, Error> {
         let peek_kind = self.peek()?.kind.clone();
 
-        if self.fill_rhs_starts_as_literal(&peek_kind) {
+        if self.with_rhs_starts_as_literal(&peek_kind) {
             let value = self.parse_literal_value()?;
-            return Ok(DataValue::Fill(FillRhs::Literal(value)));
+            return Ok(DataValue::With(WithRhs::Literal(value)));
         }
 
         if can_be_label(&peek_kind) || is_type_keyword(&peek_kind) {
@@ -767,18 +792,18 @@ impl Parser {
                 let tok = self.peek()?.clone();
                 return Err(self.error_at_token_with_suggestion(
                     &tok,
-                    "Constraint chains (`-> ...`) are not allowed on `fill`; use `data` to declare types and constraints.",
-                    "Use `data name: <type> -> ...` for constraints, then `fill name: <reference or literal>` to assign.",
+                    "Constraint chains (`-> ...`) are not allowed on `with`; use `data` to declare types and constraints.",
+                    "Use `data name: <type> -> ...` for constraints, then `with alias.field: <reference or literal>` to assign on an imported spec.",
                 ));
             }
-            return Ok(DataValue::Fill(FillRhs::Reference { target }));
+            return Ok(DataValue::With(WithRhs::Reference { target }));
         }
 
         let tok = self.peek()?.clone();
         Err(self.error_at_token(
             &tok,
             format!(
-                "Expected a reference or literal after `fill ...:`, found {}",
+                "Expected a reference or literal after `with ...:`, found {}",
                 tok.kind
             ),
         ))
@@ -910,19 +935,10 @@ impl Parser {
         ))
     }
 
-    fn parse_uses_statement(&mut self) -> Result<Vec<LemmaData>, Error> {
+    fn parse_uses_statement(&mut self) -> Result<LemmaData, Error> {
         let uses_token = self.expect(&TokenKind::Uses)?;
         let start_span = uses_token.span.clone();
-
-        let mut results = Vec::new();
-        results.push(self.parse_uses_item(&start_span)?);
-
-        while self.at(&TokenKind::Comma)? {
-            self.next()?;
-            results.push(self.parse_uses_item(&start_span)?);
-        }
-
-        Ok(results)
+        self.parse_uses_item(&start_span)
     }
 
     // ========================================================================
@@ -1047,43 +1063,7 @@ impl Parser {
         name_tok: Token,
     ) -> Result<ParentType, Error> {
         if let Some(kind) = token_kind_to_primitive(&name_tok.kind) {
-            let primitive = if self.at(&TokenKind::Identifier)? && self.peek()?.text == "range" {
-                let range_tok = self.peek()?.clone();
-                match kind {
-                    PrimitiveKind::Date => {
-                        self.next()?;
-                        PrimitiveKind::DateRange
-                    }
-                    PrimitiveKind::Number => {
-                        self.next()?;
-                        PrimitiveKind::NumberRange
-                    }
-                    PrimitiveKind::Quantity => {
-                        self.next()?;
-                        PrimitiveKind::QuantityRange
-                    }
-                    PrimitiveKind::Ratio => {
-                        self.next()?;
-                        PrimitiveKind::RatioRange
-                    }
-                    PrimitiveKind::Calendar => {
-                        self.next()?;
-                        PrimitiveKind::CalendarRange
-                    }
-                    _ => {
-                        return Err(self.error_at_token(
-                            &range_tok,
-                            format!(
-                                "'{} range' is not a valid type. Supported range types: calendar range, date range, number range, quantity range, ratio range",
-                                name_tok.text
-                            ),
-                        ));
-                    }
-                }
-            } else {
-                kind
-            };
-            Ok(ParentType::Primitive { primitive })
+            Ok(ParentType::Primitive { primitive: kind })
         } else if can_be_label(&name_tok.kind) {
             Ok(ParentType::Custom {
                 name: name_tok.text.clone(),
@@ -1121,6 +1101,15 @@ impl Parser {
                 ));
             }
             first
+        };
+
+        let base = if self.at(&TokenKind::Identifier)? && self.peek()?.text == "range" {
+            self.next()?;
+            ParentType::Ranged {
+                inner: Box::new(base),
+            }
+        } else {
+            base
         };
 
         let constraints = self.parse_trailing_constraints()?;
@@ -1568,7 +1557,6 @@ impl Parser {
         match value {
             Value::Number(d) => Ok(Value::Number(-d)),
             Value::NumberWithUnit(d, unit) => Ok(Value::NumberWithUnit(-d, unit)),
-            Value::Calendar(d, unit) => Ok(Value::Calendar(-d, unit)),
             other => Err(Error::parsing(
                 format!("Cannot negate this value: {}", other),
                 self.make_source(sign_span),
@@ -1656,9 +1644,6 @@ impl Parser {
         if can_be_label(&peeked.kind) {
             let unit_tok = self.next()?;
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            if let Some(calendar_unit) = CalendarUnit::from_keyword(&unit_tok.text) {
-                return Ok(Value::Calendar(decimal, calendar_unit));
-            }
             return Ok(Value::NumberWithUnit(decimal, unit_tok.text.clone()));
         }
 
@@ -2041,8 +2026,7 @@ impl Parser {
         self.continue_repository_operand(repository, start_span)
     }
 
-    /// Postfix suffixes on a completed repository/range expression (`in`, calendar, comparison).
-    /// Unit conversion (`as`) is parsed at term level, not here.
+    /// Postfix suffixes on a completed repository/range expression (`in`, calendar, comparison, `as`).
     fn continue_repository_operand(
         &mut self,
         mut expr: Expression,
@@ -2062,6 +2046,11 @@ impl Parser {
 
             if peeked.kind == TokenKind::In {
                 expr = self.parse_in_suffix(expr, start_span.clone())?;
+                continue;
+            }
+
+            if peeked.kind == TokenKind::As {
+                expr = self.parse_as_chain(expr, start_span.clone())?;
                 continue;
             }
 
@@ -2153,7 +2142,7 @@ impl Parser {
     ) -> Result<Expression, Error> {
         self.expect(&TokenKind::Not)?;
         self.expect(&TokenKind::In)?;
-        self.expect(&TokenKind::Calendar)?;
+        self.expect_calendar_period_marker()?;
         let unit = self.parse_calendar_unit()?;
         let end = self.peek()?.span.clone();
         let span = self.span_covering(&start_span, &end);
@@ -2182,8 +2171,8 @@ impl Parser {
             };
 
             // Check for "calendar" keyword
-            if self.at(&TokenKind::Calendar)? {
-                self.next()?; // consume "calendar"
+            if self.at_calendar_period_marker()? {
+                self.next_calendar_period_marker()?;
                 let cal_kind = if direction.kind == TokenKind::Past {
                     DateCalendarKind::Past
                 } else {
@@ -2231,8 +2220,8 @@ impl Parser {
         }
 
         // "in calendar <unit>"
-        if peeked.kind == TokenKind::Calendar {
-            self.next()?; // consume "calendar"
+        if token_is_calendar_period_marker(peeked) {
+            self.next_calendar_period_marker()?;
             let unit = self.parse_calendar_unit()?;
             let end = self.peek()?.span.clone();
             let span = self.span_covering(&start_span, &end);
@@ -2263,7 +2252,29 @@ impl Parser {
         while self.at(&TokenKind::As)? {
             self.expect(&TokenKind::As)?;
             let target_tok = self.next()?;
-            let target = conversion_target_from_token(&target_tok.kind, &target_tok.text);
+            let target = if matches!(target_tok.kind, TokenKind::PercentKw) {
+                ConversionTarget::Unit {
+                    unit_name: "percent".to_string(),
+                }
+            } else if matches!(target_tok.kind, TokenKind::Permille) {
+                ConversionTarget::Unit {
+                    unit_name: "permille".to_string(),
+                }
+            } else if let Some(primitive) = token_kind_to_primitive(&target_tok.kind) {
+                ConversionTarget::Type(primitive)
+            } else if can_be_reference_segment(&target_tok.kind) {
+                ConversionTarget::Unit {
+                    unit_name: target_tok.text.clone(),
+                }
+            } else {
+                return Err(self.error_at_token(
+                    &target_tok,
+                    format!(
+                        "Expected a type keyword or unit name after 'as', found {}",
+                        target_tok.kind
+                    ),
+                ));
+            };
             expr = self.new_expression(
                 ExpressionKind::UnitConversion(Arc::new(expr), target),
                 self.make_source(self.span_covering(&start_span, &target_tok.span)),
@@ -2781,12 +2792,6 @@ impl Parser {
         if can_be_label(&self.peek()?.kind) {
             let unit_tok = self.next()?;
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            if let Some(calendar_unit) = CalendarUnit::from_keyword(&unit_tok.text) {
-                return self.new_expression(
-                    ExpressionKind::Literal(Value::Calendar(decimal, calendar_unit)),
-                    self.make_source(self.span_covering(&start_span, &unit_tok.span)),
-                );
-            }
             return self.new_expression(
                 ExpressionKind::Literal(Value::NumberWithUnit(decimal, unit_tok.text.clone())),
                 self.make_source(self.span_covering(&start_span, &unit_tok.span)),

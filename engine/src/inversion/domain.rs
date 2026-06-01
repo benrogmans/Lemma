@@ -5,11 +5,7 @@
 //! - Domain operations: intersection, union, normalization
 //! - `extract_domains_from_constraint()`: extracts domains from constraints
 
-use crate::computation::units::UnitResolutionContext;
-use crate::planning::semantics::{
-    ComparisonComputation, DataPath, LiteralValue, SemanticConversionTarget, ValueKind,
-};
-use crate::OperationResult;
+use crate::planning::semantics::{ComparisonComputation, DataPath, LiteralValue, ValueKind};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -506,15 +502,21 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
             Ordering::Greater => 1,
         },
 
-        (ValueKind::Calendar(la, lu), ValueKind::Calendar(lb, lu2)) => {
+        (ValueKind::Quantity(la, sig_a), ValueKind::Quantity(lb, sig_b))
+            if a.lemma_type.is_calendar_like() && b.lemma_type.is_calendar_like() =>
+        {
+            let lu =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig_a);
+            let lu2 =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig_b);
             let a_months = crate::computation::units::convert_calendar_magnitude(
                 *la,
-                lu,
+                &lu,
                 &crate::planning::semantics::SemanticCalendarUnit::Month,
             );
             let b_months = crate::computation::units::convert_calendar_magnitude(
                 *lb,
-                lu2,
+                &lu2,
                 &crate::planning::semantics::SemanticCalendarUnit::Month,
             );
             match a_months.cmp(&b_months) {
@@ -530,44 +532,22 @@ fn lit_cmp(a: &LiteralValue, b: &LiteralValue) -> i8 {
             Ordering::Greater => 1,
         },
 
-        (ValueKind::Quantity(la, lua, _), ValueKind::Quantity(lb, lub, _)) => {
-            if a.lemma_type != b.lemma_type {
+        (ValueKind::Quantity(la, _), ValueKind::Quantity(lb, _)) => {
+            let a_decomp = a
+                .lemma_type
+                .quantity_type_decomposition()
+                .expect("BUG: decomposition must be resolved after planning");
+            let b_decomp = b
+                .lemma_type
+                .quantity_type_decomposition()
+                .expect("BUG: decomposition must be resolved after planning");
+            if a_decomp != b_decomp {
                 unreachable!(
-                    "BUG: lit_cmp compared different quantity types ({} vs {})",
-                    a.lemma_type.name(),
-                    b.lemma_type.name()
+                    "BUG: lit_cmp compared quantities with different decompositions ({:?} vs {:?})",
+                    a_decomp, b_decomp
                 );
             }
-
-            if lua == lub {
-                return match la.cmp(lb) {
-                    Ordering::Less => -1,
-                    Ordering::Equal => 0,
-                    Ordering::Greater => 1,
-                };
-            }
-
-            // Convert b to a's unit for comparison
-            let target = SemanticConversionTarget::QuantityUnit(lua.clone());
-            let converted = crate::computation::convert_unit(
-                b,
-                &target,
-                UnitResolutionContext::NamedQuantityOnly,
-            );
-            let converted_value = match converted {
-                OperationResult::Value(lit) => match lit.value {
-                    ValueKind::Quantity(v, _, _) => v,
-                    _ => unreachable!("BUG: quantity unit conversion returned non-quantity value"),
-                },
-                OperationResult::Veto(reason) => {
-                    unreachable!(
-                        "BUG: quantity unit conversion vetoed unexpectedly: {:?}",
-                        reason
-                    )
-                }
-            };
-
-            match la.cmp(&converted_value) {
+            match la.cmp(lb) {
                 Ordering::Less => -1,
                 Ordering::Equal => 0,
                 Ordering::Greater => 1,
@@ -1251,6 +1231,79 @@ mod tests {
         assert_eq!(
             *is_active_domain,
             Domain::Enumeration(Arc::new(vec![LiteralValue::from_bool(false)]))
+        );
+    }
+
+    /// Phase 0 — `lit_cmp` for two `Quantity` values whose decompositions match
+    /// but whose `lemma_type` markers differ (e.g. anonymous compound result vs named type)
+    /// must compare via `signature_factor`, NOT panic.
+    ///
+    /// Today the arm at domain.rs:534-538 panics with `BUG: lit_cmp compared different
+    /// quantity types`. After implementation (inversion_lit_cmp_signature_path) the same
+    /// call must succeed and return the correct ordering.
+    ///
+    /// Construct both values via the parsing/planning pipeline so the test exercises the
+    /// real LemmaType identities.
+    #[test]
+    fn inversion_lit_cmp_uses_signature_factor_for_compatible_dimensions() {
+        use crate::engine::Engine;
+        use crate::parsing::source::SourceType;
+        use std::collections::HashMap;
+        use std::path::PathBuf;
+        use std::sync::Arc as StdArc;
+
+        // Build two values that are dimensionally compatible but produced via different code paths.
+        // 80 eur*hour/minute (compound, anonymous when stored on a compound-signature lemma_type)
+        // vs 1000 eur (named money). Today both flow through quantity arithmetic, but lit_cmp
+        // crashes on lemma_type mismatch.
+        let code = r#"spec lit_cmp_test
+uses lemma units
+data money: quantity
+  -> unit eur 1
+data rate: quantity
+  -> unit eur_per_minute eur/minute
+data r: 40 eur_per_minute
+data h: 2 hour
+rule compound_cost: (r * h) as eur
+rule fixed_cost: 1000 eur
+"#;
+        let mut engine = Engine::new();
+        engine
+            .load(
+                code,
+                SourceType::Path(StdArc::new(PathBuf::from("t.lemma"))),
+            )
+            .expect("must load");
+        let response = engine
+            .run(None, "lit_cmp_test", None, HashMap::new(), true)
+            .expect("must eval");
+        let compound = response
+            .results
+            .get("compound_cost")
+            .unwrap()
+            .trace
+            .as_ref()
+            .expect("trace")
+            .result
+            .value()
+            .unwrap()
+            .clone();
+        let fixed = response
+            .results
+            .get("fixed_cost")
+            .unwrap()
+            .trace
+            .as_ref()
+            .expect("trace")
+            .result
+            .value()
+            .unwrap()
+            .clone();
+        // 80 eur*hour/minute = 4800 eur > 1000 eur
+        assert!(
+            lit_cmp(&compound, &fixed) > 0,
+            "compound (4800 eur) must be greater than fixed (1000 eur); got {}",
+            lit_cmp(&compound, &fixed)
         );
     }
 }

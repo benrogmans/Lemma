@@ -13,7 +13,6 @@ pub enum NumericFailure {
     DivisionByZero,
     Overflow,
     Irrational,
-    CommitFailed,
 }
 
 impl fmt::Display for NumericFailure {
@@ -22,9 +21,6 @@ impl fmt::Display for NumericFailure {
             NumericFailure::DivisionByZero => formatter.write_str("division by zero"),
             NumericFailure::Overflow => formatter.write_str("numeric overflow"),
             NumericFailure::Irrational => formatter.write_str("irrational numeric result"),
-            NumericFailure::CommitFailed => {
-                formatter.write_str("failed to commit rational to decimal")
-            }
         }
     }
 }
@@ -86,7 +82,7 @@ pub fn commit_rational_to_decimal(rational: &RationalInteger) -> Result<Decimal,
     let numerator = *reduced.numer();
     let denominator = *reduced.denom();
     if denominator == 0 {
-        return Err(NumericFailure::CommitFailed);
+        unreachable!("BUG: rational with zero denominator");
     }
     if numerator == 0 {
         return Ok(Decimal::ZERO);
@@ -95,7 +91,7 @@ pub fn commit_rational_to_decimal(rational: &RationalInteger) -> Result<Decimal,
     let denominator_decimal = decimal_from_i128(denominator)?;
     numerator_decimal
         .checked_div(denominator_decimal)
-        .ok_or(NumericFailure::CommitFailed)
+        .ok_or(NumericFailure::Overflow)
 }
 
 /// Format for human display: commit to decimal when possible, else reduced `numer/denom`.
@@ -106,7 +102,7 @@ pub fn rational_to_display_str(rational: &RationalInteger) -> String {
     }
 }
 
-/// Wire/API format: exact decimal string only. Never emits a fraction.
+/// API format: exact decimal string only. Never emits a fraction.
 pub fn rational_to_wire_str(rational: &RationalInteger) -> Result<String, NumericFailure> {
     commit_rational_to_decimal(rational).map(|decimal| decimal_to_display_str(&decimal))
 }
@@ -135,7 +131,7 @@ fn decimal_from_i128(value: i128) -> Result<Decimal, NumericFailure> {
     let max_mantissa = Decimal::MAX.mantissa();
     let min_mantissa = Decimal::MIN.mantissa();
     if value > max_mantissa || value < min_mantissa {
-        return Err(NumericFailure::CommitFailed);
+        return Err(NumericFailure::Overflow);
     }
     Ok(Decimal::from(value))
 }
@@ -168,8 +164,8 @@ pub fn rational_operation(
     }
 }
 
-/// Exact rational operation; on overflow, irrational power, or commit failure on operands,
-/// fall back to Decimal arithmetic (legacy pipeline semantics) and lift the result.
+/// Exact rational operation; on overflow or irrational power, fall back to 28-digit
+/// decimal arithmetic and lift the result back to rational when possible.
 pub fn rational_operation_with_fallback(
     left: &RationalInteger,
     operation: NumericOperation,
@@ -199,28 +195,25 @@ fn decimal_arithmetic(
     right: Decimal,
 ) -> Result<Decimal, NumericFailure> {
     match operation {
-        NumericOperation::Add => left.checked_add(right).ok_or(NumericFailure::CommitFailed),
-        NumericOperation::Subtract => left.checked_sub(right).ok_or(NumericFailure::CommitFailed),
-        NumericOperation::Multiply => left.checked_mul(right).ok_or(NumericFailure::CommitFailed),
+        NumericOperation::Add => left.checked_add(right).ok_or(NumericFailure::Overflow),
+        NumericOperation::Subtract => left.checked_sub(right).ok_or(NumericFailure::Overflow),
+        NumericOperation::Multiply => left.checked_mul(right).ok_or(NumericFailure::Overflow),
         NumericOperation::Divide => {
             if right.is_zero() {
                 return Err(NumericFailure::DivisionByZero);
             }
-            left.checked_div(right).ok_or(NumericFailure::CommitFailed)
+            left.checked_div(right).ok_or(NumericFailure::Overflow)
         }
         NumericOperation::Modulo => {
             if right.is_zero() {
                 return Err(NumericFailure::DivisionByZero);
             }
-            let quotient = left
-                .checked_div(right)
-                .ok_or(NumericFailure::CommitFailed)?;
+            let quotient = left.checked_div(right).ok_or(NumericFailure::Overflow)?;
             let truncated = quotient.trunc();
             let product = truncated
                 .checked_mul(right)
-                .ok_or(NumericFailure::CommitFailed)?;
-            left.checked_sub(product)
-                .ok_or(NumericFailure::CommitFailed)
+                .ok_or(NumericFailure::Overflow)?;
+            left.checked_sub(product).ok_or(NumericFailure::Overflow)
         }
         NumericOperation::Power => decimal_power(left, right),
     }
@@ -238,7 +231,7 @@ fn decimal_power(base: Decimal, exponent: Decimal) -> Result<Decimal, NumericFai
             i64::try_from(exponent.trunc().mantissa()).map_err(|_| NumericFailure::Overflow)?;
         return base
             .checked_powi(exponent_i64)
-            .ok_or(NumericFailure::CommitFailed);
+            .ok_or(NumericFailure::Overflow);
     }
     if decimal_is_half(exponent) {
         return base.sqrt().ok_or(NumericFailure::Irrational);
@@ -527,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn rational_operation_with_fallback_add_after_overflow_path() {
+    fn rational_operation_with_fallback_add_exact_rational() {
         let left = RationalInteger::new(1, 3);
         let right = RationalInteger::new(1, 6);
         let sum = rational_operation_with_fallback(&left, NumericOperation::Add, &right).unwrap();

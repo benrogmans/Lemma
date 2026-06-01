@@ -1,4 +1,4 @@
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, LiteralValue, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,14 +33,16 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
             spec_name,
             Some(&default_effective()),
             HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
+            true,
         )
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -49,6 +51,29 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     eval_literal(code, spec_name, rule_name).to_string()
+}
+
+fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> String {
+    let mut engine = Engine::new();
+    engine.load(code, source()).expect("Should parse and plan");
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&default_effective()),
+            HashMap::new(),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .cloned()
+        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}' for rule '{rule_name}'"))
 }
 
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
@@ -206,10 +231,22 @@ rule plus: (3 kilogram...5 kilogram) + 2 kilogram
 rule rplus: 2 kilogram + (3 kilogram...5 kilogram)
 rule minus: (3 kilogram...5 kilogram) - 2 kilogram
 rule rminus: 5 kilogram - (3 kilogram...5 kilogram)"#;
-    assert_contains_all(&eval_rule(code, "test", "plus"), &["4", "kilogram"]);
-    assert_contains_all(&eval_rule(code, "test", "rplus"), &["4", "kilogram"]);
-    assert_contains_all(&eval_rule(code, "test", "minus"), &["0", "kilogram"]);
-    assert_contains_all(&eval_rule(code, "test", "rminus"), &["3", "kilogram"]);
+    assert_eq!(
+        eval_rule_quantity_unit(code, "test", "plus", "kilogram"),
+        "4"
+    );
+    assert_eq!(
+        eval_rule_quantity_unit(code, "test", "rplus", "kilogram"),
+        "4"
+    );
+    assert_eq!(
+        eval_rule_quantity_unit(code, "test", "minus", "kilogram"),
+        "0"
+    );
+    assert_eq!(
+        eval_rule_quantity_unit(code, "test", "rminus", "kilogram"),
+        "3"
+    );
 }
 
 #[test]
@@ -251,29 +288,27 @@ rule cmp: (10%...50%) >= 40%"#;
 #[test]
 fn date_mixed_duration_arithmetic_uses_range_size() {
     let code = r#"spec test
-uses lemma si
-rule plus: ((2024-02-15...2024-03-15) + 1 day) as days
-rule rplus: 1 day + ((2024-02-15...2024-03-15) as days)
-rule minus: ((2024-02-15...2024-03-15) - 1 day) as days
-rule rminus: 40 days - ((2024-02-15...2024-03-15) as days)"#;
-    assert_contains_all(&eval_rule(code, "test", "plus"), &["30", "day"]);
-    assert_contains_all(&eval_rule(code, "test", "rplus"), &["30", "day"]);
-    assert_contains_all(&eval_rule(code, "test", "minus"), &["28", "day"]);
-    assert_contains_all(&eval_rule(code, "test", "rminus"), &["11", "day"]);
+uses lemma units
+rule plus: (2024-02-15...2024-03-15 + 1 day) as days as number
+rule minus: (2024-02-15...2024-03-15 - 1 day) as days as number
+rule rminus: (40 days - (2024-02-15...2024-03-15)) as days as number"#;
+    assert_contains_all(&eval_rule(code, "test", "plus"), &["30"]);
+    assert_contains_all(&eval_rule(code, "test", "minus"), &["28"]);
+    assert_contains_all(&eval_rule(code, "test", "rminus"), &["11"]);
 }
 
 #[test]
 fn date_range_arithmetic_and_comparison_use_sizes() {
     let code = r#"spec test
-uses lemma si
-rule sum: ((2024-01-01...2024-01-03) + (2024-02-01...2024-02-02)) as days
-rule diff: ((2024-01-01...2024-01-03) - (2024-02-01...2024-02-02)) as days
+uses lemma units
+rule sum: ((2024-01-01...2024-01-03) + (2024-02-01...2024-02-02)) as days as number
+rule diff: ((2024-01-01...2024-01-03) - (2024-02-01...2024-02-02)) as days as number
 rule cmp: (2024-01-01...2024-01-03) >= 2 days
-rule reversed: (2024-01-03...2024-01-01) as days"#;
-    assert_contains_all(&eval_rule(code, "test", "sum"), &["3", "day"]);
-    assert_contains_all(&eval_rule(code, "test", "diff"), &["1", "day"]);
+rule reversed: (2024-01-03...2024-01-01) as days as number"#;
+    assert_contains_all(&eval_rule(code, "test", "sum"), &["3"]);
+    assert_contains_all(&eval_rule(code, "test", "diff"), &["1"]);
     assert!(eval_bool(code, "test", "cmp"));
-    assert_contains_all(&eval_rule(code, "test", "reversed"), &["2", "day"]);
+    assert_contains_all(&eval_rule(code, "test", "reversed"), &["2"]);
 }
 
 #[test]

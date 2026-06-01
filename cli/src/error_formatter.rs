@@ -1,6 +1,6 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
-use lemma::error::ErrorDetails;
 use lemma::Error;
+use lemma::ErrorDetails;
 use std::collections::HashMap;
 
 fn format_details(

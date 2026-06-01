@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,19 +19,15 @@ fn eval_literal(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> lemm
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(&now), HashMap::new(), true)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -40,6 +36,30 @@ fn eval_literal(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> lemm
 
 fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String {
     eval_literal(code, spec_name, rule_name).to_string()
+}
+
+fn eval_rule_quantity_unit(
+    code: impl AsRef<str>,
+    spec_name: &str,
+    rule_name: &str,
+    unit: &str,
+) -> String {
+    let code = code.as_ref();
+    let mut engine = Engine::new();
+    engine.load(code, source()).expect("Should parse and plan");
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .cloned()
+        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
 }
 
 fn eval_bool(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> bool {
@@ -159,7 +179,7 @@ fn is_numeric_context_character(character: char) -> bool {
 #[test]
 fn arith_add_mixed_aliases() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2 hours + 30 minutes) as minutes"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["150", "minute"]);
@@ -168,7 +188,7 @@ rule value: (2 hours + 30 minutes) as minutes"#;
 #[test]
 fn arith_subtract_mixed_aliases() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2 hour - 30 minutes) as minute"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["90", "minute"]);
@@ -177,7 +197,7 @@ rule value: (2 hour - 30 minutes) as minute"#;
 #[test]
 fn arith_negative_duration_result() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (30 minutes - 2 hours) as minutes"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["-90", "minute"]);
@@ -186,34 +206,36 @@ rule value: (30 minutes - 2 hours) as minutes"#;
 #[test]
 fn arith_duration_times_number() {
     let code = r#"spec test
-uses lemma si
-rule value: (2 hours * 3) as hours"#;
+uses lemma units
+rule value: (2 hours * 3) as hours as number"#;
     let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["6", "hour"]);
+    assert_contains_all(&value, &["6"]);
 }
 
 #[test]
 fn arith_number_times_duration() {
     let code = r#"spec test
-uses lemma si
-rule value: (3 * 2 hours) as hours"#;
+uses lemma units
+rule value: (3 * 2 hours) as hours as number"#;
     let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["6", "hour"]);
+    assert_contains_all(&value, &["6"]);
 }
 
 #[test]
 fn arith_duration_divided_by_number() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2 hours / 2) as minutes"#;
-    let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["60", "minute"]);
+    assert_eq!(
+        eval_rule_quantity_unit(code, "test", "value", "minutes"),
+        "60"
+    );
 }
 
 #[test]
 fn arith_duration_divided_by_duration_yields_number() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 2 hours / 30 minutes"#;
     assert_eq!(eval_rule(code, "test", "value"), "4");
 }
@@ -221,7 +243,7 @@ rule value: 2 hours / 30 minutes"#;
 #[test]
 fn arith_named_duration_compare_same_alias_family() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: 2 hours > 90 minutes"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -229,7 +251,7 @@ rule ok: 2 hours > 90 minutes"#;
 #[test]
 fn arith_named_duration_compare_equal_after_conversion() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: 2 hours >= 120 minutes"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -237,16 +259,16 @@ rule ok: 2 hours >= 120 minutes"#;
 #[test]
 fn arith_number_cast_to_duration_for_comparison() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data threshold: 1.5
-rule ok: 2 hours > threshold as hours"#;
+rule ok: (2 hours as hours as number) > threshold"#;
     assert!(eval_bool(code, "test", "ok"));
 }
 
 #[test]
 fn arith_named_duration_compare_to_bare_number_rejected() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: 2 hours > 5"#;
     expect_plan_error(code, "number");
 }
@@ -254,8 +276,8 @@ rule ok: 2 hours > 5"#;
 #[test]
 fn arith_named_duration_plus_calendar_rejected() {
     let code = r#"spec test
-uses lemma si
-rule value: 2 hours + 3 months"#;
+uses lemma units
+rule value: 2 hours + 3 month"#;
     expect_plan_error(code, "calendar");
 }
 
@@ -263,7 +285,7 @@ rule value: 2 hours + 3 months"#;
 fn arith_named_duration_plus_unrelated_quantity_rejected() {
     let code = format!(
         r#"spec test
-uses lemma si
+uses lemma units
 {money}
 rule value: 2 hours + 5 eur"#,
         money = MONEY_TYPEDEF
@@ -275,19 +297,21 @@ rule value: 2 hours + 5 eur"#,
 fn arith_named_duration_cast_to_unrelated_unit_rejected() {
     let code = format!(
         r#"spec test
-uses lemma si
+uses lemma units
 {money}
-rule value: 2 hours as eur"#,
+data elapsed: units.duration
+data d: elapsed -> default 2 hours
+rule value: d as eur"#,
         money = MONEY_TYPEDEF
     );
-    expect_plan_error(code, "unknown unit");
+    expect_plan_error(code, "different quantity families");
 }
 
 #[test]
 fn arith_bare_number_not_implicitly_duration_compatible() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data threshold: 1.5
 rule ok: 2 hours > threshold"#;
-    expect_plan_error(code, "number");
+    expect_plan_error(code, "Cannot compare");
 }

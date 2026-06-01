@@ -99,7 +99,7 @@ defmodule Lemma do
   `:schema` is the decoded [`Lemma.schema/3`] envelope for this version so
   callers never need a second round-trip.
 
-  Always includes the embedded `lemma` repository (`spec si`) on a fresh engine.
+  Always includes the embedded `lemma` repository (`spec units`) on a fresh engine.
   Returns `{:ok, []}` only when no repositories have specs (should not happen on `Lemma.new/1`).
   """
   @spec list(engine()) :: {:ok, [map()]} | {:error, term()}
@@ -124,7 +124,7 @@ defmodule Lemma do
   @doc """
   Returns canonical Lemma source for a loaded repository (formatted from the in-engine AST).
 
-  Use `"lemma"` for the embedded SI stdlib (`spec si`).
+  Use `"lemma"` for the embedded units stdlib (`spec units`).
   """
   @spec format_repository(engine(), String.t()) :: {:ok, String.t()} | {:error, term()}
   def format_repository(engine, repository) when is_binary(repository) do

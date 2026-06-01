@@ -1,4 +1,4 @@
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 
 pub fn make_effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTimeValue {
     DateTimeValue {

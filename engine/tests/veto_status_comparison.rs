@@ -1,9 +1,9 @@
 //! `is veto` / `ResultIsVeto` — boolean coercion from operand `OperationResult`.
 
-use lemma::evaluation::operations::ComputationKind;
-use lemma::explanation::ExplanationNode;
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, OperationResult, VetoType};
+use lemma::ComputationKind;
+use lemma::DateTimeValue;
+use lemma::Engine;
+use lemma::TraceNode;
 use std::collections::HashMap;
 
 #[test]
@@ -22,14 +22,7 @@ rule total: validated_price * quantity
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let total = response
@@ -38,12 +31,7 @@ rule total: validated_price * quantity
         .find(|r| r.rule.name == "total")
         .expect("total rule");
 
-    assert_eq!(
-        total.result,
-        OperationResult::Value(Box::new(lemma::LiteralValue::number_from_decimal(
-            rust_decimal::Decimal::ZERO
-        )))
-    );
+    assert_eq!(total.display.as_deref(), Some("0"));
 }
 
 #[test]
@@ -61,14 +49,7 @@ rule total: validated_price
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let total = response
@@ -77,12 +58,8 @@ rule total: validated_price
         .find(|r| r.rule.name == "total")
         .expect("total rule");
 
-    assert_eq!(
-        total.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Upstream failed".to_string())
-        })
-    );
+    assert!(total.vetoed);
+    assert_eq!(total.veto_reason.as_deref(), Some("Upstream failed"));
 }
 
 #[test]
@@ -99,14 +76,7 @@ rule flag: validated_quantity is veto
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let flag = response
@@ -115,10 +85,7 @@ rule flag: validated_quantity is veto
         .find(|r| r.rule.name == "flag")
         .expect("flag");
 
-    assert_eq!(
-        flag.result,
-        OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
+    assert_eq!(flag.boolean, Some(true));
 }
 
 #[test]
@@ -137,14 +104,7 @@ rule total: price * validated_quantity
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let total = response
@@ -153,12 +113,7 @@ rule total: price * validated_quantity
         .find(|r| r.rule.name == "total")
         .expect("total");
 
-    assert_eq!(
-        total.result,
-        OperationResult::Value(Box::new(lemma::LiteralValue::number_from_decimal(
-            rust_decimal::Decimal::ZERO
-        )))
-    );
+    assert_eq!(total.display.as_deref(), Some("0"));
 }
 
 #[test]
@@ -175,14 +130,7 @@ rule flag: validated_price is veto
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let flag = response
@@ -191,10 +139,7 @@ rule flag: validated_price is veto
         .find(|r| r.rule.name == "flag")
         .expect("flag");
 
-    assert_eq!(
-        flag.result,
-        OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
-    );
+    assert_eq!(flag.boolean, Some(false));
 }
 
 #[test]
@@ -212,14 +157,7 @@ rule right_to_left: veto is validated_price
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let ltr = response
@@ -233,11 +171,8 @@ rule right_to_left: veto is validated_price
         .find(|r| r.rule.name == "right_to_left")
         .expect("right_to_left");
 
-    assert_eq!(ltr.result, rtl.result);
-    assert_eq!(
-        ltr.result,
-        OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
+    assert_eq!(ltr.boolean, rtl.boolean);
+    assert_eq!(ltr.boolean, Some(true));
 }
 
 #[test]
@@ -254,14 +189,7 @@ rule b: not veto is validated_price
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let a = response
@@ -274,11 +202,8 @@ rule b: not veto is validated_price
         .values()
         .find(|r| r.rule.name == "b")
         .expect("b");
-    assert_eq!(a.result, b.result);
-    assert_eq!(
-        a.result,
-        OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
+    assert_eq!(a.boolean, b.boolean);
+    assert_eq!(a.boolean, Some(true));
 }
 
 #[test]
@@ -297,14 +222,7 @@ rule total: validated_price * quantity
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let total = response
@@ -312,16 +230,16 @@ rule total: validated_price * quantity
         .values()
         .find(|r| r.rule.name == "total")
         .expect("total");
-    let explanation = total.explanation.as_ref().expect("explanation");
+    let explanation = total.trace.as_ref().expect("trace");
 
-    let ExplanationNode::Branches { matched, .. } = explanation.tree.as_ref() else {
+    let TraceNode::Branches { matched, .. } = explanation.tree.as_ref() else {
         panic!("expected Branches explanation, got {:?}", explanation.tree);
     };
     let condition = matched
         .condition
         .as_ref()
         .expect("matched unless should have condition");
-    let ExplanationNode::Computation { kind, .. } = condition.as_ref() else {
+    let TraceNode::Computation { kind, .. } = condition.as_ref() else {
         panic!("expected Computation on unless condition, got {condition:?}");
     };
     assert_eq!(*kind, ComputationKind::ResultIsVeto);

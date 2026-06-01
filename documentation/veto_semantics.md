@@ -7,7 +7,12 @@ title: Veto Semantics
 
 ## Purpose
 
-Use `veto` for **data validation** - when input data is invalid or out of acceptable range.
+Use `veto` when a rule cannot produce a meaningful value — the domain says "no answer here."
+
+Common cases:
+- **Data validation** — input is out of acceptable range.
+- **Missing or unrecognized input** — a required data field has no match (e.g. unknown enum value).
+- **Constraint violations at runtime** — a data override breaks a bound or type constraint.
 
 ```lemma
 rule validated_age: age
@@ -15,7 +20,7 @@ rule validated_age: age
   unless age > 120 then veto "Invalid age value"
 ```
 
-**Important**: Use veto for invalid data, not for negative business results. Use boolean values for business logic.
+**Important**: Use veto for "no value" situations, not for negative business results. A rule that evaluates to `false` or `0` is still a valid result — use boolean or numeric values for business logic.
 
 ## When veto applies
 
@@ -43,6 +48,22 @@ rule shipping_weight: validated_weight
 ```
 
 If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weight` = 5. The veto doesn't apply because `validated_weight` is never evaluated (the unless clause provides the value).
+
+### Missing data propagates as veto
+
+When a data field has no value (not provided and no default), rules that depend on it veto with a "Missing data" reason. This propagates through rule references:
+
+```lemma
+data product: text
+  -> option "latte"
+
+rule base_price: veto "Unknown product"
+  unless product is "latte" then 3.50 eur
+
+rule total: base_price * 2
+```
+
+If `product` is not provided, `base_price` vetoes with "Missing data: product" — not the default arm's "Unknown product" message. The `total` rule also vetoes because its dependency has no value. A dependent rule never produces a numeric result when an upstream dependency lacks data.
 
 ## `is veto` (boolean test, not a new failure mode)
 
@@ -73,7 +94,9 @@ Lemma distinguishes three outcomes:
 | Outcome | When | Example |
 |---------|------|---------|
 | **Planning Error** | Invalid spec (wrong types, unsupported operations) | `5 and "text"` — logical AND requires boolean operands; `1 / 0` — literal division by zero |
-| **Veto** | Domain "no value" at runtime | Division by zero from data, missing data, user `veto "..."`, date overflow |
+| **Veto** | Domain "no value" at runtime | Division by zero from data, missing data, invalid data override (constraint violation, unparsable value, value not in options), user `veto "..."`, date overflow |
 | **Panic** | Bug (invariant violated; should never happen after planning) | Internal consistency failure |
 
-**Veto is only for domain-level "no value"**, not for type errors or invalid operations. Those are caught at planning time. If the engine reaches code that would have returned a type-error Veto, it panics instead — planning should have rejected the spec.
+After planning succeeds, evaluation is guaranteed to complete — it produces rule results (values or vetoes) and never returns an error. Data overrides that violate type constraints, minimum/maximum bounds, or allowed options produce a **Veto** on the affected rules, not a planning error. Planning errors only arise from structurally invalid specs.
+
+**Veto is only for domain-level "no value"**, not for type errors or invalid operations in the spec itself. Those are caught at planning time. If the engine reaches code that would have returned a type-error Veto, it panics instead — planning should have rejected the spec.

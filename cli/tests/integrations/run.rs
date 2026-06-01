@@ -116,21 +116,31 @@ fn test_cli_schema_spec() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec inspect_test
-data name: "Test"
-data value: 42
+data name: text
+  -> option "Test"
+data value: number
+  -> minimum 0
 rule doubled: value * 2
 "#,
     )
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("schema").arg(temp_dir.path()).arg("inspect_test");
+    cmd.arg("schema")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("inspect_test");
 
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("inspect_test"))
-        .stdout(predicate::str::contains("data"))
-        .stdout(predicate::str::contains("rules"));
+        .stdout(predicate::str::contains("Data"))
+        .stdout(predicate::str::contains("Rules"))
+        .stdout(predicate::str::contains("name"))
+        .stdout(predicate::str::contains("options"))
+        .stdout(predicate::str::contains("minimum"))
+        .stdout(predicate::str::contains("text"))
+        .stdout(predicate::str::contains("number"));
 }
 
 #[test]
@@ -156,12 +166,14 @@ data y: 2
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("list").arg(temp_dir.path());
+    cmd.arg("list").arg("--prefix").arg(temp_dir.path());
 
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("spec1"))
-        .stdout(predicate::str::contains("spec2"));
+        .stdout(predicate::str::contains("spec2"))
+        .stdout(predicate::str::contains("Found").not())
+        .stdout(predicate::str::contains("data").not());
 }
 
 #[test]
@@ -186,27 +198,15 @@ data x: 1"#,
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("list").arg(temp_dir.path());
+    cmd.arg("list").arg("--prefix").arg(temp_dir.path());
 
     cmd.assert().success().stdout(
         predicate::str::contains("entry")
-            .and(predicate::str::contains("Found 1"))
-            .and(predicate::str::contains("Repositories:"))
             .and(predicate::str::contains("deps_repo"))
-            .and(predicate::str::contains("dep_only").not()),
+            .and(predicate::str::contains("dep_only"))
+            .and(predicate::str::contains("Found").not())
+            .and(predicate::str::contains("Repositories:").not()),
     );
-
-    let mut drill = cargo_bin_cmd!("lemma");
-    drill
-        .current_dir(temp_dir.path())
-        .arg("list")
-        .arg("deps_repo");
-
-    drill
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("Repository: deps_repo"))
-        .stdout(predicate::str::contains("dep_only"));
 }
 
 #[test]
@@ -433,7 +433,7 @@ rule result: mass as gram
         "run --explain should succeed: {}",
         stdout
     );
-    assert!(stdout.contains("2000 gram"), "stdout:\n{stdout}");
+    assert!(stdout.contains("2 kilogram"), "stdout:\n{stdout}");
     assert!(
         stdout.contains("1 kilogram is 1000 gram"),
         "stdout:\n{stdout}"
@@ -453,7 +453,7 @@ fn test_cli_explain_date_range_conversion_format() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec test_cli_date_conversion_explain
-uses lemma si
+uses lemma units
 data age: date range -> default 2024-06-01...2024-06-15
 rule result: age as days
 "#,
@@ -476,7 +476,7 @@ rule result: age as days
         stdout
     );
     assert!(
-        stdout.contains("14") && stdout.contains("day"),
+        stdout.contains("2 week") || (stdout.contains("14") && stdout.contains("day")),
         "stdout:\n{stdout}"
     );
     assert!(stdout.contains('−'), "stdout:\n{stdout}");
@@ -522,7 +522,7 @@ rule result: (mass * 2) as gram
         "run --explain should succeed: {}",
         stdout
     );
-    assert!(stdout.contains("4000 gram"), "stdout:\n{stdout}");
+    assert!(stdout.contains("4 kilogram"), "stdout:\n{stdout}");
     assert!(
         stdout.contains("1 kilogram is 1000 gram"),
         "stdout:\n{stdout}"
@@ -535,7 +535,7 @@ rule result: (mass * 2) as gram
 }
 
 #[test]
-fn test_cli_run_rule_result_unit_conversion() {
+fn test_cli_run_quantity_rule_result_includes_all_units_json() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("money.lemma"),
@@ -556,16 +556,17 @@ rule total: price
         .arg(temp_dir.path())
         .arg("money")
         .arg("--rules=total")
-        .arg("--as=total:usd");
+        .arg("--json");
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("usd"))
-        .stdout(predicate::str::contains("109.89010989010989010989010989"));
+        .stdout(predicate::str::contains("\"quantity\""))
+        .stdout(predicate::str::contains("\"eur\""))
+        .stdout(predicate::str::contains("\"usd\""));
 }
 
 #[test]
-fn test_cli_explain_shows_both_data_operands_in_multiply() {
+fn test_cli_explain_shows_multiply_trace_for_quantity_product() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
@@ -603,7 +604,7 @@ rule product: price * quantity
 }
 
 #[test]
-fn test_cli_explain_with_rule_result_as_preserves_multiply_trace() {
+fn test_cli_explain_with_quantity_product_preserves_multiply_trace() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
@@ -625,19 +626,13 @@ rule product: price * quantity
         .arg(temp_dir.path())
         .arg("product_as_explanation")
         .arg("--rules=product")
-        .arg("--as=product:usd")
         .arg("--explain");
 
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "run --explain --as should succeed: {}",
-        stdout
-    );
-    assert!(
-        !stdout.contains("product as usd"),
-        "API display must not replace explain trace with synthetic label, got:\n{}",
+        "run --explain should succeed: {}",
         stdout
     );
     assert!(

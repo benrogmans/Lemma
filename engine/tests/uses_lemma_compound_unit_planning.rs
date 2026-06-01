@@ -1,4 +1,4 @@
-//! Derived quantity unit planning: `uses lemma si` duration units, compound-of-compound
+//! Derived quantity unit planning: `uses lemma units` duration units, compound-of-compound
 //! resolution, topological ordering, and conversion-factor normalization.
 
 use lemma::Engine;
@@ -37,11 +37,11 @@ fn expect_plan_error(code: &str, source_file: &str, expected_fragment: &str) {
 }
 
 /// Mirrors `cli/tests/integrations/examples/03_spec_references.lemma` contractor block:
-/// compound wage-rate units reference `second` and `hour` from `si.duration` via `uses lemma si`.
+/// compound wage-rate units reference `second` and `hour` from `units.duration` via `uses lemma units`.
 #[test]
 fn uses_lemma_compound_wage_rate_units_plan_without_unknown_unit_error() {
     let code = r#"spec contractor
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1.00
@@ -55,7 +55,7 @@ rule smoke: true
     load_ok(
         code,
         "contractor.lemma",
-        "planning must accept eur/second and eur/hour when uses lemma si brings duration units",
+        "planning must accept eur/second and eur/hour when uses lemma units brings duration units",
     );
 }
 
@@ -64,7 +64,7 @@ rule smoke: true
 #[test]
 fn uses_lemma_insurance_premium_per_vehicle_compound_plans() {
     let code = r#"spec fleet_motor_quote
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1.00
@@ -92,7 +92,7 @@ rule smoke: true
 #[test]
 fn compound_newton_force_unit_plans() {
     let code = r#"spec mechanics
-uses lemma si
+uses lemma units
 
 data mass: quantity
   -> unit kg 1
@@ -121,7 +121,7 @@ rule smoke: true
 #[test]
 fn compound_pascal_pressure_unit_plans() {
     let code = r#"spec mechanics_pressure
-uses lemma si
+uses lemma units
 
 data mass: quantity
   -> unit kg 1
@@ -154,7 +154,7 @@ rule smoke: true
 #[test]
 fn compound_population_density_multi_unit_plans() {
     let code = r#"spec demography
-uses lemma si
+uses lemma units
 
 data population: quantity
   -> unit person 1
@@ -184,7 +184,7 @@ rule smoke: true
 #[test]
 fn compound_annual_growth_rate_multi_unit_plans() {
     let code = r#"spec growth
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1
@@ -210,7 +210,7 @@ rule smoke: true
 #[test]
 fn compound_three_level_chain_plans() {
     let code = r#"spec chain
-uses lemma si
+uses lemma units
 
 data a: quantity
   -> unit au 1
@@ -237,7 +237,7 @@ rule smoke: true
 #[test]
 fn compound_cycle_between_quantity_types_rejected() {
     let code = r#"spec cycle
-uses lemma si
+uses lemma units
 
 data x: quantity
   -> unit xu yu/second
@@ -258,7 +258,7 @@ rule smoke: true
 #[test]
 fn compound_kilonewton_with_prefix_plans() {
     let code = r#"spec force_prefix
-uses lemma si
+uses lemma units
 
 data mass: quantity
   -> unit kg 1
@@ -293,7 +293,7 @@ rule smoke: true
 #[test]
 fn compound_kilonewton_to_gram_kmh2_conversion() {
     let code = r#"spec force_conv
-uses lemma si
+uses lemma units
 
 data mass: quantity
   -> unit kg 1
@@ -312,13 +312,14 @@ data force: quantity
   -> unit kilonewton 1000 kg * meter/second^2
   -> unit gram_kmh2 gram * kmh2
 
-rule converted: 1 kilonewton as gram_kmh2
+data f: 1 kilonewton
+rule converted: f as gram_kmh2
 "#;
     let mut engine = Engine::new();
     engine
         .load(code, path_source("force_conv.lemma"))
         .expect("newton/kilonewton/gram_kmh2 must plan");
-    let now = lemma::parsing::ast::DateTimeValue::now();
+    let now = lemma::DateTimeValue::now();
     let response = engine
         .run(
             None,
@@ -326,21 +327,19 @@ rule converted: 1 kilonewton as gram_kmh2
             Some(&now),
             std::collections::HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .expect("should evaluate");
     let result = response
         .results
         .get("converted")
         .expect("rule 'converted' not found");
-    let val = result
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("rule 'converted' returned non-value: {:?}", result.result))
-        .to_string();
-    assert!(
-        val.contains("12960000000") && val.to_lowercase().contains("gram_kmh2"),
-        "expected 12960000000 gram_kmh2, got: {val}"
+    assert_eq!(
+        result
+            .quantity
+            .as_ref()
+            .and_then(|m| m.get("gram_kmh2"))
+            .map(String::as_str),
+        Some("12960000000")
     );
 }
 
@@ -348,7 +347,7 @@ rule converted: 1 kilonewton as gram_kmh2
 #[test]
 fn compound_volume_liter_and_cubic_meter_plans() {
     let code = r#"spec volume
-uses lemma si
+uses lemma units
 
 data length: quantity
   -> unit meter 1

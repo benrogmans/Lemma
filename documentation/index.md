@@ -66,7 +66,7 @@ Specs support hierarchical naming: `contract/employment`, `company/policies/vaca
 Named values with rich types:
 
 ```lemma
-uses lemma si
+uses lemma units
 
 data name:       "Alice"
 data age:        35
@@ -195,8 +195,8 @@ spec manager
 
 uses employee: base_employee
 
-data employee.name:   "Alice Smith"
-data employee.salary: 8000
+with employee.name:   "Alice Smith"
+with employee.salary: 8000
 
 rule manager_bonus: employee.salary * 0.15
 ```
@@ -296,12 +296,12 @@ data price: 100 eur
 rule price_usd: price as usd
 ```
 
-Trait-duration **quantity** types (after `uses lemma si` or an equivalent typedef) accept **quantity** literals for time periods:
+Trait-duration **quantity** types (after `uses lemma units` or an equivalent typedef) accept **quantity** literals for time periods:
 
 ```lemma
-uses lemma si
+uses lemma units
 
-data workweek: si.duration
+data workweek: units.duration
   -> default 40 hours
 
 rule workweek_days: workweek as days
@@ -327,14 +327,14 @@ rule as_percent: 0.25 as percent
 
 ## Ranges
 
-Intervals use `lo...hi` (lower inclusive, upper exclusive). Test membership with `in`, project width with `(lo...hi) as <unit>`, and declare slots with `date range`, `number range`, `quantity range`, `ratio range`, or `calendar range`.
+Intervals use `lo...hi` (lower inclusive, upper exclusive). Test membership with `in`, project width with `(lo...hi) as <unit> as number`, and declare slots with `date range`, `number range`, `quantity range`, or `ratio range`. Calendar month/year bands use `uses lemma units` and literals like `18 year...67 year`.
 
 ```lemma
-uses lemma si
+uses lemma units
 
-data age: 25 years
+data age: 25 year
 
-rule in_working_age: age in 18 years...67 years
+rule in_working_age: age in 18 year...67 year
 
 rule days_in_q2: (2024-04-01...2024-07-01) as days
 ```
@@ -355,7 +355,20 @@ rule is_overdue: today > deadline
 
 ## Examples
 
-Browse [examples/](examples/) or [cli/tests/integrations/examples/](../cli/tests/integrations/examples/):
+### Language examples (`documentation/examples/`)
+
+Self-contained specs demonstrating core features:
+
+- **[01_coffee_order](examples/01_coffee_order.lemma)** -- types, unless clauses, arithmetic
+- **[02_library_fees](examples/02_library_fees.lemma)** -- conditional fees, grace periods
+- **[03_recipe_scaling](examples/03_recipe_scaling.lemma)** -- calculations, stdlib duration units
+- **[04_membership_benefits](examples/04_membership_benefits.lemma)** -- spec composition with `uses`
+- **[05_weather_clothing](examples/05_weather_clothing.lemma)** -- temporal versioning, text rules
+- **[06_dutch_net_salary](examples/06_dutch_net_salary.lemma)** -- progressive tax brackets, multi-rule pipeline
+
+### CLI integration examples (`cli/tests/integrations/examples/`)
+
+Feature-focused specs used in CLI integration tests:
 
 1. **[01_simple_data](../cli/tests/integrations/examples/01_simple_data.lemma)** -- all data types and literals
 2. **[02_rules_and_unless](../cli/tests/integrations/examples/02_rules_and_unless.lemma)** -- conditional logic, veto

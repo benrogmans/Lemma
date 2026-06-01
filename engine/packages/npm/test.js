@@ -14,50 +14,20 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || 'assertion failed');
 }
 
-function opIsVeto(op) {
-  return op && Object.prototype.hasOwnProperty.call(op, 'veto');
+function ruleNumber(rr) {
+  if (!rr || rr.number == null) return null;
+  return Number(rr.number);
 }
 
-function opIsValue(op) {
-  return op && Object.prototype.hasOwnProperty.call(op, 'value');
-}
-
-function literalPrimitiveType(lit) {
-  if (!lit || !lit.value || typeof lit.value !== 'object') return null;
-  const keys = Object.keys(lit.value);
-  return keys.length === 1 ? keys[0] : null;
-}
-
-function literalNumberValue(lit) {
-  const t = literalPrimitiveType(lit);
-  if (t !== 'number') return null;
-  const v = lit.value.number;
-  if (typeof v !== 'string') return null;
-  return Number(v);
-}
-
-function literalQuantityValue(lit) {
-  const t = literalPrimitiveType(lit);
-  if (t !== 'quantity') return null;
-  const v = lit.value.quantity;
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
-  const amount = typeof v.value === 'string' ? Number(v.value) : null;
-  const unit = v.unit;
-  if (amount === null || typeof unit !== 'string') return null;
-  return { amount, unit };
-}
-
-function formatReject(e) {
-  if (Array.isArray(e)) {
-    return e.map((it) => (it && it.message) ? it.message : String(it)).join('\n');
-  }
-  if (e && typeof e === 'object' && typeof e.message === 'string') return e.message;
-  return String(e);
+function ruleQuantityUnit(rr, unit) {
+  if (!rr || !rr.quantity || typeof rr.quantity !== 'object') return null;
+  const v = rr.quantity[unit];
+  return v != null ? Number(v) : null;
 }
 
 function runEx(engine, spec, rules, data, effective) {
   try {
-    return engine.run(null, spec, rules, data, null, effective ?? null);
+    return engine.run(null, spec, rules, data, effective ?? null);
   } catch (e) {
     throw new Error(formatReject(e));
   }
@@ -81,9 +51,18 @@ function assertEngineError(e) {
   assert(e.source === null || (e.source && typeof e.source === 'object'), 'source object|null');
 }
 
+function formatReject(e) {
+  if (Array.isArray(e)) {
+    return e.map((it) => (it && it.message) ? it.message : String(it)).join('\n');
+  }
+  if (e && typeof e === 'object' && typeof e.message === 'string') return e.message;
+  return String(e);
+}
+
 function assertResponseShape(resp, specName) {
   assert(resp && typeof resp === 'object', 'run() must return object');
-  assert(resp.spec_name === specName, `spec_name want ${specName}, got ${resp.spec_name}`);
+  assert(resp.spec === specName, `spec want ${specName}, got ${resp.spec}`);
+  assert(typeof resp.effective === 'string', 'effective must be string');
   assert(
     resp.results && typeof resp.results === 'object' && !Array.isArray(resp.results),
     'results must be plain object'
@@ -192,7 +171,7 @@ export async function test() {
         `expected lemma in list: ${JSON.stringify(groups.map((g) => g.repository?.name))}`
       );
       const src = fresh.format_repository('lemma');
-      assert(src.includes('spec si'), 'format_repository must include spec si');
+      assert(src.includes('spec units'), 'format_repository must include spec units');
       assert(src.includes('trait duration'), 'format_repository must include duration typedef');
     });
 
@@ -206,8 +185,8 @@ export async function test() {
       const r = runEx(engine, 'test', [], {}, null);
       assertResponseShape(r, 'test');
       assert(Object.keys(r.results).includes('double'), `keys: ${Object.keys(r.results)}`);
-      assert(opIsValue(r.results.double.result), 'double Value');
-      assert(literalNumberValue(r.results.double.result.value) === 20, 'double=20');
+      assert(!r.results.double.vetoed, 'double not vetoed');
+      assert(ruleNumber(r.results.double) === 20, 'double=20');
     });
 
     await run('list + source fields; schema via Engine.schema', () => {
@@ -296,7 +275,7 @@ rule rate_out: rate`,
         },
         null
       );
-      assert(literalNumberValue(r.results.double_number.result.value) === 100);
+      assert(ruleNumber(r.results.double_number) === 100);
     });
 
     await run('load parse errors as EngineError array', () => {
@@ -330,27 +309,20 @@ rule rate_out: rate`,
       assert(threw);
     });
 
-    await run('run structured error attributes data', () => {
+    await run('invalid quantity unit override completes with veto', () => {
       engine.load(
         `spec bridge
-      data bridge_height: quantity -> unit meter 1.0
-      rule span: bridge_height`,
+data bridge_height: quantity -> unit meter 1.0
+rule span: bridge_height`,
         'workspace.lemma'
       );
-      let threw = false;
-      try {
-        engine.run(null, 'bridge', [], { bridge_height: '4 mete' }, null);
-      } catch (e) {
-        threw = true;
-        assertEngineError(e);
-        assert(e.kind === 'validation', `kind=${e.kind}`);
-        assert(e.related_data === 'bridge_height', `related_data=${e.related_data}`);
-        assert(e.message.startsWith('Unknown unit'), `message=${e.message}`);
-        assert(e.source && typeof e.source.line === 'number', 'source has line');
-        assert(typeof e.source.column === 'number');
-        assert(typeof e.source.length === 'number');
-      }
-      assert(threw);
+      const response = runEx(engine, 'bridge', [], { bridge_height: '4 mete' }, null);
+      assert(response.results.span.vetoed === true, 'span must veto on unknown unit');
+      assert(
+        typeof response.results.span.veto_reason === 'string' &&
+          response.results.span.veto_reason.includes('Unknown unit'),
+        `veto_reason=${response.results.span.veto_reason}`
+      );
     });
 
     await run('run missing spec', () => {
@@ -381,7 +353,7 @@ rule rate_out: rate`,
         'veto.lemma'
       );
       const r = runEx(engine, 'veto_test', [], {}, null);
-      assert(opIsVeto(r.results.bad_sqrt.result));
+      assert(r.results.bad_sqrt.vetoed === true);
     });
 
     await run('missing data veto', () => {
@@ -393,8 +365,8 @@ rule rate_out: rate`,
         'miss.lemma'
       );
       const r = runEx(engine, 'missing_test', [], { x: 10 }, null);
-      assert(opIsVeto(r.results.sum.result));
-      assert(String(r.results.sum.result.veto).includes('y'));
+      assert(r.results.sum.vetoed === true);
+      assert(typeof r.results.sum.veto_reason === 'string' && r.results.sum.veto_reason.includes('y'));
     });
 
     await run('quantity unit conversion', () => {
@@ -408,8 +380,8 @@ rule rate_out: rate`,
         'sc.lemma'
       );
       const r = runEx(engine, 'quantity_conv', [], {}, null);
-      const sc = literalQuantityValue(r.results.price_eur.result.value);
-      assert(sc && sc.unit === 'eur' && sc.amount === 84);
+      const eur = ruleQuantityUnit(r.results.price_eur, 'eur');
+      assert(eur === 84, `expected 84 eur, got ${eur}`);
     });
 
     await run('multiple specs', () => {

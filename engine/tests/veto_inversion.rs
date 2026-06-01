@@ -1,11 +1,11 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Bound, DataPath, Domain, Engine, LiteralValue, Target, ValueKind};
 use rust_decimal::Decimal;
 
 fn ratio_percent_value(v: &LiteralValue) -> Option<Decimal> {
     match &v.value {
         ValueKind::Ratio(n, u) if u.as_deref() == Some("percent") => {
-            Some(lemma::commit_rational_to_decimal(n).unwrap())
+            Some(lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap())
         }
         _ => None,
     }

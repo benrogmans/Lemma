@@ -9,7 +9,7 @@ fn test_leap_year_feb_29_valid() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data leap_date: 2024-02-29
 rule check: leap_date
     "#;
@@ -33,7 +33,7 @@ fn test_leap_year_century_2000() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data leap_date: 2000-02-29
 rule check: leap_date
     "#;
@@ -57,7 +57,7 @@ fn test_non_leap_year_century_1900() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 1900-02-28
 rule next_day: start_date + 1 day
     "#;
@@ -81,7 +81,7 @@ fn test_leap_year_century_2100_not_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2100-02-28
 rule next_day: start_date + 1 day
     "#;
@@ -105,7 +105,7 @@ fn test_add_month_with_day_overflow_jan_31_to_feb() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2024-01-31
 rule next_month: start_date + 1 month
     "#;
@@ -129,7 +129,7 @@ fn test_add_month_with_day_overflow_jan_31_to_feb_non_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2023-01-31
 rule next_month: start_date + 1 month
     "#;
@@ -153,7 +153,7 @@ fn test_add_year_to_feb_29_leap_to_non_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data leap_date: 2024-02-29
 rule next_year: leap_date + 1 year
     "#;
@@ -177,9 +177,9 @@ fn test_add_4_years_to_feb_29_leap_to_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data leap_date: 2024-02-29
-rule four_years_later: leap_date + 4 years
+rule four_years_later: leap_date + 4 year
     "#;
 
     engine
@@ -201,9 +201,9 @@ fn test_subtract_months_cross_year_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2024-02-15
-rule three_months_ago: start_date - 3 months
+rule three_months_ago: start_date - 3 month
     "#;
 
     engine
@@ -225,9 +225,9 @@ fn test_add_months_cross_multiple_years() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2023-01-15
-rule twenty_months_later: start_date + 20 months
+rule twenty_months_later: start_date + 20 month
     "#;
 
     engine
@@ -249,7 +249,7 @@ fn test_subtract_year_from_year_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2024-01-01
 rule last_year: start_date - 1 year
     "#;
@@ -273,10 +273,10 @@ fn test_date_difference_across_leap_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2024-01-01
 data end_date: 2025-01-01
-rule days_diff: start_date...end_date as seconds
+rule days_diff: start_date...end_date as seconds as number
     "#;
 
     engine
@@ -284,15 +284,16 @@ rule days_diff: start_date...end_date as seconds
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
-    if let lemma::ValueKind::Quantity(seconds, unit, _) = &lit.value {
+    if let lemma::ValueKind::Number(seconds) = &lit.value {
         // 366 days = 31,622,400 seconds
         assert_eq!(
-            lemma::commit_rational_to_decimal(seconds).unwrap(),
+            lemma::ValueKind::Number(*seconds)
+                .as_decimal_magnitude()
+                .unwrap(),
             rust_decimal::Decimal::from(31_622_400)
         );
-        assert!(unit.eq_ignore_ascii_case("seconds"), "unit={unit:?}");
     } else {
-        panic!("Expected Quantity value");
+        panic!("Expected Number value, got {:?}", lit.value);
     }
 }
 
@@ -301,10 +302,10 @@ fn test_date_difference_non_leap_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2023-01-01
 data end_date: 2024-01-01
-rule days_diff: start_date...end_date as seconds
+rule days_diff: start_date...end_date as seconds as number
     "#;
 
     engine
@@ -312,15 +313,16 @@ rule days_diff: start_date...end_date as seconds
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
-    if let lemma::ValueKind::Quantity(seconds, unit, _) = &lit.value {
+    if let lemma::ValueKind::Number(seconds) = &lit.value {
         // 365 days = 31,536,000 seconds
         assert_eq!(
-            lemma::commit_rational_to_decimal(seconds).unwrap(),
+            lemma::ValueKind::Number(*seconds)
+                .as_decimal_magnitude()
+                .unwrap(),
             rust_decimal::Decimal::from(31_536_000)
         );
-        assert!(unit.eq_ignore_ascii_case("seconds"), "unit={unit:?}");
     } else {
-        panic!("Expected Quantity value");
+        panic!("Expected Number value, got {:?}", lit.value);
     }
 }
 
@@ -329,7 +331,7 @@ fn test_add_hours_crossing_midnight() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_datetime: 2024-03-15T22:00:00
 rule next_day: start_datetime + 5 hours
     "#;
@@ -355,7 +357,7 @@ fn test_subtract_hours_crossing_midnight_backward() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_datetime: 2024-03-16T02:00:00
 rule prev_day: start_datetime - 5 hours
     "#;
@@ -381,7 +383,7 @@ fn test_add_minutes_precise() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_time: 2024-03-15T10:30:45
 rule later: start_time + 90 minutes
     "#;
@@ -405,7 +407,7 @@ fn test_add_seconds_overflow_to_minutes() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_time: 2024-03-15T10:30:30
 rule later: start_time + 90 seconds
     "#;
@@ -429,7 +431,7 @@ fn test_time_arithmetic_crossing_midnight() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data evening_time: 23:30:00
 rule after_midnight: evening_time + 90 minutes
     "#;
@@ -449,65 +451,55 @@ rule after_midnight: evening_time + 90 minutes
 }
 
 #[test]
-fn test_time_difference() {
+fn test_time_difference_rejected() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_time: 10:00:00
 data end_time: 15:30:00
 rule timespan: end_time - start_time
     "#;
 
-    engine
-        .load(code, lemma::SourceType::Volatile)
-        .expect("Failed to parse");
-
-    let lit = get_rule_value(&engine, "test", "timespan");
-    if let lemma::ValueKind::Quantity(seconds, unit, _) = &lit.value {
-        // 5.5 hours = 19800 seconds
-        assert_eq!(
-            lemma::commit_rational_to_decimal(seconds).unwrap(),
-            rust_decimal::Decimal::from(19_800)
-        );
-        assert!(
-            unit.is_empty() || unit.eq_ignore_ascii_case("seconds"),
-            "unit={unit:?}"
-        );
-    } else {
-        panic!("Expected Quantity value");
-    }
+    let result = engine.load(code, lemma::SourceType::Volatile);
+    assert!(result.is_err(), "Expected planning error");
+    let combined = result
+        .unwrap_err()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.to_lowercase().contains("datetime range"),
+        "Expected datetime range suggestion, got: {}",
+        combined
+    );
 }
 
 #[test]
-fn test_negative_time_difference() {
+fn test_negative_time_difference_rejected() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_time: 15:30:00
 data end_time: 10:00:00
 rule timespan: end_time - start_time
     "#;
 
-    engine
-        .load(code, lemma::SourceType::Volatile)
-        .expect("Failed to parse");
-
-    let lit = get_rule_value(&engine, "test", "timespan");
-    if let lemma::ValueKind::Quantity(seconds, unit, _) = &lit.value {
-        // -5.5 hours = -19800 seconds
-        assert_eq!(
-            lemma::commit_rational_to_decimal(seconds).unwrap(),
-            rust_decimal::Decimal::from(-19_800)
-        );
-        assert!(
-            unit.is_empty() || unit.eq_ignore_ascii_case("seconds"),
-            "unit={unit:?}"
-        );
-    } else {
-        panic!("Expected Quantity value");
-    }
+    let result = engine.load(code, lemma::SourceType::Volatile);
+    assert!(result.is_err(), "Expected planning error");
+    let combined = result
+        .unwrap_err()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.to_lowercase().contains("datetime range"),
+        "Expected datetime range suggestion, got: {}",
+        combined
+    );
 }
 
 #[test]
@@ -515,7 +507,7 @@ fn test_add_large_duration_days() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2024-01-01
 rule future: start_date + 1000 days
     "#;
@@ -539,7 +531,7 @@ fn test_fractional_hours() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_time: 2024-03-15T10:00:00
 rule later: start_time + 2.5 hours
     "#;
@@ -563,7 +555,7 @@ fn test_datetime_comparison_across_years() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data date1: 2023-12-31T23:59:59
 data date2: 2024-01-01T00:00:00
 rule is_before: date1 < date2
@@ -586,7 +578,7 @@ fn test_month_31_to_30_day_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2024-03-31
 rule april: start_date + 1 month
     "#;
@@ -610,7 +602,7 @@ fn test_dec_31_plus_1_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data start_date: 2023-12-31
 rule january: start_date + 1 month
     "#;

@@ -2,7 +2,7 @@
 //! to the public API are caught by `cargo nextest run` before the
 //! nightly-only fuzz job ever runs.
 
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, SourceType};
 use std::collections::HashMap;
 
@@ -58,23 +58,18 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     let mut data = HashMap::new();
     data.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
-    let result = engine.run(
-        None,
-        "fuzz_test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    );
+    let response = engine
+        .run(None, "fuzz_test", Some(&now), data, false)
+        .expect("run must complete with veto, not Error");
+    let doubled = response.results.get("doubled").expect("doubled");
     assert!(
-        result.is_err(),
-        "expected validation error for 29-digit number, got {:?}",
-        result
+        doubled.vetoed,
+        "expected veto for 29-digit number, got {:?}",
+        doubled.display
     );
-    let err = result.unwrap_err();
+    let reason = doubled.veto_reason.as_deref().expect("veto reason");
     assert!(
-        err.to_string().contains("too many digits") || err.to_string().contains("Invalid number"),
-        "expected 'too many digits' or parse error, got: {}",
-        err
+        reason.contains("too many digits") || reason.contains("Invalid number"),
+        "expected 'too many digits' or parse error, got: {reason}"
     );
 }

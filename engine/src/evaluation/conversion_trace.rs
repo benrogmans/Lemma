@@ -2,7 +2,7 @@
 
 use crate::computation::rational::{checked_div, RationalInteger};
 use crate::computation::UnitResolutionContext;
-use crate::evaluation::explanation::{ConversionExplanationRole, ConversionExplanationStep};
+use crate::evaluation::evaluation_trace::{ConversionTraceRole, ConversionTraceStep};
 use crate::planning::semantics::{
     compare_semantic_dates, DataPath, LemmaType, LiteralValue, SemanticConversionTarget,
     TypeSpecification, ValueKind,
@@ -10,30 +10,33 @@ use crate::planning::semantics::{
 use std::cmp::Ordering;
 
 /// Build ordered explanation steps (outcome → rule → source) after a successful unit conversion.
+///
+/// When the source and target unit are the same (identity conversion), the Rule step is omitted
+/// and the result contains exactly two steps: Outcome and Source.
 pub fn build_conversion_steps(
     value: &LiteralValue,
     target: &SemanticConversionTarget,
     result: &LiteralValue,
     data_ref: Option<&DataPath>,
     resolution_context: UnitResolutionContext<'_>,
-) -> Vec<ConversionExplanationStep> {
+) -> Vec<ConversionTraceStep> {
     let mut steps = Vec::new();
-    steps.push(ConversionExplanationStep {
-        role: ConversionExplanationRole::Outcome,
+    steps.push(ConversionTraceStep {
+        role: ConversionTraceRole::Outcome,
         text: result.to_string(),
         data_ref: None,
     });
 
     if let Some(rule_text) = conversion_rule_step_text(value, target, result, resolution_context) {
-        steps.push(ConversionExplanationStep {
-            role: ConversionExplanationRole::Rule,
+        steps.push(ConversionTraceStep {
+            role: ConversionTraceRole::Rule,
             text: rule_text,
             data_ref: None,
         });
     }
 
-    steps.push(ConversionExplanationStep {
-        role: ConversionExplanationRole::Source,
+    steps.push(ConversionTraceStep {
+        role: ConversionTraceRole::Source,
         text: conversion_source_step_text(value, data_ref),
         data_ref: data_ref.cloned(),
     });
@@ -60,9 +63,8 @@ fn type_specification_display_name(lemma_type: &LemmaType) -> &'static str {
         TypeSpecification::Text { .. } => "text",
         TypeSpecification::Date { .. } => "date",
         TypeSpecification::DateRange { .. } => "date range",
+        TypeSpecification::TimeRange { .. } => "time range",
         TypeSpecification::Time { .. } => "time",
-        TypeSpecification::Calendar { .. } => "calendar",
-        TypeSpecification::CalendarRange { .. } => "calendar range",
         TypeSpecification::Ratio { .. } => "ratio",
         TypeSpecification::RatioRange { .. } => "ratio range",
         TypeSpecification::Veto { .. } => "veto",
@@ -77,27 +79,23 @@ fn conversion_rule_step_text(
     resolution_context: UnitResolutionContext<'_>,
 ) -> Option<String> {
     match &value.value {
-        ValueKind::Range(left, right) => {
-            range_span_rule_step_text(left, right, target, result, resolution_context)
+        ValueKind::Range(left, right) => range_span_rule_step_text(left, right, result),
+        ValueKind::Quantity(_, from_signature) if !value.lemma_type.is_calendar_like() => {
+            match target {
+                SemanticConversionTarget::Unit { unit_name } => {
+                    quantity_unit_equivalence_step_text(
+                        from_signature,
+                        unit_name,
+                        &value.lemma_type,
+                        resolution_context,
+                    )
+                }
+                _ => None,
+            }
         }
-        ValueKind::Quantity(_, from_unit, _) => match target {
-            SemanticConversionTarget::QuantityUnit(to_unit) => quantity_unit_equivalence_step_text(
-                from_unit,
-                to_unit,
-                &value.lemma_type,
-                resolution_context,
-            ),
-            _ => None,
-        },
         ValueKind::Number(_) => None,
-        ValueKind::Ratio(_, _) => match target {
-            SemanticConversionTarget::RatioUnit(_) | SemanticConversionTarget::Number => None,
-            _ => None,
-        },
-        ValueKind::Calendar(_, _) => match target {
-            SemanticConversionTarget::Calendar(_) | SemanticConversionTarget::Number => None,
-            _ => None,
-        },
+        ValueKind::Ratio(_, _) => None,
+        ValueKind::Quantity(_, _) if value.lemma_type.is_calendar_like() => None,
         _ => None,
     }
 }
@@ -111,99 +109,79 @@ fn format_explanation_multiplier(rational: &RationalInteger) -> String {
     }
 }
 
+/// Produce the "1 {source_unit} is {multiplier} {target_unit}" Rule step text.
+///
+/// Returns `None` when the multiplier is 1 (identity conversion — no Rule step needed)
+/// or when the required unit factors cannot be resolved from the context.
 fn quantity_unit_equivalence_step_text(
-    from_unit: &str,
+    from_signature: &[(String, i32)],
     to_unit: &str,
     lemma_type: &LemmaType,
     resolution_context: UnitResolutionContext<'_>,
 ) -> Option<String> {
-    if from_unit.is_empty() {
-        let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
-            return None;
-        };
-        let target_type = unit_index.get(to_unit)?;
-        let to_factor = target_type.quantity_unit_factor(to_unit);
-        let from_unit_name = infer_anonymous_quantity_unit_name(lemma_type, unit_index, to_unit)?;
-        let from_factor = target_type.quantity_unit_factor(&from_unit_name);
+    let from_unit = from_signature
+        .first()
+        .map(|(name, _)| name.as_str())
+        .unwrap_or("");
+
+    let both_units_in_lemma_type = match &lemma_type.specifications {
+        TypeSpecification::Quantity { units, .. } => {
+            !from_unit.is_empty()
+                && from_signature.len() == 1
+                && units.get(from_unit).is_ok()
+                && units.get(to_unit).is_ok()
+        }
+        _ => false,
+    };
+
+    if both_units_in_lemma_type {
+        let from_factor = lemma_type.quantity_unit_factor(from_unit);
+        let to_factor = lemma_type.quantity_unit_factor(to_unit);
         let multiplier = checked_div(from_factor, to_factor).ok()?;
-        let mult_display = format_explanation_multiplier(&multiplier);
-        if mult_display == "1" {
+        let multiplier_display = format_explanation_multiplier(&multiplier);
+        if multiplier_display == "1" {
             return None;
         }
-        return Some(format!("1 {from_unit_name} is {mult_display} {to_unit}"));
+        return Some(format!("1 {from_unit} is {multiplier_display} {to_unit}"));
     }
 
-    let from_factor = lemma_type.quantity_unit_factor(from_unit);
-    let to_factor = lemma_type.quantity_unit_factor(to_unit);
-    let multiplier = checked_div(from_factor, to_factor).ok()?;
-    let mult_display = format_explanation_multiplier(&multiplier);
-    if mult_display == "1" {
-        return None;
-    }
-    Some(format!("1 {from_unit} is {mult_display} {to_unit}"))
-}
-
-pub(crate) fn infer_anonymous_quantity_unit_name(
-    lemma_type: &LemmaType,
-    unit_index: &std::collections::HashMap<String, LemmaType>,
-    target_unit: &str,
-) -> Option<String> {
-    let target_type = unit_index.get(target_unit)?;
-    let TypeSpecification::Quantity { units, .. } = &target_type.specifications else {
+    let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
         return None;
     };
-    for unit in &units.0 {
-        if unit.name != target_unit {
-            return Some(unit.name.clone());
-        }
-    }
-    let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications else {
+    let target_type = unit_index.get(to_unit)?;
+    let to_factor = *target_type.quantity_unit_factor(to_unit);
+    let from_factor =
+        crate::planning::semantics::signature_factor(from_signature, unit_index, None);
+    let multiplier = checked_div(&from_factor, &to_factor).ok()?;
+    let multiplier_display = format_explanation_multiplier(&multiplier);
+    if multiplier_display == "1" {
         return None;
-    };
-    units
-        .0
-        .iter()
-        .find(|unit| unit.name != target_unit)
-        .map(|unit| unit.name.clone())
+    }
+    let source_label = crate::planning::semantics::format_signature_operator_style(from_signature);
+    Some(format!(
+        "1 {source_label} is {multiplier_display} {to_unit}"
+    ))
 }
 
 fn range_span_rule_step_text(
     left: &LiteralValue,
     right: &LiteralValue,
-    target: &SemanticConversionTarget,
     result: &LiteralValue,
-    _resolution_context: UnitResolutionContext<'_>,
 ) -> Option<String> {
     match (&left.value, &right.value) {
         (ValueKind::Date(left_date), ValueKind::Date(right_date)) => {
             let (lower, upper) = ordered_date_pair(left_date, right_date);
-            let lower_lit = LiteralValue::date(lower.clone());
-            let upper_lit = LiteralValue::date(upper.clone());
-            match target {
-                SemanticConversionTarget::QuantityUnit(_) => {
-                    Some(format!("{upper_lit} − {lower_lit} = {result}"))
-                }
-                SemanticConversionTarget::Number => {
-                    Some(format!("{upper_lit} − {lower_lit} = {result}"))
-                }
-                SemanticConversionTarget::Calendar(_) => {
-                    Some(format!("{upper_lit} − {lower_lit} = {result}"))
-                }
-                _ => None,
-            }
+            let lower_literal = LiteralValue::date(lower.clone());
+            let upper_literal = LiteralValue::date(upper.clone());
+            Some(format!("{upper_literal} − {lower_literal} = {result}"))
         }
         (ValueKind::Number(_), ValueKind::Number(_)) => {
             let (lower, upper) = ordered_number_pair(left, right);
             Some(format!("{upper} − {lower} = {result}"))
         }
-        (ValueKind::Quantity(_, _, _), ValueKind::Quantity(_, _, _)) => {
+        (ValueKind::Quantity(_, _), ValueKind::Quantity(_, _)) => {
             let (lower, upper) = ordered_quantity_pair(left, right);
-            match target {
-                SemanticConversionTarget::QuantityUnit(_) => {
-                    Some(format!("{upper} − {lower} = {result}"))
-                }
-                _ => Some(format!("{upper} − {lower} = {result}")),
-            }
+            Some(format!("{upper} − {lower} = {result}"))
         }
         _ => None,
     }
@@ -216,10 +194,9 @@ fn ordered_date_pair<'a>(
     &'a crate::planning::semantics::SemanticDateTime,
     &'a crate::planning::semantics::SemanticDateTime,
 ) {
-    if compare_semantic_dates(left, right) == Ordering::Greater {
-        (right, left)
-    } else {
-        (left, right)
+    match compare_semantic_dates(left, right) {
+        Ordering::Less | Ordering::Equal => (left, right),
+        Ordering::Greater => (right, left),
     }
 }
 
@@ -227,14 +204,12 @@ fn ordered_number_pair<'a>(
     left: &'a LiteralValue,
     right: &'a LiteralValue,
 ) -> (&'a LiteralValue, &'a LiteralValue) {
-    let left_number = left
-        .value
-        .number_amount()
-        .expect("BUG: ordered_number_pair requires numbers");
-    let right_number = right
-        .value
-        .number_amount()
-        .expect("BUG: ordered_number_pair requires numbers");
+    let ValueKind::Number(left_number) = &left.value else {
+        unreachable!("BUG: ordered_number_pair called with non-number operand");
+    };
+    let ValueKind::Number(right_number) = &right.value else {
+        unreachable!("BUG: ordered_number_pair called with non-number operand");
+    };
     if left_number <= right_number {
         (left, right)
     } else {
@@ -246,47 +221,16 @@ fn ordered_quantity_pair<'a>(
     left: &'a LiteralValue,
     right: &'a LiteralValue,
 ) -> (&'a LiteralValue, &'a LiteralValue) {
-    let left_canonical = match &left.value {
-        crate::planning::semantics::ValueKind::Quantity(val, unit, _) => {
-            crate::computation::arithmetic::quantity_canonical_magnitude_rational(
-                *val,
-                unit,
-                &left.lemma_type,
-            )
-            .expect("BUG: quantity canonical magnitude must succeed after planning")
-        }
-        _ => unreachable!("BUG: ordered_quantity_pair requires quantities"),
+    let ValueKind::Quantity(left_magnitude, _) = &left.value else {
+        unreachable!("BUG: ordered_quantity_pair called with non-quantity operand");
     };
-    let right_canonical = match &right.value {
-        crate::planning::semantics::ValueKind::Quantity(val, unit, _) => {
-            crate::computation::arithmetic::quantity_canonical_magnitude_rational(
-                *val,
-                unit,
-                &right.lemma_type,
-            )
-            .expect("BUG: quantity canonical magnitude must succeed after planning")
-        }
-        _ => unreachable!("BUG: ordered_quantity_pair requires quantities"),
+    let ValueKind::Quantity(right_magnitude, _) = &right.value else {
+        unreachable!("BUG: ordered_quantity_pair called with non-quantity operand");
     };
-    if left_canonical <= right_canonical {
+    if *left_magnitude <= *right_magnitude {
         (left, right)
     } else {
         (right, left)
-    }
-}
-
-trait ValueKindParts {
-    fn number_amount(&self) -> Option<rust_decimal::Decimal>;
-}
-
-impl ValueKindParts for ValueKind {
-    fn number_amount(&self) -> Option<rust_decimal::Decimal> {
-        match self {
-            ValueKind::Number(number) => {
-                crate::computation::rational::commit_rational_to_decimal(number).ok()
-            }
-            _ => None,
-        }
     }
 }
 
@@ -299,17 +243,18 @@ mod tests {
     use crate::planning::semantics::{date_time_to_semantic, QuantityUnits};
     use rust_decimal::Decimal;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn conversion_source_step_text_with_data_reference() {
         let operand = LiteralValue::quantity_with_type(
             RationalInteger::new(2, 1),
             "kilogram".to_string(),
-            LemmaType::primitive(TypeSpecification::quantity()),
+            Arc::new(LemmaType::primitive(TypeSpecification::quantity())),
         );
         let path = DataPath::local("mass".to_string());
-        let line = conversion_source_step_text(&operand, Some(&path));
-        assert_eq!(line, "The quantity of mass is 2 kilogram");
+        let text = conversion_source_step_text(&operand, Some(&path));
+        assert_eq!(text, "The quantity of mass is 2 kilogram");
     }
 
     #[test]
@@ -323,40 +268,41 @@ mod tests {
             QuantityUnit::from_decimal_factor("gram".to_string(), Decimal::new(1, 3), vec![])
                 .unwrap(),
         );
-        let lemma_type = LemmaType::primitive(TypeSpecification::Quantity {
+        let lemma_type = Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
             minimum: None,
             maximum: None,
             decimals: None,
             units,
             traits: vec![],
             decomposition: Default::default(),
-            canonical_unit: "kilogram".to_string(),
             help: String::new(),
-        });
+        }));
         let operand = LiteralValue::quantity_with_type(
             RationalInteger::new(2, 1),
             "kilogram".to_string(),
-            lemma_type.clone(),
+            Arc::clone(&lemma_type),
         );
         let result = LiteralValue::quantity_with_type(
-            RationalInteger::new(2000, 1),
+            RationalInteger::new(2, 1),
             "gram".to_string(),
             lemma_type,
         );
         let path = DataPath::local("mass".to_string());
         let steps = build_conversion_steps(
             &operand,
-            &SemanticConversionTarget::QuantityUnit("gram".to_string()),
+            &SemanticConversionTarget::Unit {
+                unit_name: "gram".to_string(),
+            },
             &result,
             Some(&path),
             UnitResolutionContext::NamedQuantityOnly,
         );
         assert_eq!(steps.len(), 3);
-        assert!(matches!(steps[0].role, ConversionExplanationRole::Outcome));
-        assert_eq!(steps[0].text, "2000 gram");
-        assert!(matches!(steps[1].role, ConversionExplanationRole::Rule));
+        assert!(matches!(steps[0].role, ConversionTraceRole::Outcome));
+        assert_eq!(steps[0].text, "2 kilogram");
+        assert!(matches!(steps[1].role, ConversionTraceRole::Rule));
         assert_eq!(steps[1].text, "1 kilogram is 1000 gram");
-        assert!(matches!(steps[2].role, ConversionExplanationRole::Source));
+        assert!(matches!(steps[2].role, ConversionTraceRole::Source));
         assert_eq!(steps[2].text, "The quantity of mass is 2 kilogram");
         assert_eq!(steps[2].data_ref, Some(path));
     }
@@ -385,17 +331,19 @@ mod tests {
         }));
         let range = LiteralValue {
             value: ValueKind::Range(Box::new(left), Box::new(right)),
-            lemma_type: LemmaType::primitive(TypeSpecification::date_range()),
+            lemma_type: Arc::new(LemmaType::primitive(TypeSpecification::date_range())),
         };
         let result = LiteralValue::quantity_with_type(
             RationalInteger::new(14, 1),
             "days".to_string(),
-            LemmaType::primitive(TypeSpecification::quantity()),
+            Arc::new(LemmaType::primitive(TypeSpecification::quantity())),
         );
         let path = DataPath::local("age".to_string());
         let steps = build_conversion_steps(
             &range,
-            &SemanticConversionTarget::QuantityUnit("days".to_string()),
+            &SemanticConversionTarget::Unit {
+                unit_name: "days".to_string(),
+            },
             &result,
             Some(&path),
             UnitResolutionContext::WithIndex(&HashMap::new()),
@@ -415,20 +363,19 @@ mod tests {
             QuantityUnit::from_decimal_factor("kilogram".to_string(), Decimal::ONE, vec![])
                 .unwrap(),
         );
-        let lemma_type = LemmaType::primitive(TypeSpecification::Quantity {
+        let lemma_type = Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
             minimum: None,
             maximum: None,
             decimals: None,
             units,
             traits: vec![],
             decomposition: Default::default(),
-            canonical_unit: "kilogram".to_string(),
             help: String::new(),
-        });
+        }));
         let operand = LiteralValue::quantity_with_type(
             RationalInteger::new(2, 1),
             "kilogram".to_string(),
-            lemma_type.clone(),
+            Arc::clone(&lemma_type),
         );
         let result = LiteralValue::quantity_with_type(
             RationalInteger::new(2, 1),
@@ -437,26 +384,63 @@ mod tests {
         );
         let steps = build_conversion_steps(
             &operand,
-            &SemanticConversionTarget::QuantityUnit("kilogram".to_string()),
+            &SemanticConversionTarget::Unit {
+                unit_name: "kilogram".to_string(),
+            },
             &result,
             None,
             UnitResolutionContext::NamedQuantityOnly,
         );
         assert_eq!(steps.len(), 2);
-        assert!(matches!(steps[0].role, ConversionExplanationRole::Outcome));
-        assert!(matches!(steps[1].role, ConversionExplanationRole::Source));
+        assert!(matches!(steps[0].role, ConversionTraceRole::Outcome));
+        assert!(matches!(steps[1].role, ConversionTraceRole::Source));
     }
 
     #[test]
-    fn conversion_explanation_step_roundtrip() {
-        let step = ConversionExplanationStep {
-            role: ConversionExplanationRole::Rule,
+    fn conversion_trace_step_roundtrip() {
+        let step = ConversionTraceStep {
+            role: ConversionTraceRole::Rule,
             text: "1 kilogram is 1000 gram".to_string(),
             data_ref: Some(DataPath::local("mass".to_string())),
         };
-        let json = serde_json::to_string(&step).expect("serialize");
-        let restored: ConversionExplanationStep = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(restored.text, step.text);
-        assert!(matches!(restored.role, ConversionExplanationRole::Rule));
+        assert_eq!(step.text, "1 kilogram is 1000 gram");
+        assert!(matches!(step.role, ConversionTraceRole::Rule));
+    }
+
+    /// A Quantity value with a compound anonymous signature (e.g. `eur*hour/minute`) converted
+    /// `as eur` must produce an explanation whose multiplier is computed via `signature_factor`,
+    /// not via a single canonical-unit lookup. This test exercises the anonymous path in
+    /// `quantity_unit_equivalence_step_text`.
+    #[test]
+    fn explanation_for_compound_signature_uses_signature_factor() {
+        use crate::engine::Engine;
+        use crate::parsing::source::SourceType;
+        use std::path::PathBuf;
+        let code = r#"spec t
+uses lemma units
+data money: quantity
+  -> unit eur 1
+data rate: quantity
+  -> unit eur_per_minute eur/minute
+data r: 40 eur_per_minute
+data h: 2 hour
+rule cost: (r * h) as eur
+"#;
+        let mut engine = Engine::new();
+        engine
+            .load(code, SourceType::Path(Arc::new(PathBuf::from("t.lemma"))))
+            .expect("must load");
+        let response = engine
+            .run(None, "t", None, HashMap::new(), false)
+            .expect("must eval");
+        let cost_result = response.results.get("cost").expect("rule must exist");
+        let display = cost_result
+            .display
+            .as_deref()
+            .expect("must have display value");
+        assert!(
+            display.contains("4800") && display.contains("eur"),
+            "expected 4800 eur, got: {display}"
+        );
     }
 }

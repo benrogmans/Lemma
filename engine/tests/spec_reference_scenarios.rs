@@ -25,14 +25,7 @@ fn path_source(name: &str) -> SourceType {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), HashMap::new(), false)
         .unwrap()
 }
 
@@ -41,17 +34,20 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("rule '{}' not in results", rule));
-    let val = result
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("rule '{}' is Veto, expected Value", rule));
+    if result.vetoed {
+        panic!(
+            "rule '{}' is Veto: {}",
+            rule,
+            result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
     assert_eq!(
-        val.to_string(),
-        expected,
-        "rule '{}': expected {}, got {}",
+        result.display.as_deref(),
+        Some(expected),
+        "rule '{}': expected {}, got {:?}",
         rule,
         expected,
-        val
+        result.display
     );
 }
 
@@ -219,36 +215,28 @@ rule c: parent.p
     assert_rule_value(&eval(&engine, "child", &date(2028, 1, 1)), "c", "1");
 }
 
-// --- Scenario 27b: Accepted (fill from nested data, not spec ref) ---
+// --- Scenario 27b: Accepted (read nested import data in rule) ---
 
 #[test]
-fn scenario_27b_fill_copy_from_inner_x_accepts() {
+fn scenario_27b_read_inner_x_in_rule_accepts() {
     let code = r#"
 spec inner
 data x: number -> default 1
 
 spec outer
 uses i: inner
-fill copy_of_i: i.x
-rule r: copy_of_i
+rule r: i.x
 "#;
 
     let mut engine = Engine::new();
     engine
         .load(code, path_source("scenario_27b.lemma"))
-        .expect("scenario 27b: fill i.x must plan");
+        .expect("scenario 27b: i.x must plan");
 
     let now = DateTimeValue::now();
     assert_rule_value(
         &engine
-            .run(
-                None,
-                "outer",
-                Some(&now),
-                HashMap::new(),
-                false,
-                lemma::EvaluationRequest::default(),
-            )
+            .run(None, "outer", Some(&now), HashMap::new(), false)
             .expect("scenario 27b: eval outer"),
         "r",
         "1",

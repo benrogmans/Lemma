@@ -1,15 +1,15 @@
 pub mod http {
-    use crate::response;
     use axum::{
-        extract::{Form, Path, Query, State},
+        extract::{Path, Query, State},
         http::{HeaderMap, HeaderValue, StatusCode},
         response::{Html, IntoResponse, Json},
         routing::get,
         Router,
     };
     use lemma::collect_lemma_sources as engine_collect_sources;
-    use lemma::parsing::ast::DateTimeValue;
+    use lemma::DateTimeValue;
     use lemma::Engine;
+    use lemma_cli::deps::{dependency_identifier_from_dependency_path, lemma_deps_dir};
     use serde::Deserialize;
 
     use std::net::SocketAddr;
@@ -44,9 +44,6 @@ pub mod http {
     #[derive(Deserialize, Default)]
     struct SpecQuery {
         rules: Option<String>,
-        /// Comma-separated `rule:unit` quantity conversions (for example `total:usd`).
-        #[serde(default)]
-        as_units: Option<String>,
     }
 
     fn resolve_effective(
@@ -336,7 +333,7 @@ pub mod http {
         let effective = accept_datetime_from_headers(&headers)?;
         let engine = state.engine.read().await;
 
-        let spec_name = lemma::spec_set_id::parse_spec_set_id(&spec_set_id).map_err(|e| {
+        let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -426,20 +423,20 @@ pub mod http {
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = specset id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = form-encoded data.
+    /// `POST /{*path}` — evaluate; path = specset id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = JSON data object.
     async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<SpecQuery>,
         headers: HeaderMap,
-        Form(data_values): Form<std::collections::HashMap<String, String>>,
+        body: Option<Json<std::collections::HashMap<String, serde_json::Value>>>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_set_id = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
         let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
 
-        let spec_name = lemma::spec_set_id::parse_spec_set_id(&spec_set_id).map_err(|e| {
+        let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -448,31 +445,38 @@ pub mod http {
             )
         })?;
 
-        let evaluation_request = crate::evaluation_request::build_evaluation_request_from_query(
-            &engine,
-            None,
-            &spec_name,
-            &effective,
-            q.as_units.as_deref(),
-            &rule_names,
-        )
-        .map_err(|err| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: err.to_string(),
-                }),
-            )
-        })?;
+        let data_values: std::collections::HashMap<String, lemma::DataValueInput> = body
+            .map(|Json(map)| {
+                map.into_iter()
+                    .filter(|(_, v)| !v.is_null())
+                    .map(|(k, v)| {
+                        crate::data_json::json_value_to_data_input(v).map(|input| (k, input))
+                    })
+                    .collect::<Result<_, _>>()
+            })
+            .transpose()
+            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
+            .unwrap_or_default();
 
+        let plan = engine
+            .get_plan(None, &spec_name, Some(&effective))
+            .map_err(|err| {
+                (
+                    lemma_error_to_status(&err),
+                    Json(ErrorResponse {
+                        error: err.to_string(),
+                    }),
+                )
+            })?;
+
+        let include_explanations = want_explanations(&state, &headers);
         let mut response = engine
-            .run(
-                None,
-                &spec_name,
+            .run_plan(
+                plan,
                 Some(&effective),
                 data_values,
-                false,
-                evaluation_request,
+                include_explanations,
+                true,
             )
             .map_err(|err| {
                 (
@@ -488,13 +492,11 @@ pub mod http {
 
         let spec_arc = engine.get_spec(&spec_name, Some(&effective)).ok();
         let effective_from = spec_arc.as_ref().and_then(|a| a.effective_from());
-        let results = response::convert_response_envelope(
-            &response,
-            want_explanations(&state, &headers),
-            &response.spec_name,
-            &effective,
-        );
-        let mut axum_response = Json(results).into_response();
+        let mut payload = response.clone();
+        if !include_explanations {
+            payload.data.clear();
+        }
+        let mut axum_response = Json(payload).into_response();
         let headers_mut = axum_response.headers_mut();
         for (k, v) in spec_response_headers(effective_from) {
             headers_mut.insert(k, v);
@@ -683,7 +685,7 @@ pub mod http {
         use walkdir::WalkDir;
 
         let mut engine = Engine::new();
-        let deps_dir = lemma::lemma_deps_dir(workdir);
+        let deps_dir = lemma_deps_dir(workdir);
         let mut workspace_paths: Vec<std::path::PathBuf> = Vec::new();
         let mut deps_paths: Vec<std::path::PathBuf> = Vec::new();
         for entry in WalkDir::new(workdir) {
@@ -699,8 +701,7 @@ pub mod http {
         }
 
         for dep_path in &deps_paths {
-            let dependency_id =
-                lemma::dependency_identifier_from_dependency_path(workdir, dep_path);
+            let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
             let sources = match engine_collect_sources(std::slice::from_ref(dep_path)) {
                 Ok(s) => s,
                 Err(e) => {

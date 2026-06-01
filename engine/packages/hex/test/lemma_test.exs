@@ -33,6 +33,11 @@ defmodule LemmaTest do
     groups |> workspace_groups() |> spec_count()
   end
 
+  # Explanation trees embed source paths (e.g. original vs formatted); compare evaluation payloads only.
+  defp comparable_rule_result(rule) when is_map(rule) do
+    Map.drop(rule, ["explanation"])
+  end
+
   describe "new/0" do
     test "creates engine with default limits" do
       assert {:ok, engine} = Lemma.new()
@@ -146,7 +151,7 @@ defmodule LemmaTest do
       embedded = embedded_stdlib_group(groups)
       assert embedded != nil
       assert embedded[:repository][:dependency] == @embedded_repo
-      assert hd(embedded.specs)[:name] == "si"
+      assert hd(embedded.specs)[:name] == "units"
     end
 
     test "effective_from is nil when not set" do
@@ -225,11 +230,12 @@ defmodule LemmaTest do
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
       assert {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "5"})
       assert is_map(response)
-      assert response["spec_name"] == "pricing"
+      assert response["spec"] == "pricing"
       results = response["results"]
       assert is_map(results)
       total = results["total"]
-      assert total["result"]["value"]["display_value"] == "50"
+      assert total["display"] == "50"
+      assert total["number"] == "50"
     end
 
     test "runs spec with quantity triggering unless clause" do
@@ -237,7 +243,8 @@ defmodule LemmaTest do
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
       {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "10"})
       results = response["results"]
-      assert results["discount"]["result"]["value"]["display_value"] == "5"
+      assert results["discount"]["display"] == "5"
+      assert results["discount"]["number"] == "5"
     end
 
     test "runs spec with no optional data" do
@@ -245,7 +252,8 @@ defmodule LemmaTest do
       :ok = Lemma.load(engine, "spec simple\ndata x: 1\nrule y: x + 1", "s.lemma")
       {:ok, response} = Lemma.run(engine, "simple")
       results = response["results"]
-      assert results["y"]["result"]["value"]["display_value"] == "2"
+      assert results["y"]["display"] == "2"
+      assert results["y"]["number"] == "2"
     end
 
     test "returns error for unknown spec" do
@@ -385,8 +393,11 @@ defmodule LemmaTest do
       {:ok, r1} = Lemma.run(e1, "fmt", data: %{"x" => "5"})
       {:ok, r2} = Lemma.run(e2, "fmt", data: %{"x" => "5"})
 
-      assert r1["results"]["y"]["result"] == r2["results"]["y"]["result"]
-      assert r1["results"]["z"]["result"] == r2["results"]["z"]["result"]
+      assert comparable_rule_result(r1["results"]["y"]) ==
+               comparable_rule_result(r2["results"]["y"])
+
+      assert comparable_rule_result(r1["results"]["z"]) ==
+               comparable_rule_result(r2["results"]["z"])
     end
   end
 end

@@ -124,9 +124,9 @@ impl WorkspaceModel {
 
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(root), Ok(path)) = (workspace_root, url.to_file_path()) {
-            let deps_dir = lemma::lemma_deps_dir(root);
+            let deps_dir = lemma::deps::lemma_deps_dir(root);
             if path.starts_with(&deps_dir) {
-                let dep_id = lemma::dependency_identifier_from_dependency_path(root, &path);
+                let dep_id = lemma::deps::dependency_identifier_from_dependency_path(root, &path);
                 let repo = parsed_repo.as_ref();
                 let repo_name = repo.name.clone().or_else(|| Some(dep_id.clone()));
                 return Arc::new(
@@ -216,11 +216,18 @@ impl WorkspaceModel {
         insert_errors
     }
 
+    /// Embedded stdlib plus all workspace specs (same composition as [`Engine::new`] after load).
+    pub fn engine_with_workspace(&self) -> lemma::Engine {
+        let mut engine = lemma::Engine::new();
+        let _ = self.insert_specs_into_context(engine.specs_mut());
+        engine
+    }
+
     /// Run a full workspace validation: parse errors + planning errors for all files.
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
-        let mut ctx = Context::new();
-        let insert_errors = self.insert_specs_into_context(&mut ctx);
-        let mut results = self.validate_workspace_with_resolved_specs(&ctx);
+        let mut engine = lemma::Engine::new();
+        let insert_errors = self.insert_specs_into_context(engine.specs_mut());
+        let mut results = self.validate_workspace_with_resolved_specs(engine.specs());
         for (attr, e) in insert_errors {
             if let Some(r) = results.iter_mut().find(|d| d.attribute == attr) {
                 r.errors.push(e);
@@ -235,7 +242,7 @@ impl WorkspaceModel {
     pub fn validate_workspace_with_resolved_specs(&self, ctx: &Context) -> Vec<FileDiagnostics> {
         let mut planning_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
 
-        let planning_result = lemma::planning::plan(ctx);
+        let planning_result = lemma::plan(ctx);
         let all_planning_errors: Vec<Error> = planning_result
             .results
             .into_iter()
@@ -357,7 +364,7 @@ mod tests {
         );
         workspace.update_file(
             url_b.clone(),
-            "spec company\nuses employee: person\nfill employee.name: \"Bob\"".to_string(),
+            "spec company\nuses employee: person\nwith employee.name: \"Bob\"".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -425,7 +432,7 @@ mod tests {
         let url_ok = url_from_path("/tmp/lsp_clean.lemma");
         workspace.update_file(
             url_bad.clone(),
-            "spec consumer\nfill money: no_such_dep.money\ndata x: 1".to_string(),
+            "spec consumer\nuses dep: no_such_dep\nwith dep.money: 10\ndata x: 1".to_string(),
         );
         workspace.update_file(url_ok.clone(), "spec other\ndata y: 2".to_string());
 
@@ -454,13 +461,13 @@ mod tests {
     fn deps_lemma_files_use_registry_identity_like_cli_load_batch() {
         let root = std::env::temp_dir().join("lemma_lsp_deps_workspace_test");
         let _ = std::fs::remove_dir_all(&root);
-        let dep_path = lemma::dependency_cache_file(&root, "@lemma/std");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@lemma/std");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
         std::fs::write(&dep_path, "spec finance 2024\ndata z: 1\n").expect("write dep");
         let main_path = root.join("main.lemma");
         std::fs::write(
             &main_path,
-            "spec demo\nuses @lemma/std finance 2026\nfill z: finance.z\n",
+            "spec demo\nuses fin: @lemma/std finance 2026\nwith fin.z: 1\n",
         )
         .expect("write main");
 
@@ -495,7 +502,7 @@ mod tests {
     fn inline_registry_repo_spec_keeps_host_file_as_source_type() {
         let root = std::env::temp_dir().join("lemma_lsp_inline_registry_repo_test");
         let _ = std::fs::remove_dir_all(&root);
-        let dep_path = lemma::dependency_cache_file(&root, "@lemma/std");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@lemma/std");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
         let src = "spec consumer\nuses @user/somedep some_spec\ndata x: 1\n\nrepo @user/somedep\nspec some_spec\ndata y: 2\n";
         std::fs::write(&dep_path, src).expect("write dep");
@@ -523,7 +530,7 @@ mod tests {
         };
         assert_eq!(path_from_spec, dep_path);
 
-        let cache_path = lemma::dependency_cache_file(&root, "@user/somedep");
+        let cache_path = lemma::deps::dependency_cache_file(&root, "@user/somedep");
         assert!(
             !cache_path.exists(),
             "test assumes no fetched bundle at {:?}",
@@ -569,7 +576,7 @@ mod tests {
         workspace.update_file(
             url,
             r#"spec contractor
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1.00
@@ -587,7 +594,7 @@ rule smoke: true
         assert_eq!(results.len(), 1);
         assert!(
             results[0].errors.is_empty(),
-            "uses lemma si must resolve stdlib duration units: {:?}",
+            "uses lemma units must resolve stdlib duration units: {:?}",
             results[0].errors
         );
     }

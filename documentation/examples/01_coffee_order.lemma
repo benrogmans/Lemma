@@ -53,7 +53,8 @@ rule loyalty_discount: 0%
 rule age_discount: 0%
   unless age >= 65 then 10%
 
-rule discount_amount:
-  subtotal * loyalty_discount - age_discount
+rule combined_discount: loyalty_discount + age_discount
+
+rule discount_amount: subtotal * combined_discount
 
 rule total: subtotal - discount_amount

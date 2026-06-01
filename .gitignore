@@ -16,6 +16,10 @@ coverage/
 *.info
 *.profraw
 
+# Python bytecode (benchmark harness in engine/benches/python/)
+__pycache__/
+*.pyc
+
 # IDE and editor configurations
 .cursor/
 .vscode/
@@ -24,4 +28,8 @@ coverage/
 *.swo
 *~
 .DS_Store
+
+# Workspace dependency snapshots (generated on demand)
+lemma_deps/
+.deps/
 

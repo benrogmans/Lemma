@@ -5,12 +5,35 @@
 //! combinations produce the correct result type and that invalid
 //! combinations are rejected during validation.
 
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-fn with_duration_typedef(code: &str) -> String {
-    code.replacen("spec t\n", "spec t\nuses lemma si\n", 1)
+fn eval_result(
+    code: &str,
+    spec_name: &str,
+    rule_name: &str,
+    data: HashMap<String, String>,
+) -> lemma::RuleResult {
+    let mut engine = Engine::new();
+    engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect("Should parse and plan");
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, spec_name, Some(&now), data, false)
+        .expect("Should evaluate");
+    let result = response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' should exist", rule_name));
+    if result.vetoed {
+        panic!(
+            "Rule '{}' should have a value, got veto: {:?}",
+            rule_name, result.veto_reason
+        );
+    }
+    result.clone()
 }
 
 fn eval_rule(
@@ -19,42 +42,20 @@ fn eval_rule(
     rule_name: &str,
     data: HashMap<String, String>,
 ) -> String {
-    let code = with_duration_typedef(code);
-    let mut engine = Engine::new();
-    engine
-        .load(&code, lemma::SourceType::Volatile)
-        .expect("Should parse and plan");
-    let now = DateTimeValue::now();
-    let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect("Should evaluate");
-    let result = response
-        .results
-        .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' should exist", rule_name));
-    result
-        .result
-        .value()
-        .unwrap_or_else(|| {
-            panic!(
-                "Rule '{}' should have a value, got: {:?}",
-                rule_name, result.result
-            )
-        })
-        .to_string()
+    eval_result(code, spec_name, rule_name, data)
+        .display
+        .expect("display")
+}
+
+fn eval_quantity_map(code: &str, spec_name: &str, rule_name: &str) -> BTreeMap<String, String> {
+    eval_result(code, spec_name, rule_name, HashMap::new())
+        .quantity
+        .expect("quantity map")
 }
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
-    let code = with_duration_typedef(code);
     let mut engine = Engine::new();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load(code, lemma::SourceType::Volatile);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -77,6 +78,7 @@ fn expect_plan_error(code: &str, expected_fragment: &str) {
 #[test]
 fn number_add_number() {
     let code = r#"spec t
+uses lemma units
 data a: 10
 data b: 3
 rule result: a + b"#;
@@ -86,6 +88,7 @@ rule result: a + b"#;
 #[test]
 fn number_subtract_number() {
     let code = r#"spec t
+uses lemma units
 data a: 10
 data b: 3
 rule result: a - b"#;
@@ -95,6 +98,7 @@ rule result: a - b"#;
 #[test]
 fn number_multiply_number() {
     let code = r#"spec t
+uses lemma units
 data a: 10
 data b: 3
 rule result: a * b"#;
@@ -104,6 +108,7 @@ rule result: a * b"#;
 #[test]
 fn number_divide_number() {
     let code = r#"spec t
+uses lemma units
 data a: 12
 data b: 4
 rule result: a / b"#;
@@ -113,6 +118,7 @@ rule result: a / b"#;
 #[test]
 fn number_modulo_number() {
     let code = r#"spec t
+uses lemma units
 data a: 10
 data b: 3
 rule result: a % b"#;
@@ -122,6 +128,7 @@ rule result: a % b"#;
 #[test]
 fn number_power_number() {
     let code = r#"spec t
+uses lemma units
 data a: 2
 data b: 3
 rule result: a ^ b"#;
@@ -129,34 +136,35 @@ rule result: a ^ b"#;
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Quantity with Number → Quantity
+// Quantity with Number: add/subtract require explicit conversion (as unit)
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn quantity_add_number() {
+fn quantity_add_number_rejected() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 5
 rule result: price + n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("15"), "Expected 15 eur, got: {}", val);
+    expect_plan_error(code, "Cannot apply '+'");
 }
 
 #[test]
-fn quantity_subtract_number() {
+fn quantity_subtract_number_rejected() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 3
 rule result: price - n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("7"), "Expected 7 eur, got: {}", val);
+    expect_plan_error(code, "Cannot apply '-'");
 }
 
 #[test]
 fn quantity_multiply_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 3
@@ -168,6 +176,7 @@ rule result: price * n"#;
 #[test]
 fn number_multiply_quantity() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data n: 3
 data price: 10 eur
@@ -179,6 +188,7 @@ rule result: n * price"#;
 #[test]
 fn quantity_divide_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 12 eur
 data n: 4
@@ -190,6 +200,7 @@ rule result: price / n"#;
 #[test]
 fn quantity_modulo_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 10 eur
 data n: 3
@@ -202,6 +213,7 @@ rule result: price % n"#;
 fn quantity_power_number() {
     // Exponent must be an integer literal for dimensional types; using a literal 3 directly.
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 2 eur
 rule result: price ^ 3"#;
@@ -251,6 +263,7 @@ rule result: price ^ 0.5"#,
 #[test]
 fn quantity_add_ratio() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 100 eur
 data rate: 10%
@@ -262,6 +275,7 @@ rule result: price + rate"#;
 #[test]
 fn quantity_subtract_ratio() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 100 eur
 data discount: 25%
@@ -273,6 +287,7 @@ rule result: price - discount"#;
 #[test]
 fn quantity_multiply_ratio() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 100 eur
 data rate: 50%
@@ -284,6 +299,7 @@ rule result: price * rate"#;
 #[test]
 fn quantity_divide_ratio() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data price: 100 eur
 data rate: 50%
@@ -302,7 +318,7 @@ rule result: price / rate"#;
 #[test]
 fn quantity_multiply_duration_rejected_at_rule_boundary() {
     // Duration * Quantity and Quantity * Duration produce anonymous intermediates with unresolved
-    // dimensions. These are forbidden at rule boundaries; the user must cast with `as <unit>`.
+    // dimensions. These are forbidden at rule boundaries; give the rule a named quantity type with units.
     let mut engine = Engine::new();
     let result = engine.load(
         r#"spec t
@@ -353,73 +369,78 @@ rule result: total / hours"#,
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// Duration with Number → Duration
+// Duration with Number: add/subtract require explicit conversion (as unit)
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
-fn duration_add_number() {
+fn duration_add_number_rejected() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data n: 5
 rule result: d + n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("15"), "Expected 15 hours, got: {}", val);
+    expect_plan_error(code, "Cannot apply '+'");
 }
 
 #[test]
-fn duration_subtract_number() {
+fn duration_subtract_number_rejected() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data n: 3
 rule result: d - n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("7"), "Expected 7 hours, got: {}", val);
+    expect_plan_error(code, "Cannot apply '-'");
 }
 
 #[test]
 fn duration_multiply_number() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data n: 3
 rule result: d * n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("30"), "Expected 30 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "30", "10 hours * 3 = 30 hours");
 }
 
 #[test]
 fn number_multiply_duration() {
     let code = r#"spec t
+uses lemma units
 data n: 3
 data d: 10 hours
 rule result: n * d"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("30"), "Expected 30 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "30", "3 * 10 hours = 30 hours");
 }
 
 #[test]
 fn duration_divide_number() {
     let code = r#"spec t
+uses lemma units
 data d: 12 hours
 data n: 4
 rule result: d / n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("3"), "Expected 3 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "3", "12 hours / 4 = 3 hours");
 }
 
 #[test]
 fn duration_modulo_number() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data n: 3
 rule result: d % n"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("1"), "Expected 1 hour, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "1", "10 hours % 3 = 1 hour");
 }
 
 #[test]
 fn duration_power_number() {
     // Exponent must be an integer literal for dimensional types; using a literal 3 directly.
     let code = r#"spec t
+uses lemma units
 data d: 2 hours
 rule result: d ^ 3"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
@@ -450,51 +471,56 @@ rule result: d ^ n"#,
 #[test]
 fn duration_add_ratio() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data r: 50%
 rule result: d + r"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("15"), "Expected 15 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "15", "10 hours + 50% = 15 hours");
 }
 
 #[test]
 fn duration_subtract_ratio() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data r: 25%
 rule result: d - r"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("7.5"), "Expected 7.5 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "7.5", "10 hours - 25% = 7.5 hours");
 }
 
 #[test]
 fn duration_multiply_ratio() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data r: 50%
 rule result: d * r"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("5"), "Expected 5 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "5", "10 hours * 50% = 5 hours");
 }
 
 #[test]
 fn ratio_multiply_duration() {
     let code = r#"spec t
+uses lemma units
 data r: 50%
 data d: 10 hours
 rule result: r * d"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("5"), "Expected 5 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "5", "50% * 10 hours = 5 hours");
 }
 
 #[test]
 fn duration_divide_ratio() {
     let code = r#"spec t
+uses lemma units
 data d: 10 hours
 data r: 50%
 rule result: d / r"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("20"), "Expected 20 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "20", "10 hours / 50% = 20 hours");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -504,6 +530,7 @@ rule result: d / r"#;
 #[test]
 fn ratio_multiply_number() {
     let code = r#"spec t
+uses lemma units
 data r: 50%
 data n: 200
 rule result: r * n"#;
@@ -513,6 +540,7 @@ rule result: r * n"#;
 #[test]
 fn ratio_add_number() {
     let code = r#"spec t
+uses lemma units
 data r: 10%
 data n: 100
 rule result: n + r"#;
@@ -526,6 +554,7 @@ rule result: n + r"#;
 #[test]
 fn quantity_add_quantity_same_family() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data a: 4 eur
 data b: 5 eur
@@ -541,6 +570,7 @@ rule result: a + b"#;
 #[test]
 fn quantity_subtract_quantity_same_family() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data a: 10 eur
 data b: 3 eur
@@ -556,6 +586,7 @@ rule result: a - b"#;
 #[test]
 fn quantity_add_quantity_result_used_in_comparison() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data a: 4 eur
 data b: 5 eur
@@ -571,6 +602,7 @@ rule over_threshold: total > threshold"#;
 #[test]
 fn quantity_add_quantity_result_in_further_arithmetic() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data a: 10 eur
 data b: 20 eur
@@ -592,6 +624,7 @@ rule total: subtotal + c"#;
 #[test]
 fn ratio_add_ratio() {
     let code = r#"spec t
+uses lemma units
 data a: 10%
 data b: 5%
 rule result: a + b"#;
@@ -602,6 +635,7 @@ rule result: a + b"#;
 #[test]
 fn ratio_subtract_ratio() {
     let code = r#"spec t
+uses lemma units
 data a: 25%
 data b: 10%
 rule result: a - b"#;
@@ -612,6 +646,7 @@ rule result: a - b"#;
 #[test]
 fn ratio_add_ratio_result_used_with_quantity() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data base_rate: 10%
 data surcharge: 5%
@@ -633,12 +668,23 @@ rule discount: price * combined_rate"#;
 #[test]
 fn date_subtract_date_result_used_in_comparison_with_duration() {
     let code = r#"spec t
+uses lemma units
 data start: 2024-01-01
 data end: 2024-01-10
 data limit: 5 days
 rule elapsed: end - start
 rule over_limit: elapsed > limit"#;
-    expect_plan_error(code, "Cannot subtract dates");
+    expect_plan_error(code, "date range");
+}
+
+#[test]
+fn date_subtract_date() {
+    let code = r#"spec t
+uses lemma units
+data a: 2024-01-10
+data b: 2024-01-01
+rule result: (a - b) as day"#;
+    expect_plan_error(code, "date range");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -648,21 +694,23 @@ rule over_limit: elapsed > limit"#;
 #[test]
 fn duration_add_duration() {
     let code = r#"spec t
+uses lemma units
 data a: 10 hours
 data b: 5 hours
 rule result: a + b"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("15"), "Expected 15 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "15", "10 hours + 5 hours = 15 hours");
 }
 
 #[test]
 fn duration_subtract_duration() {
     let code = r#"spec t
+uses lemma units
 data a: 10 hours
 data b: 3 hours
 rule result: a - b"#;
-    let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("7"), "Expected 7 hours, got: {}", val);
+    let map = eval_quantity_map(code, "t", "result");
+    assert_eq!(map["hours"], "7", "10 hours - 3 hours = 7 hours");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -672,6 +720,7 @@ rule result: a - b"#;
 #[test]
 fn date_add_duration() {
     let code = r#"spec t
+uses lemma units
 data d: 2024-01-01
 data dur: 7 days
 rule result: d + dur"#;
@@ -686,6 +735,7 @@ rule result: d + dur"#;
 #[test]
 fn date_subtract_duration() {
     let code = r#"spec t
+uses lemma units
 data d: 2024-01-08
 data dur: 7 days
 rule result: d - dur"#;
@@ -700,6 +750,7 @@ rule result: d - dur"#;
 #[test]
 fn duration_add_date() {
     let code = r#"spec t
+uses lemma units
 data dur: 7 days
 data d: 2024-01-01
 rule result: dur + d"#;
@@ -711,15 +762,6 @@ rule result: dur + d"#;
     );
 }
 
-#[test]
-fn date_subtract_date() {
-    let code = r#"spec t
-data a: 2024-01-10
-data b: 2024-01-01
-rule result: a - b"#;
-    expect_plan_error(code, "dateA...dateB");
-}
-
 // ═══════════════════════════════════════════════════════════════════
 // Quantity family: parent + child (same family) → Quantity
 // ═══════════════════════════════════════════════════════════════════
@@ -727,6 +769,7 @@ rule result: a - b"#;
 #[test]
 fn same_family_parent_plus_child() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data budget: money -> unit jpy 160.00 -> minimum 0 eur
 data price: 10 eur
@@ -743,6 +786,7 @@ rule result: price + allowance"#;
 #[test]
 fn same_family_siblings() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data income: money -> minimum 0 eur
 data expense: money -> minimum 0 eur
@@ -760,6 +804,7 @@ rule remaining: salary - rent"#;
 #[test]
 fn same_family_result_used_in_comparison() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data budget: money -> unit jpy 160.00 -> minimum 0 eur
 data price: 4 eur
@@ -777,6 +822,7 @@ rule over_budget: total > limit"#;
 #[test]
 fn quantity_divide_quantity_returns_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data total: 10 eur
 data unit_price: 5 eur
@@ -797,6 +843,7 @@ rule ratio: total / unit_price"#;
 #[test]
 fn quantity_divide_quantity_result_usable_as_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data revenue: 100 eur
 data cost: 50 eur
@@ -822,6 +869,7 @@ rule doubled: margin_factor * 10"#;
 #[test]
 fn number_divide_quantity_returns_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data count: 20
 data price: 10 eur
@@ -864,14 +912,15 @@ rule product: a * b"#,
 #[test]
 fn quantity_multiply_quantity_via_as_number_produces_number() {
     let code = r#"spec t
+uses lemma units
 data money: quantity -> unit eur 1.00
 data a: 10 eur
 data b: 5 eur
-rule product: (a as number) * (b as number)"#;
+rule product: (a as eur as number) * (b as eur as number)"#;
     let val = eval_rule(code, "t", "product", HashMap::new());
     assert!(
         val.contains("50"),
-        "(a as number) * (b as number) should be 50, got: {}",
+        "(a as eur as number) * (b as eur as number) should be 50, got: {}",
         val
     );
     assert!(

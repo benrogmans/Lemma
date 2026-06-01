@@ -38,7 +38,7 @@ fn salary_data() -> HashMap<String, String> {
 
 fn bench_dutch_salary_profile(c: &mut Criterion) {
     let engine = load_engine();
-    let now = parsing::ast::DateTimeValue::now();
+    let now = DateTimeValue::now();
     let spec = "net_salary";
     let data = salary_data();
 
@@ -47,14 +47,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     group.bench_function("engine_evaluate", |b| {
         b.iter(|| {
             let resp = engine
-                .run(
-                    None,
-                    spec,
-                    Some(&now),
-                    data.clone(),
-                    false,
-                    lemma::EvaluationRequest::default(),
-                )
+                .run(None, spec, Some(&now), data.clone(), false)
                 .expect("run");
             std::hint::black_box(resp);
         });
@@ -68,7 +61,10 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
             let plan = base_plan
                 .clone()
                 .set_data_values(
-                    serialization::data_values_from_strings(data.clone()),
+                    data.clone()
+                        .into_iter()
+                        .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
+                        .collect(),
                     &ResourceLimits::default(),
                 )
                 .expect("set_data_values");
@@ -89,14 +85,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     group.bench_function("single_rule", |b| {
         b.iter(|| {
             let mut resp = engine
-                .run(
-                    None,
-                    spec,
-                    Some(&now),
-                    data.clone(),
-                    false,
-                    lemma::EvaluationRequest::default(),
-                )
+                .run(None, spec, Some(&now), data.clone(), false)
                 .expect("run");
             resp.filter_rules(&[String::from("periods_per_year")]);
             std::hint::black_box(resp);
@@ -105,14 +94,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_envelope", |b| {
         let response = engine
-            .run(
-                None,
-                spec,
-                Some(&now),
-                data.clone(),
-                false,
-                lemma::EvaluationRequest::default(),
-            )
+            .run(None, spec, Some(&now), data.clone(), false)
             .expect("run");
         b.iter(|| {
             let envelope = build_envelope(&response, spec, &now);
@@ -123,14 +105,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_raw_response", |b| {
         let response = engine
-            .run(
-                None,
-                spec,
-                Some(&now),
-                data.clone(),
-                false,
-                lemma::EvaluationRequest::default(),
-            )
+            .run(None, spec, Some(&now), data.clone(), false)
             .expect("run");
         b.iter(|| {
             let json = serde_json::to_vec(&response).expect("serialize");
@@ -144,32 +119,30 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 fn build_envelope(
     response: &Response,
     spec_name: &str,
-    effective: &parsing::ast::DateTimeValue,
+    effective: &DateTimeValue,
 ) -> serde_json::Value {
     let mut result = serde_json::Map::new();
     for (name, rule_result) in &response.results {
         let mut entry = serde_json::Map::new();
-        match &rule_result.result {
-            OperationResult::Value(v) => {
+        entry.insert("vetoed".into(), serde_json::Value::Bool(rule_result.vetoed));
+        if let Some(display) = &rule_result.display {
+            entry.insert("display".into(), serde_json::Value::String(display.clone()));
+        }
+        if let Some(veto_reason) = &rule_result.veto_reason {
+            entry.insert(
+                "veto_reason".into(),
+                serde_json::Value::String(veto_reason.clone()),
+            );
+        }
+        if let Some(trace) = &rule_result.trace {
+            if let OperationResult::Value(v) = &trace.result {
                 let val = serde_json::to_value(&v.value).expect("ValueKind serializes");
                 entry.insert("value".into(), val);
-                entry.insert(
-                    "display".into(),
-                    serde_json::Value::String(v.display_value()),
-                );
-                entry.insert("vetoed".into(), serde_json::Value::Bool(false));
-            }
-            OperationResult::Veto(reason) => {
-                entry.insert("vetoed".into(), serde_json::Value::Bool(true));
-                entry.insert(
-                    "veto_reason".into(),
-                    serde_json::Value::String(reason.to_string()),
-                );
             }
         }
         entry.insert(
             "rule_type".into(),
-            serde_json::Value::String(rule_result.rule_type.name()),
+            serde_json::Value::String(rule_result.rule_type.clone()),
         );
         result.insert(name.clone(), serde_json::Value::Object(entry));
     }

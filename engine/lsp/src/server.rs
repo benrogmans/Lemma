@@ -15,9 +15,9 @@ use crate::diagnostics;
 use crate::registry::Registry;
 use crate::semantic_tokens;
 use crate::workspace::WorkspaceModel;
-use lemma::parsing::ast::{DataValue, SpecRef};
 #[cfg(not(target_arch = "wasm32"))]
 use lemma::Context;
+use lemma::{DataValue, SpecRef};
 
 async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
     let file_diagnostics = workspace.validate_workspace();
@@ -314,11 +314,10 @@ impl LanguageServer for LemmaLanguageServer {
             let Some(root) = workspace.workspace_root().cloned() else {
                 return Ok(None);
             };
-            let mut ctx = Context::new();
-            let _ = workspace.insert_specs_into_context(&mut ctx);
+            let engine = workspace.engine_with_workspace();
+            let ctx = engine.specs();
             let text = text.as_str();
             let root = root.as_path();
-            let ctx = &ctx;
 
             let links: Vec<DocumentLink> = parse_result
                 .repositories
@@ -446,7 +445,7 @@ fn spec_ref_hit_range(spec_ref: &SpecRef, text: &str, position: Position) -> Opt
 
 /// Return one LSP `Range` covering the full `uses` reference from the qualifier
 /// (e.g. `@lemma/std` or `lemma`) through the target span (`finance 2026-01-01`,
-/// `si`). Used by `document_link` so the entire reference is a single clickable
+/// `units`). Used by `document_link` so the entire reference is a single clickable
 /// region, instead of two separate hot spots on `repository_span` and
 /// `target_span`. Falls back to whichever span is present if one is missing.
 #[cfg(not(target_arch = "wasm32"))]
@@ -487,7 +486,7 @@ fn build_uses_document_link(
 ) -> Option<DocumentLink> {
     let repo_qual = spec_ref.repository.as_ref()?;
     let qualifier_name = repo_qual.name.as_str();
-    let is_embedded_stdlib = qualifier_name == lemma::engine::EMBEDDED_STDLIB_REPOSITORY;
+    let is_embedded_stdlib = qualifier_name == lemma::EMBEDDED_STDLIB_REPOSITORY;
     if !repo_qual.is_registry() && !is_embedded_stdlib {
         return None;
     }
@@ -501,7 +500,7 @@ fn build_uses_document_link(
     } else {
         match resolved.source_type.as_ref() {
             Some(lemma::SourceType::Path(p)) => p.as_ref().clone(),
-            _ => lemma::dependency_cache_file(workspace_root, qualifier_name),
+            _ => lemma::deps::dependency_cache_file(workspace_root, qualifier_name),
         }
     };
     let mut file_url = Url::from_file_path(&dep_path).ok()?;
@@ -519,14 +518,14 @@ fn build_uses_document_link(
 }
 
 /// Path under `<workspace>/lemma_deps/` where the LSP writes a view-only copy of the embedded
-/// SI standard library for editor navigation. The `.std` extension keeps the file out of
+/// units standard library for editor navigation. The `.std` extension keeps the file out of
 /// every `.lemma` discovery pass (CLI loaders, watchers, LSP workspace scan).
 #[cfg(not(target_arch = "wasm32"))]
 fn embedded_stdlib_view_path(workspace_root: &Path) -> std::path::PathBuf {
-    lemma::lemma_deps_dir(workspace_root).join("lemma.std")
+    lemma::deps::lemma_deps_dir(workspace_root).join("lemma.std")
 }
 
-/// Lazily write the embedded SI standard library to `<workspace>/lemma_deps/lemma.std`.
+/// Lazily write the embedded units standard library to `<workspace>/lemma_deps/lemma.std`.
 ///
 /// Called from `document_link` only when a `uses lemma ...` reference is present in the
 /// active file, so the file appears in `lemma_deps/` the first time a user wants to navigate
@@ -537,7 +536,7 @@ fn embedded_stdlib_view_path(workspace_root: &Path) -> std::path::PathBuf {
 #[cfg(not(target_arch = "wasm32"))]
 fn materialize_embedded_stdlib_view(workspace_root: &Path) -> Option<std::path::PathBuf> {
     let destination = embedded_stdlib_view_path(workspace_root);
-    let expected = lemma::stdlib::SI_LEMMA;
+    let expected = lemma::UNITS_LEMMA;
     match std::fs::read_to_string(&destination) {
         Ok(current) if current == expected => return Some(destination),
         Ok(_) | Err(_) => {}
@@ -587,9 +586,9 @@ fn find_lemma_files_recursive(directory: &Path, results: &mut Vec<std::path::Pat
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use lemma::engine::EMBEDDED_STDLIB_REPOSITORY;
-    use lemma::parsing::ast::DataValue;
-    use lemma::registry::LemmaBase;
+    use lemma::DataValue;
+    use lemma::LemmaBase;
+    use lemma::EMBEDDED_STDLIB_REPOSITORY;
 
     #[test]
     fn position_within_range_treats_end_as_exclusive() {
@@ -714,7 +713,7 @@ mod tests {
             path.parent()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str()),
-            Some(lemma::LEMMA_DEPS_DIR_NAME),
+            Some(lemma::deps::LEMMA_DEPS_DIR_NAME),
         );
         assert!(
             path.extension().and_then(|e| e.to_str()) != Some("lemma"),
@@ -723,13 +722,13 @@ mod tests {
     }
 
     #[test]
-    fn materialize_writes_si_lemma_when_missing() {
+    fn materialize_writes_units_lemma_when_missing() {
         let workspace = test_workspace();
         let materialized = materialize_embedded_stdlib_view(&workspace)
             .expect("first materialization must succeed");
         assert_eq!(materialized, embedded_stdlib_view_path(&workspace));
         let written = std::fs::read_to_string(&materialized).expect("written file readable");
-        assert_eq!(written, lemma::stdlib::SI_LEMMA);
+        assert_eq!(written, lemma::UNITS_LEMMA);
     }
 
     #[test]
@@ -760,18 +759,18 @@ mod tests {
         let materialized =
             materialize_embedded_stdlib_view(&workspace).expect("materialize must succeed");
         let written = std::fs::read_to_string(&materialized).expect("written file readable");
-        assert_eq!(written, lemma::stdlib::SI_LEMMA);
+        assert_eq!(written, lemma::UNITS_LEMMA);
     }
 
     /// Mirrors the link-resolution body of `document_link` for the embedded stdlib path,
     /// so we can exercise it without constructing a `tower_lsp::Client`. Asserts both the
-    /// lazy write and that we can derive a valid `file://` URL at the resolved `spec si`
+    /// lazy write and that we can derive a valid `file://` URL at the resolved `spec units`
     /// line number.
     #[test]
-    fn uses_lemma_si_produces_link_to_lemma_deps_lemma_std() {
+    fn uses_lemma_units_produces_link_to_lemma_deps_lemma_std() {
         let workspace = test_workspace();
         let workspace_root = workspace.as_path();
-        let source = "spec consumer\nuses lemma si\n";
+        let source = "spec consumer\nuses lemma units\n";
 
         let parse_result = lemma::parse(
             source,
@@ -780,13 +779,16 @@ mod tests {
         )
         .expect("parse consumer");
 
-        let mut ctx = Context::new();
+        let mut engine = lemma::Engine::new();
         for (parsed_repo, specs) in &parse_result.repositories {
             for spec in specs {
-                ctx.insert_spec(Arc::clone(parsed_repo), Arc::new(spec.clone()))
+                engine
+                    .specs_mut()
+                    .insert_spec(Arc::clone(parsed_repo), Arc::new(spec.clone()))
                     .expect("insert workspace spec");
             }
         }
+        let ctx = engine.specs();
 
         let consumer_spec = parse_result
             .repositories
@@ -833,11 +835,11 @@ mod tests {
         let instant = spec_ref.at(consumer_eff);
         let spec_set = ctx
             .spec_set(&repo_arc, spec_ref.name.as_str())
-            .expect("spec set for si");
-        let resolved = spec_set.spec_at(&instant).expect("resolve spec si");
+            .expect("spec set for units");
+        let resolved = spec_set.spec_at(&instant).expect("resolve spec units");
         assert!(
             resolved.start_line >= 1,
-            "resolved start_line must reflect SI_LEMMA layout, got {}",
+            "resolved start_line must reflect UNITS_LEMMA layout, got {}",
             resolved.start_line,
         );
 
@@ -861,7 +863,7 @@ mod tests {
             diagnostics::span_to_range(source, qualifier_span.start, target_span.end);
         assert_eq!(
             full, expected_full,
-            "DocumentLink range must cover `lemma si` as one region (qualifier start to target end)",
+            "DocumentLink range must cover `lemma units` as one region (qualifier start to target end)",
         );
     }
 
@@ -987,7 +989,7 @@ mod tests {
     #[test]
     fn registry_uses_emits_single_unified_document_link() {
         let root = test_workspace();
-        let dep_path = lemma::dependency_cache_file(&root, "@lemma/std");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@lemma/std");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
         std::fs::write(&dep_path, "spec finance\ndata z: 1\n").expect("write dep");
         let consumer_path = root.join("consumer.lemma");

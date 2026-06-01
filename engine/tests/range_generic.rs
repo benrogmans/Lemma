@@ -1,4 +1,4 @@
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, LiteralValue, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,19 +33,15 @@ fn eval_literal_with_data(
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&default_effective()),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(&default_effective()), data, true)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -61,10 +57,23 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 }
 
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
-    match eval_literal(code, spec_name, rule_name).value {
-        ValueKind::Boolean(val) => val,
-        other => panic!("Expected Boolean, got {:?}", other),
-    }
+    let mut engine = Engine::new();
+    engine.load(code, source()).expect("Should parse and plan");
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&default_effective()),
+            HashMap::new(),
+            false,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .boolean
+        .expect("boolean rule result")
 }
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
@@ -396,7 +405,7 @@ rule margin_ok: span_with_allowance >= 5500 gram"#;
 fn q15_user_declared() {
     let code = r#"spec test
 data weight: quantity -> unit gram 1 -> unit kilogram 1000
-data acceptable: quantity range -> default 30 kilogram...35 kilogram
+data acceptable: weight range -> default 30 kilogram...35 kilogram
 rule check: 32 kilogram in acceptable"#;
     assert!(eval_bool(code, "test", "check"));
 }
@@ -405,13 +414,24 @@ rule check: 32 kilogram in acceptable"#;
 fn q15_mixed_unit_endpoints_gram_to_kilogram() {
     let code = r#"spec test
 data weight: quantity -> unit gram 1 -> unit kilogram 1000
-data band: quantity range -> default 3000 gram...35 kilogram
+data band: weight range -> default 3000 gram...35 kilogram
 rule inside: 3200 gram in band
 rule lower: 3000 gram in band
 rule upper_excluded: 35 kilogram in band"#;
     assert!(eval_bool(code, "test", "inside"));
     assert!(eval_bool(code, "test", "lower"));
     assert!(!eval_bool(code, "test", "upper_excluded"));
+}
+
+#[test]
+fn q16_money_named_range() {
+    let code = r#"spec test
+data money: quantity -> unit eur 1.00
+data estimated: money range -> default 30 eur...50 eur
+rule inside: 40 eur in estimated
+rule span: (30 eur...50 eur) >= 20 eur"#;
+    assert!(eval_bool(code, "test", "inside"));
+    assert!(eval_bool(code, "test", "span"));
 }
 
 // =============================================================================
@@ -536,9 +556,17 @@ rule bad: "a"..."z""#;
 }
 
 #[test]
+fn s4b_text_type_range() {
+    let code = r#"spec test
+data label: text
+data bad: label range"#;
+    expect_plan_error(code, "rangeable");
+}
+
+#[test]
 fn s5_date_vs_duration() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule bad: 2024-01-01...7 days"#;
     expect_plan_error(code, "range");
 }
@@ -550,20 +578,20 @@ rule bad: 50...50%"#;
     expect_plan_error(code, "range");
 }
 
-// `(0...100) as days` span semantics: see `range_span_unit_conversion.rs`.
+// `(0...100) as number` span semantics: see `range_span_unit_conversion.rs`.
 
 #[test]
 fn s8_quantity_range_in_months() {
     let code = r#"spec test
 data weight: quantity -> unit gram 1 -> unit kilogram 1000
-rule bad: (30 kilogram...35 kilogram) as months"#;
-    expect_plan_error(code, "convert");
+rule bad: (30 kilogram...35 kilogram) as number"#;
+    expect_plan_error(code, "as number");
 }
 
 #[test]
 fn s9_quantity_times_number_range() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data money: quantity -> unit eur 1.00
 data rate: quantity
   -> unit eur_per_second eur/second

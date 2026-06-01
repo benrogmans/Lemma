@@ -114,8 +114,8 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `load(code, attribute?)` | Parse and validate a `.lemma` spec set. Resolves on success; rejects with `EngineError[]`. |
 | `load_batch(sources, dependency?)` | Load many sources in one planning pass (see `lemma.d.ts`). |
 | `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. Rejects with `EngineError[]`. |
-| `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Always includes embedded `lemma` / `spec si`. |
-| `format_repository(repo)` | Canonical Lemma source for a loaded repository, formatted from the in-engine AST. Use `"lemma"` for the embedded SI stdlib. |
+| `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Always includes embedded `lemma` / `spec units`. |
+| `format_repository(repo)` | Canonical Lemma source for a loaded repository, formatted from the in-engine AST. Use `"lemma"` for the embedded units stdlib. |
 | `schema(repo, name, effective?)` | `SpecSchema`; `repo` null for workspace. |
 | `run(repo, name, ruleNames, data, effective?)` | Evaluate. `rules: []` runs everything; pass an array to filter. Returns a `Response`. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
@@ -144,7 +144,7 @@ Lemma is pre-1.0. The WASM API is stable for most use cases, but breaking change
 ## Related
 
 - [`lemmabase.com`](https://lemmabase.com): public database for Lemma Specs
-- [`lemma-cli`](https://crates.io/crates/lemma-cli): REPL, HTTP server, MCP server, formatter
+- [`lemma`](https://crates.io/crates/lemma): REPL, HTTP server, MCP server, formatter
 - [`lemma-engine`](https://crates.io/crates/lemma-engine): same engine as a Rust crate
 - [`lemma_engine` on Hex](https://hex.pm/packages/lemma_engine): Elixir bindings via Rustler
 - VS Code / Cursor extension: search "Lemma Language" in the marketplace

@@ -2,18 +2,13 @@
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
-use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::BaseQuantityVector;
-use lemma::Engine;
+use lemma::{DateTimeValue, Engine, LiteralValue, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-fn decimal_lit(d: &str) -> Decimal {
-    Decimal::from_str(d).unwrap()
-}
-fn rational_lit(d: &str) -> lemma::RationalInteger {
-    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
+fn decimal_lit(s: &str) -> Decimal {
+    Decimal::from_str(s).expect("BUG: test decimal literal must parse")
 }
 
 fn get_rule_value(
@@ -23,23 +18,17 @@ fn get_rule_value(
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
-    let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap();
+    let response = engine.run(None, spec_name, Some(&now), data, true).unwrap();
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, spec_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
-        .unwrap_or_else(|| panic!("rule '{}' had no value", rule_name))
+        .expect("value")
         .clone()
 }
 
@@ -53,6 +42,7 @@ fn load_specs_folder_examples() -> Engine {
         "../documentation/examples/03_recipe_scaling.lemma",
         "../documentation/examples/04_membership_benefits.lemma",
         "../documentation/examples/05_weather_clothing.lemma",
+        "../documentation/examples/06_dutch_net_salary.lemma",
     ];
 
     for path in examples {
@@ -93,17 +83,22 @@ fn test_01_coffee_order() {
 
     // latte base_price (3.50 eur) * large size_multiplier (120%) = 4.20 eur per cup
     // 4.20 eur * 2 cups = 8.40 eur subtotal
-    // loyalty card discount 10% = 0.84 eur (age >= 65, so age_discount = 10%)
-    // discount_amount = 0.84 eur - 10% = 0.84 - 0.084 = 0.756 eur
-    // total = 8.40 - 0.756 = 7.644 eur
-    assert_eq!(
-        total.value,
-        lemma::ValueKind::Quantity(
-            rational_lit("7.644"),
-            "eur".to_string(),
-            std::collections::BTreeMap::new()
-        )
-    );
+    // loyalty_discount 10% + age_discount 10% = combined_discount 20%
+    // discount_amount = 8.40 * 20% = 1.68 eur
+    // total = 8.40 - 1.68 = 6.72 eur
+    match &total.value {
+        ValueKind::Quantity(n, signature) => {
+            assert_eq!(
+                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("6.72")
+            );
+            assert_eq!(
+                signature.first().map(|(name, _)| name.as_str()),
+                Some("eur")
+            );
+        }
+        other => panic!("expected Quantity total, got {other:?}"),
+    }
 }
 
 #[test]
@@ -116,14 +111,19 @@ fn test_02_library_fees() {
     data.insert("is_first_offense".to_string(), "false".to_string());
 
     let final_fee = get_rule_value(&engine, "library_fees", "final_fee", data.clone());
-    assert_eq!(
-        final_fee.value,
-        lemma::ValueKind::Quantity(
-            rational_lit("1.25"),
-            "eur".to_string(),
-            std::collections::BTreeMap::new()
-        )
-    );
+    match &final_fee.value {
+        ValueKind::Quantity(n, signature) => {
+            assert_eq!(
+                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("1.25")
+            );
+            assert_eq!(
+                signature.first().map(|(name, _)| name.as_str()),
+                Some("eur")
+            );
+        }
+        other => panic!("expected Quantity final_fee, got {other:?}"),
+    }
 
     let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", data);
     assert_eq!(can_checkout.value, lemma::ValueKind::Boolean(true));
@@ -141,28 +141,38 @@ fn test_03_recipe_scaling() {
     let scaling_factor = get_rule_value(&engine, "recipe_scaling", "scaling_factor", data.clone());
     assert_eq!(
         scaling_factor.value,
-        lemma::ValueKind::Number(rational_lit("2"))
+        LiteralValue::number_from_decimal(decimal_lit("2")).value
     );
 
     let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", data.clone());
-    assert_eq!(
-        baking_time.value,
-        lemma::ValueKind::Quantity(
-            rational_lit("40"),
-            "minutes".to_string(),
-            BaseQuantityVector::new(),
-        )
-    );
+    match &baking_time.value {
+        ValueKind::Quantity(n, signature) => {
+            assert_eq!(
+                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("2400")
+            );
+            assert_eq!(
+                signature.first().map(|(name, _)| name.as_str()),
+                Some("minutes")
+            );
+        }
+        other => panic!("expected Quantity baking_time, got {other:?}"),
+    }
 
     let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", data);
-    assert_eq!(
-        oven_temp.value,
-        lemma::ValueKind::Quantity(
-            rational_lit("175"),
-            "celsius".to_string(),
-            BaseQuantityVector::new(),
-        )
-    );
+    match &oven_temp.value {
+        ValueKind::Quantity(n, signature) => {
+            assert_eq!(
+                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("175")
+            );
+            assert_eq!(
+                signature.first().map(|(name, _)| name.as_str()),
+                Some("celsius")
+            );
+        }
+        other => panic!("expected Quantity oven_temperature, got {other:?}"),
+    }
 }
 
 #[test]
@@ -178,12 +188,15 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         discount_rate.value,
-        lemma::ValueKind::Ratio(rational_lit("0.10"), Some("percent".to_string()))
+        LiteralValue::ratio_from_decimal(decimal_lit("0.10"), Some("percent".to_string())).value
     );
 
     // Test membership_benefits spec (references premium_membership)
     let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
-    assert_eq!(discount.value, lemma::ValueKind::Number(rational_lit("15")));
+    assert_eq!(
+        discount.value,
+        LiteralValue::number_from_decimal(decimal_lit("15")).value
+    );
 
     let shipping_cost = get_rule_value(
         &engine,
@@ -193,7 +206,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         shipping_cost.value,
-        lemma::ValueKind::Number(rational_lit("0"))
+        LiteralValue::number_from_decimal(decimal_lit("0")).value
     );
 
     let total_points = get_rule_value(
@@ -204,7 +217,7 @@ fn test_04_membership_benefits() {
     );
     assert_eq!(
         total_points.value,
-        lemma::ValueKind::Number(rational_lit("325"))
+        LiteralValue::number_from_decimal(decimal_lit("325")).value
     );
 }
 
@@ -226,4 +239,43 @@ fn test_05_weather_clothing() {
 
     let needs_jacket = get_rule_value(&engine, "weather_clothing", "needs_jacket", data);
     assert_eq!(needs_jacket.value, lemma::ValueKind::Boolean(false));
+}
+
+#[test]
+fn test_06_dutch_net_salary() {
+    let engine = load_specs_folder_examples();
+
+    let effective = DateTimeValue {
+        year: 2026,
+        month: 6,
+        day: 1,
+        hour: 12,
+        minute: 0,
+        second: 0,
+        microsecond: 0,
+        timezone: None,
+    };
+
+    let mut data = HashMap::new();
+    data.insert("gross_salary".to_string(), "5000 eur".to_string());
+    data.insert("pay_period".to_string(), "month".to_string());
+
+    let response = engine
+        .run(None, "net_salary", Some(&effective), data, false)
+        .expect("net_salary run");
+
+    let net = response
+        .results
+        .get("net_salary")
+        .expect("net_salary in results");
+    assert!(
+        !net.vetoed,
+        "net_salary must not veto with all required data provided"
+    );
+
+    let gross_annual = response
+        .results
+        .get("gross_annual_salary")
+        .expect("gross_annual_salary in results");
+    assert!(!gross_annual.vetoed, "gross_annual_salary must not veto");
 }

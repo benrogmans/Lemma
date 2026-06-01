@@ -1099,15 +1099,23 @@ pub(crate) fn try_constant_fold_expression(expr: &Expression) -> Option<Expressi
 
 /// Evaluate an arithmetic operation on two literals
 ///
-/// Delegates to the computation module for consistent behavior
+/// Delegates to the computation module for consistent behavior. Signature resolution is
+/// not invoked here because constant folding inside inversion only sees already-typed
+/// literals; the produced literal carries its signature on its lemma_type for downstream
+/// use.
 fn evaluate_arithmetic(
     left: &LiteralValue,
     op: &ArithmeticComputation,
     right: &LiteralValue,
 ) -> Option<LiteralValue> {
+    use crate::computation::arithmetic::SignatureIndex;
     use crate::computation::arithmetic_operation;
+    use std::collections::HashMap;
 
-    match arithmetic_operation(left, op, right) {
+    let unit_index: HashMap<String, std::sync::Arc<crate::planning::semantics::LemmaType>> =
+        HashMap::new();
+    let signature_index = SignatureIndex::new();
+    match arithmetic_operation(left, op, right, &unit_index, &signature_index) {
         OperationResult::Value(lit) => Some(lit.as_ref().clone()),
         OperationResult::Veto(_) => None,
     }

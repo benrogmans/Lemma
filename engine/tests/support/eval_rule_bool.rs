@@ -1,5 +1,5 @@
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, OperationResult};
+use lemma::DateTimeValue;
+use lemma::Engine;
 use std::collections::HashMap;
 
 pub fn eval_rule_bool(
@@ -10,21 +10,14 @@ pub fn eval_rule_bool(
     data: HashMap<String, String>,
 ) -> bool {
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), data, false)
         .expect("run");
     let rule_result = response.get(rule).unwrap_or_else(|_| panic!("rule {rule}"));
-    match &rule_result.result {
-        OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Boolean(b) => *b,
-            other => panic!("expected boolean, got {other:?}"),
-        },
-        OperationResult::Veto(v) => panic!("rule {rule} vetoed: {v:?}"),
+    if rule_result.vetoed {
+        panic!(
+            "rule {rule} vetoed: {}",
+            rule_result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
     }
+    rule_result.boolean.expect("boolean rule result")
 }

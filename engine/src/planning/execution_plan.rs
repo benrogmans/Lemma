@@ -9,19 +9,22 @@
 //!   IO compatibility is the consumer-facing guarantee.
 
 use crate::computation::UnitResolutionContext;
-use crate::parsing::ast::{EffectiveDate, LemmaRepository, LemmaSpec, MetaValue};
+use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, MetaValue};
 use crate::parsing::source::Source;
+use crate::planning::data_input::{parse_data_value, DataValueInput};
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
-use crate::planning::normalize::{build_unless_chain, inline_rule_refs, normalize_expression};
+use crate::planning::normalize::{
+    build_decision_table, is_literal_bool_expression, normalize_expression,
+};
 use crate::planning::semantics::{
-    DataDefinition, DataPath, Expression, LemmaType, LiteralValue, RulePath, SemanticCalendarUnit,
-    TypeSpecification, ValueKind,
+    value_kind_matches_spec, DataDefinition, DataPath, Expression, LemmaType, LiteralValue,
+    RulePath, TypeSpecification, ValueKind,
 };
 use crate::Error;
 use crate::ResourceLimits;
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -46,14 +49,15 @@ pub type SpecSources = Vec<SpecSource>;
 ///
 /// Contains the topologically sorted list of rules to execute, along with all data.
 /// Self-contained structure - no spec lookups required during evaluation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ExecutionPlan {
     /// Main spec name
     pub spec_name: String,
 
+    /// Optional commentary from the `"""..."""` block in the spec source.
+    pub commentary: Option<String>,
+
     /// Per-data data in definition order: value, type-only, or spec reference.
-    #[serde(serialize_with = "crate::serialization::serialize_resolved_data_value_map")]
-    #[serde(deserialize_with = "crate::serialization::deserialize_resolved_data_value_map")]
     pub data: IndexMap<DataPath, DataDefinition>,
 
     /// Rules to execute in topological order (sorted by dependencies)
@@ -63,22 +67,27 @@ pub struct ExecutionPlan {
     /// at evaluation time so that chained references (reference → reference →
     /// data) copy values in the correct sequence. Empty when the plan has no
     /// references.
-    #[serde(default, alias = "alias_evaluation_order")]
     pub reference_evaluation_order: Vec<DataPath>,
 
     /// Spec metadata
     pub meta: HashMap<String, MetaValue>,
 
-    /// Unit name → owning quantity/ratio type (same as planner [`ResolvedSpecTypes::unit_index`]:
-    /// local types plus units from **direct** `uses` imports only; qualified re-exports skipped).
-    #[serde(default)]
-    pub unit_index: HashMap<String, LemmaType>,
+    /// Main-spec types from planning. [`ResolvedSpecTypes::unit_index`] is expression-scope
+    /// units (local types plus direct `uses` imports). Rule-result units live on each
+    /// [`ExecutableRule::rule_type`], not in this index.
+    pub resolved_types: ResolvedSpecTypes,
+
+    /// Reverse index: canonical-form unit signature `Vec<(unit_name, exponent)>` →
+    /// (unit_name, owning type). Built from expression-scope units during planning so
+    /// cross-type Multiply/Divide arithmetic can deterministically resolve a combined
+    /// signature back to a single named unit. Ambiguous signatures (the same key matched
+    /// by units in two distinct types) are rejected at planning time.
+    pub signature_index: crate::computation::arithmetic::SignatureIndex,
 
     pub effective: EffectiveDate,
 
     /// Canonical source for all specs in this plan (one entry per spec, includes repository).
     /// Reconstructed from AST — not raw file content.
-    #[serde(default)]
     pub sources: SpecSources,
 }
 
@@ -120,11 +129,13 @@ pub struct ExecutableRule {
     /// Rule name
     pub name: String,
 
-    /// Branches evaluated in order (last matching wins)
+    /// Branches as written in source (evaluated only when `explain` is enabled)
     /// First branch has condition=None (default expression)
     /// Subsequent branches have condition=Some(...) (unless clauses)
-    /// The evaluation is done in reverse order with the earliest matching branch returning (winning) the result.
     pub branches: Vec<Branch>,
+
+    /// Normalized decision table (self-contained conditions); authoritative for evaluation
+    pub normalized_branches: Vec<NormalizedBranch>,
 
     /// All data this rule needs (direct + inherited from rule dependencies)
     pub needs_data: BTreeSet<DataPath>,
@@ -134,135 +145,66 @@ pub struct ExecutableRule {
 
     /// Computed type of this rule's result
     /// Every rule MUST have a type (Lemma is strictly typed)
-    pub rule_type: LemmaType,
+    #[serde(with = "arc_lemma_type")]
+    pub rule_type: Arc<LemmaType>,
 }
 
-/// A branch in an executable rule
+/// A branch in an executable rule (original expressions for explanation trace)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Branch {
     /// Condition expression (None for default branch)
     pub condition: Option<Expression>,
 
-    /// Unless condition after normalize (authoritative for evaluation when present)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub normalized_condition: Option<Expression>,
-
-    /// Result expression as written (for explanation trace; `RulePath` refs preserved)
+    /// Result expression as written (`RulePath` refs preserved)
     pub result: Expression,
-
-    /// Dependencies inlined and algebraically simplified; evaluated for authoritative result
-    pub normalized_result: Expression,
 
     /// Source location for error messages (always present for branches from parsed specs)
     pub source: Source,
 }
 
-/// One expression for a rule's branch semantics (unless-chain), using normalized branch results
-/// and normalized conditions. Used for rule inlining into downstream rules.
-fn build_rule_normalized_result_expression(branches: &[Branch]) -> Expression {
-    let pairs: Vec<(Option<Expression>, Expression)> = branches
-        .iter()
-        .map(|b| {
-            let condition = b.condition.as_ref().map(|_| {
-                b.normalized_condition
-                    .clone()
-                    .expect("BUG: normalized_condition must exist when condition exists")
-            });
-            (condition, b.normalized_result.clone())
-        })
-        .collect();
-    build_unless_chain(&pairs)
+/// One entry in the normalized decision table
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalizedBranch {
+    /// Self-contained condition (always present)
+    pub condition: Expression,
+
+    /// Normalized result expression
+    pub result: Expression,
+}
+
+mod arc_lemma_type {
+    use super::LemmaType;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(value: &Arc<LemmaType>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.as_ref().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<LemmaType>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        LemmaType::deserialize(deserializer).map(Arc::new)
+    }
 }
 
 /// Builds an execution plan from a Graph for one temporal slice.
 /// Internal implementation detail - only called by plan()
 pub(crate) fn build_execution_plan(
     graph: &Graph,
-    resolved_types: &[(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)],
+    resolved_types: &mut Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)>,
     effective: &EffectiveDate,
 ) -> Result<ExecutionPlan, Vec<Error>> {
-    let data = graph.build_data();
     let execution_order = graph.execution_order();
 
     let main_spec = graph.main_spec();
-    let unit_index = resolved_types
+    let main_idx = resolved_types
         .iter()
-        .find(|(_, spec, _)| Arc::ptr_eq(spec, main_spec))
-        .map(|(_, _, types)| types.unit_index.clone())
-        .unwrap_or_default();
-
-    let mut executable_rules: Vec<ExecutableRule> = Vec::new();
-    let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
-    let mut normalized_rule_results: HashMap<RulePath, Expression> = HashMap::new();
-
-    for rule_path in execution_order {
-        let rule_node = graph.rules().get(rule_path).expect(
-            "bug: rule from topological sort not in graph - validation should have caught this",
-        );
-
-        let mut direct_data = HashSet::new();
-        for (condition, result) in &rule_node.branches {
-            if let Some(cond) = condition {
-                cond.collect_data_paths(&mut direct_data);
-            }
-            result.collect_data_paths(&mut direct_data);
-        }
-        let mut needs_data: BTreeSet<DataPath> = direct_data.into_iter().collect();
-
-        for dep in &rule_node.depends_on_rules {
-            if let Some(&dep_idx) = path_to_index.get(dep) {
-                needs_data.extend(executable_rules[dep_idx].needs_data.iter().cloned());
-            }
-        }
-
-        let mut executable_branches = Vec::new();
-        let unit_ctx = UnitResolutionContext::WithIndex(&unit_index);
-        for (condition, result) in &rule_node.branches {
-            let inlined = inline_rule_refs(result, &normalized_rule_results);
-            let normalized_result =
-                normalize_expression(&inlined, Some(&unit_ctx)).map_err(|error| {
-                    vec![Error::validation(
-                        format!("failed to normalize rule result: {error}"),
-                        Some(rule_node.source.clone()),
-                        None::<String>,
-                    )]
-                })?;
-            let normalized_condition = match condition {
-                Some(condition) => Some(normalize_expression(condition, Some(&unit_ctx)).map_err(
-                    |error| {
-                        vec![Error::validation(
-                            format!("failed to normalize unless condition: {error}"),
-                            Some(rule_node.source.clone()),
-                            None::<String>,
-                        )]
-                    },
-                )?),
-                None => None,
-            };
-            executable_branches.push(Branch {
-                condition: condition.clone(),
-                normalized_condition,
-                result: result.clone(),
-                normalized_result,
-                source: rule_node.source.clone(),
-            });
-        }
-
-        normalized_rule_results.insert(
-            rule_path.clone(),
-            build_rule_normalized_result_expression(&executable_branches),
-        );
-
-        path_to_index.insert(rule_path.clone(), executable_rules.len());
-        executable_rules.push(ExecutableRule {
-            path: rule_path.clone(),
-            name: rule_path.rule.clone(),
-            branches: executable_branches,
-            source: rule_node.source.clone(),
-            needs_data,
-            rule_type: rule_node.rule_type.clone(),
-        });
-    }
+        .position(|(_, spec, _)| Arc::ptr_eq(spec, main_spec));
 
     let mut sources: SpecSources = Vec::new();
     for (repo, spec, _) in resolved_types.iter() {
@@ -280,8 +222,89 @@ pub(crate) fn build_execution_plan(
         }
     }
 
+    let main_resolved_types = main_idx
+        .map(|idx| resolved_types.remove(idx).2)
+        .unwrap_or_default();
+    let data = graph.build_data(&main_resolved_types.resolved);
+
+    let signature_index = crate::planning::graph::build_signature_index(
+        &main_spec.name,
+        &main_resolved_types.unit_index,
+    )
+    .expect("BUG: signature_index build already validated during resolve_and_validate");
+
+    let mut executable_rules: Vec<ExecutableRule> = Vec::new();
+    let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
+
+    for rule_path in execution_order {
+        let rule_node = graph.rules().get(rule_path).expect(
+            "bug: rule from topological sort not in graph - validation should have caught this",
+        );
+
+        let mut executable_branches = Vec::new();
+        for (condition, result) in &rule_node.branches {
+            executable_branches.push(Branch {
+                condition: condition.clone(),
+                result: result.clone(),
+                source: rule_node.source.clone(),
+            });
+        }
+
+        let unit_ctx = UnitResolutionContext::WithIndex(&main_resolved_types.unit_index);
+        let decision_table = build_decision_table(&rule_node.branches);
+        let mut normalized_branches = Vec::new();
+        let mut direct_data = HashSet::new();
+        for (condition, result) in decision_table {
+            let normalized_condition =
+                normalize_expression(&condition, Some(&unit_ctx)).map_err(|error| {
+                    vec![Error::validation(
+                        format!("failed to normalize decision table condition: {error}"),
+                        Some(rule_node.source.clone()),
+                        None::<String>,
+                    )]
+                })?;
+            if is_literal_bool_expression(&normalized_condition, false) {
+                continue;
+            }
+            let normalized_result =
+                normalize_expression(&result, Some(&unit_ctx)).map_err(|error| {
+                    vec![Error::validation(
+                        format!("failed to normalize decision table result: {error}"),
+                        Some(rule_node.source.clone()),
+                        None::<String>,
+                    )]
+                })?;
+            normalized_condition.collect_data_paths(&mut direct_data);
+            normalized_result.collect_data_paths(&mut direct_data);
+            normalized_branches.push(NormalizedBranch {
+                condition: normalized_condition,
+                result: normalized_result,
+            });
+        }
+
+        let mut needs_data: BTreeSet<DataPath> = direct_data.into_iter().collect();
+
+        for dep in &rule_node.depends_on_rules {
+            if let Some(&dep_idx) = path_to_index.get(dep) {
+                needs_data.extend(executable_rules[dep_idx].needs_data.iter().cloned());
+            }
+        }
+
+        path_to_index.insert(rule_path.clone(), executable_rules.len());
+        executable_rules.push(ExecutableRule {
+            path: rule_path.clone(),
+            name: rule_path.rule.clone(),
+            branches: executable_branches,
+            normalized_branches,
+            source: rule_node.source.clone(),
+            needs_data,
+            rule_type: Arc::clone(&rule_node.rule_type),
+        });
+    }
+
     Ok(ExecutionPlan {
         spec_name: main_spec.name.clone(),
+        commentary: main_spec.commentary.clone(),
         data,
         rules: executable_rules,
         reference_evaluation_order: graph.reference_evaluation_order().to_vec(),
@@ -290,7 +313,8 @@ pub(crate) fn build_execution_plan(
             .iter()
             .map(|f| (f.key.clone(), f.value.clone()))
             .collect(),
-        unit_index,
+        resolved_types: main_resolved_types,
+        signature_index,
         effective: effective.clone(),
         sources,
     })
@@ -333,6 +357,16 @@ pub struct DataEntry {
 pub struct SpecSchema {
     /// Resolved spec id (logical name including path segments).
     pub spec: String,
+    /// Optional commentary from the `"""..."""` block in the spec source.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commentary: Option<String>,
+    /// The effective date of this specific plan version. `None` for origin (unversioned) specs.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub effective: Option<DateTimeValue>,
+    /// All known effective-from dates for this spec, populated by the caller when multiple
+    /// temporal versions exist. Empty for single-version specs.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub versions: Vec<DateTimeValue>,
     /// Data (inputs) keyed by name.
     pub data: indexmap::IndexMap<String, DataEntry>,
     /// Rules (outputs) keyed by name, with their computed result types
@@ -344,6 +378,10 @@ pub struct SpecSchema {
 impl std::fmt::Display for SpecSchema {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Spec: {}", self.spec)?;
+
+        if let Some(commentary) = &self.commentary {
+            write!(f, "\n  {}", commentary)?;
+        }
 
         if !self.meta.is_empty() {
             write!(f, "\n\nMeta:")?;
@@ -358,25 +396,27 @@ impl std::fmt::Display for SpecSchema {
         if !self.data.is_empty() {
             write!(f, "\n\nData:")?;
             for (name, entry) in &self.data {
-                write!(f, "\n  {} ({}", name, entry.lemma_type.name())?;
-                if let Some(constraints) = format_type_constraints(&entry.lemma_type.specifications)
-                {
-                    write!(f, ", {}", constraints)?;
+                write!(f, "\n  {} ({})", name, entry.lemma_type.specifications)?;
+                for line in type_detail_lines(&entry.lemma_type.specifications) {
+                    write!(f, "\n    {}", line)?;
+                }
+                let help = entry.lemma_type.specifications.help();
+                if !help.is_empty() {
+                    write!(f, "\n    help: {}", help)?;
                 }
                 if let Some(val) = &entry.bound_value {
-                    write!(f, ", value: {}", val)?;
+                    write!(f, "\n    value: {}", val)?;
                 }
                 if let Some(val) = &entry.default {
-                    write!(f, ", default: {}", val)?;
+                    write!(f, "\n    default: {}", val)?;
                 }
-                write!(f, ")")?;
             }
         }
 
         if !self.rules.is_empty() {
             write!(f, "\n\nRules:")?;
             for (name, rule_type) in &self.rules {
-                write!(f, "\n  {} ({})", name, rule_type.name())?;
+                write!(f, "\n  {} ({})", name, rule_type.specifications)?;
             }
         }
 
@@ -414,20 +454,13 @@ impl SpecSchema {
 
 /// Produce a human-readable summary of type constraints, or `None` when there
 /// are no constraints worth showing (e.g. bare `boolean`).
-fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
-    let mut parts = Vec::new();
-
+/// Returns one formatted string per constraint or property of the type specification.
+/// Uses `rational_to_display_str` for all rational bounds so they render as decimals,
+/// not as raw fractions.
+pub fn type_detail_lines(spec: &TypeSpecification) -> Vec<String> {
+    use crate::computation::rational::rational_to_display_str;
+    let mut lines = Vec::new();
     match spec {
-        TypeSpecification::Number {
-            minimum, maximum, ..
-        } => {
-            if let Some(v) = minimum {
-                parts.push(format!("minimum: {}", v));
-            }
-            if let Some(v) = maximum {
-                parts.push(format!("maximum: {}", v));
-            }
-        }
         TypeSpecification::Quantity {
             minimum,
             maximum,
@@ -437,73 +470,124 @@ fn format_type_constraints(spec: &TypeSpecification) -> Option<String> {
         } => {
             let unit_names: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
             if !unit_names.is_empty() {
-                parts.push(format!("units: {}", unit_names.join(", ")));
-            }
-            if let Some((magnitude, unit_name)) = minimum {
-                parts.push(format!("minimum: {} {}", magnitude, unit_name));
-            }
-            if let Some((magnitude, unit_name)) = maximum {
-                parts.push(format!("maximum: {} {}", magnitude, unit_name));
+                lines.push(format!("units: {}", unit_names.join(", ")));
             }
             if let Some(d) = decimals {
-                parts.push(format!("decimals: {}", d));
+                lines.push(format!("decimals: {}", d));
+            }
+            if let Some((magnitude, unit_name)) = minimum {
+                lines.push(format!(
+                    "minimum: {} {}",
+                    rational_to_display_str(magnitude),
+                    unit_name
+                ));
+            }
+            if let Some((magnitude, unit_name)) = maximum {
+                lines.push(format!(
+                    "maximum: {} {}",
+                    rational_to_display_str(magnitude),
+                    unit_name
+                ));
+            }
+        }
+        TypeSpecification::Number {
+            minimum,
+            maximum,
+            decimals,
+            ..
+        } => {
+            if let Some(d) = decimals {
+                lines.push(format!("decimals: {}", d));
+            }
+            if let Some(v) = minimum {
+                lines.push(format!("minimum: {}", rational_to_display_str(v)));
+            }
+            if let Some(v) = maximum {
+                lines.push(format!("maximum: {}", rational_to_display_str(v)));
             }
         }
         TypeSpecification::Ratio {
-            minimum, maximum, ..
+            minimum,
+            maximum,
+            decimals,
+            units,
+            ..
         } => {
+            let unit_names: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
+            if !unit_names.is_empty() {
+                lines.push(format!("units: {}", unit_names.join(", ")));
+            }
+            if let Some(d) = decimals {
+                lines.push(format!("decimals: {}", d));
+            }
             if let Some(v) = minimum {
-                parts.push(format!("minimum: {}", v));
+                lines.push(format!("minimum: {}", rational_to_display_str(v)));
             }
             if let Some(v) = maximum {
-                parts.push(format!("maximum: {}", v));
+                lines.push(format!("maximum: {}", rational_to_display_str(v)));
             }
         }
-        TypeSpecification::Text { options, .. } => {
+        TypeSpecification::Text {
+            options, length, ..
+        } => {
+            if let Some(l) = length {
+                lines.push(format!("length: {}", l));
+            }
             if !options.is_empty() {
                 let quoted: Vec<String> = options.iter().map(|o| format!("\"{}\"", o)).collect();
-                parts.push(format!("options: {}", quoted.join(", ")));
+                lines.push(format!("options: {}", quoted.join(", ")));
             }
         }
         TypeSpecification::Date {
             minimum, maximum, ..
         } => {
             if let Some(v) = minimum {
-                parts.push(format!("minimum: {}", v));
+                lines.push(format!("minimum: {}", v));
             }
             if let Some(v) = maximum {
-                parts.push(format!("maximum: {}", v));
+                lines.push(format!("maximum: {}", v));
             }
         }
         TypeSpecification::Time {
             minimum, maximum, ..
         } => {
             if let Some(v) = minimum {
-                parts.push(format!("minimum: {}", v));
+                lines.push(format!("minimum: {}", v));
             }
             if let Some(v) = maximum {
-                parts.push(format!("maximum: {}", v));
+                lines.push(format!("maximum: {}", v));
+            }
+        }
+        TypeSpecification::QuantityRange { units, .. } => {
+            let unit_names: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
+            if !unit_names.is_empty() {
+                lines.push(format!("units: {}", unit_names.join(", ")));
+            }
+        }
+        TypeSpecification::RatioRange { units, .. } => {
+            let unit_names: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
+            if !unit_names.is_empty() {
+                lines.push(format!("units: {}", unit_names.join(", ")));
             }
         }
         TypeSpecification::Boolean { .. }
         | TypeSpecification::NumberRange { .. }
-        | TypeSpecification::QuantityRange { .. }
         | TypeSpecification::DateRange { .. }
-        | TypeSpecification::RatioRange { .. }
-        | TypeSpecification::CalendarRange { .. }
-        | TypeSpecification::Calendar { .. }
+        | TypeSpecification::TimeRange { .. }
         | TypeSpecification::Veto { .. }
         | TypeSpecification::Undetermined => {}
     }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
-    }
+    lines
 }
 
 impl ExecutionPlan {
+    /// Expression-scope unit index (local types plus direct `uses` imports).
+    /// Rule-result units outside this scope are resolved from [`ExecutableRule::rule_type`]
+    /// at materialization time.
+    pub(crate) fn expression_unit_index(&self) -> &HashMap<String, Arc<LemmaType>> {
+        &self.resolved_types.unit_index
+    }
+
     /// Build a [`SpecSchema`] describing this plan's public IO contract.
     ///
     /// Only data transitively reachable from at least one local rule (via
@@ -522,8 +606,8 @@ impl ExecutionPlan {
             .expect("BUG: all_local_rules sourced from self.rules")
     }
 
-    /// Every typed data and every local rule — the surface other specs can address.
-    pub(crate) fn interface_schema(&self) -> SpecSchema {
+    /// Every typed data input and local rule — the full spec surface.
+    pub fn interface_schema(&self) -> SpecSchema {
         let mut data_entries: Vec<(usize, String, DataEntry)> = self
             .data
             .iter()
@@ -552,11 +636,14 @@ impl ExecutionPlan {
             .rules
             .iter()
             .filter(|r| r.path.segments.is_empty())
-            .map(|r| (r.name.clone(), r.rule_type.clone()))
+            .map(|r| (r.name.clone(), (*r.rule_type).clone()))
             .collect();
 
         SpecSchema {
             spec: self.spec_name.clone(),
+            commentary: self.commentary.clone(),
+            effective: self.effective.as_ref().cloned(),
+            versions: Vec::new(),
             data: data_entries
                 .into_iter()
                 .map(|(_, name, data)| (name, data))
@@ -589,7 +676,7 @@ impl ExecutionPlan {
                 )
             })?;
             needed_data.extend(rule.needs_data.iter().cloned());
-            rule_entries.push((rule.name.clone(), rule.rule_type.clone()));
+            rule_entries.push((rule.name.clone(), (*rule.rule_type).clone()));
         }
 
         let mut data_entries: Vec<(usize, String, DataEntry)> = self
@@ -619,6 +706,9 @@ impl ExecutionPlan {
 
         Ok(SpecSchema {
             spec: self.spec_name.clone(),
+            commentary: self.commentary.clone(),
+            effective: self.effective.as_ref().cloned(),
+            versions: Vec::new(),
             data: data_entries.into_iter().collect(),
             rules: rule_entries.into_iter().collect(),
             meta: self.meta.clone(),
@@ -651,12 +741,12 @@ impl ExecutionPlan {
         self.data.get(path).and_then(|d| d.value())
     }
 
-    /// Provide data values as JSON (convenience strings or serialized objects).
+    /// Provide typed data values from a client.
     ///
     /// Parses each value to its expected type, validates constraints, and applies to the plan.
     pub fn set_data_values(
         mut self,
-        values: std::collections::HashMap<String, serde_json::Value>,
+        values: std::collections::HashMap<String, DataValueInput>,
         limits: &ResourceLimits,
     ) -> Result<Self, Error> {
         for (name, raw_value) in values {
@@ -679,23 +769,40 @@ impl ExecutionPlan {
                 .expect("BUG: data_path was just resolved from self.data, must exist");
 
             let data_source = data_definition.source().clone();
-            let expected_type = data_definition.schema_type().cloned().ok_or_else(|| {
-                Error::request(
-                    format!(
-                        "Data '{}' is a spec reference; cannot provide a value.",
+            let type_arc = match data_definition {
+                DataDefinition::TypeDeclaration { resolved_type, .. }
+                | DataDefinition::Reference { resolved_type, .. } => Arc::clone(resolved_type),
+                DataDefinition::Value { value, .. } => Arc::clone(&value.lemma_type),
+                DataDefinition::Import { .. } => {
+                    return Err(Error::request(
+                        format!(
+                            "Data '{}' is a spec reference; cannot provide a value.",
+                            name
+                        ),
+                        None::<String>,
+                    ));
+                }
+                DataDefinition::Violated { .. } => {
+                    unreachable!(
+                        "BUG: Violated data '{}' cannot appear before set_data_values on a fresh plan clone",
                         name
-                    ),
-                    None::<String>,
-                )
-            })?;
+                    );
+                }
+            };
 
-            let literal_value = crate::planning::semantics::parse_data_value_from_json(
-                &raw_value,
-                &expected_type.specifications,
-                &expected_type,
-                &data_source,
-            )
-            .map_err(|e| e.with_related_data(&name))?;
+            let literal_value = match parse_data_value(&raw_value, &type_arc, &data_source) {
+                Ok(value) => value,
+                Err(error) => {
+                    self.data.insert(
+                        data_path,
+                        DataDefinition::Violated {
+                            reason: error.message().to_string(),
+                            source: data_source,
+                        },
+                    );
+                    continue;
+                }
+            };
 
             let size = literal_value.byte_size();
             if size > limits.max_data_value_bytes {
@@ -714,10 +821,16 @@ impl ExecutionPlan {
                 .with_related_data(&name));
             }
 
-            validate_value_against_type(&expected_type, &literal_value).map_err(|msg| {
-                Error::validation(msg, Some(data_source.clone()), None::<String>)
-                    .with_related_data(&name)
-            })?;
+            if let Err(msg) = validate_value_against_type(type_arc.as_ref(), &literal_value) {
+                self.data.insert(
+                    data_path,
+                    DataDefinition::Violated {
+                        reason: msg,
+                        source: data_source,
+                    },
+                );
+                continue;
+            }
 
             self.data.insert(
                 data_path,
@@ -751,7 +864,7 @@ impl ExecutionPlan {
                         DataDefinition::Value {
                             value: LiteralValue {
                                 value: dv.clone(),
-                                lemma_type: resolved_type.clone(),
+                                lemma_type: Arc::clone(resolved_type),
                             },
                             source: source.clone(),
                         },
@@ -843,42 +956,64 @@ pub(crate) fn validate_value_against_type(
                 units,
                 ..
             },
-            ValueKind::Quantity(magnitude, unit, _),
+            ValueKind::Quantity(magnitude, signature),
         ) => {
+            use crate::computation::rational::checked_div;
+            use crate::planning::semantics::quantity_declared_bound_canonical;
+            let unit = signature
+                .first()
+                .map(|(n, _)| n.as_str())
+                .expect("BUG: Quantity value has empty signature in execution plan validation");
+            let quantity_unit = units.get(unit)?;
+            let factor = &quantity_unit.factor;
+            let in_unit = checked_div(magnitude, factor).map_err(|failure| {
+                format!("cannot de-canonicalize quantity for validation: {failure}")
+            })?;
             if let Some(d) = decimals {
-                if exceeds_decimal_places(magnitude, *d) {
+                if exceeds_decimal_places(&in_unit, *d) {
                     return Err(format!(
                         "{} {unit} exceeds decimals constraint {d}",
-                        format_rational(magnitude, *decimals)
+                        format_rational(&in_unit, *decimals)
                     ));
                 }
             }
-            let quantity_unit = units.get(unit)?;
-            if minimum.is_some() {
-                let unit_minimum = quantity_unit.minimum.expect(
-                    "BUG: QuantityUnit.minimum missing after type minimum set by sync_quantity_units_from_canonical",
-                );
-                if magnitude < &unit_minimum {
+            if let Some(bound) = minimum {
+                let canonical_min = quantity_declared_bound_canonical(
+                    bound,
+                    units,
+                    expected_type.name().as_str(),
+                    "minimum",
+                )?;
+                if magnitude < &canonical_min {
+                    let min_in_unit = checked_div(&canonical_min, factor).map_err(|failure| {
+                        format!("cannot de-canonicalize minimum for validation: {failure}")
+                    })?;
                     let value_display =
-                        format!("{} {}", format_rational(magnitude, *decimals), unit);
+                        format!("{} {}", format_rational(&in_unit, *decimals), unit);
                     let bound_display = format!(
                         "{} {}",
-                        format_rational(&unit_minimum, *decimals),
+                        format_rational(&min_in_unit, *decimals),
                         quantity_unit.name
                     );
                     return Err(format!("{value_display} is below minimum {bound_display}"));
                 }
             }
-            if maximum.is_some() {
-                let unit_maximum = quantity_unit.maximum.expect(
-                    "BUG: QuantityUnit.maximum missing after type maximum set by sync_quantity_units_from_canonical",
-                );
-                if magnitude > &unit_maximum {
+            if let Some(bound) = maximum {
+                let canonical_max = quantity_declared_bound_canonical(
+                    bound,
+                    units,
+                    expected_type.name().as_str(),
+                    "maximum",
+                )?;
+                if magnitude > &canonical_max {
+                    let max_in_unit = checked_div(&canonical_max, factor).map_err(|failure| {
+                        format!("cannot de-canonicalize maximum for validation: {failure}")
+                    })?;
                     let value_display =
-                        format!("{} {}", format_rational(magnitude, *decimals), unit);
+                        format!("{} {}", format_rational(&in_unit, *decimals), unit);
                     let bound_display = format!(
                         "{} {}",
-                        format_rational(&unit_maximum, *decimals),
+                        format_rational(&max_in_unit, *decimals),
                         quantity_unit.name
                     );
                     return Err(format!("{value_display} is above maximum {bound_display}"));
@@ -1005,43 +1140,6 @@ pub(crate) fn validate_value_against_type(
             Ok(())
         }
         (
-            TypeSpecification::Calendar {
-                minimum, maximum, ..
-            },
-            ValueKind::Calendar(value, unit),
-        ) => {
-            let value_months = crate::computation::units::convert_calendar_magnitude(
-                *value,
-                unit,
-                &SemanticCalendarUnit::Month,
-            );
-            if let Some((min_val, min_unit)) = minimum {
-                let min_months = crate::computation::units::convert_calendar_magnitude(
-                    *min_val,
-                    min_unit,
-                    &SemanticCalendarUnit::Month,
-                );
-                if value_months < min_months {
-                    return Err(format!(
-                        "{value} {unit} is below minimum {min_val} {min_unit}"
-                    ));
-                }
-            }
-            if let Some((max_val, max_unit)) = maximum {
-                let max_months = crate::computation::units::convert_calendar_magnitude(
-                    *max_val,
-                    max_unit,
-                    &SemanticCalendarUnit::Month,
-                );
-                if value_months > max_months {
-                    return Err(format!(
-                        "{value} {unit} is above maximum {max_val} {max_unit}"
-                    ));
-                }
-            }
-            Ok(())
-        }
-        (
             TypeSpecification::Time {
                 minimum, maximum, ..
             },
@@ -1066,16 +1164,17 @@ pub(crate) fn validate_value_against_type(
         (TypeSpecification::Boolean { .. }, ValueKind::Boolean(_))
         | (TypeSpecification::NumberRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::DateRange { .. }, ValueKind::Range(_, _))
+        | (TypeSpecification::TimeRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::QuantityRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::RatioRange { .. }, ValueKind::Range(_, _))
-        | (TypeSpecification::CalendarRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::Veto { .. }, _)
         | (TypeSpecification::Undetermined, _) => Ok(()),
-        (spec, value_kind) => unreachable!(
+        (spec, value_kind) if !value_kind_matches_spec(value_kind, spec) => unreachable!(
             "BUG: validate_value_against_type called with mismatched type/value: \
              spec={:?}, value={:?} — typing must be enforced before validation",
             spec, value_kind
         ),
+        (_, _) => Ok(()),
     }
 }
 
@@ -1087,7 +1186,8 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
             DataDefinition::Value { value, .. } => (&value.lemma_type, value),
             DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Import { .. }
-            | DataDefinition::Reference { .. } => continue,
+            | DataDefinition::Reference { .. }
+            | DataDefinition::Violated { .. } => continue,
         };
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
@@ -1096,7 +1196,7 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
                 format!(
                     "Invalid value for data {} (expected {}): {}",
                     data_path,
-                    expected_type.name(),
+                    expected_type.name().as_str(),
                     msg
                 ),
                 Some(source),
@@ -1106,6 +1206,166 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
     }
 
     errors
+}
+
+fn collect_unit_conversion_targets(expression: &Expression, units: &mut BTreeSet<String>) {
+    use crate::planning::semantics::{ExpressionKind, SemanticConversionTarget};
+    match &expression.kind {
+        ExpressionKind::UnitConversion(inner, SemanticConversionTarget::Unit { unit_name }) => {
+            units.insert(unit_name.clone());
+            collect_unit_conversion_targets(inner, units);
+        }
+        ExpressionKind::UnitConversion(inner, SemanticConversionTarget::Type(_))
+        | ExpressionKind::LogicalNegation(inner, _)
+        | ExpressionKind::MathematicalComputation(_, inner)
+        | ExpressionKind::PastFutureRange(_, inner) => {
+            collect_unit_conversion_targets(inner, units);
+        }
+        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+            collect_unit_conversion_targets(left, units);
+            collect_unit_conversion_targets(right, units);
+        }
+        ExpressionKind::Arithmetic(left, _, right)
+        | ExpressionKind::Comparison(left, _, right)
+        | ExpressionKind::RangeLiteral(left, right)
+        | ExpressionKind::RangeContainment(left, right) => {
+            collect_unit_conversion_targets(left, units);
+            collect_unit_conversion_targets(right, units);
+        }
+        ExpressionKind::DateRelative(_, date_expr) => {
+            collect_unit_conversion_targets(date_expr, units);
+        }
+        ExpressionKind::DateCalendar(_, _, date_expr) => {
+            collect_unit_conversion_targets(date_expr, units);
+        }
+        ExpressionKind::ResultIsVeto(operand) => {
+            collect_unit_conversion_targets(operand, units);
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::DataPath(_)
+        | ExpressionKind::RulePath(_)
+        | ExpressionKind::Veto(_)
+        | ExpressionKind::Now => {}
+    }
+}
+
+pub(crate) fn validate_unit_index_references(plan: &ExecutionPlan) -> Result<(), Error> {
+    let mut required_units = BTreeSet::new();
+    for rule in &plan.rules {
+        for branch in &rule.normalized_branches {
+            collect_unit_conversion_targets(&branch.result, &mut required_units);
+            collect_unit_conversion_targets(&branch.condition, &mut required_units);
+        }
+    }
+    for unit_name in required_units {
+        if plan.resolved_types.unit_index.contains_key(&unit_name) {
+            continue;
+        }
+        return Err(Error::validation(
+            format!("Unknown unit '{unit_name}' in execution plan unit index."),
+            None::<Source>,
+            Some(plan.spec_name.clone()),
+        ));
+    }
+    Ok(())
+}
+
+/// The serializable form of an [`ExecutionPlan`].
+///
+/// `ExecutionPlan` itself is not `Serialize`/`Deserialize`: it contains derived
+/// runtime state (`signature_index`, `resolved_types.resolved`,
+/// `resolved_types.declared_defaults`) that is either recomputed on reconstruction
+/// or belongs to the planning phase only. This struct is the sole canonical
+/// representation for persistence and transport.
+///
+/// Convert via [`From<&ExecutionPlan>`] to serialize and [`TryFrom<ExecutionPlanSerialized>`]
+/// to reconstruct.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionPlanSerialized {
+    pub spec_name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub commentary: Option<String>,
+    #[serde(
+        serialize_with = "serialize_resolved_data_value_map",
+        deserialize_with = "deserialize_resolved_data_value_map"
+    )]
+    pub data: IndexMap<DataPath, DataDefinition>,
+    #[serde(default)]
+    pub rules: Vec<ExecutableRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference_evaluation_order: Vec<DataPath>,
+    #[serde(default)]
+    pub meta: HashMap<String, MetaValue>,
+    /// Only the unit index is persisted from `resolved_types`; the rest is
+    /// ephemeral planning state that is not needed after planning.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub unit_index: HashMap<String, Arc<LemmaType>>,
+    pub effective: EffectiveDate,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: SpecSources,
+}
+
+impl From<&ExecutionPlan> for ExecutionPlanSerialized {
+    fn from(plan: &ExecutionPlan) -> Self {
+        Self {
+            spec_name: plan.spec_name.clone(),
+            commentary: plan.commentary.clone(),
+            data: plan.data.clone(),
+            rules: plan.rules.clone(),
+            reference_evaluation_order: plan.reference_evaluation_order.clone(),
+            meta: plan.meta.clone(),
+            unit_index: plan.resolved_types.unit_index.clone(),
+            effective: plan.effective.clone(),
+            sources: plan.sources.clone(),
+        }
+    }
+}
+
+impl TryFrom<ExecutionPlanSerialized> for ExecutionPlan {
+    type Error = crate::Error;
+
+    fn try_from(serialized: ExecutionPlanSerialized) -> Result<Self, Self::Error> {
+        let signature_index = crate::planning::graph::build_signature_index(
+            &serialized.spec_name,
+            &serialized.unit_index,
+        )?;
+        Ok(Self {
+            spec_name: serialized.spec_name,
+            commentary: serialized.commentary,
+            data: serialized.data,
+            rules: serialized.rules,
+            reference_evaluation_order: serialized.reference_evaluation_order,
+            meta: serialized.meta,
+            resolved_types: ResolvedSpecTypes {
+                unit_index: serialized.unit_index,
+                ..ResolvedSpecTypes::default()
+            },
+            signature_index,
+            effective: serialized.effective,
+            sources: serialized.sources,
+        })
+    }
+}
+
+fn serialize_resolved_data_value_map<S>(
+    map: &IndexMap<DataPath, DataDefinition>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let entries: Vec<(&DataPath, &DataDefinition)> = map.iter().collect();
+    entries.serialize(serializer)
+}
+
+fn deserialize_resolved_data_value_map<'de, D>(
+    deserializer: D,
+) -> Result<IndexMap<DataPath, DataDefinition>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let entries: Vec<(DataPath, DataDefinition)> = Vec::deserialize(deserializer)?;
+    Ok(entries.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -1125,10 +1385,18 @@ mod tests {
         ResourceLimits::default()
     }
 
-    fn json_data(pairs: &[(&str, &str)]) -> HashMap<String, serde_json::Value> {
+    fn roundtrip_execution_plan(plan: &ExecutionPlan) -> ExecutionPlan {
+        let serialized = ExecutionPlanSerialized::from(plan);
+        let json = serde_json::to_string(&serialized).expect("Should serialize");
+        let back: ExecutionPlanSerialized =
+            serde_json::from_str(&json).expect("Should deserialize");
+        ExecutionPlan::try_from(back).expect("Should reconstruct")
+    }
+
+    fn input_data(pairs: &[(&str, &str)]) -> HashMap<String, DataValueInput> {
         pairs
             .iter()
-            .map(|(k, v)| (k.to_string(), serde_json::Value::String((*v).to_string())))
+            .map(|(k, v)| (k.to_string(), DataValueInput::convenience(*v)))
             .collect()
     }
 
@@ -1151,7 +1419,7 @@ mod tests {
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
         let data_path = DataPath::new(vec![], "age".to_string());
 
-        let values = json_data(&[("age", "30")]);
+        let values = input_data(&[("age", "30")]);
 
         let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
         let updated_value = updated_plan.get_data_value(&data_path).unwrap();
@@ -1181,9 +1449,19 @@ mod tests {
         let now = DateTimeValue::now();
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
-        let values = json_data(&[("age", "thirty")]);
+        let values = input_data(&[("age", "thirty")]);
 
-        assert!(plan.set_data_values(values, &default_limits()).is_err());
+        let updated = plan.set_data_values(values, &default_limits()).unwrap();
+        let data_path = DataPath::new(vec![], "age".to_string());
+        match updated.data.get(&data_path) {
+            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+                assert!(
+                    reason.contains("number"),
+                    "type mismatch must record violation reason, got: {reason}"
+                );
+            }
+            other => panic!("expected Violated data for age=thirty, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -1204,7 +1482,7 @@ mod tests {
         let now = DateTimeValue::now();
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
-        let values = json_data(&[("unknown", "30")]);
+        let values = input_data(&[("unknown", "30")]);
 
         assert!(plan.set_data_values(values, &default_limits()).is_err());
     }
@@ -1230,7 +1508,7 @@ mod tests {
         let now = DateTimeValue::now();
         let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
 
-        let values = json_data(&[("rules.base_price", "100")]);
+        let values = input_data(&[("rules.base_price", "100")]);
 
         let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
         let data_path = DataPath {
@@ -1317,7 +1595,7 @@ mod tests {
             crate::planning::semantics::DataDefinition::Value {
                 value: crate::planning::semantics::LiteralValue::number_with_type(
                     0.into(),
-                    max10.clone(),
+                    Arc::new(max10.clone()),
                 ),
                 source: source.clone(),
             },
@@ -1325,21 +1603,29 @@ mod tests {
 
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let values = json_data(&[("x", "11")]);
+        let values = input_data(&[("x", "11")]);
 
-        assert!(
-            plan.set_data_values(values, &default_limits()).is_err(),
-            "Providing x=11 should fail due to maximum 10"
-        );
+        let updated = plan.set_data_values(values, &default_limits()).unwrap();
+        match updated.data.get(&data_path) {
+            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+                assert!(
+                    reason.contains("maximum") || reason.contains("10"),
+                    "x=11 must violate maximum 10, got: {reason}"
+                );
+            }
+            other => panic!("expected Violated data for x=11, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -1369,7 +1655,7 @@ mod tests {
             crate::planning::semantics::DataDefinition::Value {
                 value: crate::planning::semantics::LiteralValue::text_with_type(
                     "silver".to_string(),
-                    tier.clone(),
+                    Arc::new(tier.clone()),
                 ),
                 source,
             },
@@ -1377,21 +1663,29 @@ mod tests {
 
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let values = json_data(&[("tier", "platinum")]);
+        let values = input_data(&[("tier", "platinum")]);
 
-        assert!(
-            plan.set_data_values(values, &default_limits()).is_err(),
-            "Invalid enum value should be rejected (tier='platinum')"
-        );
+        let updated = plan.set_data_values(values, &default_limits()).unwrap();
+        match updated.data.get(&data_path) {
+            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+                assert!(
+                    reason.contains("allowed options") || reason.contains("platinum"),
+                    "invalid enum must record violation, got: {reason}"
+                );
+            }
+            other => panic!("expected Violated data for tier=platinum, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -1414,8 +1708,7 @@ mod tests {
                     .expect("eur unit factor must be exact decimal"),
                 ]),
                 traits: Vec::new(),
-                decomposition: crate::literals::BaseQuantityVector::new(),
-                canonical_unit: "eur".to_string(),
+                decomposition: None,
                 help: String::new(),
             },
         );
@@ -1435,7 +1728,7 @@ mod tests {
                 value: crate::planning::semantics::LiteralValue::quantity_with_type(
                     rational_zero(),
                     "eur".to_string(),
-                    money.clone(),
+                    Arc::new(money.clone()),
                 ),
                 source,
             },
@@ -1443,21 +1736,29 @@ mod tests {
 
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let values = json_data(&[("price", "1.234 eur")]);
+        let values = input_data(&[("price", "1.234 eur")]);
 
-        assert!(
-            plan.set_data_values(values, &default_limits()).is_err(),
-            "Quantity decimals=2 should reject 1.234 eur"
-        );
+        let updated = plan.set_data_values(values, &default_limits()).unwrap();
+        match updated.data.get(&data_path) {
+            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+                assert!(
+                    reason.contains("decimals") || reason.contains("decimal"),
+                    "1.234 eur must violate decimals=2, got: {reason}"
+                );
+            }
+            other => panic!("expected Violated data for price=1.234 eur, got: {other:?}"),
+        }
     }
 
     #[test]
@@ -1476,17 +1777,18 @@ mod tests {
         );
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.spec_name, plan.spec_name);
         assert_eq!(deserialized.data.len(), plan.data.len());
@@ -1513,7 +1815,7 @@ mod tests {
         data.insert(
             salary_path,
             crate::planning::semantics::DataDefinition::TypeDeclaration {
-                resolved_type: imported_type,
+                resolved_type: Arc::new(imported_type),
                 declared_default: None,
                 source: test_source(),
             },
@@ -1521,17 +1823,18 @@ mod tests {
 
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         let recovered = deserialized
             .data
@@ -1567,11 +1870,13 @@ mod tests {
         );
         let mut plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1581,30 +1886,40 @@ mod tests {
             name: "can_drive".to_string(),
             branches: vec![{
                 let result = create_literal_expr(create_boolean_literal(true));
+                let condition = Expression::new(
+                    ExpressionKind::Comparison(
+                        Arc::new(create_data_path_expr(age_path.clone())),
+                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
+                    ),
+                    test_source(),
+                );
                 Branch {
-                    condition: Some(Expression::new(
-                        ExpressionKind::Comparison(
-                            Arc::new(create_data_path_expr(age_path.clone())),
-                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                            Arc::new(create_literal_expr(create_number_literal(18.into()))),
-                        ),
-                        test_source(),
-                    )),
-                    normalized_condition: None,
+                    condition: Some(condition.clone()),
                     result: result.clone(),
-                    normalized_result: result,
                     source: test_source(),
                 }
             }],
+            normalized_branches: vec![{
+                let result = create_literal_expr(create_boolean_literal(true));
+                let condition = Expression::new(
+                    ExpressionKind::Comparison(
+                        Arc::new(create_data_path_expr(age_path.clone())),
+                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
+                    ),
+                    test_source(),
+                );
+                NormalizedBranch { condition, result }
+            }],
             needs_data: BTreeSet::from([age_path]),
             source: test_source(),
-            rule_type: primitive_boolean().clone(),
+            rule_type: Arc::new(primitive_boolean().clone()),
         };
 
         plan.rules.push(rule);
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.spec_name, plan.spec_name);
         assert_eq!(deserialized.data.len(), plan.data.len());
@@ -1635,17 +1950,18 @@ mod tests {
         );
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.data.len(), 1);
         let (deserialized_path, _) = deserialized.data.iter().next().unwrap();
@@ -1685,17 +2001,18 @@ mod tests {
 
         let plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.data.len(), 3);
 
@@ -1728,11 +2045,13 @@ mod tests {
         );
         let mut plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1745,9 +2064,7 @@ mod tests {
                     let result = create_literal_expr(create_text_literal("bronze".to_string()));
                     Branch {
                         condition: None,
-                        normalized_condition: None,
                         result: result.clone(),
-                        normalized_result: result,
                         source: test_source(),
                     }
                 },
@@ -1762,9 +2079,7 @@ mod tests {
                             ),
                             test_source(),
                         )),
-                        normalized_condition: None,
                         result: result.clone(),
-                        normalized_result: result,
                         source: test_source(),
                     }
                 },
@@ -1779,22 +2094,33 @@ mod tests {
                             ),
                             test_source(),
                         )),
-                        normalized_condition: None,
                         result: result.clone(),
-                        normalized_result: result,
                         source: test_source(),
                     }
                 },
             ],
+            normalized_branches: vec![
+                NormalizedBranch {
+                    condition: create_literal_expr(create_boolean_literal(true)),
+                    result: create_literal_expr(create_text_literal("bronze".to_string())),
+                },
+                NormalizedBranch {
+                    condition: create_literal_expr(create_boolean_literal(true)),
+                    result: create_literal_expr(create_text_literal("silver".to_string())),
+                },
+                NormalizedBranch {
+                    condition: create_literal_expr(create_boolean_literal(true)),
+                    result: create_literal_expr(create_text_literal("gold".to_string())),
+                },
+            ],
             needs_data: BTreeSet::from([points_path]),
             source: test_source(),
-            rule_type: primitive_text().clone(),
+            rule_type: Arc::new(primitive_text().clone()),
         };
 
         plan.rules.push(rule);
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.rules.len(), 1);
         assert_eq!(deserialized.rules[0].branches.len(), 3);
@@ -1807,17 +2133,18 @@ mod tests {
     fn test_serialize_deserialize_empty_plan() {
         let plan = ExecutionPlan {
             spec_name: "empty".to_string(),
+            commentary: None,
             data: IndexMap::new(),
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.spec_name, "empty");
         assert_eq!(deserialized.data.len(), 0);
@@ -1839,11 +2166,13 @@ mod tests {
         );
         let mut plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1862,21 +2191,32 @@ mod tests {
                 );
                 Branch {
                     condition: None,
-                    normalized_condition: None,
                     result: result.clone(),
-                    normalized_result: result,
                     source: test_source(),
+                }
+            }],
+            normalized_branches: vec![{
+                let result = Expression::new(
+                    ExpressionKind::Arithmetic(
+                        Arc::new(create_data_path_expr(x_path.clone())),
+                        crate::parsing::ast::ArithmeticComputation::Multiply,
+                        Arc::new(create_literal_expr(create_number_literal(2.into()))),
+                    ),
+                    test_source(),
+                );
+                NormalizedBranch {
+                    condition: create_literal_expr(create_boolean_literal(true)),
+                    result,
                 }
             }],
             needs_data: BTreeSet::from([x_path]),
             source: test_source(),
-            rule_type: crate::planning::semantics::primitive_number().clone(),
+            rule_type: Arc::new(crate::planning::semantics::primitive_number().clone()),
         };
 
         plan.rules.push(rule);
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
+        let deserialized = roundtrip_execution_plan(&plan);
 
         assert_eq!(deserialized.rules.len(), 1);
         match &deserialized.rules[0].branches[0].result.kind {
@@ -1910,11 +2250,13 @@ mod tests {
         );
         let mut plan = ExecutionPlan {
             spec_name: "test".to_string(),
+            commentary: None,
             data,
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
             sources: Vec::new(),
         };
@@ -1924,34 +2266,41 @@ mod tests {
             name: "is_adult".to_string(),
             branches: vec![{
                 let result = create_literal_expr(create_boolean_literal(true));
+                let condition = Expression::new(
+                    ExpressionKind::Comparison(
+                        Arc::new(create_data_path_expr(age_path.clone())),
+                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
+                    ),
+                    test_source(),
+                );
                 Branch {
-                    condition: Some(Expression::new(
-                        ExpressionKind::Comparison(
-                            Arc::new(create_data_path_expr(age_path.clone())),
-                            crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                            Arc::new(create_literal_expr(create_number_literal(18.into()))),
-                        ),
-                        test_source(),
-                    )),
-                    normalized_condition: None,
+                    condition: Some(condition.clone()),
                     result: result.clone(),
-                    normalized_result: result,
                     source: test_source(),
                 }
             }],
+            normalized_branches: vec![{
+                let result = create_literal_expr(create_boolean_literal(true));
+                let condition = Expression::new(
+                    ExpressionKind::Comparison(
+                        Arc::new(create_data_path_expr(age_path.clone())),
+                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
+                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
+                    ),
+                    test_source(),
+                );
+                NormalizedBranch { condition, result }
+            }],
             needs_data: BTreeSet::from([age_path]),
             source: test_source(),
-            rule_type: primitive_boolean().clone(),
+            rule_type: Arc::new(primitive_boolean().clone()),
         };
 
         plan.rules.push(rule);
 
-        let json = serde_json::to_string(&plan).expect("Should serialize");
-        let deserialized: ExecutionPlan = serde_json::from_str(&json).expect("Should deserialize");
-
-        let json2 = serde_json::to_string(&deserialized).expect("Should serialize again");
-        let deserialized2: ExecutionPlan =
-            serde_json::from_str(&json2).expect("Should deserialize again");
+        let deserialized = roundtrip_execution_plan(&plan);
+        let deserialized2 = roundtrip_execution_plan(&deserialized);
 
         assert_eq!(deserialized2.spec_name, plan.spec_name);
         assert_eq!(deserialized2.data.len(), plan.data.len());
@@ -1966,11 +2315,13 @@ mod tests {
     fn empty_plan(effective: crate::parsing::ast::EffectiveDate) -> ExecutionPlan {
         ExecutionPlan {
             spec_name: "s".into(),
+            commentary: None,
             data: IndexMap::new(),
             rules: Vec::new(),
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
-            unit_index: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
             effective,
             sources: Vec::new(),
         }

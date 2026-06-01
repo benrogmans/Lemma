@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, Error, ResourceLimits};
 use std::time::Instant;
 
@@ -145,14 +145,7 @@ fn test_data_value_size_limit() {
     data.insert("name".to_string(), large_string);
 
     let now = DateTimeValue::now();
-    let result = engine.run(
-        None,
-        "test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    );
+    let result = engine.run(None, "test", Some(&now), data, false);
 
     match result {
         Err(Error::ResourceLimitExceeded { ref limit_name, .. }) => {
@@ -174,7 +167,7 @@ fn find_resource_limit_name(errors: &[Error]) -> Option<String> {
 
 #[test]
 fn spec_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_SPEC_NAME_LENGTH + 1);
+    let name = "a".repeat(lemma::MAX_SPEC_NAME_LENGTH + 1);
     let code = format!("spec {name}\ndata x: 1");
     let mut engine = Engine::default();
     let result = engine.load(&code, lemma::SourceType::Volatile);
@@ -186,7 +179,7 @@ fn spec_name_exceeding_max_length_is_rejected() {
 
 #[test]
 fn data_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_DATA_NAME_LENGTH + 1);
+    let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code = format!("spec test\ndata {name}: 1");
     let mut engine = Engine::default();
     let result = engine.load(&code, lemma::SourceType::Volatile);
@@ -198,7 +191,7 @@ fn data_name_exceeding_max_length_is_rejected() {
 
 #[test]
 fn data_binding_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_DATA_NAME_LENGTH + 1);
+    let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code = format!("spec test\ndata other.{name}: 1");
     let mut engine = Engine::default();
     let result = engine.load(&code, lemma::SourceType::Volatile);
@@ -210,7 +203,7 @@ fn data_binding_name_exceeding_max_length_is_rejected() {
 
 #[test]
 fn rule_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_RULE_NAME_LENGTH + 1);
+    let name = "a".repeat(lemma::MAX_RULE_NAME_LENGTH + 1);
     let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
     let result = engine.load(&code, lemma::SourceType::Volatile);
@@ -222,7 +215,7 @@ fn rule_name_exceeding_max_length_is_rejected() {
 
 #[test]
 fn data_type_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_DATA_NAME_LENGTH + 1);
+    let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code = format!("spec test\ndata {name}: number\ndata x: 1");
     let mut engine = Engine::default();
     let result = engine.load(&code, lemma::SourceType::Volatile);
@@ -234,7 +227,7 @@ fn data_type_name_exceeding_max_length_is_rejected() {
 
 #[test]
 fn data_import_name_exceeding_max_length_is_rejected() {
-    let name = "a".repeat(lemma::limits::MAX_DATA_NAME_LENGTH + 1);
+    let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code =
         format!("spec other\ndata v: number\n\nspec test\nuses {name}: other\ndata x: number");
     let mut engine = Engine::default();
@@ -342,20 +335,13 @@ fn performance_test_10k_rules() {
     let now = DateTimeValue::now();
     let eval_start = Instant::now();
     let resp = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
     let eval_time = eval_start.elapsed();
 
     eprintln!(
         "{num_rules:>6} rules ({nodes:>7} nodes, {bytes:>8} bytes): parse+plan {elapsed:>8.2?}  eval {eval_time:>8.2?}  result={:?}",
-        resp.results[0].result
+        resp.results[0].display
     );
 
     // Assert that the test takes less than 10 seconds
@@ -444,20 +430,13 @@ fn bench_deep_chains_body() {
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
         let resp = engine
-            .run(
-                None,
-                "chain",
-                Some(&now),
-                HashMap::new(),
-                false,
-                lemma::EvaluationRequest::default(),
-            )
+            .run(None, "chain", Some(&now), HashMap::new(), false)
             .unwrap();
         let eval_time = eval_start.elapsed();
 
         eprintln!(
             "chain {num_rules:>6} rules (~{est_nodes:>6} nodes): parse+plan {elapsed:>8.2?}  eval {eval_time:>8.2?}  result={:?}",
-            resp.results[0].result
+            resp.results[0].display
         );
     }
 
@@ -489,20 +468,13 @@ fn bench_deep_chains_body() {
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
         let resp = engine
-            .run(
-                None,
-                "tree",
-                Some(&now),
-                HashMap::new(),
-                false,
-                lemma::EvaluationRequest::default(),
-            )
+            .run(None, "tree", Some(&now), HashMap::new(), false)
             .unwrap();
         let eval_time = eval_start.elapsed();
 
         eprintln!(
             "tree  {total_rules:>6} rules (depth {depth:>2}, ~{est_nodes:>6} nodes): parse+plan {elapsed:>8.2?}  eval {eval_time:>8.2?}  result={:?}",
-            resp.results[0].result
+            resp.results[0].display
         );
     }
 }

@@ -86,7 +86,7 @@ jobs:
             Or install from source:
 
             ```bash
-            cargo install lemma-cli@${{ needs.detect-version-changes.outputs.version }}
+            cargo install lemma@${{ needs.detect-version-changes.outputs.version }}
             ```
 
             Or use the library in your Rust project:
@@ -147,9 +147,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.use-cross }}" == "true" ]; then
-            cross build --release -p lemma-cli --target ${{ matrix.target }}
+            cross build --release -p lemma --target ${{ matrix.target }}
           else
-            cargo build --release -p lemma-cli --target ${{ matrix.target }}
+            cargo build --release -p lemma --target ${{ matrix.target }}
           fi
 
       - name: Verify static Linux binary
@@ -280,8 +280,8 @@ jobs:
       - name: Wait for crates.io index
         run: sleep 30
 
-      - name: Publish lemma-cli
-        run: cargo publish -p lemma-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish lemma
+        run: cargo publish -p lemma --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   publish-npm:
     name: Publish to npm
