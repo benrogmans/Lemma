@@ -6,12 +6,12 @@ This package provides the `lemma` CLI for running, inspecting, and serving Lemma
 
 ## Status
 
-Lemma is still early-stage and **not yet recommended for production use**. Expect breaking changes and evolving commands while the toolchain stabilizes.
+Lemma is pre-1.0. The CLI is stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
 
 ## Installation
 
 ```bash
-cargo install lemma-cli
+cargo install lemma
 ```
 
 After installation the `lemma` binary is available on your PATH.
@@ -34,16 +34,16 @@ lemma run --interactive
 # Show spec structure
 lemma schema pricing
 
-# List workspace entry-point specs (+ loaded repos); from cwd, drill into a repo:
+# List loaded specs grouped by repository
 lemma list
-lemma list '@lemma/std'
-lemma list ./my_project spec_composition
+lemma list --prefix ./my_project
+lemma list --json
 
 # Start the HTTP server
-lemma server ./documentation/examples --port 8012
+lemma server --prefix ./documentation/examples --port 8012
 
 # Start the MCP server (AI assistant integration)
-lemma mcp ./documentation/examples
+lemma mcp --prefix ./documentation/examples
 ```
 
 Each command supports `--help` for full usage details.
@@ -54,7 +54,7 @@ Each command supports `--help` for full usage details.
 - **Interactive mode** – select specs, rules, and data without typing full paths
 - **HTTP server** – evaluate specs over REST, perfect for integration tests and dashboards
 - **MCP server** – expose Lemma to AI assistants via the Model Context Protocol
-- **Machine-readable output** – `--raw` flag for tooling and pipelines
+- **Machine-readable output** – `--json` flag for tooling and pipelines
 
 ## Example session
 
@@ -73,7 +73,7 @@ lemma run shipping
 Enable raw mode to pipe results:
 
 ```bash
-lemma run shipping --raw > output.json
+lemma run shipping --json > output.json
 ```
 
 ## Documentation

@@ -5,21 +5,15 @@
 
 // Re-exported parsing types: downstream modules (evaluation, inversion, computation,
 // serialization) import these from `planning::semantics`, never from `parsing` directly.
+#[cfg(test)]
+pub use crate::parsing::ast::Span;
 pub use crate::parsing::ast::{
-    ArithmeticComputation, ComparisonComputation, MathematicalComputation, NegationType, Span,
-    VetoExpression,
+    ArithmeticComputation, ComparisonComputation, LogicalComputation, MathematicalComputation,
+    NegationType, VetoExpression,
 };
 pub use crate::parsing::source::Source;
 
 /// Logical computation operators (defined in semantics, not used by the parser).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogicalComputation {
-    And,
-    Or,
-    Not,
-}
-
 /// Returns the logical negation of a comparison (for displaying conditions as true in explanations).
 #[must_use]
 pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
@@ -34,10 +28,10 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
 }
 
 // Internal-only parsing imports (used only within this module for value/type resolution).
-use crate::computation::rational::RationalInteger;
+use crate::computation::rational::{checked_div, checked_mul, RationalInteger};
 use crate::parsing::ast::Constraint;
 use crate::parsing::ast::{
-    BooleanValue, CalendarPeriodUnit, CalendarUnit, CommandArg, ConversionTarget, DateCalendarKind,
+    BooleanValue, CalendarPeriodUnit, CommandArg, ConversionTarget, DateCalendarKind,
     DateRelativeKind, DateTimeValue, LemmaSpec, PrimitiveKind, TimeValue, TypeConstraintCommand,
 };
 use crate::Error;
@@ -76,6 +70,149 @@ pub fn combine_decompositions(
     result
 }
 
+/// Combine two symbolic unit signatures (sorted-by-unit-name, no-zero-exponent vectors)
+/// under multiplication or division. The result is in canonical form: sorted by unit name
+/// ascending, no zero exponents.
+pub fn combine_signatures(
+    left: &[(String, i32)],
+    right: &[(String, i32)],
+    is_multiply: bool,
+) -> Vec<(String, i32)> {
+    use std::collections::BTreeMap;
+    let mut accumulator: BTreeMap<String, i32> = BTreeMap::new();
+    for (name, exponent) in left {
+        *accumulator.entry(name.clone()).or_insert(0) += exponent;
+    }
+    for (name, exponent) in right {
+        let delta = if is_multiply { *exponent } else { -*exponent };
+        *accumulator.entry(name.clone()).or_insert(0) += delta;
+    }
+    accumulator
+        .into_iter()
+        .filter(|(_, exponent)| *exponent != 0)
+        .collect()
+}
+
+/// Canonicalize a unit signature: sum duplicate entries by name, drop zero exponents,
+/// sort ascending by unit name. Idempotent.
+/// Format a canonical unit signature into human-readable operator style.
+///
+/// Rules:
+/// - Numerator units (positive exponents) sorted alphabetically, joined by `*`.
+/// - Denominator units (negative exponents) sorted alphabetically, joined by `*`, exponents shown
+///   as positive values.
+/// - Separated by `/`. Empty numerator: `1/<denominator>`. No denominator: numerator only.
+/// - Exponents > 1 suffixed as `^n`.
+///
+/// Examples: `eur/hour`, `kilogram*meter^2/second^2`, `1/meter`.
+pub fn format_signature_operator_style(signature: &[(String, i32)]) -> String {
+    let canonical = canonicalize_signature(signature);
+    let mut numerator: Vec<(String, i32)> = Vec::new();
+    let mut denominator: Vec<(String, i32)> = Vec::new();
+    for (name, exponent) in canonical {
+        if exponent > 0 {
+            numerator.push((name, exponent));
+        } else if exponent < 0 {
+            denominator.push((name, -exponent));
+        }
+    }
+    let render = |terms: &[(String, i32)]| -> String {
+        terms
+            .iter()
+            .map(|(name, exp)| {
+                if *exp == 1 {
+                    name.clone()
+                } else {
+                    format!("{name}^{exp}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("*")
+    };
+    match (numerator.is_empty(), denominator.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => render(&numerator),
+        (true, false) => format!("1/{}", render(&denominator)),
+        (false, false) => format!("{}/{}", render(&numerator), render(&denominator)),
+    }
+}
+
+/// Returns the intra-calendar-dimension factor for `name`, if it is a known calendar unit.
+///
+/// Month is canonical (factor 1). Year = 12.
+/// Keys are **singular** (`"month"`, `"year"`).
+///
+/// Returns `None` for names that are not calendar units.
+pub fn calendar_unit_factor(name: &str) -> Option<crate::computation::rational::RationalInteger> {
+    use crate::computation::rational::{rational_one, RationalInteger};
+    match name {
+        "month" | "months" => Some(rational_one()),
+        "year" | "years" => Some(RationalInteger::new(12, 1)),
+        _ => None,
+    }
+}
+
+fn owner_declares_quantity_unit(owner: &LemmaType, unit_name: &str) -> bool {
+    owner
+        .quantity_unit_names()
+        .is_some_and(|names| names.contains(&unit_name))
+}
+
+/// Compute the numeric factor of a symbolic unit signature relative to canonical bases.
+///
+/// For each `(unit_name, exponent)` in `signature`:
+/// 1. When `owner` declares the unit, use `owner.quantity_unit_factor(unit_name)`.
+/// 2. Fall back to `expression_units[unit_name].quantity_unit_factor(unit_name)`.
+/// 3. Unknown names panic with `"BUG: signature_factor called with unresolved unit name"`.
+///
+/// Returns the product of `factor^exponent` over all pairs.
+pub fn signature_factor(
+    signature: &[(String, i32)],
+    expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
+    owner: Option<&LemmaType>,
+) -> crate::computation::rational::RationalInteger {
+    use crate::computation::rational::{checked_div, checked_mul, rational_one};
+    let mut acc = rational_one();
+    for (name, exponent) in signature {
+        let factor =
+            if let Some(owner) = owner.filter(|owner| owner_declares_quantity_unit(owner, name)) {
+                *owner.quantity_unit_factor(name)
+            } else if let Some(lemma_type) = expression_units.get(name) {
+                *lemma_type.quantity_unit_factor(name)
+            } else {
+                panic!(
+                    "BUG: signature_factor called with unresolved unit name '{}'",
+                    name
+                );
+            };
+        let mut term = rational_one();
+        let abs_exp = exponent.unsigned_abs();
+        for _ in 0..abs_exp {
+            term = checked_mul(&term, &factor)
+                .expect("BUG: signature_factor overflow during exponent expansion");
+        }
+        if *exponent >= 0 {
+            acc = checked_mul(&acc, &term)
+                .expect("BUG: signature_factor overflow during multiplication");
+        } else {
+            acc = checked_div(&acc, &term).expect("BUG: signature_factor overflow during division");
+        }
+    }
+    acc
+}
+
+pub fn canonicalize_signature(signature: &[(String, i32)]) -> Vec<(String, i32)> {
+    use std::collections::BTreeMap;
+    let mut accumulator: BTreeMap<String, i32> = BTreeMap::new();
+    for (name, exponent) in signature {
+        *accumulator.entry(name.clone()).or_insert(0) += exponent;
+    }
+    accumulator
+        .into_iter()
+        .filter(|(_, exponent)| *exponent != 0)
+        .collect()
+}
+
 pub const DURATION_DIMENSION: &str = "duration";
 pub const CALENDAR_DIMENSION: &str = "calendar";
 
@@ -83,6 +220,7 @@ pub const CALENDAR_DIMENSION: &str = "calendar";
 #[serde(rename_all = "snake_case")]
 pub enum QuantityTrait {
     Duration,
+    Calendar,
 }
 
 pub fn duration_decomposition() -> BaseQuantityVector {
@@ -95,6 +233,19 @@ pub fn calendar_decomposition() -> BaseQuantityVector {
     [(CALENDAR_DIMENSION.to_string(), 1i32)]
         .into_iter()
         .collect()
+}
+
+/// Marker `LemmaType` for a Quantity value whose signature has not been resolved to
+/// a named quantity type. Carries an empty decomposition; the value's own signature
+/// (on `ValueKind::Quantity`) is authoritative for arithmetic and display.
+pub fn anonymous_quantity_type() -> LemmaType {
+    LemmaType::anonymous_for_decomposition(BaseQuantityVector::new())
+}
+
+/// Return a copy of `signature` with every exponent negated. Used by Number/Quantity
+/// reciprocal construction (`1 / Q`).
+pub fn negate_signature(signature: &[(String, i32)]) -> Vec<(String, i32)> {
+    signature.iter().map(|(n, e)| (n.clone(), -*e)).collect()
 }
 
 mod stored_quantity_declared_bound_serde {
@@ -137,47 +288,6 @@ mod stored_quantity_declared_bound_serde {
     }
 }
 
-mod stored_calendar_bound_serde {
-    use super::{RationalInteger, SemanticCalendarUnit};
-    use crate::computation::rational::commit_rational_to_decimal;
-    use rust_decimal::Decimal;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    fn lift(decimal: Decimal) -> Result<RationalInteger, String> {
-        crate::computation::rational::decimal_to_rational(decimal)
-            .map_err(|failure| failure.to_string())
-    }
-
-    pub mod option {
-        use super::*;
-
-        pub fn serialize<S: Serializer>(
-            value: &Option<(RationalInteger, SemanticCalendarUnit)>,
-            serializer: S,
-        ) -> Result<S::Ok, S::Error> {
-            match value {
-                None => serializer.serialize_none(),
-                Some((magnitude, unit)) => {
-                    let decimal =
-                        commit_rational_to_decimal(magnitude).map_err(serde::ser::Error::custom)?;
-                    (decimal, unit).serialize(serializer)
-                }
-            }
-        }
-
-        pub fn deserialize<'de, D: Deserializer<'de>>(
-            deserializer: D,
-        ) -> Result<Option<(RationalInteger, SemanticCalendarUnit)>, D::Error> {
-            let parsed: Option<(Decimal, SemanticCalendarUnit)> =
-                Option::deserialize(deserializer)?;
-            parsed
-                .map(|(decimal, unit)| lift(decimal).map(|magnitude| (magnitude, unit)))
-                .transpose()
-                .map_err(serde::de::Error::custom)
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum TypeSpecification {
@@ -194,14 +304,11 @@ pub enum TypeSpecification {
         #[serde(default)]
         traits: Vec<QuantityTrait>,
         /// Common dimensional decomposition vector shared by all units in this quantity.
-        /// Empty until the decomposition pass runs. Base quantities (no compound unit expression)
-        /// are assigned `{quantity_name: 1}` by the pass.
+        /// `None` until the decomposition pass runs. Base quantities (no compound unit expression)
+        /// are assigned `Some({quantity_name: 1})` by the pass. `Some(empty_map)` means resolved
+        /// to dimensionless (e.g. `kg/kg`).
         #[serde(default)]
-        decomposition: BaseQuantityVector,
-        /// Name of the canonical unit (the one with `value == 1`). Empty until the
-        /// decomposition pass validates and assigns it. Must be exactly one such unit.
-        #[serde(default)]
-        canonical_unit: String,
+        decomposition: Option<BaseQuantityVector>,
         help: String,
     },
     Number {
@@ -246,22 +353,13 @@ pub enum TypeSpecification {
         maximum: Option<TimeValue>,
         help: String,
     },
-    Calendar {
-        #[serde(with = "stored_calendar_bound_serde::option", default)]
-        minimum: Option<(RationalInteger, SemanticCalendarUnit)>,
-        #[serde(with = "stored_calendar_bound_serde::option", default)]
-        maximum: Option<(RationalInteger, SemanticCalendarUnit)>,
-        help: String,
-    },
-    CalendarRange {
+    TimeRange {
         help: String,
     },
     QuantityRange {
         units: QuantityUnits,
         #[serde(default)]
-        decomposition: BaseQuantityVector,
-        #[serde(default)]
-        canonical_unit: String,
+        decomposition: Option<BaseQuantityVector>,
         help: String,
     },
     Veto {
@@ -271,6 +369,49 @@ pub enum TypeSpecification {
     /// Propagates through expressions without generating cascading errors.
     /// Must never appear in a successfully validated graph or execution plan.
     Undetermined,
+}
+
+impl std::fmt::Display for TypeSpecification {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            Self::Boolean { .. } => "boolean",
+            Self::Quantity { .. } => "quantity",
+            Self::QuantityRange { .. } => "quantity range",
+            Self::Number { .. } => "number",
+            Self::NumberRange { .. } => "number range",
+            Self::Text { .. } => "text",
+            Self::Date { .. } => "date",
+            Self::DateRange { .. } => "date range",
+            Self::Time { .. } => "time",
+            Self::TimeRange { .. } => "time range",
+            Self::Ratio { .. } => "ratio",
+            Self::RatioRange { .. } => "ratio range",
+            Self::Veto { .. } => "veto",
+            Self::Undetermined => "undetermined",
+        };
+        f.write_str(label)
+    }
+}
+
+impl TypeSpecification {
+    /// Returns the help text associated with this type, or an empty string if none.
+    pub fn help(&self) -> &str {
+        match self {
+            Self::Boolean { help, .. }
+            | Self::Quantity { help, .. }
+            | Self::Number { help, .. }
+            | Self::NumberRange { help, .. }
+            | Self::Text { help, .. }
+            | Self::Date { help, .. }
+            | Self::DateRange { help, .. }
+            | Self::Time { help, .. }
+            | Self::TimeRange { help, .. }
+            | Self::Ratio { help, .. }
+            | Self::RatioRange { help, .. }
+            | Self::QuantityRange { help, .. } => help.as_str(),
+            Self::Veto { .. } | Self::Undetermined => "",
+        }
+    }
 }
 
 /// Extract a typed [`Value`] from the first `CommandArg`, requiring `Literal` shape.
@@ -311,13 +452,6 @@ fn apply_type_help_command(help: &mut String, args: &[CommandArg]) -> Result<(),
     }
 }
 
-fn calendar_unit_singular_label(unit: &crate::literals::CalendarUnit) -> &'static str {
-    match unit {
-        crate::literals::CalendarUnit::Month => "month",
-        crate::literals::CalendarUnit::Year => "year",
-    }
-}
-
 fn format_quantity_units_list(units: &QuantityUnits) -> String {
     units
         .iter()
@@ -338,18 +472,18 @@ pub(crate) enum DefaultExpectation {
     Ratio,
     NumberRange,
     DateRange,
+    TimeRange,
     QuantityRange,
     RatioRange,
-    CalendarRange,
 }
 
 pub(crate) fn default_value_mismatch_error(
-    calendar_unit: &crate::literals::CalendarUnit,
+    calendar_unit: &str,
     type_name: &str,
     expectation: DefaultExpectation,
     quantity_units: Option<&QuantityUnits>,
 ) -> String {
-    let unit_label = calendar_unit_singular_label(calendar_unit);
+    let unit_label = calendar_unit;
     let first = format!("Unit '{unit_label}' is for calendar data.");
     match expectation {
         DefaultExpectation::QuantityUnits => {
@@ -382,11 +516,11 @@ pub(crate) fn default_value_mismatch_error(
         DefaultExpectation::DateRange => format!(
             "{first} Please provide a date range, for example `-> default 2024-01-01...2024-12-31`."
         ),
+        DefaultExpectation::TimeRange => format!(
+            "{first} Please provide a time range, for example `-> default 09:00...17:00`."
+        ),
         DefaultExpectation::QuantityRange => format!(
             "{first} Please provide a range with units valid for '{type_name}', for example `-> default 30 kilogram...35 kilogram`."
-        ),
-        DefaultExpectation::CalendarRange => format!(
-            "{first} Please provide a calendar range, for example `-> default 18 years...67 years`."
         ),
     }
 }
@@ -401,6 +535,8 @@ fn quantity_default_unit_error(unit: &str, type_name: &str, units: &QuantityUnit
 fn quantity_default_wrong_shape_error(type_name: &str, traits: &[QuantityTrait]) -> String {
     let example = if traits.contains(&QuantityTrait::Duration) {
         "4 weeks"
+    } else if traits.contains(&QuantityTrait::Calendar) {
+        "3 month"
     } else {
         "30 kilogram"
     };
@@ -409,24 +545,30 @@ fn quantity_default_wrong_shape_error(type_name: &str, traits: &[QuantityTrait])
     )
 }
 
-fn validate_quantity_default_literal(
-    args: &[CommandArg],
+fn validate_calendar_range_default_endpoint(
+    value: &crate::literals::Value,
     type_name: &str,
     units: &QuantityUnits,
-    traits: &[QuantityTrait],
-) -> Result<ValueKind, String> {
-    let (magnitude, unit_name) = match args {
-        [CommandArg::Literal(crate::literals::Value::NumberWithUnit(m, u))] => (*m, u.as_str()),
-        _ => return Err(quantity_default_wrong_shape_error(type_name, traits)),
+) -> Result<(), String> {
+    let unit_name = match value {
+        crate::literals::Value::NumberWithUnit(_, u) => u.as_str(),
+        _ => {
+            return Err(
+                "Please provide a range with calendar units, for example `-> default 18 year...67 year`."
+                    .to_string(),
+            );
+        }
     };
+    if calendar_unit_factor(unit_name).is_none() {
+        return Err(
+            "Please provide a range with calendar units, for example `-> default 18 year...67 year`."
+                .to_string(),
+        );
+    }
     if units.get(unit_name).is_err() {
         return Err(quantity_default_unit_error(unit_name, type_name, units));
     }
-    Ok(ValueKind::Quantity(
-        lift_parser_decimal(magnitude)?,
-        unit_name.to_string(),
-        BaseQuantityVector::new(),
-    ))
+    Ok(())
 }
 
 fn reject_calendar_for_default(
@@ -435,13 +577,15 @@ fn reject_calendar_for_default(
     expectation: DefaultExpectation,
     quantity_units: Option<&QuantityUnits>,
 ) -> Result<(), String> {
-    if let crate::literals::Value::Calendar(_, unit) = value {
-        return Err(default_value_mismatch_error(
-            unit,
-            type_name,
-            expectation,
-            quantity_units,
-        ));
+    if let crate::literals::Value::NumberWithUnit(_, unit) = value {
+        if calendar_unit_factor(unit).is_some() {
+            return Err(default_value_mismatch_error(
+                unit,
+                type_name,
+                expectation,
+                quantity_units,
+            ));
+        }
     }
     Ok(())
 }
@@ -456,7 +600,6 @@ fn value_kind_name(v: &crate::literals::Value) -> &'static str {
         Value::Date(_) => "date",
         Value::Time(_) => "time",
         Value::Boolean(_) => "boolean",
-        Value::Calendar(_, _) => "calendar",
         Value::Range(_, _) => "range",
     }
 }
@@ -468,12 +611,16 @@ fn require_default_range_endpoints<'a>(
     quantity_units: Option<&QuantityUnits>,
 ) -> Result<(&'a crate::literals::Value, &'a crate::literals::Value), String> {
     match require_literal(args, "default")? {
-        crate::literals::Value::Calendar(_, unit) => Err(default_value_mismatch_error(
-            unit,
-            type_name,
-            expectation,
-            quantity_units,
-        )),
+        crate::literals::Value::NumberWithUnit(_, unit)
+            if calendar_unit_factor(unit).is_some() =>
+        {
+            Err(default_value_mismatch_error(
+                unit,
+                type_name,
+                expectation,
+                quantity_units,
+            ))
+        }
         crate::literals::Value::Range(left, right) => Ok((left.as_ref(), right.as_ref())),
         _ => Err(match expectation {
             DefaultExpectation::NumberRange => {
@@ -489,10 +636,6 @@ fn require_default_range_endpoints<'a>(
             DefaultExpectation::QuantityRange => format!(
                 "Please provide a range with units valid for '{type_name}', for example `-> default 30 kilogram...35 kilogram`."
             ),
-            DefaultExpectation::CalendarRange => {
-                "Please provide a calendar range, for example `-> default 18 years...67 years`."
-                    .to_string()
-            }
             _ => unreachable!("BUG: require_default_range_endpoints called with non-range expectation"),
         }),
     }
@@ -504,38 +647,36 @@ fn lift_parser_decimal(decimal: rust_decimal::Decimal) -> Result<RationalInteger
 }
 
 /// Element spec for a range type, used for parsing endpoints and lifting literal endpoints.
-/// Returns the per-endpoint primitive spec (e.g. `RatioRange { units }` -> `Ratio { units }`).
 pub fn range_element_type_specification(
     range_spec: &TypeSpecification,
 ) -> Option<TypeSpecification> {
-    match range_spec {
-        TypeSpecification::NumberRange { .. } => Some(TypeSpecification::number()),
-        TypeSpecification::QuantityRange {
-            units,
-            decomposition,
-            canonical_unit,
-            ..
-        } => Some(TypeSpecification::Quantity {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units: units.clone(),
-            traits: Vec::new(),
-            decomposition: decomposition.clone(),
-            canonical_unit: canonical_unit.clone(),
-            help: String::new(),
-        }),
-        TypeSpecification::DateRange { .. } => Some(TypeSpecification::date()),
-        TypeSpecification::CalendarRange { .. } => Some(TypeSpecification::calendar()),
-        TypeSpecification::RatioRange { units, .. } => Some(TypeSpecification::Ratio {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units: units.clone(),
-            help: String::new(),
-        }),
-        _ => None,
+    range_spec.element_from_range()
+}
+
+fn range_endpoints_compatible(left: &LemmaType, right: &LemmaType) -> bool {
+    match (&left.specifications, &right.specifications) {
+        (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => true,
+        (TypeSpecification::Time { .. }, TypeSpecification::Time { .. }) => true,
+        (TypeSpecification::Number { .. }, TypeSpecification::Number { .. }) => true,
+        (TypeSpecification::Quantity { .. }, TypeSpecification::Quantity { .. }) => {
+            left.same_quantity_family(right)
+                || left.compatible_with_anonymous_quantity(right)
+                || right.compatible_with_anonymous_quantity(left)
+        }
+        (TypeSpecification::Ratio { .. }, TypeSpecification::Ratio { .. }) => true,
+        _ => false,
     }
+}
+
+/// Infer the range type specification from two compatible endpoint types.
+pub fn range_type_specification_from_endpoints(
+    left: &LemmaType,
+    right: &LemmaType,
+) -> Option<TypeSpecification> {
+    if !range_endpoints_compatible(left, right) {
+        return None;
+    }
+    left.specifications.range_from_element()
 }
 
 /// Lift a parser literal range endpoint to a [`LiteralValue`] with the element's primitive type.
@@ -552,7 +693,7 @@ fn lift_range_endpoint(
     };
     Ok(LiteralValue {
         value: kind,
-        lemma_type: LemmaType::primitive(element_spec.clone()),
+        lemma_type: Arc::new(LemmaType::primitive(element_spec.clone())),
     })
 }
 
@@ -563,17 +704,13 @@ fn literal_value_from_parser_value(
 
     match value {
         Value::Number(n) => Ok(LiteralValue::number(lift_parser_decimal(*n)?)),
-        Value::NumberWithUnit(n, unit) => Ok(LiteralValue::number_interpreted_as_quantity(
-            lift_parser_decimal(*n)?,
-            unit.clone(),
-        )),
         Value::Text(s) => Ok(LiteralValue::text(s.clone())),
         Value::Date(dt) => Ok(LiteralValue::date(date_time_to_semantic(dt))),
         Value::Time(t) => Ok(LiteralValue::time(time_to_semantic(t))),
         Value::Boolean(b) => Ok(LiteralValue::from_bool(bool::from(*b))),
-        Value::Calendar(n, unit) => Ok(LiteralValue::calendar(
+        Value::NumberWithUnit(n, unit) => Ok(LiteralValue::number_interpreted_as_quantity(
             lift_parser_decimal(*n)?,
-            calendar_unit_to_semantic(unit),
+            unit.clone(),
         )),
         Value::Range(left, right) => {
             let left = literal_value_from_parser_value(left)?;
@@ -583,6 +720,7 @@ fn literal_value_from_parser_value(
                 &right.lemma_type.specifications,
             ) {
                 (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => true,
+                (TypeSpecification::Time { .. }, TypeSpecification::Time { .. }) => true,
                 (TypeSpecification::Number { .. }, TypeSpecification::Number { .. }) => true,
                 (TypeSpecification::Quantity { .. }, TypeSpecification::Quantity { .. }) => {
                     left.lemma_type.same_quantity_family(&right.lemma_type)
@@ -594,7 +732,6 @@ fn literal_value_from_parser_value(
                             .compatible_with_anonymous_quantity(&left.lemma_type)
                 }
                 (TypeSpecification::Ratio { .. }, TypeSpecification::Ratio { .. }) => true,
-                (TypeSpecification::Calendar { .. }, TypeSpecification::Calendar { .. }) => true,
                 _ => false,
             };
             if !compatible {
@@ -772,16 +909,16 @@ fn sync_quantity_default_units(
     default: &ValueKind,
     type_name: &str,
 ) -> Result<(), String> {
-    use crate::computation::rational::checked_mul;
-    let ValueKind::Quantity(magnitude, unit_name, _) = default else {
+    let ValueKind::Quantity(magnitude, signature) = default else {
         return Ok(());
     };
-    let unit = units.get(unit_name).map_err(|_| {
+    let unit_name = signature.first().map(|(n, _)| n.as_str()).expect(
+        "BUG: Quantity default value has empty signature; literal lift must produce single-term",
+    );
+    units.get(unit_name).map_err(|_| {
         format!("Default unit '{unit_name}' is not defined on quantity type '{type_name}'.")
     })?;
-    let canonical = checked_mul(magnitude, &unit.factor)
-        .map_err(|failure| format!("default: unit conversion overflow: {failure}"))?;
-    sync_quantity_units_from_canonical(units, &canonical, UnitConstraintField::DefaultMagnitude)
+    sync_quantity_units_from_canonical(units, magnitude, UnitConstraintField::DefaultMagnitude)
 }
 
 pub(crate) fn finalize_quantity_unit_constraint_magnitudes(
@@ -873,6 +1010,7 @@ fn label_name(arg: &CommandArg, cmd: &str) -> Result<String, String> {
 fn quantity_trait_name(quantity_trait: QuantityTrait) -> &'static str {
     match quantity_trait {
         QuantityTrait::Duration => "duration",
+        QuantityTrait::Calendar => "calendar",
     }
 }
 
@@ -886,8 +1024,23 @@ fn parse_quantity_trait(args: &[CommandArg]) -> Result<QuantityTrait, String> {
         .as_str()
     {
         "duration" => Ok(QuantityTrait::Duration),
+        "calendar" => Ok(QuantityTrait::Calendar),
         other => Err(format!("Unknown quantity trait '{}'", other)),
     }
+}
+
+fn validate_calendar_trait_requirements(units: &QuantityUnits) -> Result<(), String> {
+    let month_unit = units
+        .iter()
+        .find(|unit| unit.name == "month")
+        .ok_or_else(|| {
+            "trait calendar requires a canonical 'month' unit declared before 'trait calendar'"
+                .to_string()
+        })?;
+    if !month_unit.is_canonical_factor() {
+        return Err("trait calendar requires unit month 1".to_string());
+    }
+    Ok(())
 }
 
 fn validate_duration_trait_requirements(units: &QuantityUnits) -> Result<(), String> {
@@ -928,22 +1081,6 @@ fn require_time_literal(args: &[CommandArg], cmd: &str) -> Result<TimeValue, Str
     }
 }
 
-fn require_calendar_literal(
-    args: &[CommandArg],
-    cmd: &str,
-) -> Result<(RationalInteger, CalendarUnit), String> {
-    match require_literal(args, cmd)? {
-        crate::literals::Value::Calendar(d, unit) => {
-            lift_parser_decimal(*d).map(|value| (value, unit.clone()))
-        }
-        other => Err(format!(
-            "{} requires a calendar literal (e.g. 1 month), got {}",
-            cmd,
-            value_kind_name(other)
-        )),
-    }
-}
-
 /// Default `help` for a built-in primitive (goal-oriented; syntax lives in [`LemmaType::example_value`]).
 #[must_use]
 pub fn default_help_for_primitive(kind: PrimitiveKind) -> &'static str {
@@ -960,8 +1097,7 @@ pub fn default_help_for_primitive(kind: PrimitiveKind) -> &'static str {
         Date => "A date, or a date and time with optional timezone.",
         DateRange => "The start date and end date of the date range.",
         Time => "A time of day, with optional timezone.",
-        Calendar => "A length in years or months.",
-        CalendarRange => "The lower and upper bound of the calendar range in years or months.",
+        TimeRange => "The start time and end time of the time range.",
     }
 }
 
@@ -978,8 +1114,7 @@ impl TypeSpecification {
             decimals: None,
             units: QuantityUnits::new(),
             traits: Vec::new(),
-            decomposition: BaseQuantityVector::new(),
-            canonical_unit: String::new(),
+            decomposition: None,
             help: default_help_for_primitive(PrimitiveKind::Quantity).to_string(),
         }
     }
@@ -1055,26 +1190,106 @@ impl TypeSpecification {
             help: default_help_for_primitive(PrimitiveKind::Time).to_string(),
         }
     }
-    pub fn calendar() -> Self {
-        TypeSpecification::Calendar {
-            minimum: None,
-            maximum: None,
-            help: default_help_for_primitive(PrimitiveKind::Calendar).to_string(),
-        }
-    }
-    pub fn calendar_range() -> Self {
-        TypeSpecification::CalendarRange {
-            help: default_help_for_primitive(PrimitiveKind::CalendarRange).to_string(),
+    pub fn time_range() -> Self {
+        TypeSpecification::TimeRange {
+            help: default_help_for_primitive(PrimitiveKind::TimeRange).to_string(),
         }
     }
     pub fn quantity_range() -> Self {
         TypeSpecification::QuantityRange {
             units: QuantityUnits::new(),
-            decomposition: BaseQuantityVector::new(),
-            canonical_unit: String::new(),
+            decomposition: None,
             help: default_help_for_primitive(PrimitiveKind::QuantityRange).to_string(),
         }
     }
+
+    /// Element spec for a range type (e.g. `QuantityRange` → `Quantity`).
+    #[must_use]
+    pub fn element_from_range(&self) -> Option<Self> {
+        match self {
+            TypeSpecification::NumberRange { .. } => Some(TypeSpecification::number()),
+            TypeSpecification::QuantityRange {
+                units,
+                decomposition,
+                ..
+            } => Some(TypeSpecification::Quantity {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: units.clone(),
+                traits: Vec::new(),
+                decomposition: decomposition.clone(),
+                help: String::new(),
+            }),
+            TypeSpecification::DateRange { .. } => Some(TypeSpecification::date()),
+            TypeSpecification::TimeRange { .. } => Some(TypeSpecification::time()),
+            TypeSpecification::RatioRange { units, .. } => Some(TypeSpecification::Ratio {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: units.clone(),
+                help: String::new(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Range spec for an element type (e.g. `Quantity` → `QuantityRange`).
+    #[must_use]
+    pub fn range_from_element(&self) -> Option<Self> {
+        match self {
+            TypeSpecification::Number { .. } => Some(TypeSpecification::number_range()),
+            TypeSpecification::Quantity {
+                units,
+                decomposition,
+                ..
+            } => Some(TypeSpecification::QuantityRange {
+                units: units.clone(),
+                decomposition: decomposition.clone(),
+                help: default_help_for_primitive(PrimitiveKind::QuantityRange).to_string(),
+            }),
+            TypeSpecification::Date { .. } => Some(TypeSpecification::date_range()),
+            TypeSpecification::Time { .. } => Some(TypeSpecification::time_range()),
+            TypeSpecification::Ratio { units, .. } => Some(TypeSpecification::RatioRange {
+                units: units.clone(),
+                help: default_help_for_primitive(PrimitiveKind::RatioRange).to_string(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Minimum bound as decimal for interactive numeric prompts (number, quantity, ratio).
+    #[must_use]
+    pub fn minimum_decimal(&self) -> Option<Decimal> {
+        use crate::computation::rational::commit_rational_to_decimal;
+        match self {
+            TypeSpecification::Number { minimum, .. }
+            | TypeSpecification::Ratio { minimum, .. } => minimum
+                .as_ref()
+                .and_then(|bound| commit_rational_to_decimal(bound).ok()),
+            TypeSpecification::Quantity { minimum, .. } => minimum
+                .as_ref()
+                .and_then(|(bound, _unit)| commit_rational_to_decimal(bound).ok()),
+            _ => None,
+        }
+    }
+
+    /// Maximum bound as decimal for interactive numeric prompts (number, quantity, ratio).
+    #[must_use]
+    pub fn maximum_decimal(&self) -> Option<Decimal> {
+        use crate::computation::rational::commit_rational_to_decimal;
+        match self {
+            TypeSpecification::Number { maximum, .. }
+            | TypeSpecification::Ratio { maximum, .. } => maximum
+                .as_ref()
+                .and_then(|bound| commit_rational_to_decimal(bound).ok()),
+            TypeSpecification::Quantity { maximum, .. } => maximum
+                .as_ref()
+                .and_then(|(bound, _unit)| commit_rational_to_decimal(bound).ok()),
+            _ => None,
+        }
+    }
+
     pub fn veto() -> Self {
         TypeSpecification::Veto { message: None }
     }
@@ -1082,16 +1297,17 @@ impl TypeSpecification {
     /// Apply a single constraint command to this spec.
     ///
     /// The `declared_default` out-parameter receives the default value (if the command
-    /// is `Default`), encoded as [`ValueKind`]. Defaults are owned by the data binding
+    /// is `Default`), encoded as [`RawDefault`]. Defaults are owned by the data binding
     /// or typedef entry, not by the type specification itself; callers thread a single
-    /// `&mut Option<ValueKind>` across all constraint applications for one type so the
-    /// latest `-> default` command wins.
+    /// `&mut Option<RawDefault>` across all constraint applications for one type so the
+    /// latest `-> default` command wins. Quantity scalars stay raw until unit factors
+    /// are resolved; callers materialize via [`materialize_raw_default`].
     pub fn apply_constraint(
         mut self,
         type_name: &str,
         command: TypeConstraintCommand,
         args: &[CommandArg],
-        declared_default: &mut Option<ValueKind>,
+        declared_default: &mut Option<RawDefault>,
     ) -> Result<Self, String> {
         if command == TypeConstraintCommand::Trait
             && !matches!(&self, TypeSpecification::Quantity { .. })
@@ -1108,7 +1324,8 @@ impl TypeSpecification {
                     reject_calendar_for_default(lit, type_name, DefaultExpectation::Boolean, None)?;
                     match lit {
                         crate::literals::Value::Boolean(bv) => {
-                            *declared_default = Some(ValueKind::Boolean(bool::from(bv)));
+                            *declared_default =
+                                Some(RawDefault::Value(ValueKind::Boolean(bool::from(bv))));
                         }
                         _ => {
                             return Err(
@@ -1131,6 +1348,7 @@ impl TypeSpecification {
                 maximum,
                 units,
                 traits,
+                decomposition,
                 help,
                 ..
             } => match command {
@@ -1183,6 +1401,9 @@ impl TypeSpecification {
                     if quantity_trait == QuantityTrait::Duration {
                         validate_duration_trait_requirements(units)?;
                     }
+                    if quantity_trait == QuantityTrait::Calendar {
+                        validate_calendar_trait_requirements(units)?;
+                    }
                     traits.push(quantity_trait);
                 }
                 TypeConstraintCommand::Minimum => {
@@ -1200,15 +1421,54 @@ impl TypeSpecification {
                 }
                 TypeConstraintCommand::Default => {
                     let lit = require_literal(args, "default")?;
-                    reject_calendar_for_default(
-                        lit,
-                        type_name,
-                        DefaultExpectation::QuantityUnits,
-                        Some(units),
-                    )?;
-                    let default =
-                        validate_quantity_default_literal(args, type_name, units, traits)?;
-                    *declared_default = Some(default);
+                    if traits.contains(&QuantityTrait::Calendar) {
+                        match lit {
+                            crate::literals::Value::Range(left, right) => {
+                                validate_calendar_range_default_endpoint(left, type_name, units)?;
+                                validate_calendar_range_default_endpoint(right, type_name, units)?;
+                                let element_spec = TypeSpecification::Quantity {
+                                    minimum: minimum.clone(),
+                                    maximum: maximum.clone(),
+                                    decimals: *decimals,
+                                    units: units.clone(),
+                                    traits: traits.clone(),
+                                    decomposition: decomposition.clone(),
+                                    help: String::new(),
+                                };
+                                let left = lift_range_endpoint(left, &element_spec)?;
+                                let right = lift_range_endpoint(right, &element_spec)?;
+                                *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                                    Box::new(left),
+                                    Box::new(right),
+                                )));
+                            }
+                            crate::literals::Value::NumberWithUnit(_, _) => {
+                                let (magnitude, unit_name) = parse_quantity_declared_bound(
+                                    args, "default", units, type_name,
+                                )?;
+                                *declared_default = Some(RawDefault::Quantity {
+                                    magnitude,
+                                    unit_name,
+                                });
+                            }
+                            _ => {
+                                return Err(quantity_default_wrong_shape_error(type_name, traits));
+                            }
+                        }
+                    } else {
+                        reject_calendar_for_default(
+                            lit,
+                            type_name,
+                            DefaultExpectation::QuantityUnits,
+                            Some(units),
+                        )?;
+                        let (magnitude, unit_name) =
+                            parse_quantity_declared_bound(args, "default", units, type_name)?;
+                        *declared_default = Some(RawDefault::Quantity {
+                            magnitude,
+                            unit_name,
+                        });
+                    }
                 }
                 _ => {
                     return Err(format!(
@@ -1246,7 +1506,9 @@ impl TypeSpecification {
                     reject_calendar_for_default(lit, type_name, DefaultExpectation::Number, None)?;
                     match lit {
                         crate::literals::Value::Number(d) => {
-                            *declared_default = Some(ValueKind::Number(lift_parser_decimal(*d)?));
+                            *declared_default = Some(RawDefault::Value(ValueKind::Number(
+                                lift_parser_decimal(*d)?,
+                            )));
                         }
                         _ => {
                             return Err(
@@ -1281,7 +1543,10 @@ impl TypeSpecification {
                                 .to_string(),
                         );
                     }
-                    *declared_default = Some(ValueKind::Range(Box::new(left), Box::new(right)));
+                    *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                        Box::new(left),
+                        Box::new(right),
+                    )));
                 }
                 _ => {
                     return Err(format!(
@@ -1357,9 +1622,6 @@ impl TypeSpecification {
                     let lit = require_literal(args, "default")?;
                     reject_calendar_for_default(lit, type_name, DefaultExpectation::Ratio, None)?;
                     let default = match lit {
-                        crate::literals::Value::Number(d) => {
-                            ValueKind::Ratio(lift_parser_decimal(*d)?, None)
-                        }
                         crate::literals::Value::NumberWithUnit(_, _) => {
                             let element_spec = TypeSpecification::Ratio {
                                 decimals: *decimals,
@@ -1370,12 +1632,15 @@ impl TypeSpecification {
                             };
                             parser_value_to_value_kind(lit, &element_spec)?
                         }
-                        _ => {
-                            return Err("Please provide a ratio value, for example `-> default 0.25` or `-> default 25%`.".to_string());
+                        other => {
+                            return Err(format!(
+                                "default requires a ratio literal with a unit, got {}. Please provide a ratio value with a unit, for example `-> default 25%`.",
+                                value_kind_name(other)
+                            ));
                         }
                     };
                     sync_ratio_default_units(units, &default)?;
-                    *declared_default = Some(default);
+                    *declared_default = Some(RawDefault::Value(default));
                 }
                 _ => {
                     return Err(format!(
@@ -1437,7 +1702,10 @@ impl TypeSpecification {
                                     .to_string(),
                             );
                         }
-                        *declared_default = Some(ValueKind::Range(Box::new(left), Box::new(right)));
+                        *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                            Box::new(left),
+                            Box::new(right),
+                        )));
                     }
                     _ => {
                         return Err(format!(
@@ -1477,7 +1745,7 @@ impl TypeSpecification {
                     reject_calendar_for_default(lit, type_name, DefaultExpectation::Text, None)?;
                     match lit {
                         crate::literals::Value::Text(s) => {
-                            *declared_default = Some(ValueKind::Text(s.clone()));
+                            *declared_default = Some(RawDefault::Value(ValueKind::Text(s.clone())));
                         }
                         _ => {
                             return Err(
@@ -1515,7 +1783,9 @@ impl TypeSpecification {
                     reject_calendar_for_default(lit, type_name, DefaultExpectation::Date, None)?;
                     match lit {
                         crate::literals::Value::Date(dt) => {
-                            *declared_default = Some(ValueKind::Date(date_time_to_semantic(dt)));
+                            *declared_default = Some(RawDefault::Value(ValueKind::Date(
+                                date_time_to_semantic(dt),
+                            )));
                         }
                         _ => {
                             return Err(
@@ -1551,7 +1821,10 @@ impl TypeSpecification {
                                 .to_string(),
                         );
                     }
-                    *declared_default = Some(ValueKind::Range(Box::new(left), Box::new(right)));
+                    *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                        Box::new(left),
+                        Box::new(right),
+                    )));
                 }
                 _ => {
                     return Err(format!(
@@ -1581,7 +1854,8 @@ impl TypeSpecification {
                     reject_calendar_for_default(lit, type_name, DefaultExpectation::Time, None)?;
                     match lit {
                         crate::literals::Value::Time(t) => {
-                            *declared_default = Some(ValueKind::Time(time_to_semantic(t)));
+                            *declared_default =
+                                Some(RawDefault::Value(ValueKind::Time(time_to_semantic(t))));
                         }
                         _ => {
                             return Err(
@@ -1598,35 +1872,7 @@ impl TypeSpecification {
                     ));
                 }
             },
-            TypeSpecification::Calendar {
-                minimum,
-                maximum,
-                help,
-            } => match command {
-                TypeConstraintCommand::Help => {
-                    apply_type_help_command(help, args)?;
-                }
-                TypeConstraintCommand::Minimum => {
-                    let (value, unit) = require_calendar_literal(args, "minimum")?;
-                    *minimum = Some((value, calendar_unit_to_semantic(&unit)));
-                }
-                TypeConstraintCommand::Maximum => {
-                    let (value, unit) = require_calendar_literal(args, "maximum")?;
-                    *maximum = Some((value, calendar_unit_to_semantic(&unit)));
-                }
-                TypeConstraintCommand::Default => {
-                    let (value, unit) = require_calendar_literal(args, "default")?;
-                    *declared_default =
-                        Some(ValueKind::Calendar(value, calendar_unit_to_semantic(&unit)));
-                }
-                _ => {
-                    return Err(format!(
-                        "Invalid command '{}' for calendar type. Valid commands: minimum, maximum, help, default",
-                        command
-                    ));
-                }
-            },
-            TypeSpecification::CalendarRange { help } => match command {
+            TypeSpecification::TimeRange { help } => match command {
                 TypeConstraintCommand::Help => {
                     apply_type_help_command(help, args)?;
                 }
@@ -1634,27 +1880,35 @@ impl TypeSpecification {
                     let (left, right) = require_default_range_endpoints(
                         args,
                         type_name,
-                        DefaultExpectation::CalendarRange,
+                        DefaultExpectation::TimeRange,
                         None,
                     )?;
                     let left = literal_value_from_parser_value(left)?;
                     let right = literal_value_from_parser_value(right)?;
-                    if !left.lemma_type.is_calendar() || !right.lemma_type.is_calendar() {
+                    if !left.lemma_type.is_time() || !right.lemma_type.is_time() {
                         return Err(
-                            "Please provide a calendar range, for example `-> default 18 years...67 years`."
+                            "Please provide a time range, for example `-> default 09:00...17:00`."
                                 .to_string(),
                         );
                     }
-                    *declared_default = Some(ValueKind::Range(Box::new(left), Box::new(right)));
+                    *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                        Box::new(left),
+                        Box::new(right),
+                    )));
                 }
                 _ => {
                     return Err(format!(
-                        "Invalid command '{}' for calendar range type. Valid commands: help, default",
+                        "Invalid command '{}' for time range type. Valid commands: help, default",
                         command
                     ));
                 }
             },
-            TypeSpecification::QuantityRange { units, help, .. } => match command {
+            TypeSpecification::QuantityRange {
+                units,
+                decomposition,
+                help,
+                ..
+            } => match command {
                 TypeConstraintCommand::Unit => {
                     let (unit_name, value, derived_quantity_factors) = match args {
                         [CommandArg::Label(name), CommandArg::UnitExpr(crate::parsing::ast::UnitArg::Factor(v))] => {
@@ -1699,14 +1953,26 @@ impl TypeSpecification {
                         DefaultExpectation::QuantityRange,
                         Some(units),
                     )?;
-                    let left = literal_value_from_parser_value(left)?;
-                    let right = literal_value_from_parser_value(right)?;
+                    let element_spec = TypeSpecification::Quantity {
+                        minimum: None,
+                        maximum: None,
+                        decimals: None,
+                        units: units.clone(),
+                        traits: vec![],
+                        decomposition: decomposition.clone(),
+                        help: String::new(),
+                    };
+                    let left = lift_range_endpoint(left, &element_spec)?;
+                    let right = lift_range_endpoint(right, &element_spec)?;
                     if !left.lemma_type.is_quantity() || !right.lemma_type.is_quantity() {
                         return Err(format!(
                             "Please provide a range with units valid for '{type_name}', for example `-> default 30 kilogram...35 kilogram`."
                         ));
                     }
-                    *declared_default = Some(ValueKind::Range(Box::new(left), Box::new(right)));
+                    *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                        Box::new(left),
+                        Box::new(right),
+                    )));
                 }
                 _ => {
                     return Err(format!(
@@ -1803,66 +2069,6 @@ pub fn parse_number_unit(
     }
 }
 
-/// Parse one data field from JSON: convenience strings or serialized objects.
-pub fn parse_data_value_from_json(
-    value: &serde_json::Value,
-    type_spec: &TypeSpecification,
-    lemma_type: &LemmaType,
-    source: &Source,
-) -> Result<LiteralValue, Error> {
-    let to_err = |msg: String| Error::validation(msg, Some(source.clone()), None::<String>);
-
-    let kind = if let Some(s) = value.as_str() {
-        let parsed = parse_value_from_string(s, type_spec, source)?;
-        parser_value_to_value_kind(&parsed, type_spec).map_err(to_err)?
-    } else if let Some(b) = value.as_bool() {
-        if !matches!(type_spec, TypeSpecification::Boolean { .. }) {
-            return Err(to_err(format!(
-                "JSON boolean is only valid for boolean data, not {}",
-                value_kind_tag_for_type(type_spec)
-            )));
-        }
-        ValueKind::Boolean(b)
-    } else if let Some(n) = value.as_number() {
-        let parsed = parse_value_from_string(&n.to_string(), type_spec, source)?;
-        parser_value_to_value_kind(&parsed, type_spec).map_err(to_err)?
-    } else if let Some(obj) = value.as_object() {
-        if obj.len() == 2 && obj.contains_key("value") && obj.contains_key("unit") {
-            let tagged = serde_json::json!({ value_kind_tag_for_type(type_spec): value });
-            serde_json::from_value::<ValueKind>(tagged).map_err(|e| to_err(e.to_string()))?
-        } else {
-            serde_json::from_value::<ValueKind>(value.clone()).map_err(|e| to_err(e.to_string()))?
-        }
-    } else {
-        return Err(to_err("unsupported JSON value for data input".to_string()));
-    };
-
-    Ok(LiteralValue {
-        value: kind,
-        lemma_type: lemma_type.clone(),
-    })
-}
-
-fn value_kind_tag_for_type(spec: &TypeSpecification) -> &'static str {
-    match spec {
-        TypeSpecification::Boolean { .. } => "boolean",
-        TypeSpecification::Quantity { .. } => "quantity",
-        TypeSpecification::Number { .. } => "number",
-        TypeSpecification::NumberRange { .. }
-        | TypeSpecification::QuantityRange { .. }
-        | TypeSpecification::DateRange { .. }
-        | TypeSpecification::RatioRange { .. }
-        | TypeSpecification::CalendarRange { .. } => "range",
-        TypeSpecification::Ratio { .. } => "ratio",
-        TypeSpecification::Text { .. } => "text",
-        TypeSpecification::Date { .. } => "date",
-        TypeSpecification::Time { .. } => "time",
-        TypeSpecification::Calendar { .. } => "calendar",
-        TypeSpecification::Veto { .. } => "veto",
-        TypeSpecification::Undetermined => "undetermined",
-    }
-}
-
 /// Parse a string value according to a TypeSpecification.
 /// Used to parse runtime user input into typed values.
 pub fn parse_value_from_string(
@@ -1912,17 +2118,13 @@ pub fn parse_value_from_string(
             let time = value_str.parse::<TimeValue>().map_err(to_err)?;
             Ok(Value::Time(time))
         }
-        TypeSpecification::Calendar { .. } => value_str
-            .parse::<crate::literals::CalendarLiteral>()
-            .map(|d| Value::Calendar(d.0, d.1))
-            .map_err(to_err),
         TypeSpecification::Ratio { .. } => {
             parse_number_unit(value_str, type_spec).map_err(to_err)
         }
         TypeSpecification::NumberRange { .. }
         | TypeSpecification::QuantityRange { .. }
         | TypeSpecification::DateRange { .. }
-        | TypeSpecification::CalendarRange { .. }
+        | TypeSpecification::TimeRange { .. }
         | TypeSpecification::RatioRange { .. } => {
             let element_spec = range_element_type_specification(type_spec).unwrap_or_else(|| {
                 unreachable!("BUG: range_element_type_specification missing arm for known range type")
@@ -1952,33 +2154,59 @@ pub enum SemanticCalendarUnit {
 impl fmt::Display for SemanticCalendarUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            SemanticCalendarUnit::Month => "months",
-            SemanticCalendarUnit::Year => "years",
+            SemanticCalendarUnit::Month => "month",
+            SemanticCalendarUnit::Year => "year",
         };
         write!(f, "{}", s)
     }
 }
 
-/// Target unit for conversion (semantic; used by evaluation/computation).
-/// Planning converts AST ConversionTarget into this so computation does not depend on parsing.
-/// Ratio vs quantity is determined by looking up the unit in the type registry's unit index.
+pub fn semantic_calendar_unit_from_unit_name(unit_name: &str) -> SemanticCalendarUnit {
+    match unit_name {
+        "month" | "months" => SemanticCalendarUnit::Month,
+        "year" | "years" => SemanticCalendarUnit::Year,
+        other => unreachable!(
+            "BUG: calendar quantity signature unit must be month or year, got '{other}'"
+        ),
+    }
+}
+
+pub fn semantic_calendar_unit_from_quantity_signature(
+    signature: &[(String, i32)],
+) -> SemanticCalendarUnit {
+    let unit_name = signature
+        .first()
+        .map(|(name, _)| name.as_str())
+        .expect("BUG: calendar quantity must carry a unit signature");
+    semantic_calendar_unit_from_unit_name(unit_name)
+}
+
+/// Target type for `as` casts (semantic; used by evaluation/computation).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticConversionTarget {
-    Calendar(SemanticCalendarUnit),
-    QuantityUnit(String),
-    RatioUnit(String),
-    /// Strip unit label and return the raw numeric value as a Number.
-    Number,
+    Type(PrimitiveKind),
+    /// `number as eur` — construct, convert, relabel, or range-span into `unit_name`.
+    Unit {
+        unit_name: String,
+    },
+}
+
+impl SemanticConversionTarget {
+    #[must_use]
+    pub fn primitive_kind(&self) -> Option<PrimitiveKind> {
+        match self {
+            SemanticConversionTarget::Type(kind) => Some(*kind),
+            SemanticConversionTarget::Unit { .. } => None,
+        }
+    }
 }
 
 impl fmt::Display for SemanticConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            SemanticConversionTarget::Calendar(u) => write!(f, "{}", u),
-            SemanticConversionTarget::QuantityUnit(s) => write!(f, "{}", s),
-            SemanticConversionTarget::RatioUnit(s) => write!(f, "{}", s),
-            SemanticConversionTarget::Number => write!(f, "number"),
+            SemanticConversionTarget::Type(kind) => write!(f, "{:?}", kind),
+            SemanticConversionTarget::Unit { unit_name } => write!(f, "{unit_name}"),
         }
     }
 }
@@ -2065,28 +2293,75 @@ impl fmt::Display for SemanticDateTime {
     }
 }
 
+/// Default captured during type constraint application, before quantity unit factors are final.
+/// Materialized into [`ValueKind`] after `resolve_quantity_decompositions` (or immediately for
+/// reference-local defaults, which run after that pass).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RawDefault {
+    Value(ValueKind),
+    Quantity {
+        magnitude: RationalInteger,
+        unit_name: String,
+    },
+}
+
+pub fn materialize_raw_default(
+    raw: RawDefault,
+    specifications: &TypeSpecification,
+    type_name: &str,
+) -> Result<ValueKind, String> {
+    match raw {
+        RawDefault::Value(vk) => Ok(vk),
+        RawDefault::Quantity {
+            magnitude,
+            unit_name,
+        } => {
+            let TypeSpecification::Quantity { units, .. } = specifications else {
+                return Err(format!(
+                    "BUG: RawDefault::Quantity for non-quantity type '{type_name}'"
+                ));
+            };
+            let canonical = quantity_declared_bound_to_canonical(
+                &magnitude, &unit_name, units, type_name, "default",
+            )?;
+            Ok(ValueKind::Quantity(canonical, vec![(unit_name, 1)]))
+        }
+    }
+}
+
 /// Value payload (shape of a literal). No type attached.
 /// Quantity unit is required; Ratio unit is optional (see plan ratio-units-optional.md).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueKind {
     Number(RationalInteger),
-    /// Quantity: value + unit + decomposition.
+    /// Quantity: magnitude + canonical-form unit signature.
     ///
-    /// - For values bound to a named typedef, `decomposition` is empty (the type's
-    ///   `TypeSpecification::Quantity.decomposition` is authoritative).
-    /// - For anonymous cross-axis intermediates produced by `*`/`/`, `decomposition`
-    ///   is non-empty and carries the combined dimensional vector.
-    /// - For anonymous intermediates the unit string is empty (`""`).
-    Quantity(RationalInteger, String, BaseQuantityVector),
+    /// The signature is always present, always in canonical form (sorted by unit name,
+    /// no zero exponents), and never empty for a Quantity value. "Named" vs "anonymous"
+    /// is a display-time concern: a signature_index hit yields a friendly unit name,
+    /// a miss yields operator-style rendering. The magnitude is in the signature's
+    /// natural unit form (no hidden canonical-base layer).
+    Quantity(RationalInteger, Vec<(String, i32)>),
     Text(String),
     Date(SemanticDateTime),
     Time(SemanticTime),
     Boolean(bool),
-    /// Calendar: value + unit
-    Calendar(RationalInteger, SemanticCalendarUnit),
     /// Ratio: value + optional unit
     Ratio(RationalInteger, Option<String>),
     Range(Box<LiteralValue>, Box<LiteralValue>),
+}
+
+impl ValueKind {
+    /// Decimal magnitude for numeric variants (number, quantity, ratio).
+    pub fn as_decimal_magnitude(&self) -> Result<Decimal, String> {
+        use crate::computation::rational::commit_rational_to_decimal;
+        match self {
+            ValueKind::Number(n) | ValueKind::Quantity(n, _) | ValueKind::Ratio(n, _) => {
+                commit_rational_to_decimal(n).map_err(|failure| failure.to_string())
+            }
+            other => Err(format!("expected numeric value kind, got {other}")),
+        }
+    }
 }
 
 fn format_rational_magnitude_for_display(rational: &RationalInteger) -> String {
@@ -2109,7 +2384,8 @@ impl fmt::Display for ValueKind {
             ValueKind::Number(rational) => {
                 write!(f, "{}", format_rational_magnitude_for_display(rational))
             }
-            ValueKind::Quantity(rational, unit, _decomp) => {
+            ValueKind::Quantity(rational, signature) => {
+                let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
                 write!(f, "{}", format_number_with_unit_for_display(rational, unit))
             }
             ValueKind::Text(s) => write!(f, "{}", crate::parsing::ast::Value::Text(s.clone())),
@@ -2156,12 +2432,6 @@ impl fmt::Display for ValueKind {
                 })
             ),
             ValueKind::Boolean(b) => write!(f, "{}", b),
-            ValueKind::Calendar(rational, unit) => write!(
-                f,
-                "{} {}",
-                format_rational_magnitude_for_display(rational),
-                unit
-            ),
             ValueKind::Range(left, right) => write!(f, "{}...{}", left, right),
         }
     }
@@ -2175,6 +2445,12 @@ fn decimal_from_serialized_str(s: &str) -> Result<Decimal, String> {
 struct SerializedValueUnit {
     value: String,
     unit: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SerializedQuantity {
+    value: String,
+    signature: Vec<(String, i32)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2195,13 +2471,13 @@ impl Serialize for ValueKind {
                         .map_err(serde::ser::Error::custom)?,
                 )?;
             }
-            ValueKind::Quantity(rational, unit, _) => {
+            ValueKind::Quantity(rational, signature) => {
                 map.serialize_entry(
                     "quantity",
-                    &SerializedValueUnit {
+                    &SerializedQuantity {
                         value: crate::literals::rational_to_serialized_str(rational)
                             .map_err(serde::ser::Error::custom)?,
-                        unit: unit.clone(),
+                        signature: signature.clone(),
                     },
                 )?;
             }
@@ -2216,16 +2492,6 @@ impl Serialize for ValueKind {
             }
             ValueKind::Boolean(b) => {
                 map.serialize_entry("boolean", b)?;
-            }
-            ValueKind::Calendar(rational, unit) => {
-                map.serialize_entry(
-                    "calendar",
-                    &SerializedValueUnit {
-                        value: crate::literals::rational_to_serialized_str(rational)
-                            .map_err(serde::ser::Error::custom)?,
-                        unit: unit.to_string(),
-                    },
-                )?;
             }
             ValueKind::Ratio(rational, unit) => {
                 map.serialize_entry(
@@ -2280,13 +2546,12 @@ fn deserialize_value_kind_variant(
             ))
         }
         "quantity" => {
-            let pair: SerializedValueUnit =
+            let pair: SerializedQuantity =
                 serde_json::from_value(payload).map_err(|e| e.to_string())?;
             let decimal = decimal_from_serialized_str(&pair.value)?;
             Ok(ValueKind::Quantity(
                 crate::literals::rational_from_parsed_decimal(decimal)?,
-                pair.unit,
-                BaseQuantityVector::new(),
+                pair.signature,
             ))
         }
         "ratio" => {
@@ -2307,18 +2572,18 @@ fn deserialize_value_kind_variant(
             let pair: SerializedValueUnit =
                 serde_json::from_value(payload).map_err(|e| e.to_string())?;
             let unit = match pair.unit.as_str() {
-                "months" => SemanticCalendarUnit::Month,
-                "years" => SemanticCalendarUnit::Year,
+                "month" | "months" => SemanticCalendarUnit::Month,
+                "year" | "years" => SemanticCalendarUnit::Year,
                 other => {
                     return Err(format!(
-                        "unknown calendar unit '{other}' (expected 'months' or 'years')"
+                        "unknown calendar unit '{other}' (expected 'month' or 'year')"
                     ));
                 }
             };
             let decimal = decimal_from_serialized_str(&pair.value)?;
-            Ok(ValueKind::Calendar(
+            Ok(ValueKind::Quantity(
                 crate::literals::rational_from_parsed_decimal(decimal)?,
-                unit,
+                vec![(unit.to_string(), 1)],
             ))
         }
         "text" => {
@@ -2348,11 +2613,11 @@ fn deserialize_value_kind_variant(
             Ok(ValueKind::Range(
                 Box::new(LiteralValue {
                     value: range.from,
-                    lemma_type: primitive_number().clone(),
+                    lemma_type: primitive_number_arc().clone(),
                 }),
                 Box::new(LiteralValue {
                     value: range.to,
-                    lemma_type: primitive_number().clone(),
+                    lemma_type: primitive_number_arc().clone(),
                 }),
             ))
         }
@@ -2677,6 +2942,51 @@ pub struct LemmaType {
 }
 
 impl LemmaType {
+    /// Functional update of the `Quantity` payload (units + decomposition).
+    /// Non-Quantity variants pass through unchanged. The transform receives the owned
+    /// units and decomposition and returns the replacements.
+    pub fn map_quantity<F>(self, f: F) -> Self
+    where
+        F: FnOnce(
+            QuantityUnits,
+            Option<BaseQuantityVector>,
+        ) -> (QuantityUnits, Option<BaseQuantityVector>),
+    {
+        let LemmaType {
+            name,
+            specifications,
+            extends,
+        } = self;
+        let specifications = match specifications {
+            TypeSpecification::Quantity {
+                minimum,
+                maximum,
+                decimals,
+                units,
+                traits,
+                decomposition,
+                help,
+            } => {
+                let (units, decomposition) = f(units, decomposition);
+                TypeSpecification::Quantity {
+                    minimum,
+                    maximum,
+                    decimals,
+                    units,
+                    traits,
+                    decomposition,
+                    help,
+                }
+            }
+            other => other,
+        };
+        LemmaType {
+            name,
+            specifications,
+            extends,
+        }
+    }
+
     /// Create a new type with a name
     pub fn new(name: String, specifications: TypeSpecification, extends: TypeExtends) -> Self {
         Self {
@@ -2706,31 +3016,27 @@ impl LemmaType {
 
     /// Get the type name, or a default based on the type specification
     pub fn name(&self) -> String {
-        self.name.clone().unwrap_or_else(|| {
-            match &self.specifications {
-                TypeSpecification::Boolean { .. } => "boolean",
-                TypeSpecification::Quantity { .. } => "quantity",
-                TypeSpecification::QuantityRange { .. } => "quantity range",
-                TypeSpecification::Number { .. } => "number",
-                TypeSpecification::NumberRange { .. } => "number range",
-                TypeSpecification::Text { .. } => "text",
-                TypeSpecification::Date { .. } => "date",
-                TypeSpecification::DateRange { .. } => "date range",
-                TypeSpecification::Time { .. } => "time",
-                TypeSpecification::Calendar { .. } => "calendar",
-                TypeSpecification::CalendarRange { .. } => "calendar range",
-                TypeSpecification::Ratio { .. } => "ratio",
-                TypeSpecification::RatioRange { .. } => "ratio range",
-                TypeSpecification::Veto { .. } => "veto",
-                TypeSpecification::Undetermined => "undetermined",
-            }
-            .to_string()
-        })
+        self.name
+            .clone()
+            .unwrap_or_else(|| self.specifications.to_string())
     }
 
     /// Check if this type is boolean
     pub fn is_boolean(&self) -> bool {
         matches!(&self.specifications, TypeSpecification::Boolean { .. })
+    }
+
+    pub fn matches_primitive_kind(&self, kind: PrimitiveKind) -> bool {
+        matches!(
+            (kind, &self.specifications),
+            (PrimitiveKind::Number, TypeSpecification::Number { .. })
+                | (PrimitiveKind::Text, TypeSpecification::Text { .. })
+                | (PrimitiveKind::Boolean, TypeSpecification::Boolean { .. })
+                | (PrimitiveKind::Date, TypeSpecification::Date { .. })
+                | (PrimitiveKind::Time, TypeSpecification::Time { .. })
+                | (PrimitiveKind::Ratio, TypeSpecification::Ratio { .. })
+                | (PrimitiveKind::Quantity, TypeSpecification::Quantity { .. })
+        )
     }
 
     /// Check if this type is quantity
@@ -2776,6 +3082,10 @@ impl LemmaType {
         matches!(&self.specifications, TypeSpecification::DateRange { .. })
     }
 
+    pub fn is_time_range(&self) -> bool {
+        matches!(&self.specifications, TypeSpecification::TimeRange { .. })
+    }
+
     /// Check if this type is time
     pub fn is_time(&self) -> bool {
         matches!(&self.specifications, TypeSpecification::Time { .. })
@@ -2796,16 +3106,37 @@ impl LemmaType {
             return true;
         }
         self.is_anonymous_quantity()
-            && self.quantity_type_decomposition() == &duration_decomposition()
+            && self
+                .quantity_type_decomposition()
+                .is_some_and(|d| *d == duration_decomposition())
     }
 
     pub fn is_duration_like(&self) -> bool {
         self.is_duration_like_quantity()
     }
 
-    /// Check if this type is calendar
-    pub fn is_calendar(&self) -> bool {
-        matches!(&self.specifications, TypeSpecification::Calendar { .. })
+    pub fn has_trait_calendar(&self) -> bool {
+        match &self.specifications {
+            TypeSpecification::Quantity { traits, .. } => traits.contains(&QuantityTrait::Calendar),
+            _ => false,
+        }
+    }
+
+    pub fn is_calendar_like_quantity(&self) -> bool {
+        if !self.is_quantity() {
+            return false;
+        }
+        if self.has_trait_calendar() {
+            return true;
+        }
+        self.is_anonymous_quantity()
+            && self
+                .quantity_type_decomposition()
+                .is_some_and(|d| *d == calendar_decomposition())
+    }
+
+    pub fn is_calendar_like(&self) -> bool {
+        self.is_calendar_like_quantity()
     }
 
     /// Check if this type is ratio
@@ -2817,21 +3148,26 @@ impl LemmaType {
         matches!(&self.specifications, TypeSpecification::RatioRange { .. })
     }
 
-    pub fn is_calendar_range(&self) -> bool {
+    pub fn is_calendar_quantity_range(&self) -> bool {
         matches!(
             &self.specifications,
-            TypeSpecification::CalendarRange { .. }
+            TypeSpecification::QuantityRange { decomposition: Some(decomposition), .. }
+                if *decomposition == calendar_decomposition()
         )
+    }
+
+    pub fn is_calendar_like_range(&self) -> bool {
+        self.is_calendar_quantity_range()
     }
 
     pub fn is_range(&self) -> bool {
         matches!(
             &self.specifications,
             TypeSpecification::DateRange { .. }
+                | TypeSpecification::TimeRange { .. }
                 | TypeSpecification::NumberRange { .. }
                 | TypeSpecification::QuantityRange { .. }
                 | TypeSpecification::RatioRange { .. }
-                | TypeSpecification::CalendarRange { .. }
         )
     }
 
@@ -2859,8 +3195,7 @@ impl LemmaType {
                 | (Date { .. }, Date { .. })
                 | (DateRange { .. }, DateRange { .. })
                 | (Time { .. }, Time { .. })
-                | (Calendar { .. }, Calendar { .. })
-                | (CalendarRange { .. }, CalendarRange { .. })
+                | (TimeRange { .. }, TimeRange { .. })
                 | (Ratio { .. }, Ratio { .. })
                 | (RatioRange { .. }, RatioRange { .. })
                 | (Veto { .. }, Veto { .. })
@@ -2900,9 +3235,13 @@ impl LemmaType {
         if !self.is_anonymous_quantity() && !other.is_anonymous_quantity() {
             return false;
         }
-        let self_decomposition = self.quantity_type_decomposition();
-        let other_decomposition = other.quantity_type_decomposition();
-        !self_decomposition.is_empty() && self_decomposition == other_decomposition
+        match (
+            self.quantity_type_decomposition(),
+            other.quantity_type_decomposition(),
+        ) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
     }
 
     /// Create a Veto LemmaType
@@ -2938,10 +3277,9 @@ impl LemmaType {
             TypeSpecification::Boolean { .. } => "true",
             TypeSpecification::Date { .. } => "2023-12-25T14:30:00Z",
             TypeSpecification::DateRange { .. } => "2024-01-01...2024-12-31",
+            TypeSpecification::TimeRange { .. } => "09:00...17:00",
             TypeSpecification::Veto { .. } => "veto",
             TypeSpecification::Time { .. } => "14:30:00",
-            TypeSpecification::Calendar { .. } => "6 months",
-            TypeSpecification::CalendarRange { .. } => "18 years...67 years",
             TypeSpecification::Ratio { .. } => "50%",
             TypeSpecification::RatioRange { .. } => "10%...50%",
             TypeSpecification::Undetermined => unreachable!(
@@ -2954,13 +3292,12 @@ impl LemmaType {
     /// Planning must validate conversions first and return Error for invalid units.
     /// If called with a non-quantity type or unknown unit name, panics (invariant violation).
     #[must_use]
-    /// Returns the `BaseQuantityVector` for Quantity types.
-    /// For base quantitys (after decomposition pass) this is `{type_name: 1}`.
-    /// For derived quantitys it is the combined dimensional vector.
+    /// Returns the resolved `BaseQuantityVector` for Quantity types, or `None` if
+    /// the decomposition pass has not yet resolved this type.
     /// Panics if called on non-Quantity types.
-    pub fn quantity_type_decomposition(&self) -> &BaseQuantityVector {
+    pub fn quantity_type_decomposition(&self) -> Option<&BaseQuantityVector> {
         match &self.specifications {
-            TypeSpecification::Quantity { decomposition, .. } => decomposition,
+            TypeSpecification::Quantity { decomposition, .. } => decomposition.as_ref(),
             _ => unreachable!(
                 "BUG: quantity_type_decomposition called on non-quantity type {}",
                 self.name()
@@ -2976,6 +3313,7 @@ impl LemmaType {
 
     /// Build an anonymous `LemmaType` for a given dimensional decomposition.
     /// Used at plan time to represent the inferred type of cross-axis intermediates.
+    /// Signatures live on the value, not on the type.
     pub fn anonymous_for_decomposition(decomposition: BaseQuantityVector) -> Self {
         Self {
             name: None,
@@ -2985,184 +3323,35 @@ impl LemmaType {
                 decimals: None,
                 units: crate::literals::QuantityUnits::new(),
                 traits: Vec::new(),
-                decomposition,
-                canonical_unit: String::new(),
+                decomposition: Some(decomposition),
                 help: String::new(),
             },
             extends: TypeExtends::Primitive,
         }
     }
 
-    /// Declared unit names for a named quantity type (`None` for non-quantity or anonymous quantity).
+    /// Declared unit names when the type carries a non-empty unit table (`None` otherwise).
     #[must_use]
     pub fn quantity_unit_names(&self) -> Option<Vec<&str>> {
-        if !self.is_quantity() || self.is_anonymous_quantity() {
-            return None;
-        }
         match &self.specifications {
-            TypeSpecification::Quantity { units, .. } => {
+            TypeSpecification::Quantity { units, .. } if !units.is_empty() => {
+                Some(units.iter().map(|unit| unit.name.as_str()).collect())
+            }
+            TypeSpecification::QuantityRange { units, .. } if !units.is_empty() => {
                 Some(units.iter().map(|unit| unit.name.as_str()).collect())
             }
             _ => None,
         }
     }
 
-    /// Whether a value of this type may be expressed in `target_unit` (typed named quantity only).
-    ///
-    /// Used by planning (`as` on typed quantity operands) and evaluation API rule-result conversion.
-    pub fn validate_quantity_result_unit(&self, target_unit: &str) -> Result<(), String> {
-        let target_unit =
-            crate::parsing::ast::ascii_lowercase_logical_name(target_unit.to_string());
-        let units = match &self.specifications {
-            TypeSpecification::Quantity { units, .. } => units,
-            _ => {
-                return Err(format!(
-                    "Cannot convert {} to quantity unit '{}'.",
-                    self.name(),
-                    target_unit
-                ));
-            }
-        };
-        if self.is_anonymous_quantity() {
-            return Err(format!(
-                "Cannot convert {} to quantity unit '{}'.",
-                self.name(),
-                target_unit
-            ));
-        }
-        let matched = units.get(&target_unit)?;
-        if crate::computation::rational::rational_is_zero(&matched.factor) {
-            return Err(format!(
-                "Unit '{}' has a zero conversion factor in quantity type {}.",
-                matched.name,
-                self.name()
-            ));
-        }
-        Ok(())
-    }
-
-    fn validate_ratio_result_unit(&self, target_unit: &str) -> Result<(), String> {
-        let target_unit =
-            crate::parsing::ast::ascii_lowercase_logical_name(target_unit.to_string());
-        let units = match &self.specifications {
-            TypeSpecification::Ratio { units, .. } => units,
-            _ => {
-                return Err(format!(
-                    "Cannot convert {} to ratio unit '{}'.",
-                    self.name(),
-                    target_unit
-                ));
-            }
-        };
-        let matched = units.get(&target_unit)?;
-        if crate::computation::rational::rational_is_zero(&matched.value) {
-            return Err(format!(
-                "Unit '{}' has a zero conversion value in ratio type {}.",
-                matched.name,
-                self.name()
-            ));
-        }
-        Ok(())
-    }
-
-    /// Whether `source_type` may be converted to `target_unit` for `as` / API rule-result display.
-    ///
-    /// Mirrors planning [`check_unit_conversion_types`](crate::planning::graph) for quantity- and
-    /// ratio-unit targets. Callers must reject impossible conversions before evaluation.
-    pub fn validate_rule_result_unit_conversion(
-        &self,
-        target_unit: &str,
-        unit_index: &std::collections::HashMap<String, LemmaType>,
-        spec_name: &str,
-    ) -> Result<SemanticConversionTarget, String> {
-        if self.is_ratio() {
-            self.validate_ratio_result_unit(target_unit)?;
-            match unit_index.get(target_unit) {
-                Some(target_type) if target_type.is_ratio() => {}
-                Some(_) => {
-                    return Err(format!(
-                        "Unit '{}' does not belong to a ratio type.",
-                        target_unit
-                    ));
-                }
-                None => {
-                    return Err(format!(
-                        "Unknown unit '{}': no ratio type in spec '{}' owns this unit.",
-                        target_unit, spec_name
-                    ));
-                }
-            }
-            return Ok(SemanticConversionTarget::RatioUnit(target_unit.to_string()));
-        }
-
-        if !self.is_quantity() {
-            return Err(format!(
-                "Cannot convert {} to unit '{}': requires quantity or ratio result type.",
-                self.name(),
-                target_unit
-            ));
-        }
-
-        if self.is_anonymous_quantity() {
-            let target_type = unit_index.get(target_unit).ok_or_else(|| {
-                format!(
-                    "Unknown unit '{}': no quantity type in spec '{}' owns this unit.",
-                    target_unit, spec_name
-                )
-            })?;
-            let source_decomp = self.quantity_type_decomposition();
-            let target_decomp = match &target_type.specifications {
-                TypeSpecification::Quantity { decomposition, .. } => decomposition,
-                _ => {
-                    return Err(format!(
-                        "Unit '{}' does not belong to a quantity type.",
-                        target_unit
-                    ));
-                }
-            };
-            if source_decomp != target_decomp {
-                let target_quantity_family = target_type
-                    .quantity_family_name()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| target_type.name().to_string());
-                return Err(format!(
-                    "Cannot cast to '{}' (quantity '{}'): source dimensions {:?} do not \
-                     match target dimensions {:?}. The intermediate result has a different \
-                     physical quantity than the target type.",
-                    target_unit, target_quantity_family, source_decomp, target_decomp
-                ));
-            }
-            target_type.validate_quantity_result_unit(target_unit)?;
-            return Ok(SemanticConversionTarget::QuantityUnit(
-                target_unit.to_string(),
-            ));
-        }
-
-        self.validate_quantity_result_unit(target_unit)?;
-        if unit_index.get(target_unit).is_none() {
-            return Err(format!(
-                "Unknown unit '{}': no quantity type in spec '{}' owns this unit.",
-                target_unit, spec_name
-            ));
-        }
-        Ok(SemanticConversionTarget::QuantityUnit(
-            target_unit.to_string(),
-        ))
-    }
-
+    /// Return the conversion factor for a declared unit name on this quantity type.
     pub fn quantity_unit_factor(
         &self,
         unit_name: &str,
     ) -> &crate::computation::rational::RationalInteger {
-        use crate::computation::rational::rational_one;
-        use std::sync::LazyLock;
-        static EMPTY_UNIT_FACTOR: LazyLock<crate::computation::rational::RationalInteger> =
-            LazyLock::new(rational_one);
-        if unit_name.is_empty() {
-            return &EMPTY_UNIT_FACTOR;
-        }
         let units = match &self.specifications {
             TypeSpecification::Quantity { units, .. } => units,
+            TypeSpecification::QuantityRange { units, .. } => units,
             _ => unreachable!(
                 "BUG: quantity_unit_factor called with non-quantity type {}; only call during evaluation after planning validated quantity conversion",
                 self.name()
@@ -3209,10 +3398,10 @@ impl LemmaType {
 }
 
 /// Literal value with type. The single value type in semantics.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LiteralValue {
     pub value: ValueKind,
-    pub lemma_type: LemmaType,
+    pub lemma_type: Arc<LemmaType>,
 }
 
 impl Serialize for LiteralValue {
@@ -3223,9 +3412,27 @@ impl Serialize for LiteralValue {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("LiteralValue", 3)?;
         state.serialize_field("value", &self.value)?;
-        state.serialize_field("lemma_type", &self.lemma_type)?;
+        state.serialize_field("lemma_type", self.lemma_type.as_ref())?;
         state.serialize_field("display_value", &self.display_value())?;
         state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for LiteralValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            value: ValueKind,
+            lemma_type: LemmaType,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self {
+            value: raw.value,
+            lemma_type: Arc::new(raw.lemma_type),
+        })
     }
 }
 
@@ -3233,11 +3440,11 @@ impl LiteralValue {
     pub fn text(s: String) -> Self {
         Self {
             value: ValueKind::Text(s),
-            lemma_type: primitive_text().clone(),
+            lemma_type: primitive_text_arc().clone(),
         }
     }
 
-    pub fn text_with_type(s: String, lemma_type: LemmaType) -> Self {
+    pub fn text_with_type(s: String, lemma_type: Arc<LemmaType>) -> Self {
         Self {
             value: ValueKind::Text(s),
             lemma_type,
@@ -3247,7 +3454,7 @@ impl LiteralValue {
     pub fn number(n: RationalInteger) -> Self {
         Self {
             value: ValueKind::Number(n),
-            lemma_type: primitive_number().clone(),
+            lemma_type: primitive_number_arc().clone(),
         }
     }
 
@@ -3258,14 +3465,14 @@ impl LiteralValue {
         )
     }
 
-    pub fn number_with_type(n: RationalInteger, lemma_type: LemmaType) -> Self {
+    pub fn number_with_type(n: RationalInteger, lemma_type: Arc<LemmaType>) -> Self {
         Self {
             value: ValueKind::Number(n),
             lemma_type,
         }
     }
 
-    pub fn number_with_type_from_decimal(decimal: Decimal, lemma_type: LemmaType) -> Self {
+    pub fn number_with_type_from_decimal(decimal: Decimal, lemma_type: Arc<LemmaType>) -> Self {
         Self::number_with_type(
             crate::literals::rational_from_parsed_decimal(decimal)
                 .expect("BUG: literal number from decimal must lift at boundary"),
@@ -3273,32 +3480,29 @@ impl LiteralValue {
         )
     }
 
-    pub fn quantity_with_type(n: RationalInteger, unit: String, lemma_type: LemmaType) -> Self {
+    /// Build a Quantity literal carrying a single user-typed unit name.
+    /// The signature is `[(unit_name, 1)]`; the normalize pass expands compound names
+    /// against `unit_index` so all stored signatures end up in canonical (base-unit) form.
+    pub fn quantity_with_type(
+        n: RationalInteger,
+        unit: String,
+        lemma_type: Arc<LemmaType>,
+    ) -> Self {
         Self {
-            value: ValueKind::Quantity(n, unit, BaseQuantityVector::new()),
+            value: ValueKind::Quantity(n, vec![(unit, 1)]),
             lemma_type,
         }
     }
 
-    /// Create an anonymous intermediate Quantity value with a non-empty decomposition.
-    /// Used by cross-axis arithmetic to represent dimensioned values without a named typedef.
-    pub fn quantity_anonymous(n: RationalInteger, decomposition: BaseQuantityVector) -> Self {
-        let lemma_type = LemmaType {
-            name: None,
-            specifications: TypeSpecification::Quantity {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: crate::literals::QuantityUnits::new(),
-                traits: Vec::new(),
-                decomposition: decomposition.clone(),
-                canonical_unit: String::new(),
-                help: String::new(),
-            },
-            extends: TypeExtends::Primitive,
-        };
+    /// Build a Quantity literal with an explicit signature (already in canonical form).
+    /// Used by arithmetic when combining operand signatures yields a multi-term result.
+    pub fn quantity_with_signature(
+        n: RationalInteger,
+        signature: Vec<(String, i32)>,
+        lemma_type: Arc<LemmaType>,
+    ) -> Self {
         Self {
-            value: ValueKind::Quantity(n, String::new(), decomposition),
+            value: ValueKind::Quantity(n, signature),
             lemma_type,
         }
     }
@@ -3306,49 +3510,55 @@ impl LiteralValue {
     /// Number interpreted as a quantity value in the given unit (e.g. "3 as usd" where 3 is a number).
     /// Creates an anonymous one-unit quantity type so computation does not depend on parsing types.
     pub fn number_interpreted_as_quantity(value: RationalInteger, unit_name: String) -> Self {
-        let lemma_type = LemmaType {
-            name: None,
-            specifications: TypeSpecification::Quantity {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: QuantityUnits::from(vec![QuantityUnit {
-                    name: unit_name.clone(),
-                    factor: crate::computation::rational::rational_one(),
-                    derived_quantity_factors: Vec::new(),
-                    decomposition: BaseQuantityVector::new(),
-                    minimum: None,
-                    maximum: None,
-                    default_magnitude: None,
-                }]),
-                traits: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
-                canonical_unit: unit_name.clone(),
-                help: default_help_for_primitive(PrimitiveKind::Quantity).to_string(),
-            },
-            extends: TypeExtends::Primitive,
-        };
         Self {
-            value: ValueKind::Quantity(value, unit_name, BaseQuantityVector::new()),
-            lemma_type,
+            value: ValueKind::Quantity(value, vec![(unit_name, 1)]),
+            lemma_type: Arc::new(anonymous_quantity_type()),
         }
     }
 
     pub fn from_bool(b: bool) -> Self {
         Self {
             value: ValueKind::Boolean(b),
-            lemma_type: primitive_boolean().clone(),
+            lemma_type: primitive_boolean_arc().clone(),
+        }
+    }
+
+    pub fn from_datetime(dt: &crate::parsing::ast::DateTimeValue) -> Self {
+        Self::date(date_time_to_semantic(dt))
+    }
+
+    /// Magnitude string for decimal input prompts (number, single-unit quantity, ratio with percent/permille scaling).
+    #[must_use]
+    pub fn magnitude_default_for_decimal_prompt(&self) -> Option<String> {
+        use crate::computation::rational::{checked_mul, rational_to_display_str, RationalInteger};
+        match &self.value {
+            ValueKind::Number(n) => Some(rational_to_display_str(n)),
+            ValueKind::Quantity(n, signature) if signature.len() == 1 && signature[0].1 == 1 => {
+                Some(rational_to_display_str(n))
+            }
+            ValueKind::Ratio(n, Some(unit)) if unit == "percent" => {
+                checked_mul(n, &RationalInteger::new(100, 1))
+                    .ok()
+                    .map(|scaled| rational_to_display_str(&scaled))
+            }
+            ValueKind::Ratio(n, Some(unit)) if unit == "permille" => {
+                checked_mul(n, &RationalInteger::new(1000, 1))
+                    .ok()
+                    .map(|scaled| rational_to_display_str(&scaled))
+            }
+            ValueKind::Ratio(n, _) => Some(rational_to_display_str(n)),
+            _ => None,
         }
     }
 
     pub fn date(dt: SemanticDateTime) -> Self {
         Self {
             value: ValueKind::Date(dt),
-            lemma_type: primitive_date().clone(),
+            lemma_type: primitive_date_arc().clone(),
         }
     }
 
-    pub fn date_with_type(dt: SemanticDateTime, lemma_type: LemmaType) -> Self {
+    pub fn date_with_type(dt: SemanticDateTime, lemma_type: Arc<LemmaType>) -> Self {
         Self {
             value: ValueKind::Date(dt),
             lemma_type,
@@ -3358,47 +3568,86 @@ impl LiteralValue {
     pub fn time(t: SemanticTime) -> Self {
         Self {
             value: ValueKind::Time(t),
-            lemma_type: primitive_time().clone(),
+            lemma_type: primitive_time_arc().clone(),
         }
     }
 
-    pub fn time_with_type(t: SemanticTime, lemma_type: LemmaType) -> Self {
+    pub fn time_with_type(t: SemanticTime, lemma_type: Arc<LemmaType>) -> Self {
         Self {
             value: ValueKind::Time(t),
             lemma_type,
         }
     }
 
-    pub fn calendar(value: RationalInteger, unit: SemanticCalendarUnit) -> Self {
-        Self {
-            value: ValueKind::Calendar(value, unit),
-            lemma_type: primitive_calendar().clone(),
-        }
+    pub fn calendar(
+        value: RationalInteger,
+        unit: SemanticCalendarUnit,
+        lemma_type: Arc<LemmaType>,
+    ) -> Self {
+        Self::quantity_with_type(value, unit.to_string(), lemma_type)
     }
 
-    pub fn calendar_from_decimal(value: Decimal, unit: SemanticCalendarUnit) -> Self {
+    pub fn calendar_from_decimal(
+        value: Decimal,
+        unit: SemanticCalendarUnit,
+        lemma_type: Arc<LemmaType>,
+    ) -> Self {
         Self::calendar(
             crate::literals::rational_from_parsed_decimal(value)
                 .expect("BUG: calendar literal from decimal must lift at boundary"),
             unit,
+            lemma_type,
         )
     }
 
     pub fn calendar_with_type(
         value: RationalInteger,
         unit: SemanticCalendarUnit,
-        lemma_type: LemmaType,
+        lemma_type: Arc<LemmaType>,
     ) -> Self {
-        Self {
-            value: ValueKind::Calendar(value, unit),
-            lemma_type,
+        Self::calendar(value, unit, lemma_type)
+    }
+
+    /// Derive seconds from a duration quantity's canonical magnitude.
+    pub fn duration_canonical_seconds(&self) -> RationalInteger {
+        let ValueKind::Quantity(magnitude, _) = &self.value else {
+            unreachable!(
+                "BUG: duration_canonical_seconds called with {:?}",
+                self.value
+            );
+        };
+        if !self.lemma_type.is_duration_like_quantity() {
+            unreachable!(
+                "BUG: duration_canonical_seconds called with type {}",
+                self.lemma_type.name()
+            );
         }
+        let factor = self.lemma_type.quantity_unit_factor("second");
+        checked_div(magnitude, factor).expect("BUG: duration unit factor cannot be zero")
+    }
+
+    /// Derive months from a calendar quantity's canonical magnitude.
+    pub fn calendar_canonical_months(&self) -> RationalInteger {
+        let ValueKind::Quantity(magnitude, _) = &self.value else {
+            unreachable!(
+                "BUG: calendar_canonical_months called with {:?}",
+                self.value
+            );
+        };
+        if !self.lemma_type.is_calendar_like() {
+            unreachable!(
+                "BUG: calendar_canonical_months called with type {}",
+                self.lemma_type.name()
+            );
+        }
+        let factor = self.lemma_type.quantity_unit_factor("month");
+        checked_div(magnitude, factor).expect("BUG: calendar unit factor cannot be zero")
     }
 
     pub fn ratio(r: RationalInteger, unit: Option<String>) -> Self {
         Self {
             value: ValueKind::Ratio(r, unit),
-            lemma_type: primitive_ratio().clone(),
+            lemma_type: primitive_ratio_arc().clone(),
         }
     }
 
@@ -3413,7 +3662,7 @@ impl LiteralValue {
     pub fn ratio_with_type(
         r: RationalInteger,
         unit: Option<String>,
-        lemma_type: LemmaType,
+        lemma_type: Arc<LemmaType>,
     ) -> Self {
         Self {
             value: ValueKind::Ratio(r, unit),
@@ -3422,60 +3671,17 @@ impl LiteralValue {
     }
 
     pub fn range(left: LiteralValue, right: LiteralValue) -> Self {
-        let specifications = match (
-            &left.lemma_type.specifications,
-            &right.lemma_type.specifications,
-        ) {
-            (TypeSpecification::Date { .. }, TypeSpecification::Date { .. }) => {
-                TypeSpecification::date_range()
-            }
-            (TypeSpecification::Number { .. }, TypeSpecification::Number { .. }) => {
-                TypeSpecification::number_range()
-            }
-            (
-                TypeSpecification::Quantity {
-                    units,
-                    decomposition,
-                    canonical_unit,
-                    ..
-                },
-                TypeSpecification::Quantity { .. },
-            ) if left.lemma_type.same_quantity_family(&right.lemma_type) => {
-                let mut spec = TypeSpecification::quantity_range();
-                if let TypeSpecification::QuantityRange {
-                    units: range_units,
-                    decomposition: range_decomposition,
-                    canonical_unit: range_canonical_unit,
-                    ..
-                } = &mut spec
-                {
-                    *range_units = units.clone();
-                    *range_decomposition = decomposition.clone();
-                    *range_canonical_unit = canonical_unit.clone();
-                }
-                spec
-            }
-            (TypeSpecification::Ratio { units, .. }, TypeSpecification::Ratio { .. }) => {
-                let mut spec = TypeSpecification::ratio_range();
-                if let TypeSpecification::RatioRange {
-                    units: range_units, ..
-                } = &mut spec
-                {
-                    *range_units = units.clone();
-                }
-                spec
-            }
-            (TypeSpecification::Calendar { .. }, TypeSpecification::Calendar { .. }) => {
-                TypeSpecification::calendar_range()
-            }
-            _ => unreachable!(
+        let specifications =
+            range_type_specification_from_endpoints(&left.lemma_type, &right.lemma_type)
+                .unwrap_or_else(|| {
+                    unreachable!(
                 "BUG: attempted to construct a range literal from incompatible endpoint types"
-            ),
-        };
+            )
+                });
 
         Self {
             value: ValueKind::Range(Box::new(left), Box::new(right)),
-            lemma_type: LemmaType::primitive(specifications),
+            lemma_type: Arc::new(LemmaType::primitive(specifications)),
         }
     }
 
@@ -3545,7 +3751,7 @@ pub enum DataDefinition {
     /// the default inherited from the parent type chain, if any; value-promoting code
     /// uses it instead of re-deriving defaults from [`TypeSpecification`].
     TypeDeclaration {
-        resolved_type: LemmaType,
+        resolved_type: Arc<LemmaType>,
         declared_default: Option<ValueKind>,
         source: Source,
     },
@@ -3574,28 +3780,30 @@ pub enum DataDefinition {
     /// constraint list during type resolution. It is materialized into a
     /// concrete value by [`crate::planning::ExecutionPlan::with_defaults`]
     /// before evaluation (or remains a schema suggestion when callers use
-    /// [`Engine::run_plan_without_defaults`]).
+    /// [`Engine::run_plan`] with `apply_defaults: false`).
     ///
     /// The reference itself is evaluated by copying the target's value (data path)
     /// or the target rule's result in topological order; `set_data_values`
     /// entries for a referenced path override the reference with a literal.
     Reference {
         target: ReferenceTarget,
-        resolved_type: LemmaType,
+        resolved_type: Arc<LemmaType>,
         local_constraints: Option<Vec<Constraint>>,
         local_default: Option<ValueKind>,
         source: Source,
     },
+    /// Runtime data override failed parse or constraint validation.
+    Violated { reason: String, source: Source },
 }
 
 impl DataDefinition {
     /// Schema type for value, type-declaration, and reference data; `None` for imports.
     pub fn schema_type(&self) -> Option<&LemmaType> {
         match self {
-            DataDefinition::Value { value, .. } => Some(&value.lemma_type),
-            DataDefinition::TypeDeclaration { resolved_type, .. } => Some(resolved_type),
-            DataDefinition::Reference { resolved_type, .. } => Some(resolved_type),
-            DataDefinition::Import { .. } => None,
+            DataDefinition::Value { value, .. } => Some(value.lemma_type.as_ref()),
+            DataDefinition::TypeDeclaration { resolved_type, .. } => Some(resolved_type.as_ref()),
+            DataDefinition::Reference { resolved_type, .. } => Some(resolved_type.as_ref()),
+            DataDefinition::Import { .. } | DataDefinition::Violated { .. } => None,
         }
     }
 
@@ -3607,7 +3815,8 @@ impl DataDefinition {
             DataDefinition::Value { value, .. } => Some(value),
             DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Import { .. }
-            | DataDefinition::Reference { .. } => None,
+            | DataDefinition::Reference { .. }
+            | DataDefinition::Violated { .. } => None,
         }
     }
 
@@ -3631,7 +3840,7 @@ impl DataDefinition {
                 ..
             } => Some(LiteralValue {
                 value: dv.clone(),
-                lemma_type: resolved_type.clone(),
+                lemma_type: Arc::clone(resolved_type),
             }),
             DataDefinition::Reference {
                 resolved_type,
@@ -3639,12 +3848,13 @@ impl DataDefinition {
                 ..
             } => Some(LiteralValue {
                 value: dv.clone(),
-                lemma_type: resolved_type.clone(),
+                lemma_type: Arc::clone(resolved_type),
             }),
             DataDefinition::Value { .. }
             | DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Reference { .. }
-            | DataDefinition::Import { .. } => None,
+            | DataDefinition::Import { .. }
+            | DataDefinition::Violated { .. } => None,
         }
     }
 
@@ -3655,6 +3865,7 @@ impl DataDefinition {
             DataDefinition::TypeDeclaration { source, .. } => source,
             DataDefinition::Import { source, .. } => source,
             DataDefinition::Reference { source, .. } => source,
+            DataDefinition::Violated { source, .. } => source,
         }
     }
 
@@ -3687,11 +3898,17 @@ pub fn number_with_unit_to_value_kind(
                 Some(unit.name.clone()),
             ))
         }
-        TypeSpecification::Quantity { .. } => Ok(ValueKind::Quantity(
-            lift_parser_decimal(magnitude)?,
-            unit_name.to_string(),
-            BaseQuantityVector::new(),
-        )),
+        TypeSpecification::Quantity { units, .. } => {
+            use crate::computation::rational::checked_mul;
+            let rational = lift_parser_decimal(magnitude)?;
+            let unit = units.get(unit_name)?;
+            let canonical = checked_mul(&rational, &unit.factor)
+                .map_err(|failure| format!("quantity canonicalization overflow: {failure}"))?;
+            Ok(ValueKind::Quantity(
+                canonical,
+                vec![(unit_name.to_string(), 1)],
+            ))
+        }
         _ => Err(format!(
             "Unit '{}' is defined on type '{}' which is not quantity or ratio",
             unit_name,
@@ -3700,15 +3917,128 @@ pub fn number_with_unit_to_value_kind(
     }
 }
 
+/// Whether a [`ValueKind`] is structurally compatible with a [`TypeSpecification`].
+/// Bound validation (min/max/decimals) is separate; this only checks shape.
+pub(crate) fn value_kind_matches_spec(value: &ValueKind, type_spec: &TypeSpecification) -> bool {
+    matches!(
+        (type_spec, value),
+        (TypeSpecification::Number { .. }, ValueKind::Number(_))
+            | (TypeSpecification::Text { .. }, ValueKind::Text(_))
+            | (TypeSpecification::Boolean { .. }, ValueKind::Boolean(_))
+            | (TypeSpecification::Date { .. }, ValueKind::Date(_))
+            | (TypeSpecification::Time { .. }, ValueKind::Time(_))
+            | (
+                TypeSpecification::Quantity { .. },
+                ValueKind::Quantity(_, _)
+            )
+            | (TypeSpecification::Ratio { .. }, ValueKind::Ratio(_, _))
+            | (TypeSpecification::Ratio { .. }, ValueKind::Number(_))
+            | (
+                TypeSpecification::NumberRange { .. },
+                ValueKind::Range(_, _)
+            )
+            | (TypeSpecification::DateRange { .. }, ValueKind::Range(_, _))
+            | (TypeSpecification::TimeRange { .. }, ValueKind::Range(_, _))
+            | (TypeSpecification::RatioRange { .. }, ValueKind::Range(_, _))
+            | (
+                TypeSpecification::QuantityRange { .. },
+                ValueKind::Range(_, _)
+            )
+            | (TypeSpecification::Veto { .. }, _)
+            | (TypeSpecification::Undetermined, _)
+    )
+}
+
+fn value_kind_tag_for_type(spec: &TypeSpecification) -> &'static str {
+    match spec {
+        TypeSpecification::Boolean { .. } => "boolean",
+        TypeSpecification::Quantity { .. } => "quantity",
+        TypeSpecification::Number { .. } => "number",
+        TypeSpecification::NumberRange { .. }
+        | TypeSpecification::QuantityRange { .. }
+        | TypeSpecification::DateRange { .. }
+        | TypeSpecification::TimeRange { .. }
+        | TypeSpecification::RatioRange { .. } => "range",
+        TypeSpecification::Ratio { .. } => "ratio",
+        TypeSpecification::Text { .. } => "text",
+        TypeSpecification::Date { .. } => "date",
+        TypeSpecification::Time { .. } => "time",
+        TypeSpecification::Veto { .. } => "veto",
+        TypeSpecification::Undetermined => "undetermined",
+    }
+}
+
+fn parser_value_type_mismatch(
+    value: &crate::literals::Value,
+    type_spec: &TypeSpecification,
+) -> String {
+    use crate::parsing::ast::AsLemmaSource;
+    let value_str = format!("{}", AsLemmaSource(value));
+    let expected = value_kind_tag_for_type(type_spec);
+    match type_spec {
+        TypeSpecification::Quantity { units, .. } => {
+            let unit_hint = units
+                .iter()
+                .find(|u| u.factor == crate::computation::rational::rational_one())
+                .map(|u| u.name.as_str())
+                .or_else(|| units.iter().next().map(|u| u.name.as_str()))
+                .unwrap_or("unit");
+            format!("cannot use {value_str} as {expected}: expected `<n> {unit_hint}`")
+        }
+        TypeSpecification::Ratio { units, .. } if !units.is_empty() => {
+            let unit_hint = units
+                .iter()
+                .next()
+                .map(|u| u.name.as_str())
+                .unwrap_or("unit");
+            format!(
+                "cannot use {value_str} as {expected}: expected `<n> {unit_hint}` or bare ratio"
+            )
+        }
+        _ => format!("cannot use {value_str} as {expected}"),
+    }
+}
+
+/// Re-canonicalize a quantity literal after compound unit factors were resolved.
+///
+/// Literals parsed before derived unit resolution were canonicalized with prefix-only
+/// factors; multiply by `resolved_factor / stored_factor` to align with final factors.
+pub fn refresh_quantity_literal_canonical_magnitude(
+    lit: &mut LiteralValue,
+    resolved_type: &LemmaType,
+) {
+    let ValueKind::Quantity(magnitude, signature) = &mut lit.value else {
+        return;
+    };
+    let (unit_name, exponent) = signature
+        .first()
+        .expect("BUG: quantity literal has empty signature during canonical magnitude refresh");
+    if *exponent != 1 || signature.len() != 1 {
+        return;
+    }
+    let stored_factor = lit.lemma_type.quantity_unit_factor(unit_name);
+    let resolved_factor = resolved_type.quantity_unit_factor(unit_name);
+    if stored_factor == resolved_factor {
+        lit.lemma_type = Arc::new(resolved_type.clone());
+        return;
+    }
+    let scaled = checked_mul(magnitude, resolved_factor)
+        .expect("BUG: quantity recanonicalization multiply overflow");
+    *magnitude = checked_div(&scaled, stored_factor)
+        .expect("BUG: quantity recanonicalization divide failed");
+    lit.lemma_type = Arc::new(resolved_type.clone());
+}
+
 /// Convert parser [`Value`] to [`ValueKind`] using the target type (canonicalizes ratio at bind).
 pub fn parser_value_to_value_kind(
     value: &crate::literals::Value,
     type_spec: &TypeSpecification,
 ) -> Result<ValueKind, String> {
+    use crate::computation::rational::decimal_to_rational;
     use crate::literals::Value;
     match (value, type_spec) {
         (Value::NumberWithUnit(magnitude, unit_name), TypeSpecification::Ratio { units, .. }) => {
-            use crate::computation::rational::{checked_div, decimal_to_rational};
+            use crate::computation::rational::checked_div;
             let unit = units.get(unit_name.as_str())?;
             let magnitude_rational = decimal_to_rational(*magnitude)
                 .map_err(|failure| format!("ratio literal failed rational lift: {failure}"))?;
@@ -3719,17 +4049,52 @@ pub fn parser_value_to_value_kind(
                 Some(unit.name.clone()),
             ))
         }
-        (Value::NumberWithUnit(magnitude, unit_name), TypeSpecification::Quantity { .. }) => {
-            Ok(ValueKind::Quantity(
-                lift_parser_decimal(*magnitude)?,
-                unit_name.clone(),
-                BaseQuantityVector::new(),
-            ))
+        (
+            Value::NumberWithUnit(magnitude, unit_name),
+            TypeSpecification::Quantity { units, .. },
+        ) => {
+            use crate::computation::rational::checked_mul;
+            let rational = lift_parser_decimal(*magnitude)?;
+            let unit = units.get(unit_name.as_str())?;
+            let canonical = checked_mul(&rational, &unit.factor)
+                .map_err(|failure| format!("quantity canonicalization overflow: {failure}"))?;
+            Ok(ValueKind::Quantity(canonical, vec![(unit_name.clone(), 1)]))
         }
         (Value::NumberWithUnit(_, _), _) => {
             Err("number_with_unit literal requires a quantity or ratio type".to_string())
         }
-        _ => value_to_semantic(value),
+        (Value::Number(n), TypeSpecification::Number { .. }) => {
+            Ok(ValueKind::Number(lift_parser_decimal(*n)?))
+        }
+        (Value::Number(n), TypeSpecification::Ratio { .. }) => {
+            let r = decimal_to_rational(*n)
+                .map_err(|failure| format!("ratio literal failed rational lift: {failure}"))?;
+            Ok(ValueKind::Ratio(r, None))
+        }
+        (Value::Text(s), TypeSpecification::Text { .. }) => Ok(ValueKind::Text(s.clone())),
+        (Value::Boolean(b), TypeSpecification::Boolean { .. }) => Ok(ValueKind::Boolean(b.into())),
+        (Value::Date(dt), TypeSpecification::Date { .. }) => {
+            Ok(ValueKind::Date(date_time_to_semantic(dt)))
+        }
+        (Value::Time(t), TypeSpecification::Time { .. }) => {
+            Ok(ValueKind::Time(time_to_semantic(t)))
+        }
+        (
+            Value::Range(left, right),
+            range_spec @ (TypeSpecification::NumberRange { .. }
+            | TypeSpecification::DateRange { .. }
+            | TypeSpecification::TimeRange { .. }
+            | TypeSpecification::RatioRange { .. }
+            | TypeSpecification::QuantityRange { .. }),
+        ) => {
+            let endpoint = range_element_type_specification(range_spec).ok_or_else(|| {
+                "BUG: range_element_type_specification missing arm for range type".to_string()
+            })?;
+            let left_lit = lift_range_endpoint(left, &endpoint)?;
+            let right_lit = lift_range_endpoint(right, &endpoint)?;
+            Ok(ValueKind::Range(Box::new(left_lit), Box::new(right_lit)))
+        }
+        (value, type_spec) => Err(parser_value_type_mismatch(value, type_spec)),
     }
 }
 
@@ -3744,9 +4109,6 @@ pub fn value_to_semantic(value: &crate::parsing::ast::Value) -> Result<ValueKind
         Value::Boolean(b) => ValueKind::Boolean(bool::from(*b)),
         Value::Date(dt) => ValueKind::Date(date_time_to_semantic(dt)),
         Value::Time(t) => ValueKind::Time(time_to_semantic(t)),
-        Value::Calendar(n, u) => {
-            ValueKind::Calendar(lift_parser_decimal(*n)?, calendar_unit_to_semantic(u))
-        }
         Value::NumberWithUnit(_, _) => {
             return Err(
                 "number_with_unit literal requires type context (quantity or ratio)".to_string(),
@@ -3820,54 +4182,21 @@ pub(crate) fn compare_semantic_times(
         .then_with(|| left.microsecond.cmp(&right.microsecond))
 }
 
-pub(crate) fn calendar_unit_to_semantic(
-    u: &crate::parsing::ast::CalendarUnit,
-) -> SemanticCalendarUnit {
-    use crate::parsing::ast::CalendarUnit as CU;
-    match u {
-        CU::Month => SemanticCalendarUnit::Month,
-        CU::Year => SemanticCalendarUnit::Year,
-    }
-}
-
 /// Convert AST conversion target to semantic (planning boundary; evaluation/computation use only semantic).
-///
-/// The AST uses [`ConversionTarget::Unit`] for unit names (including duration unit words such as
-/// `hours`); this function looks up `name` in the spec's unit index and returns [`SemanticConversionTarget::RatioUnit`]
-/// or [`SemanticConversionTarget::QuantityUnit`] based on the type that defines the unit.
 pub fn conversion_target_to_semantic(
     ct: &ConversionTarget,
-    unit_index: Option<&HashMap<String, LemmaType>>,
+    unit_index: Option<&HashMap<String, Arc<LemmaType>>>,
 ) -> Result<SemanticConversionTarget, String> {
     match ct {
-        ConversionTarget::Calendar(u) => Ok(SemanticConversionTarget::Calendar(
-            calendar_unit_to_semantic(u),
-        )),
-        ConversionTarget::Type(PrimitiveKind::Number) => Ok(SemanticConversionTarget::Number),
-        ConversionTarget::Type(kind) => Err(format!(
-            "Type conversion to '{:?}' is not yet supported.",
-            kind
-        )),
-        ConversionTarget::Unit(name) => {
-            let index = unit_index.ok_or_else(|| {
-                "Unit conversion requires type resolution; unit index not available.".to_string()
-            })?;
-            let lemma_type = index.get(name).ok_or_else(|| {
-                format!(
-                    "Unknown unit '{}'. Unit must be defined by a quantity or ratio type.",
-                    name
-                )
-            })?;
-            if lemma_type.is_ratio() {
-                Ok(SemanticConversionTarget::RatioUnit(name.clone()))
-            } else if lemma_type.is_quantity() {
-                Ok(SemanticConversionTarget::QuantityUnit(name.clone()))
-            } else {
-                Err(format!(
-                    "Unit '{}' is not a ratio or quantity type; cannot use it in conversion.",
-                    name
-                ))
+        ConversionTarget::Type(kind) => Ok(SemanticConversionTarget::Type(*kind)),
+        ConversionTarget::Unit { unit_name } => {
+            let unit_name = crate::parsing::ast::ascii_lowercase_logical_name(unit_name.clone());
+            if let Some(index) = unit_index {
+                if index.get(&unit_name).is_none() {
+                    return Err(format!("Unknown unit '{unit_name}'."));
+                }
             }
+            Ok(SemanticConversionTarget::Unit { unit_name })
         }
     }
 }
@@ -3876,87 +4205,101 @@ pub fn conversion_target_to_semantic(
 // Primitive type constructors (moved from parsing::ast)
 // -----------------------------------------------------------------------------
 
-// Private statics for lazy initialization
-static PRIMITIVE_BOOLEAN: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_QUANTITY: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_QUANTITY_RANGE: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_NUMBER: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_NUMBER_RANGE: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_TEXT: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_DATE: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_DATE_RANGE: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_TIME: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_CALENDAR: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_RATIO: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_RATIO_RANGE: OnceLock<LemmaType> = OnceLock::new();
-static PRIMITIVE_CALENDAR_RANGE: OnceLock<LemmaType> = OnceLock::new();
+// Statics for lazy initialization of production-used primitive types.
+static PRIMITIVE_BOOLEAN: OnceLock<Arc<LemmaType>> = OnceLock::new();
+static PRIMITIVE_NUMBER: OnceLock<Arc<LemmaType>> = OnceLock::new();
+static PRIMITIVE_TEXT: OnceLock<Arc<LemmaType>> = OnceLock::new();
+static PRIMITIVE_DATE: OnceLock<Arc<LemmaType>> = OnceLock::new();
+static PRIMITIVE_DATE_RANGE: OnceLock<Arc<LemmaType>> = OnceLock::new();
+static PRIMITIVE_TIME: OnceLock<Arc<LemmaType>> = OnceLock::new();
+static PRIMITIVE_RATIO: OnceLock<Arc<LemmaType>> = OnceLock::new();
 
-/// Primitive types use the default TypeSpecification from the parser (single source of truth).
+#[must_use]
+pub fn primitive_boolean_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_BOOLEAN.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::boolean())))
+}
+
+#[must_use]
+pub fn primitive_number_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_NUMBER.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::number())))
+}
+
+#[must_use]
+pub fn primitive_text_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_TEXT.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::text())))
+}
+
+#[must_use]
+pub fn primitive_date_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_DATE.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::date())))
+}
+
+#[must_use]
+pub fn primitive_date_range_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_DATE_RANGE
+        .get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::date_range())))
+}
+
+#[must_use]
+pub fn primitive_time_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_TIME.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::time())))
+}
+
+#[must_use]
+pub fn primitive_ratio_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_RATIO.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::ratio())))
+}
+
+// Test-only non-Arc wrappers used exclusively in unit tests.
+#[cfg(test)]
+static PRIMITIVE_QUANTITY: OnceLock<Arc<LemmaType>> = OnceLock::new();
+
+#[cfg(test)]
 #[must_use]
 pub fn primitive_boolean() -> &'static LemmaType {
-    PRIMITIVE_BOOLEAN.get_or_init(|| LemmaType::primitive(TypeSpecification::boolean()))
+    primitive_boolean_arc().as_ref()
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn primitive_quantity() -> &'static LemmaType {
-    PRIMITIVE_QUANTITY.get_or_init(|| LemmaType::primitive(TypeSpecification::quantity()))
+    primitive_quantity_arc().as_ref()
 }
 
+#[cfg(test)]
 #[must_use]
-pub fn primitive_quantity_range() -> &'static LemmaType {
-    PRIMITIVE_QUANTITY_RANGE
-        .get_or_init(|| LemmaType::primitive(TypeSpecification::quantity_range()))
+pub fn primitive_quantity_arc() -> &'static Arc<LemmaType> {
+    PRIMITIVE_QUANTITY.get_or_init(|| Arc::new(LemmaType::primitive(TypeSpecification::quantity())))
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn primitive_number() -> &'static LemmaType {
-    PRIMITIVE_NUMBER.get_or_init(|| LemmaType::primitive(TypeSpecification::number()))
+    primitive_number_arc().as_ref()
 }
 
-#[must_use]
-pub fn primitive_number_range() -> &'static LemmaType {
-    PRIMITIVE_NUMBER_RANGE.get_or_init(|| LemmaType::primitive(TypeSpecification::number_range()))
-}
-
+#[cfg(test)]
 #[must_use]
 pub fn primitive_text() -> &'static LemmaType {
-    PRIMITIVE_TEXT.get_or_init(|| LemmaType::primitive(TypeSpecification::text()))
+    primitive_text_arc().as_ref()
 }
 
+#[cfg(test)]
 #[must_use]
 pub fn primitive_date() -> &'static LemmaType {
-    PRIMITIVE_DATE.get_or_init(|| LemmaType::primitive(TypeSpecification::date()))
+    primitive_date_arc().as_ref()
 }
 
-#[must_use]
-pub fn primitive_date_range() -> &'static LemmaType {
-    PRIMITIVE_DATE_RANGE.get_or_init(|| LemmaType::primitive(TypeSpecification::date_range()))
-}
-
+#[cfg(test)]
 #[must_use]
 pub fn primitive_time() -> &'static LemmaType {
-    PRIMITIVE_TIME.get_or_init(|| LemmaType::primitive(TypeSpecification::time()))
+    primitive_time_arc().as_ref()
 }
 
-#[must_use]
-pub fn primitive_calendar() -> &'static LemmaType {
-    PRIMITIVE_CALENDAR.get_or_init(|| LemmaType::primitive(TypeSpecification::calendar()))
-}
-
+#[cfg(test)]
 #[must_use]
 pub fn primitive_ratio() -> &'static LemmaType {
-    PRIMITIVE_RATIO.get_or_init(|| LemmaType::primitive(TypeSpecification::ratio()))
-}
-
-#[must_use]
-pub fn primitive_ratio_range() -> &'static LemmaType {
-    PRIMITIVE_RATIO_RANGE.get_or_init(|| LemmaType::primitive(TypeSpecification::ratio_range()))
-}
-
-#[must_use]
-pub fn primitive_calendar_range() -> &'static LemmaType {
-    PRIMITIVE_CALENDAR_RANGE
-        .get_or_init(|| LemmaType::primitive(TypeSpecification::calendar_range()))
+    primitive_ratio_arc().as_ref()
 }
 
 /// Map PrimitiveKind to TypeSpecification. Single source of truth for primitive type resolution.
@@ -3974,8 +4317,7 @@ pub fn type_spec_for_primitive(kind: PrimitiveKind) -> TypeSpecification {
         PrimitiveKind::Date => TypeSpecification::date(),
         PrimitiveKind::DateRange => TypeSpecification::date_range(),
         PrimitiveKind::Time => TypeSpecification::time(),
-        PrimitiveKind::Calendar => TypeSpecification::calendar(),
-        PrimitiveKind::CalendarRange => TypeSpecification::calendar_range(),
+        PrimitiveKind::TimeRange => TypeSpecification::time_range(),
     }
 }
 
@@ -4013,27 +4355,119 @@ impl fmt::Display for LemmaType {
     }
 }
 
+fn decimal_places_in_display_value(decimal: &rust_decimal::Decimal) -> u32 {
+    if decimal.is_integer() {
+        return 0;
+    }
+    decimal.fract().normalize().scale()
+}
+
+fn format_decimal_for_quantity_display(
+    decimal: rust_decimal::Decimal,
+    decimals: Option<u8>,
+) -> String {
+    match decimals {
+        Some(dp) => {
+            let rounded = decimal.round_dp(u32::from(dp));
+            format!("{:.prec$}", rounded, prec = dp as usize)
+        }
+        None => decimal.normalize().to_string(),
+    }
+}
+
+fn format_quantity_canonical_for_display(
+    canonical: &crate::computation::rational::RationalInteger,
+    lemma_type: &LemmaType,
+    signature: &[(String, i32)],
+) -> String {
+    use crate::computation::rational::{
+        checked_div, commit_rational_to_decimal, rational_to_display_str,
+    };
+    use rust_decimal::Decimal;
+
+    let decimals = lemma_type.decimal_places();
+
+    if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
+        if !units.is_empty() {
+            struct UnitDisplayCandidate {
+                unit_name: String,
+                decimal_places: u32,
+                under_1000: bool,
+                abs_magnitude: Decimal,
+                formatted: String,
+            }
+
+            let mut candidates: Vec<UnitDisplayCandidate> = Vec::with_capacity(units.len());
+            for unit in units.iter() {
+                let in_unit = checked_div(canonical, &unit.factor)
+                    .expect("BUG: de-canonicalization for quantity display must not fail");
+                let formatted = match commit_rational_to_decimal(&in_unit) {
+                    Ok(decimal) => format_decimal_for_quantity_display(decimal, decimals),
+                    Err(_) => rational_to_display_str(&in_unit),
+                };
+                let abs_magnitude = match commit_rational_to_decimal(&in_unit) {
+                    Ok(decimal) => decimal.abs(),
+                    Err(_) => Decimal::MAX,
+                };
+                let decimal_places = match commit_rational_to_decimal(&in_unit) {
+                    Ok(decimal) => decimal_places_in_display_value(&decimal),
+                    Err(_) => u32::MAX,
+                };
+                let under_1000 = abs_magnitude < Decimal::from(1000);
+                candidates.push(UnitDisplayCandidate {
+                    unit_name: unit.name.clone(),
+                    decimal_places,
+                    under_1000,
+                    abs_magnitude,
+                    formatted,
+                });
+            }
+
+            let pool: Vec<&UnitDisplayCandidate> = {
+                let under: Vec<_> = candidates.iter().filter(|c| c.under_1000).collect();
+                if under.is_empty() {
+                    candidates.iter().collect()
+                } else {
+                    under
+                }
+            };
+            let best = pool
+                .iter()
+                .min_by(|left, right| {
+                    left.decimal_places
+                        .cmp(&right.decimal_places)
+                        .then_with(|| left.abs_magnitude.cmp(&right.abs_magnitude))
+                })
+                .expect("BUG: quantity type must have at least one declared unit");
+            return format!("{} {}", best.formatted, best.unit_name);
+        }
+    }
+
+    let unit_label = match signature {
+        [] => String::new(),
+        [(name, 1)] => name.clone(),
+        _ => format_signature_operator_style(signature),
+    };
+    let formatted = match commit_rational_to_decimal(canonical) {
+        Ok(decimal) => format_decimal_for_quantity_display(decimal, decimals),
+        Err(_) => rational_to_display_str(canonical),
+    };
+    if unit_label.is_empty() {
+        formatted
+    } else {
+        format!("{formatted} {unit_label}")
+    }
+}
+
 impl fmt::Display for LiteralValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use crate::computation::rational::{commit_rational_to_decimal, rational_to_display_str};
         match &self.value {
-            ValueKind::Quantity(n, u, _decomp) => {
-                if let TypeSpecification::Quantity { decimals, .. } =
-                    &self.lemma_type.specifications
-                {
-                    let s = match commit_rational_to_decimal(n) {
-                        Ok(decimal) => match decimals {
-                            Some(dp) => {
-                                let rounded = decimal.round_dp(u32::from(*dp));
-                                format!("{:.prec$}", rounded, prec = *dp as usize)
-                            }
-                            None => decimal.normalize().to_string(),
-                        },
-                        Err(_) => rational_to_display_str(n),
-                    };
-                    return write!(f, "{} {}", s, u);
-                }
-                write!(f, "{}", self.value)
+            ValueKind::Quantity(n, signature) => {
+                write!(
+                    f,
+                    "{}",
+                    format_quantity_canonical_for_display(n, &self.lemma_type, signature)
+                )
             }
             ValueKind::Ratio(_, Some(_unit_name)) => write!(f, "{}", self.value),
             ValueKind::Range(left, right) => write!(f, "{}...{}", left, right),
@@ -4071,8 +4505,7 @@ mod tests {
             PrimitiveKind::Date,
             PrimitiveKind::DateRange,
             PrimitiveKind::Time,
-            PrimitiveKind::Calendar,
-            PrimitiveKind::CalendarRange,
+            PrimitiveKind::TimeRange,
         ];
         for kind in kinds {
             let spec = type_spec_for_primitive(kind);
@@ -4087,9 +4520,8 @@ mod tests {
                 | TypeSpecification::RatioRange { help, .. }
                 | TypeSpecification::Date { help, .. }
                 | TypeSpecification::DateRange { help }
-                | TypeSpecification::Time { help, .. }
-                | TypeSpecification::Calendar { help, .. }
-                | TypeSpecification::CalendarRange { help } => help,
+                | TypeSpecification::TimeRange { help }
+                | TypeSpecification::Time { help, .. } => help,
                 TypeSpecification::Veto { .. } | TypeSpecification::Undetermined => {
                     unreachable!(
                         "BUG: primitive kind {:?} mapped to non-primitive spec",
@@ -4135,83 +4567,41 @@ mod tests {
     }
 
     #[test]
-    fn parse_data_value_from_json_accepts_json_number_for_number_type() {
-        use crate::parsing::ast::Span;
-        use crate::parsing::source::SourceType;
-        let source = Source::new(
-            SourceType::Volatile,
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-        );
-        let ty = primitive_number();
-        let lit =
-            parse_data_value_from_json(&serde_json::json!(42), &ty.specifications, ty, &source)
-                .unwrap();
-        assert!(matches!(lit.value, ValueKind::Number(d) if d == RationalInteger::new(42, 1)));
-        let lit =
-            parse_data_value_from_json(&serde_json::json!(1.5), &ty.specifications, ty, &source)
-                .unwrap();
-        assert!(
-            matches!(lit.value, ValueKind::Number(d) if d == decimal_to_rational(Decimal::from_str("1.5").unwrap()).unwrap())
-        );
-    }
-
-    #[test]
-    fn parse_data_value_from_json_rejects_bare_json_number_for_quantity() {
-        use crate::literals::{QuantityUnit, QuantityUnits};
-        use crate::parsing::ast::Span;
-        use crate::parsing::source::SourceType;
-        let source = Source::new(
-            SourceType::Volatile,
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-        );
-        let spec = TypeSpecification::Quantity {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units: QuantityUnits::from(vec![QuantityUnit {
-                name: "eur".to_string(),
-                factor: crate::computation::rational::rational_one(),
-                derived_quantity_factors: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
-                minimum: None,
-                maximum: None,
-                default_magnitude: None,
-            }]),
-            traits: Vec::new(),
-            decomposition: BaseQuantityVector::new(),
-            canonical_unit: "eur".to_string(),
-            help: String::new(),
-        };
-        let ty = LemmaType::primitive(spec);
-        assert!(parse_data_value_from_json(
-            &serde_json::json!(100),
-            &ty.specifications,
-            &ty,
-            &source,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn value_kind_quantity_serializes_as_value_unit_object() {
+    fn value_kind_quantity_serializes_with_signature() {
         let kind = ValueKind::Quantity(
             decimal_to_rational(Decimal::from_str("99.50").unwrap()).unwrap(),
-            "eur".to_string(),
-            BaseQuantityVector::new(),
+            vec![("eur".to_string(), 1)],
         );
         let json = serde_json::to_value(&kind).unwrap();
         assert_eq!(json["quantity"]["value"], "99.5");
-        assert_eq!(json["quantity"]["unit"], "eur");
+        assert_eq!(json["quantity"]["signature"][0][0], "eur");
+        assert_eq!(json["quantity"]["signature"][0][1], 1);
+    }
+
+    #[test]
+    fn value_kind_quantity_compound_signature_roundtrips() {
+        let original = ValueKind::Quantity(
+            decimal_to_rational(Decimal::from_str("4800").unwrap()).unwrap(),
+            vec![
+                ("eur".to_string(), 1),
+                ("hour".to_string(), 1),
+                ("minute".to_string(), -1),
+            ],
+        );
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: ValueKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, parsed);
+    }
+
+    #[test]
+    fn value_kind_quantity_empty_signature_roundtrips() {
+        let original = ValueKind::Quantity(
+            decimal_to_rational(Decimal::from_str("12.5").unwrap()).unwrap(),
+            Vec::new(),
+        );
+        let json = serde_json::to_string(&original).unwrap();
+        let parsed: ValueKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, parsed);
     }
 
     #[test]
@@ -4281,14 +4671,13 @@ mod tests {
                     default_magnitude: None,
                 }]),
                 traits: vec![QuantityTrait::Duration],
-                decomposition: BaseQuantityVector::new(),
-                canonical_unit: "second".to_string(),
+                decomposition: None,
                 help: String::new(),
             },
             TypeExtends::Primitive,
         );
         assert_eq!(
-            LiteralValue::quantity_with_type(one, "second".to_string(), dur_type)
+            LiteralValue::quantity_with_type(one, "second".to_string(), Arc::new(dur_type))
                 .lemma_type
                 .name(),
             "duration"
@@ -4358,12 +4747,12 @@ mod tests {
                     default_magnitude: None,
                 }]),
                 traits: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
-                canonical_unit: "eur".to_string(),
+                decomposition: None,
                 help: String::new(),
             },
             extends: TypeExtends::Primitive,
         };
+        let money_type = Arc::new(money_type);
         let val = LiteralValue::quantity_with_type(
             decimal_to_rational(Decimal::from_str("1.8").unwrap()).unwrap(),
             "eur".to_string(),
@@ -4392,8 +4781,7 @@ mod tests {
                     default_magnitude: None,
                 }]),
                 traits: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
-                canonical_unit: "items".to_string(),
+                decomposition: None,
                 help: String::new(),
             },
             extends: TypeExtends::Primitive,
@@ -4401,7 +4789,7 @@ mod tests {
         let val_any = LiteralValue::quantity_with_type(
             decimal_to_rational(Decimal::from_str("42.50").unwrap()).unwrap(),
             "items".to_string(),
-            quantity_no_decimals,
+            Arc::new(quantity_no_decimals),
         );
         assert_eq!(val_any.display_value(), "42.5 items");
     }
@@ -4622,9 +5010,9 @@ mod tests {
     }
 
     fn month_default_arg() -> CommandArg {
-        CommandArg::Literal(crate::literals::Value::Calendar(
+        CommandArg::Literal(crate::literals::Value::NumberWithUnit(
             Decimal::ONE,
-            crate::literals::CalendarUnit::Month,
+            "month".to_string(),
         ))
     }
 
@@ -4731,7 +5119,13 @@ mod tests {
                 &mut default,
             )
             .unwrap();
-        assert!(matches!(default, Some(ValueKind::Quantity(_, unit, _)) if unit == "week"));
+        assert!(matches!(
+            default,
+            Some(RawDefault::Quantity {
+                unit_name,
+                ..
+            }) if unit_name == "week"
+        ));
     }
 
     #[test]
@@ -4766,7 +5160,8 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("fortnight"));
-        assert!(err.contains("Valid 'duration' units are"));
+        assert!(err.contains("not defined on 'duration'"));
+        assert!(err.contains("Valid units are"));
     }
 
     fn money_quantity_type() -> LemmaType {
@@ -4800,8 +5195,7 @@ mod tests {
                     },
                 ]),
                 traits: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
-                canonical_unit: "eur".to_string(),
+                decomposition: None,
                 help: String::new(),
             },
             TypeExtends::Primitive,
@@ -4809,92 +5203,296 @@ mod tests {
     }
 
     #[test]
-    fn validate_rule_result_unit_conversion_requires_unit_index_entry() {
-        let money = money_quantity_type();
-        let mut index = std::collections::HashMap::new();
-        index.insert("eur".to_string(), money.clone());
-        let err = money
-            .validate_rule_result_unit_conversion("usd", &index, "pricing")
-            .expect_err("usd missing from index");
-        assert!(err.contains("Unknown unit 'usd'"), "got: {err}");
-    }
-
-    #[test]
-    fn validate_rule_result_unit_conversion_accepts_declared_unit_in_index() {
-        let money = money_quantity_type();
-        let mut index = std::collections::HashMap::new();
-        index.insert("eur".to_string(), money.clone());
-        index.insert("usd".to_string(), money.clone());
-        money
-            .validate_rule_result_unit_conversion("usd", &index, "pricing")
-            .unwrap();
-    }
-
-    #[test]
-    fn validate_quantity_result_unit_accepts_declared_unit() {
-        let money = money_quantity_type();
-        money.validate_quantity_result_unit("usd").unwrap();
-        money.validate_quantity_result_unit("EUR").unwrap();
-    }
-
-    #[test]
-    fn validate_quantity_result_unit_lists_valid_units() {
-        let money = money_quantity_type();
-        let err = money
-            .validate_quantity_result_unit("gbp")
-            .expect_err("gbp not declared");
-        assert!(err.contains("Valid units: eur, usd"), "got: {err}");
-    }
-
-    #[test]
-    fn validate_quantity_result_unit_rejects_zero_factor() {
-        let mut money = money_quantity_type();
-        if let TypeSpecification::Quantity { units, .. } = &mut money.specifications {
-            units.push(QuantityUnit {
-                name: "zero".to_string(),
-                factor: crate::computation::rational::RationalInteger::new(0, 1),
-                derived_quantity_factors: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
-                minimum: None,
-                maximum: None,
-                default_magnitude: None,
-            });
-        }
-        let err = money
-            .validate_quantity_result_unit("zero")
-            .expect_err("zero factor");
-        assert!(err.contains("zero conversion factor"), "got: {err}");
-    }
-
-    #[test]
-    fn validate_quantity_result_unit_rejects_non_quantity() {
-        let number = primitive_number().clone();
-        let err = number
-            .validate_quantity_result_unit("eur")
-            .expect_err("number is not quantity");
-        assert!(
-            err.contains("Cannot convert number to quantity unit"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_quantity_result_unit_rejects_anonymous_quantity() {
-        let mut decomposition = BaseQuantityVector::new();
-        decomposition.insert("mass".to_string(), 1);
-        let anonymous = LemmaType::anonymous_for_decomposition(decomposition);
-        let err = anonymous
-            .validate_quantity_result_unit("kilogram")
-            .expect_err("anonymous");
-        assert!(
-            err.contains("Cannot convert quantity to quantity unit"),
-            "got: {err}"
-        );
-    }
-
-    #[test]
     fn quantity_unit_names_for_named_quantity() {
         let money = money_quantity_type();
         assert_eq!(money.quantity_unit_names(), Some(vec!["eur", "usd"]));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Phase 0 — pin combine_signatures and canonicalize_signature behavior
+    // ---------------------------------------------------------------------------
+
+    fn sig(pairs: &[(&str, i32)]) -> Vec<(String, i32)> {
+        pairs.iter().map(|(s, e)| (s.to_string(), *e)).collect()
+    }
+
+    #[test]
+    fn combine_signatures_multiply_adds_exponents() {
+        let left = sig(&[("eur", 1)]);
+        let right = sig(&[("hour", -1)]);
+        let result = combine_signatures(&left, &right, true);
+        assert_eq!(result, sig(&[("eur", 1), ("hour", -1)]));
+    }
+
+    #[test]
+    fn combine_signatures_divide_subtracts_exponents() {
+        let left = sig(&[("eur", 1)]);
+        let right = sig(&[("hour", 1)]);
+        let result = combine_signatures(&left, &right, false);
+        assert_eq!(result, sig(&[("eur", 1), ("hour", -1)]));
+    }
+
+    #[test]
+    fn combine_signatures_cancels_to_empty() {
+        let left = sig(&[("ce", 1), ("minute", -1)]);
+        let right = sig(&[("minute", 1)]);
+        let result = combine_signatures(&left, &right, true);
+        // ce * (ce/min * min) = ce; minute cancels
+        assert_eq!(result, sig(&[("ce", 1)]));
+    }
+
+    #[test]
+    fn combine_signatures_output_is_canonical_form() {
+        let left = sig(&[("eur", 1), ("hour", 1)]);
+        let right = sig(&[("minute", 1)]);
+        let result = combine_signatures(&left, &right, false); // divide
+                                                               // [("eur",1),("hour",1)] / [("minute",1)] = [("eur",1),("hour",1),("minute",-1)]
+        let expected = sig(&[("eur", 1), ("hour", 1), ("minute", -1)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn canonicalize_signature_drops_zero_exponents() {
+        let sig_with_zero = sig(&[("eur", 1), ("hour", 0), ("minute", -1)]);
+        let result = canonicalize_signature(&sig_with_zero);
+        assert_eq!(result, sig(&[("eur", 1), ("minute", -1)]));
+    }
+
+    #[test]
+    fn canonicalize_signature_sorts_by_name() {
+        let unsorted = sig(&[("minute", -1), ("eur", 1)]);
+        let result = canonicalize_signature(&unsorted);
+        assert_eq!(result, sig(&[("eur", 1), ("minute", -1)]));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Phase 0 — format_signature_operator_style (to be implemented in
+    // signature_factor_and_display todo)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn format_signature_operator_style_numerator_only() {
+        let signature = sig(&[("eur", 1)]);
+        let result = format_signature_operator_style(&signature);
+        assert_eq!(result, "eur");
+    }
+
+    #[test]
+    fn format_signature_operator_style_with_denominator() {
+        let signature = sig(&[("eur", 1), ("hour", -1)]);
+        let result = format_signature_operator_style(&signature);
+        assert_eq!(result, "eur/hour");
+    }
+
+    #[test]
+    fn format_signature_operator_style_denominator_only() {
+        let signature = sig(&[("meter", -1)]);
+        let result = format_signature_operator_style(&signature);
+        assert_eq!(result, "1/meter");
+    }
+
+    #[test]
+    fn format_signature_operator_style_with_exponents() {
+        let signature = sig(&[("meter", 2), ("second", -2)]);
+        let result = format_signature_operator_style(&signature);
+        assert_eq!(result, "meter^2/second^2");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Phase 0 — calendar_unit_factor (to be implemented in builtin_calendar_factor_table)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn calendar_unit_factor_table_completeness() {
+        // Every SemanticCalendarUnit Display string must resolve to a factor.
+        // Today SemanticCalendarUnit only has Month and Year; more may be added.
+        for unit in &[SemanticCalendarUnit::Month, SemanticCalendarUnit::Year] {
+            let name = unit.to_string();
+            assert!(
+                calendar_unit_factor(&name).is_some(),
+                "calendar_unit_factor('{}') must return Some",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_calendar_unit_display_returns_singular() {
+        // Today Month => "months", Year => "years" (plural).
+        // After singular_calendar_names_everywhere, must be "month" and "year".
+        assert_eq!(SemanticCalendarUnit::Month.to_string(), "month");
+        assert_eq!(SemanticCalendarUnit::Year.to_string(), "year");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Phase 0 — signature_factor (to be implemented in signature_factor_and_display)
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn signature_factor_with_calendar_units() {
+        use crate::computation::rational::RationalInteger;
+        use std::collections::HashMap;
+        let calendar = test_calendar_type_for_signature_factor();
+        let unit_index: HashMap<String, Arc<LemmaType>> = HashMap::new();
+        // month factor = 1, year factor = 12.
+        // [(month,1),(year,-1)] = 1/12
+        let sig_month_per_year = sig(&[("month", 1), ("year", -1)]);
+        let factor = signature_factor(&sig_month_per_year, &unit_index, Some(&calendar));
+        let expected = RationalInteger::new(1, 12);
+        assert_eq!(factor, expected, "month/year factor must be 1/12");
+    }
+
+    fn test_calendar_type_for_signature_factor() -> LemmaType {
+        use crate::computation::rational::{decimal_to_rational, rational_one};
+        use crate::literals::{QuantityUnit, QuantityUnits};
+        use rust_decimal::Decimal;
+        LemmaType::new(
+            "calendar".to_string(),
+            TypeSpecification::Quantity {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: QuantityUnits::from(vec![
+                    QuantityUnit {
+                        name: "month".to_string(),
+                        factor: rational_one(),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                        decomposition: calendar_decomposition(),
+                        derived_quantity_factors: Vec::new(),
+                    },
+                    QuantityUnit {
+                        name: "year".to_string(),
+                        factor: decimal_to_rational(Decimal::from(12)).expect("year factor"),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                        decomposition: calendar_decomposition(),
+                        derived_quantity_factors: Vec::new(),
+                    },
+                ]),
+                traits: vec![QuantityTrait::Calendar],
+                decomposition: Some(calendar_decomposition()),
+                help: String::new(),
+            },
+            TypeExtends::Primitive,
+        )
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: signature_factor called with unresolved unit name")]
+    fn signature_factor_panics_on_unresolved_name() {
+        use std::collections::HashMap;
+        let unit_index: HashMap<String, Arc<LemmaType>> = HashMap::new();
+        let bad_sig = sig(&[("nonexistent_unit_xyz", 1)]);
+        signature_factor(&bad_sig, &unit_index, None);
+    }
+
+    #[test]
+    fn signature_factor_uses_owner_when_expression_index_empty() {
+        use crate::computation::rational::RationalInteger;
+        use std::collections::HashMap;
+        let money = test_money_type_for_signature_factor();
+        let expression_units: HashMap<String, Arc<LemmaType>> = HashMap::new();
+        let sig_usd = sig(&[("usd", 1)]);
+        let factor = signature_factor(&sig_usd, &expression_units, Some(&money));
+        assert_eq!(factor, RationalInteger::new(91, 100));
+    }
+
+    fn test_money_type_for_signature_factor() -> LemmaType {
+        use crate::computation::rational::decimal_to_rational;
+        use crate::literals::{QuantityUnit, QuantityUnits};
+        use rust_decimal::Decimal;
+        LemmaType::new(
+            "money".to_string(),
+            TypeSpecification::Quantity {
+                minimum: None,
+                maximum: None,
+                decimals: Some(2),
+                units: QuantityUnits::from(vec![
+                    QuantityUnit {
+                        name: "eur".to_string(),
+                        factor: crate::computation::rational::rational_one(),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                        decomposition: BaseQuantityVector::new(),
+                        derived_quantity_factors: Vec::new(),
+                    },
+                    QuantityUnit {
+                        name: "usd".to_string(),
+                        factor: decimal_to_rational(Decimal::new(91, 2)).expect("usd factor"),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                        decomposition: BaseQuantityVector::new(),
+                        derived_quantity_factors: Vec::new(),
+                    },
+                ]),
+                traits: Vec::new(),
+                decomposition: None,
+                help: String::new(),
+            },
+            TypeExtends::Primitive,
+        )
+    }
+
+    fn quantity_type_with_kilogram() -> TypeSpecification {
+        use crate::computation::rational::rational_one;
+        use crate::literals::{QuantityUnit, QuantityUnits};
+        let mut units = QuantityUnits::new();
+        units.push(QuantityUnit {
+            name: "kilogram".to_string(),
+            factor: rational_one(),
+            minimum: None,
+            maximum: None,
+            default_magnitude: None,
+            decomposition: BaseQuantityVector::new(),
+            derived_quantity_factors: Vec::new(),
+        });
+        TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units,
+            traits: Vec::new(),
+            decomposition: None,
+            help: String::new(),
+        }
+    }
+
+    #[test]
+    fn parser_value_to_value_kind_rejects_bare_number_for_quantity() {
+        let ten = Value::Number(Decimal::from(10));
+        let err = parser_value_to_value_kind(&ten, &quantity_type_with_kilogram())
+            .expect_err("bare number must not bind to quantity");
+        assert!(
+            err.contains("kilogram"),
+            "error must hint expected unit, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parser_value_to_value_kind_accepts_number_with_unit_for_quantity() {
+        let ten_kg = Value::NumberWithUnit(Decimal::from(10), "kilogram".to_string());
+        let kind = parser_value_to_value_kind(&ten_kg, &quantity_type_with_kilogram())
+            .expect("10 kilogram must bind to quantity");
+        assert!(matches!(kind, ValueKind::Quantity(_, _)));
+    }
+
+    #[test]
+    fn parser_value_to_value_kind_accepts_bare_number_for_ratio() {
+        let ten = Value::Number(Decimal::from(10));
+        let kind =
+            parser_value_to_value_kind(&ten, &TypeSpecification::ratio()).expect("number -> ratio");
+        assert!(matches!(kind, ValueKind::Ratio(_, None)));
+    }
+
+    #[test]
+    fn value_kind_matches_spec_rejects_number_for_quantity() {
+        use crate::computation::rational::RationalInteger;
+        let n = ValueKind::Number(RationalInteger::new(10, 1));
+        assert!(!value_kind_matches_spec(&n, &quantity_type_with_kilogram()));
     }
 }

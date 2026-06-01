@@ -6,7 +6,7 @@ Lemma Engine is the Rust crate behind the Lemma language. It lets you parse, val
 
 ## Status
 
-Lemma is still early-stage and **not yet recommended for production use**. Expect breaking changes, evolving semantics, and incomplete tooling while the project matures.
+Lemma is pre-1.0. The language and APIs are stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
 
 ## Why Lemma?
 
@@ -22,14 +22,14 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.15"
+lemma-engine = "0.8.16"
 ```
 
 ### Minimal example
 
 ```rust
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, EvaluationRequest, SourceType};
+use lemma::{Engine, SourceType};
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
@@ -52,12 +52,11 @@ let response = engine.run(
     Some(&now),
     HashMap::new(),
     false,
-    EvaluationRequest::default(),
 )?;
 
 for (rule_name, rule_result) in &response.results {
-    if let Some(value) = rule_result.result.value() {
-        println!("{rule_name}: {value}");
+    if !rule_result.vetoed {
+        println!("{rule_name}: {}", rule_result.display.as_deref().unwrap_or(""));
     }
 }
 ```
@@ -66,7 +65,7 @@ for (rule_name, rule_result) in &response.results {
 
 ```rust
 use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, EvaluationRequest, SourceType};
+use lemma::{Engine, SourceType};
 use std::collections::HashMap;
 
 let mut engine = Engine::new();
@@ -100,13 +99,12 @@ let response = engine.run(
     Some(&now),
     values,
     false,
-    EvaluationRequest::default(),
 )?;
 ```
 
-## Embedded SI stdlib
+## Embedded units stdlib
 
-`Engine::new()` loads `repo lemma` / `spec si` from [`src/lemma/si.lemma.std`](src/lemma/si.lemma.std) at compile time (import with `uses lemma si`). The `.lemma.std` suffix keeps workspace discovery from loading it as a user spec. It always appears in [`Engine::list`](engine/src/engine.rs). Inspect formatted source with `engine.format_repository("lemma")`.
+`Engine::new()` loads `repo lemma` / `spec units` from [`src/lemma/units.lemma.std`](src/lemma/units.lemma.std) at compile time (import with `uses lemma units`). The `.lemma.std` suffix keeps workspace discovery from loading it as a user spec. It always appears in [`Engine::list`](engine/src/engine.rs). Inspect formatted source with `engine.format_repository("lemma")`.
 
 ## Features
 
@@ -129,14 +127,14 @@ cargo add lemma-engine
 ### CLI tool
 
 ```bash
-cargo install lemma-cli
+cargo install lemma
 lemma run pricing quantity=10
 ```
 
 ### HTTP server
 
 ```bash
-cargo install lemma-cli
+cargo install lemma
 lemma server --port 8012
 ```
 

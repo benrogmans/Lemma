@@ -2,44 +2,85 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.16] - 2026-06-03
+
+0.8.16 makes unit math smarter and the API simpler. Quantity arithmetic now flows across types — `rule wage: rate * hours` resolves to a money amount on its own — and every quantity or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (years, months) are now ordinary quantity units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
+
+```lemma
+uses contract: employment_contract
+with contract.salary: 5000 eur
+rule net_salary: contract.net
+```
+
+### Added
+
+- **Cross-type quantity arithmetic**: multiplying or dividing quantities of different types now produces the right unit automatically and promotes the result to a matching named type when one exists in scope (e.g. `rate * hours` → money). Ambiguous results are rejected at planning rather than guessed.
+- **Cross-type quantity comparison**: dimensionally equal quantities (e.g. a per-hour rate vs a per-minute rate) compare correctly in rule conditions and inversion.
+- **Named type ranges**: declare a range over any rangeable named type, e.g. `data estimate: money range`. Unsupported bases (`text range`, …) are rejected at planning.
+- **`time range`**: half-open time-of-day intervals such as `09:00...17:00`, with `in` containment and span in duration units. Endpoints must share a timezone; reversed literals do not wrap past midnight.
+- **Quantity-range span**: any specialized `quantity range` (mass, money, duration, …) projects its width with `(lo...hi) as <unit> as number` when the unit is in the same family; cross-family span is rejected.
+- **Structured data input**: JSON unit maps (`{"eur": "84"}`) are accepted at the CLI, HTTP, and WASM boundaries.
+
+### Changed
+
+- **Binding keyword `fill` → `with`**: set values on an imported spec with `with alias.field: …`. Local `with name: …` is rejected — use `data` for slots in the current spec.
+- **In-spec unit conversion only**: display-time conversion flags (`lemma run --as`, HTTP `as_units`, WASM `rule_result_units`) are removed. Convert with `as <unit>` in the spec; quantity and ratio rule results now return every declared unit as a map.
+- **Calendar periods are units**: years and months are quantity units in the standard library via `uses lemma units` (`units.calendar`). The standalone `calendar` and `calendar range` types are removed; a calendar range comes from `units.calendar -> default 18 year...67 year` or inline literals like `18 year...67 year`. The names `month`, `year`, `week`, and `day` are reserved for calendar/duration units.
+- **No canonical unit required**: a `quantity` type no longer needs a factor-1 unit; magnitudes stay anchored to the units you declare.
+- **Compound unit display**: results whose unit is a combination render in operator style (e.g. `26.66… eur·hour/minute`); single-unit values stay `<magnitude> <unit>`.
+
+### Fixed
+
+- Unit-conversion explanations no longer drop a step when both the source and target units are explicitly declared.
+- Comparing dimensionally compatible quantities of different types during inversion no longer crashes.
+
+### Breaking
+
+- **`fill` → `with`**: update binding rows and tooling; the serde `DataValue` tag is now `"with"`. A bare `with name:` / `fill name:` (no import alias) is a parse error.
+- **Display-conversion API removed**: drop `--as`, `as_units`, `rule_result_units`, and `EvaluationRequest`; read the unit you need from each rule result's unit map (`results.<rule>.quantity`, etc.). Evaluate/load no longer accept legacy `{value, unit}` payloads — use unit maps.
+- **Calendar types removed**: replace `data band: calendar range` with `uses lemma units` and `data band: units.calendar -> default 18 year...67 year`. The API `kind` tags `calendar` and `calendar_range` are gone.
+
 ## [0.8.15] - 2026-05-25
 
 ### Added
 
+- **Cross-type result unit derivation via symbolic unit signatures**: arithmetic between named quantity types now derives a result unit from the user-chosen operand units. `batch_size_ce / packaging_speed` (with `packaging_speed` declared as `ce/minute`) produces `<n> minute` directly, with no `as <unit>` cast required. Combined signatures that resolve unambiguously to a single named unit in scope auto-promote the anonymous intermediate to that named type; ambiguous signatures (the same composite signature matching units in two distinct types) are now a planning error that asks the spec to rename one of the conflicting units or differentiate the factor.
 - **Unified ratio units across types**: same unit name (e.g. `percent`, `permille`, `basis_points`) may be reused across distinct `ratio` typedefs in the same spec as long as the conversion factors match. Mismatched factors still error at planning. Built-in `percent` / `permille` collisions across multiple `data: ratio` fields are now valid; cross-type ratio rule-result conversion (`lemma run --as rule:unit`) works across the unified unit space.
 - **Ratio range defaults**: ratio ranges may declare a default literal range, e.g. `data band: ratio range -> default 10%...50%`. The default participates in schema (`SpecSchema.data[].default`) the same way scalar ratio defaults do.
-- **LSP navigation for `uses` references**: a `uses @org/repo spec` line becomes a single clickable link that jumps to the resolved dependency file in `lemma_deps/` at the spec's starting line; hover shows the LemmaBase URL. `uses lemma si` opens an on-demand snapshot at `lemma_deps/lemma.std`.
+- **LSP navigation for `uses` references**: a `uses @org/repo spec` line becomes a single clickable link that jumps to the resolved dependency file in `lemma_deps/` at the spec's starting line; hover shows the LemmaBase URL. `uses lemma units` opens an on-demand snapshot at `lemma_deps/lemma.std`.
 - **`documentation/llms.txt`**: authoring guide for LLMs translating natural-language policy into Lemma specs. Linked from `documentation/index.md` and the root README.
 - **`lemma` CLI on npm**: install without Rust via `npm install -g lemma` or run ad-hoc with `npx lemma`. The umbrella `lemma` package resolves a per-platform binary from `@lemmabase/cli-{linux,darwin,win32}-{x64,arm64}` optional dependencies; no postinstall scripts, works offline once installed.
 
 ### Changed
 
+- **Per-quantity-type unit normalisation removed**: the engine no longer rescales a quantity's natural-factor units to a per-type canonical at planning. Stored magnitudes follow the unit declarations as written; cross-type arithmetic combines natural factors directly, so `1 ce_per_minute * 1 minute` now lands on `1 ce` rather than going through an opaque per-type scale. Specs that relied on hidden rescaling for derived types lacking a factor-1 unit must add one (e.g. declare the canonical base unit explicitly) so that result magnitudes remain anchored to a known unit. No user-visible value change for specs whose canonical unit was already factor 1.
 - **Case-insensitive logical identifiers**: spec, data, rule, unit, and repo names are canonicalised to lowercase at parse. `repo` blocks that differ only by case are merged. API surfaces (spec lookup, data override keys, `rule_result_units` keys) lowercase inputs at the boundary; internal `eq_ignore_ascii_case` lookups are replaced with exact match on canonical names. The formatter emits identifiers in lowercase.
-- Test registry references and the `12_registry_references` integration example modernised to `uses lemma si` plus reformatted `uses @lemma/std finance` blocks.
+- Test registry references and the `12_registry_references` integration example modernised to `uses lemma units` plus reformatted `uses @lemma/std finance` blocks.
 - Quality CI workflow declares an explicit `contents: read` permission.
 
 ### Fixed
 
-- Local test runs no longer load the embedded stdlib twice (deduplicated stdlib include when validating workspaces that already reference `lemma si`).
+- Local test runs no longer load the embedded stdlib twice (deduplicated stdlib include when validating workspaces that already reference `lemma units`).
+- Ratio typedef `default` now requires a unit (matching `minimum` / `maximum` and the 0.8.14 contract): `-> default 0.015` is rejected; use `-> default 1.5%` or `-> default 500 basis_points`.
 
 ### Breaking
 
-- **Workspace dependency directory renamed from `.deps/` to `lemma_deps/`**. Move any existing `.deps/` content into `lemma_deps/`; old `.deps/` directories are no longer recognised. The public `LEMMA_DEPS_DIR_NAME` constant in `lemma::deps` is the single source of truth. Embedded stdlib snapshot path moved from `engine/src/lemma/si.lemma` to `engine/src/lemma/si.lemma.std` (and surfaces in workspaces as `lemma_deps/lemma.std`).
+- **Workspace dependency directory renamed from `.deps/` to `lemma_deps/`**. Move any existing `.deps/` content into `lemma_deps/`; old `.deps/` directories are no longer recognised. The public `LEMMA_DEPS_DIR_NAME` constant in `lemma::deps` is the single source of truth. Embedded stdlib snapshot path moved from `engine/src/lemma/si.lemma` to `engine/src/lemma/units.lemma.std` (and surfaces in workspaces as `lemma_deps/lemma.std`).
 - **Identifier canonicalisation is lossy**: any integrator that round-tripped mixed-case identifiers through the engine (API calls, override maps, rule-result unit maps) now receives lowercase. Callers comparing identifiers case-sensitively to engine output must lowercase their side too.
 
 ## [0.8.14] - 2026-05-21
 
 - Branch on failed rules: `is veto` / `is not veto` (e.g. `unless price is veto then fallback`).
 - Return a rule’s result in another unit without changing the spec: CLI `lemma run --as rule:unit`, HTTP `?as_units=rule:unit,...`, MCP/WASM `rule_result_units` (quantity conversion or ratio relabel).
-- Time: elapsed intervals via `uses lemma si` and types like `si.duration` (no built-in `duration` type); calendar periods (`year`, `month`, `week`) on **calendar** and **date** types — not mixed with elapsed durations.
+- Time: elapsed intervals via `uses lemma units` and types like `units.duration` (no built-in `duration` type); calendar periods (`year`, `month`, `week`) on **calendar** and **date** types — not mixed with elapsed durations.
 - **Calendar** type and **calendar range** for calendar-aware periods; **date**, **number**, **quantity**, and **ratio** ranges with half-open `lo...hi`; width via `(lo...hi) as <unit>` for number, duration quantity, and ratio ranges.
-- Compound quantity units (e.g. rates built from SI units in `uses lemma si`).
+- Compound quantity units (e.g. rates built from SI units in `uses lemma units`).
 - Arithmetic stays exact until API output; JSON magnitudes are decimal strings (see `documentation/numeric_precision.md`). Division by zero in rule bodies is rejected at planning time.
 
 ### Breaking (0.8.13 → 0.8.14)
 
 - `scale` → `quantity` (and `scale range` → `quantity range`) in specs and API `kind` tags.
-- `uses lemma` → `uses lemma si`; stdlib is embedded `repo lemma` / `spec si` (`si.duration`, `si.length`, …).
+- `uses lemma` → `uses lemma units`; stdlib is embedded `repo lemma` / `spec units` (`units.duration`, `units.length`, …).
 - `Engine::run`, `run_plan`, `run_plan_without_defaults`, and `evaluate_plan` take `EvaluationRequest` after `record_operations` — pass `EvaluationRequest::default()` when you do not need display conversion.
 - Value-copy rows use `fill` (removed `from` keyword); integrators: `rule_result_quantity_units` → `rule_result_units`.
 - Ratio typedef `minimum` / `maximum` / `default` must include units (`10%`, not bare `10`).

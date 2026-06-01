@@ -2,7 +2,7 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.15",
+  "version": "0.8.16",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "repository": {
@@ -52,7 +52,7 @@
       {
         "id": "dataBody",
         "superType": "type",
-        "description": "Data or fill field body after the colon (type, value, constraints)"
+        "description": "Data or with field body after the colon (type, value, constraints)"
       },
       {
         "id": "punctuation",

@@ -5,9 +5,15 @@ mod eval_rule_bool;
 
 use effective::{make_effective, make_effective_tz};
 use eval_rule_bool::eval_rule_bool;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, ValueKind};
+use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
+
+fn decimal_lit(s: &str) -> Decimal {
+    Decimal::from_str(s).expect("BUG: test decimal literal must parse")
+}
 
 fn eval_rule_date(
     engine: &Engine,
@@ -17,20 +23,16 @@ fn eval_rule_date(
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), data, true)
         .unwrap();
     response
         .results
         .values()
         .find(|r| r.rule.name == rule)
         .unwrap_or_else(|| panic!("rule '{}' not found in response", rule))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap()
@@ -46,7 +48,7 @@ fn now_resolves_to_effective_datetime() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 rule current: now
     "#;
     engine.load(code, lemma::SourceType::Volatile).unwrap();
@@ -68,20 +70,21 @@ fn now_in_arithmetic_subtraction() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data birth_date: 2000-01-01
-rule age_duration: birth_date...now as seconds
+rule age_duration: birth_date...now as seconds as number
     "#;
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     let lit = eval_rule_date(&engine, "test", "age_duration", &effective, HashMap::new());
-    if let ValueKind::Quantity(seconds, unit, _) = &lit.value {
-        let days = lemma::commit_rational_to_decimal(seconds).unwrap()
+    if let ValueKind::Number(seconds) = &lit.value {
+        let days = lemma::ValueKind::Number(*seconds)
+            .as_decimal_magnitude()
+            .unwrap()
             / rust_decimal::Decimal::from(86_400);
         assert_eq!(days, rust_decimal::Decimal::from(9497));
-        assert!(unit.eq_ignore_ascii_case("seconds"), "unit={unit:?}");
     } else {
-        panic!("expected Quantity, got {:?}", lit.value);
+        panic!("expected Number, got {:?}", lit.value);
     }
 }
 
@@ -90,7 +93,7 @@ fn now_in_comparison() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
@@ -110,7 +113,7 @@ fn now_in_comparison_after_deadline() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
@@ -130,7 +133,7 @@ fn now_different_effective_gives_different_result() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data threshold: 2026-06-01
 rule is_past_threshold: now > threshold
     "#;
@@ -164,7 +167,7 @@ fn in_past_with_literal_date() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-01-15
 rule was_in_past: event_date in past
     "#;
@@ -184,7 +187,7 @@ fn in_past_future_date_is_false() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-12-25
 rule was_in_past: event_date in past
     "#;
@@ -204,7 +207,7 @@ fn in_future_with_literal_date() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data launch_date: 2026-12-01
 rule is_upcoming: launch_date in future
     "#;
@@ -224,7 +227,7 @@ fn in_future_past_date_is_false() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data launch_date: 2025-06-01
 rule is_upcoming: launch_date in future
     "#;
@@ -244,7 +247,7 @@ fn in_past_date_equal_now_is_false() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-07T12:00:00Z
 rule check: event_date in past
     "#;
@@ -264,7 +267,7 @@ fn in_future_date_equal_now_is_false() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-07T12:00:00Z
 rule check: event_date in future
     "#;
@@ -288,7 +291,7 @@ fn in_past_7_days_inside_window() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data delivered: 2026-03-03
 rule recent_delivery: delivered in past 7 days
     "#;
@@ -308,7 +311,7 @@ fn in_past_7_days_outside_window() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data delivered: 2026-02-15
 rule recent_delivery: delivered in past 7 days
     "#;
@@ -328,7 +331,7 @@ fn in_future_30_days_inside_window() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data renewal_date: 2026-03-20
 rule upcoming_renewal: renewal_date in future 30 days
     "#;
@@ -348,7 +351,7 @@ fn in_future_30_days_outside_window() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data renewal_date: 2026-06-15
 rule upcoming_renewal: renewal_date in future 30 days
     "#;
@@ -368,7 +371,7 @@ fn in_past_tolerance_at_exact_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event: 2026-02-28T12:00:00Z
 rule check: event in past 7 days
     "#;
@@ -389,7 +392,7 @@ fn in_past_tolerance_with_hours() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-07T10:00:00Z
 rule check: event in past 4 hours
     "#;
@@ -409,7 +412,7 @@ fn in_past_tolerance_with_hours_outside() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-07T06:00:00Z
 rule check: event in past 4 hours
     "#;
@@ -433,7 +436,7 @@ fn in_calendar_year_same_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data invoice_date: 2026-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
@@ -453,7 +456,7 @@ fn in_calendar_year_different_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data invoice_date: 2025-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
@@ -473,7 +476,7 @@ fn in_past_calendar_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data invoice_date: 2025-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
@@ -493,7 +496,7 @@ fn in_past_calendar_year_two_years_ago_excluded() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data invoice_date: 2024-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
@@ -513,7 +516,7 @@ fn in_future_calendar_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data target_date: 2027-06-15
 rule next_year: target_date in future calendar year
     "#;
@@ -533,7 +536,7 @@ fn not_in_calendar_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data old_date: 2024-01-01
 rule is_not_this_year: old_date not in calendar year
     "#;
@@ -553,7 +556,7 @@ fn not_in_calendar_year_current_year_is_false() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data today_date: 2026-03-07
 rule is_not_this_year: today_date not in calendar year
     "#;
@@ -573,7 +576,7 @@ fn in_calendar_month_same_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data payment_date: 2026-03-15
 rule this_month_payment: payment_date in calendar month
     "#;
@@ -593,7 +596,7 @@ fn in_calendar_month_different_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data payment_date: 2026-04-01
 rule this_month_payment: payment_date in calendar month
     "#;
@@ -613,7 +616,7 @@ fn in_past_calendar_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data payment_date: 2026-02-15
 rule last_month_payment: payment_date in past calendar month
     "#;
@@ -633,7 +636,7 @@ fn in_past_calendar_month_cross_year_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data payment_date: 2025-12-15
 rule last_month_payment: payment_date in past calendar month
     "#;
@@ -653,7 +656,7 @@ fn in_future_calendar_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data due_date: 2026-04-15
 rule next_month_due: due_date in future calendar month
     "#;
@@ -673,7 +676,7 @@ fn in_calendar_week_same_week() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data meeting_date: 2026-03-02
 rule this_week_meeting: meeting_date in calendar week
     "#;
@@ -694,7 +697,7 @@ fn in_calendar_week_different_week() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data meeting_date: 2026-03-15
 rule this_week_meeting: meeting_date in calendar week
     "#;
@@ -718,7 +721,7 @@ fn unless_with_in_past() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data order_date: 2026-03-05
 rule shipping_fee: 15
   unless order_date in past 3 days then 0
@@ -727,7 +730,10 @@ rule shipping_fee: 15
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
-        assert_eq!(*n, lemma::RationalInteger::new(0, 1));
+        assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            decimal_lit("0")
+        );
     } else {
         panic!("expected Number, got {:?}", lit.value);
     }
@@ -738,7 +744,7 @@ fn unless_with_in_past_not_matching() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data order_date: 2026-02-01
 rule shipping_fee: 15
   unless order_date in past 3 days then 0
@@ -748,7 +754,7 @@ rule shipping_fee: 15
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
         assert_eq!(
-            lemma::commit_rational_to_decimal(n).unwrap(),
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
             rust_decimal::Decimal::from(15)
         );
     } else {
@@ -761,7 +767,7 @@ fn unless_with_in_calendar_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data hire_date: 2026-01-15
 rule is_new_hire: false
   unless hire_date in calendar year then true
@@ -782,7 +788,7 @@ fn unless_with_not_in_calendar_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data hire_date: 2024-06-01
 rule needs_recertification: false
   unless hire_date not in calendar year then true
@@ -807,7 +813,7 @@ fn date_sugar_combined_with_and() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data order_date: 2026-03-05
 data is_premium: true
 rule qualifies: order_date in past 7 days and is_premium
@@ -828,7 +834,7 @@ fn date_sugar_combined_with_and_false() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data order_date: 2026-03-05
 data is_premium: false
 rule qualifies: order_date in past 7 days and is_premium
@@ -849,7 +855,7 @@ fn multiple_date_sugar_in_unless_chain() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-05
 rule status: "unknown"
   unless event_date in past then "completed"
@@ -875,7 +881,7 @@ fn in_past_with_data_binding() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: date
 rule was_recent: event_date in past 7 days
     "#;
@@ -897,7 +903,7 @@ fn in_past_with_data_binding_outside_window() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: date
 rule was_recent: event_date in past 7 days
     "#;
@@ -923,7 +929,7 @@ fn in_past_timezone_aware() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-07T00:00:00Z
 rule check: event_date in past
     "#;
@@ -945,7 +951,7 @@ fn in_calendar_year_with_timezone_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-12-31T23:00:00Z
 rule check: event_date in calendar year
     "#;
@@ -976,7 +982,7 @@ fn in_calendar_month_february_leap_year() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data payment_date: 2024-02-29
 rule this_month: payment_date in calendar month
     "#;
@@ -996,7 +1002,7 @@ fn in_calendar_month_last_day_of_31_day_month() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-31T23:59:59Z
 rule check: event_date in calendar month
     "#;
@@ -1016,7 +1022,7 @@ fn in_calendar_month_first_of_next_month_excluded() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-04-01T00:00:00Z
 rule check: event_date in calendar month
     "#;
@@ -1040,7 +1046,7 @@ fn in_calendar_week_monday_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-02T00:00:00Z
 rule check: event_date in calendar week
     "#;
@@ -1061,7 +1067,7 @@ fn in_calendar_week_sunday_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-08T23:59:59Z
 rule check: event_date in calendar week
     "#;
@@ -1081,7 +1087,7 @@ fn in_calendar_week_next_monday_excluded() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-03-09T00:00:00Z
 rule check: event_date in calendar week
     "#;
@@ -1105,7 +1111,7 @@ fn in_calendar_year_jan_1_boundary() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2026-01-01T00:00:00Z
 rule check: event_date in calendar year
     "#;
@@ -1125,7 +1131,7 @@ fn in_past_calendar_year_boundary_last_day() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2025-12-31T23:59:59Z
 rule check: event_date in past calendar year
     "#;
@@ -1145,7 +1151,7 @@ fn in_past_calendar_year_boundary_first_day() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
-uses lemma si
+uses lemma units
 data event_date: 2025-01-01T00:00:00Z
 rule check: event_date in past calendar year
     "#;

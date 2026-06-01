@@ -1,0 +1,16 @@
+{
+  "customer_tier": "gold",
+  "payment_method": "credit",
+  "shipping_zone": "national",
+  "quantity": "12",
+  "unit_price": "85",
+  "package_weight": "3.5",
+  "delivery_distance": "180",
+  "loyalty_points": "6500",
+  "coupon_percent": "10",
+  "is_fragile": "true",
+  "is_express": "true",
+  "is_hazardous": "false",
+  "is_gift": "false",
+  "is_first_time": "false"
+}

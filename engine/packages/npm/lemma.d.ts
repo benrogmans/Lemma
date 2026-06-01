@@ -35,7 +35,7 @@ declare module './lemma.bindings.js' {
     list(): ResolvedRepositoryJson[];
 
     /**
-     * Formatted Lemma source for a loaded repository (from in-engine AST). Use `"lemma"` for embedded SI stdlib.
+     * Formatted Lemma source for a loaded repository (from in-engine AST). Use `"lemma"` for embedded units stdlib.
      */
     format_repository(repository: string): string;
 
@@ -56,9 +56,8 @@ declare module './lemma.bindings.js' {
       spec: string,
       rule_names: string[] | string,
       data_values: Record<string, unknown>,
-      rule_result_units?: Record<string, string> | null,
       effective?: string | null,
-    ): any;
+    ): EvaluationResponse;
   }
 }
 
@@ -205,6 +204,47 @@ export interface DataEntry {
   bound_value?: LiteralValue;
   /** `-> default ...` suggestion; omitted from `bound_value` until evaluation applies it. */
   default?: LiteralValue;
+}
+
+/** Return shape of {@link Engine.run}. */
+export interface EvaluationResponse {
+  spec: string;
+  effective: string;
+  results: Record<string, RuleResult>;
+  data: EvaluationDataEntry[];
+}
+
+export interface RuleResult {
+  vetoed: boolean;
+  display?: string | null;
+  veto_reason?: string | null;
+  rule_type: string;
+  quantity?: Record<string, string> | null;
+  ratio?: Record<string, string> | null;
+  number?: string | null;
+  boolean?: boolean | null;
+  text?: string | null;
+  date?: unknown | null;
+  time?: unknown | null;
+  calendar?: { value: string; unit: string } | null;
+  range?: { from: RuleResultPayload; to: RuleResultPayload } | null;
+  explanation?: unknown | null;
+}
+
+export interface RuleResultPayload {
+  quantity?: Record<string, string> | null;
+  ratio?: Record<string, string> | null;
+  number?: string | null;
+  boolean?: boolean | null;
+  text?: string | null;
+  date?: unknown | null;
+  time?: unknown | null;
+  calendar?: { value: string; unit: string } | null;
+}
+
+export interface EvaluationDataEntry {
+  path: string;
+  value: unknown;
 }
 
 /** Return shape of {@link Engine.schema}. */

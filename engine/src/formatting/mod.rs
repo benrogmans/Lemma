@@ -152,7 +152,7 @@ fn data_constraints_nonempty(constraints: &Option<Vec<Constraint>>) -> bool {
 fn data_value_has_arrow_constraints(value: &DataValue) -> bool {
     match value {
         DataValue::Definition { constraints, .. } => data_constraints_nonempty(constraints),
-        DataValue::Fill(_) => false,
+        DataValue::With(_) => false,
         _ => false,
     }
 }
@@ -187,7 +187,7 @@ fn data_value_rhs_for_spec_body(value: &DataValue, continuation_prefix: &str) ->
             }
             out
         }
-        DataValue::Fill(crate::parsing::ast::FillRhs::Reference { target }) => target.to_string(),
+        DataValue::With(crate::parsing::ast::WithRhs::Reference { target }) => target.to_string(),
         _ => format!("{}", AsLemmaSource(value)),
     }
 }
@@ -195,7 +195,7 @@ fn data_value_rhs_for_spec_body(value: &DataValue, continuation_prefix: &str) ->
 fn data_declaration_keyword(data: &LemmaData) -> &'static str {
     match &data.value {
         DataValue::Import(_) => unreachable!("BUG: format_data called on Import row"),
-        DataValue::Fill(_) => "fill",
+        DataValue::With(_) => "with",
         DataValue::Definition { .. } => "data",
     }
 }
@@ -212,7 +212,7 @@ fn format_data(data: &LemmaData, line_prefix: &str) -> String {
     }
 }
 
-/// Byte length from start of `data ` or `fill ` through the single space after `:` (same layout as [`format_data`]).
+/// Byte length from start of `data ` or `with ` through the single space after `:` (same layout as [`format_data`]).
 fn data_line_prefix_len_before_rhs(keyword: &str, ref_str: &str) -> usize {
     keyword.len() + 1 + ref_str.len() + 2
 }
@@ -324,60 +324,23 @@ fn format_sorted_data(data: &[LemmaData], out: &mut String, line_prefix: &str) {
     if !imports.is_empty() {
         out.push('\n');
 
-        let has_overrides = |row: &LemmaData| -> bool {
-            let ref_name = &row.reference.name;
-            overrides.iter().any(|o| {
-                o.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str())
-            })
-        };
-
-        let is_bare = |row: &LemmaData| -> bool {
-            if let DataValue::Import(sr) = &row.value {
-                let last = sr.name.rsplit('/').next().unwrap_or(&sr.name);
-                row.reference.name == last && sr.effective.is_none() && !has_overrides(row)
-            } else {
-                false
-            }
-        };
-
-        let mut i = 0;
-        while i < imports.len() {
+        for (i, row) in imports.iter().enumerate() {
             if i > 0 {
                 out.push('\n');
             }
-            if is_bare(imports[i]) {
-                let mut group_names = Vec::new();
-                while i < imports.len() && is_bare(imports[i]) {
-                    if let DataValue::Import(sr) = &imports[i].value {
-                        group_names.push(sr.to_string());
-                    }
-                    i += 1;
-                }
-                if group_names.len() == 1 {
-                    out.push_str(line_prefix);
-                    out.push_str(&format!("uses {}", group_names[0]));
-                } else {
-                    out.push_str(line_prefix);
-                    out.push_str(&format!("uses {}", group_names.join(", ")));
-                }
-                out.push('\n');
-            } else {
-                let row = imports[i];
-                out.push_str(line_prefix);
-                out.push_str(&format_import_row(row));
-                out.push('\n');
-                let ref_name = &row.reference.name;
-                let binding_overrides: Vec<&LemmaData> = overrides
-                    .iter()
-                    .filter(|o| {
-                        o.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str())
-                    })
-                    .copied()
-                    .collect();
-                if !binding_overrides.is_empty() {
-                    emit_data_row_group(&binding_overrides, line_prefix, out);
-                }
-                i += 1;
+            out.push_str(line_prefix);
+            out.push_str(&format_import_row(row));
+            out.push('\n');
+            let ref_name = &row.reference.name;
+            let binding_overrides: Vec<&LemmaData> = overrides
+                .iter()
+                .filter(|o| {
+                    o.reference.segments.first().map(|s| s.as_str()) == Some(ref_name.as_str())
+                })
+                .copied()
+                .collect();
+            if !binding_overrides.is_empty() {
+                emit_data_row_group(&binding_overrides, line_prefix, out);
             }
         }
     }
@@ -637,8 +600,8 @@ mod tests {
 
     #[test]
     fn test_format_value_calendar() {
-        let v = Value::Calendar(Decimal::from(6), crate::literals::CalendarUnit::Month);
-        assert_eq!(fmt_value(&v), "6 months");
+        let v = Value::NumberWithUnit(Decimal::from(6), "month".to_string());
+        assert_eq!(fmt_value(&v), "6 month");
     }
 
     #[test]
@@ -790,10 +753,10 @@ rule total: income
     fn test_format_groups_spec_refs_with_overrides() {
         let source = r#"spec test
 
-fill retail.quantity: 5
+with retail.quantity: 5
 uses order wholesale
 uses order retail
-fill wholesale.quantity: 100
+with wholesale.quantity: 100
 data base_price: 50
 
 rule total: base_price
@@ -809,10 +772,38 @@ rule total: base_price
             .unwrap();
         let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lines[0], "uses order wholesale");
-        assert_eq!(lines[1], "fill wholesale.quantity: 100");
+        assert_eq!(lines[1], "with wholesale.quantity: 100");
         assert_eq!(lines[2], "uses order retail");
-        assert_eq!(lines[3], "fill retail.quantity: 5");
+        assert_eq!(lines[3], "with retail.quantity: 5");
         assert_eq!(lines[4], "data base_price: 50");
+    }
+
+    #[test]
+    fn test_format_groups_with_literals_under_each_uses() {
+        let source = r#"spec test
+
+uses x
+uses y
+
+with x.name: "Ben"
+with y.age: 15
+
+rule r: 1
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        let data_section = formatted
+            .split("rule r")
+            .next()
+            .unwrap()
+            .split("spec test\n")
+            .nth(1)
+            .unwrap();
+        let lines: Vec<&str> = data_section.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines[0], "uses x");
+        assert_eq!(lines[1], "with x.name: \"Ben\"");
+        assert_eq!(lines[2], "uses y");
+        assert_eq!(lines[3], "with y.age: 15");
     }
 
     #[test]

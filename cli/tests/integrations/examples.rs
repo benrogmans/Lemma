@@ -138,7 +138,7 @@ fn test_all_examples_parse_via_cli() {
     }
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("list").arg(temp_dir.path());
+    cmd.arg("list").arg("--prefix").arg(temp_dir.path());
 
     cmd.assert()
         .success()

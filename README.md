@@ -1,7 +1,8 @@
 # Lemma
 
 [![CI](https://github.com/lemma/lemma/workflows/CI/badge.svg)](https://github.com/lemma/lemma/actions/workflows/quality.yml)
-[![Crates.io](https://img.shields.io/crates/v/lemma-engine.svg)](https://crates.io/crates/lemma-engine)
+[![Crates.io CLI](https://img.shields.io/crates/v/lemma.svg?label=lemma)](https://crates.io/crates/lemma)
+[![Crates.io Engine](https://img.shields.io/crates/v/lemma-engine.svg?label=lemma-engine)](https://crates.io/crates/lemma-engine)
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
@@ -22,7 +23,8 @@ rule discount: 0%
   unless quantity >= 50  then 20%
   unless is_vip          then 25%
 
-rule price: quantity * 20 - discount
+rule price: quantity * 20
+rule discounted_price: price - price * discount
 ```
 
 The last matching `unless` wins, mirroring how business rules, legal documents, and SOPs are written: "In principle X applies, unless Y, unless Z..."
@@ -31,7 +33,7 @@ The last matching `unless` wins, mirroring how business rules, legal documents, 
 ## Why Lemma?
 Laws, policies, and business rules traditionally exist in natural language. While humans must understand these rules, we rely on systems to enforce them. Over time, organizations have built massive IT infrastructures to house these rules; however, as both the regulations and the systems evolve, they become harder to manage and the disconnect between them grows.
 
-Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis, eliminating runtime errors. Furthermore, Lemma provides unrivaled auditability by explaining exactly how rules were applied for every evaluation.
+Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis — invalid specs are rejected before evaluation ever runs. Furthermore, Lemma provides unrivaled auditability by explaining exactly how rules were applied for every evaluation.
 
 This allows you to implement policy changes rapidly without compromising compliance. Lemma requires no database and maintains no state; by design, it is secure, able to run within existing applications and yes, it is blazingly fast.
 
@@ -49,8 +51,22 @@ Lemma provides certainty and transparency. Every result is exact, verifiable, an
 
 ### Installation
 
+**CLI** (from [crates.io/crates/lemma](https://crates.io/crates/lemma)):
+
 ```bash
-cargo install lemma-cli
+cargo install lemma
+```
+
+Or via npm:
+
+```bash
+npm install -g lemma
+```
+
+**Rust library** (from [crates.io/crates/lemma-engine](https://crates.io/crates/lemma-engine)):
+
+```bash
+cargo add lemma-engine --rename lemma
 ```
 
 ### Your first spec
@@ -126,7 +142,7 @@ data discount: ratio
   -> maximum 100%
 ```
 
-**Primitive types:** `boolean`, `number`, `quantity` (with units; time periods via `trait duration`), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `number range`, `quantity range`, `ratio range`, `calendar range`). Import SI units with `uses lemma si` (`si.duration`, `si.length`, …).
+**Primitive types:** `boolean`, `number`, `quantity` (with units; elapsed time via `trait duration`, calendar periods via `trait calendar`), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `quantity range`, `ratio range`, plus named `<type> range`). Import stdlib with `uses lemma units` (`units.duration`, `units.calendar`, …).
 
 ### Spec composition
 
@@ -147,7 +163,8 @@ data senior_threshold: 5
 
 spec leave_entitlement
 
-uses employee, leave_policy
+uses employee
+uses leave_policy
 
 rule is_senior:
   employee.years_service >= leave_policy.senior_threshold
@@ -212,7 +229,7 @@ Reference shared specs from a registry with `@`:
 ```lemma
 spec invoicing
 
-uses fin: @lemma/std/finance
+uses fin: @lemma/std finance
 
 data subtotal: 250 eur
 data tax_rate: 21%
@@ -236,7 +253,7 @@ lemma run pricing quantity=10 is_vip=true # override data
 lemma run --interactive                   # interactive mode
 
 lemma run pricing --effective 2025-01-01  # temporal query
-lemma run pricing -o json                 # JSON output
+lemma run pricing --json                 # JSON output
 lemma run pricing -x                      # show reasoning
 
 lemma schema pricing                      # spec schema
@@ -248,7 +265,7 @@ lemma fetch                                 # fetch registry dependencies
 ### HTTP Server
 
 ```bash
-lemma server ./policies
+lemma server --prefix ./policies
 
 # Evaluate via query parameters
 curl "http://localhost:8012/pricing?quantity=10&is_member=true"
@@ -267,7 +284,7 @@ Routes: `GET /` (list specs), `GET /openapi.json`, `GET /docs` (interactive API 
 Live-reload with `--watch`:
 
 ```bash
-lemma server ./policies --watch
+lemma server --prefix ./policies --watch
 ```
 
 ### MCP Server
@@ -320,7 +337,7 @@ Supports `linux/amd64` and `linux/arm64`.
 
 ## Status
 
-Lemma is in early development and **not yet recommended for production use**. Expect breaking changes and evolving semantics.
+Lemma is pre-1.0. The language and APIs are stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](CHANGELOG.md) before upgrading.
 
 ## Contributing
 

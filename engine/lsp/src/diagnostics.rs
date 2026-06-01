@@ -220,14 +220,14 @@ mod tests {
 
     #[test]
     fn errors_to_diagnostics_filters_by_file_attribute() {
-        use lemma::parsing::ast::Span;
+        use lemma::Span;
 
         let error_in_file = Error::parsing(
             "bad syntax",
-            lemma::parsing::source::Source::new(
-                lemma::parsing::source::SourceType::Path(std::sync::Arc::new(
-                    std::path::PathBuf::from("file_a.lemma"),
-                )),
+            lemma::Source::new(
+                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "file_a.lemma",
+                ))),
                 Span {
                     start: 0,
                     end: 8,
@@ -239,10 +239,10 @@ mod tests {
         );
         let error_in_other_file = Error::parsing(
             "also bad",
-            lemma::parsing::source::Source::new(
-                lemma::parsing::source::SourceType::Path(std::sync::Arc::new(
-                    std::path::PathBuf::from("file_b.lemma"),
-                )),
+            lemma::Source::new(
+                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "file_b.lemma",
+                ))),
                 Span {
                     start: 0,
                     end: 5,

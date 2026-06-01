@@ -3,16 +3,15 @@
 //! Internal [`NormalForm`] IR; public API is [`normalize_expression`].
 
 use crate::computation::rational::{
-    convert_quantity_magnitude_rational, rational_is_zero, rational_one, rational_operation,
-    rational_zero, NumericFailure, NumericOperation, RationalInteger,
+    rational_is_zero, rational_one, rational_operation, rational_zero, NumericFailure,
+    NumericOperation, RationalInteger,
 };
 use crate::computation::UnitResolutionContext;
-use crate::evaluation::conversion_explanation::infer_anonymous_quantity_unit_name;
-use crate::parsing::ast::{CalendarPeriodUnit, DateCalendarKind, DateRelativeKind};
+use crate::parsing::ast::{CalendarPeriodUnit, DateCalendarKind, DateRelativeKind, PrimitiveKind};
 use crate::planning::semantics::{
-    negated_comparison, primitive_number, ArithmeticComputation, ComparisonComputation, Expression,
-    ExpressionKind, LiteralValue, MathematicalComputation, NegationType, SemanticConversionTarget,
-    Source, ValueKind, VetoExpression,
+    negated_comparison, primitive_number_arc, ArithmeticComputation, ComparisonComputation,
+    Expression, ExpressionKind, LiteralValue, MathematicalComputation, NegationType,
+    SemanticConversionTarget, Source, ValueKind, VetoExpression,
 };
 use crate::Error;
 use std::sync::Arc;
@@ -27,7 +26,7 @@ fn literal_from_folded_rational(
 ) -> Result<LiteralValue, Error> {
     Ok(LiteralValue::number_with_type(
         rational,
-        primitive_number().clone(),
+        primitive_number_arc().clone(),
     ))
 }
 
@@ -48,143 +47,107 @@ pub(crate) fn normalize_expression(
     Ok(to_expression(&nf, source))
 }
 
-/// Unless-chain as nested `LogicalOr(LogicalAnd(cond, val), fallback)` (forward unless order).
-/// Matches rule evaluation: last `unless` in source is checked first (outermost `Or` evaluates
-/// left child first; left is `And(last_unless)`).
+/// Decision table from an unless-chain: each `(condition, result)` pair has a self-contained
+/// condition (negations of all higher-priority unless conditions included). Ordered by priority
+/// (last `unless` in source first).
 #[must_use]
-pub(crate) fn build_unless_chain(branches: &[(Option<Expression>, Expression)]) -> Expression {
+pub(crate) fn build_decision_table(
+    branches: &[(Option<Expression>, Expression)],
+) -> Vec<(Expression, Expression)> {
     assert!(
         !branches.is_empty(),
         "BUG: rule must have at least one branch"
     );
     if branches.len() == 1 {
-        return branches[0].1.clone();
+        let (_, result) = &branches[0];
+        return vec![(
+            literal_bool_expression(true, result.source_location.clone()),
+            result.clone(),
+        )];
     }
-    let default = branches[0].1.clone();
-    let mut acc = default;
-    for (condition, result) in branches.iter().skip(1) {
-        let cond = condition
+
+    let mut table = Vec::new();
+    let mut higher_priority_conditions: Vec<Expression> = Vec::new();
+
+    for (condition, result) in branches.iter().skip(1).rev() {
+        let unless_condition = condition
             .as_ref()
             .expect("BUG: non-default branch missing condition");
-        let guarded = Expression::with_source(
-            ExpressionKind::LogicalAnd(Arc::new(cond.clone()), Arc::new(result.clone())),
-            None,
-        );
-        acc = Expression::with_source(
-            ExpressionKind::LogicalOr(Arc::new(guarded), Arc::new(acc)),
-            None,
-        );
+        let self_contained_condition =
+            conjunction_with_negated_higher_priority(unless_condition, &higher_priority_conditions);
+        table.push((self_contained_condition, result.clone()));
+        higher_priority_conditions.push(unless_condition.clone());
     }
-    acc
+
+    let (_, default_result) = &branches[0];
+    let default_condition = if higher_priority_conditions.is_empty() {
+        literal_bool_expression(true, default_result.source_location.clone())
+    } else {
+        conjunction_of_negated_conditions(
+            &higher_priority_conditions,
+            default_result.source_location.clone(),
+        )
+    };
+    table.push((default_condition, default_result.clone()));
+
+    table
 }
 
-/// Replace each `RulePath` with the referenced rule's normalized result expression.
-#[must_use]
-pub(crate) fn inline_rule_refs(
-    expr: &Expression,
-    normalized_rules: &std::collections::HashMap<crate::planning::semantics::RulePath, Expression>,
+fn literal_bool_expression(value: bool, source: Option<Source>) -> Expression {
+    Expression::with_source(
+        ExpressionKind::Literal(Box::new(LiteralValue::from_bool(value))),
+        source,
+    )
+}
+
+fn conjunction_with_negated_higher_priority(
+    condition: &Expression,
+    higher_priority_conditions: &[Expression],
 ) -> Expression {
-    match &expr.kind {
-        ExpressionKind::RulePath(path) => normalized_rules
-            .get(path)
-            .cloned()
-            .unwrap_or_else(|| expr.clone()),
-        ExpressionKind::Literal(_)
-        | ExpressionKind::DataPath(_)
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::Now => expr.clone(),
-        ExpressionKind::LogicalAnd(left, right) => Expression::with_source(
-            ExpressionKind::LogicalAnd(
-                Arc::new(inline_rule_refs(left, normalized_rules)),
-                Arc::new(inline_rule_refs(right, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::LogicalOr(left, right) => Expression::with_source(
-            ExpressionKind::LogicalOr(
-                Arc::new(inline_rule_refs(left, normalized_rules)),
-                Arc::new(inline_rule_refs(right, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::Arithmetic(left, op, right) => Expression::with_source(
-            ExpressionKind::Arithmetic(
-                Arc::new(inline_rule_refs(left, normalized_rules)),
-                op.clone(),
-                Arc::new(inline_rule_refs(right, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::Comparison(left, op, right) => Expression::with_source(
-            ExpressionKind::Comparison(
-                Arc::new(inline_rule_refs(left, normalized_rules)),
-                op.clone(),
-                Arc::new(inline_rule_refs(right, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::UnitConversion(inner, target) => Expression::with_source(
-            ExpressionKind::UnitConversion(
-                Arc::new(inline_rule_refs(inner, normalized_rules)),
-                target.clone(),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::LogicalNegation(inner, neg) => Expression::with_source(
-            ExpressionKind::LogicalNegation(
-                Arc::new(inline_rule_refs(inner, normalized_rules)),
-                neg.clone(),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::MathematicalComputation(op, inner) => Expression::with_source(
-            ExpressionKind::MathematicalComputation(
-                op.clone(),
-                Arc::new(inline_rule_refs(inner, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::DateRelative(kind, inner) => Expression::with_source(
-            ExpressionKind::DateRelative(
-                *kind,
-                Arc::new(inline_rule_refs(inner, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::DateCalendar(kind, unit, inner) => Expression::with_source(
-            ExpressionKind::DateCalendar(
-                *kind,
-                *unit,
-                Arc::new(inline_rule_refs(inner, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::RangeLiteral(left, right) => Expression::with_source(
-            ExpressionKind::RangeLiteral(
-                Arc::new(inline_rule_refs(left, normalized_rules)),
-                Arc::new(inline_rule_refs(right, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::PastFutureRange(kind, inner) => Expression::with_source(
-            ExpressionKind::PastFutureRange(
-                *kind,
-                Arc::new(inline_rule_refs(inner, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::RangeContainment(left, right) => Expression::with_source(
-            ExpressionKind::RangeContainment(
-                Arc::new(inline_rule_refs(left, normalized_rules)),
-                Arc::new(inline_rule_refs(right, normalized_rules)),
-            ),
-            expr.source_location.clone(),
-        ),
-        ExpressionKind::ResultIsVeto(operand) => Expression::with_source(
-            ExpressionKind::ResultIsVeto(operand.clone()),
-            expr.source_location.clone(),
-        ),
+    let mut factors: Vec<Expression> = vec![condition.clone()];
+    for higher in higher_priority_conditions {
+        factors.push(negated_expression(higher));
     }
+    fold_logical_and(&factors, condition.source_location.clone())
+}
+
+fn conjunction_of_negated_conditions(
+    conditions: &[Expression],
+    source: Option<Source>,
+) -> Expression {
+    let factors: Vec<Expression> = conditions.iter().map(negated_expression).collect();
+    fold_logical_and(&factors, source)
+}
+
+fn negated_expression(expr: &Expression) -> Expression {
+    Expression::with_source(
+        ExpressionKind::LogicalNegation(Arc::new(expr.clone()), NegationType::Not),
+        expr.source_location.clone(),
+    )
+}
+
+fn fold_logical_and(factors: &[Expression], source: Option<Source>) -> Expression {
+    assert!(
+        !factors.is_empty(),
+        "BUG: logical AND requires at least one factor"
+    );
+    let mut accumulated = factors[0].clone();
+    for factor in factors.iter().skip(1) {
+        accumulated = Expression::with_source(
+            ExpressionKind::LogicalAnd(Arc::new(accumulated), Arc::new(factor.clone())),
+            source.clone(),
+        );
+    }
+    accumulated
+}
+
+/// True when `expr` is a literal boolean with value `expected`.
+pub(crate) fn is_literal_bool_expression(expr: &Expression, expected: bool) -> bool {
+    matches!(
+        expr.kind,
+        ExpressionKind::Literal(ref literal)
+            if matches!(literal.value, ValueKind::Boolean(value) if value == expected)
+    )
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -329,7 +292,10 @@ fn simplify(
     let nf = double_negate_reciprocal(nf);
     let nf = power_laws(nf);
     let nf = constant_fold(nf, source.clone())?;
-    let nf = fold_unit_literals(nf, unit_ctx, source)?;
+    let nf = fold_unit_literals(nf, unit_ctx, source.clone())?;
+    let _ = source;
+    // Literal signature expansion (named unit -> base-unit signature) is not enabled yet:
+    // NamedQuantityOnly paths must use `signature_factor` with a full unit_index first.
     let nf = demorgan(nf);
     let nf = logical_flatten(nf);
     let nf = logical_short_circuit(nf);
@@ -337,63 +303,6 @@ fn simplify(
     let nf = negated_comparisons(nf);
     let nf = math_identities(nf);
     Ok(canonical_order(nf))
-}
-
-fn fold_quantity_unit_literal(
-    literal: &LiteralValue,
-    target_unit: &str,
-    unit_context: UnitResolutionContext<'_>,
-) -> Result<LiteralValue, Error> {
-    let ValueKind::Quantity(magnitude, from_unit, _) = &literal.value else {
-        panic!("BUG: fold_quantity_unit_literal called with non-quantity literal");
-    };
-    let (from_factor, to_factor, target_lemma_type) = match unit_context {
-        UnitResolutionContext::WithIndex(unit_index) => {
-            if from_unit.is_empty() {
-                let target_type = unit_index.get(target_unit).ok_or_else(|| {
-                    Error::validation(
-                        format!(
-                            "cannot fold unit conversion: target unit '{target_unit}' is not in the unit index"
-                        ),
-                        None,
-                        None::<String>,
-                    )
-                })?;
-                let from_unit_name = infer_anonymous_quantity_unit_name(
-                    &literal.lemma_type,
-                    unit_index,
-                    target_unit,
-                )
-                .ok_or_else(|| {
-                    Error::validation(
-                        "cannot fold anonymous quantity unit conversion".to_string(),
-                        None,
-                        None::<String>,
-                    )
-                })?;
-                let from_factor = target_type.quantity_unit_factor(&from_unit_name);
-                let to_factor = target_type.quantity_unit_factor(target_unit);
-                (from_factor, to_factor, target_type.clone())
-            } else {
-                let from_factor = literal.lemma_type.quantity_unit_factor(from_unit);
-                let to_factor = literal.lemma_type.quantity_unit_factor(target_unit);
-                (from_factor, to_factor, literal.lemma_type.clone())
-            }
-        }
-        UnitResolutionContext::NamedQuantityOnly => {
-            let from_factor = literal.lemma_type.quantity_unit_factor(from_unit);
-            let to_factor = literal.lemma_type.quantity_unit_factor(target_unit);
-            (from_factor, to_factor, literal.lemma_type.clone())
-        }
-    };
-    let converted_magnitude =
-        convert_quantity_magnitude_rational(*magnitude, from_factor, to_factor)
-            .map_err(|failure| normalization_error(None, failure, "quantity unit literal fold"))?;
-    Ok(LiteralValue::quantity_with_type(
-        converted_magnitude,
-        target_unit.to_string(),
-        target_lemma_type,
-    ))
 }
 
 fn fold_unit_literals(
@@ -454,61 +363,17 @@ fn fold_unit_literals(
         )),
         NormalForm::UnitConversion(inner, target) => {
             let inner_done = fold_unit_literals((*inner).clone(), unit_ctx, source.clone())?;
-            if let (Some(unit_context), NormalForm::Leaf(LeafKind::Literal(literal))) =
+            if let (Some(_unit_context), NormalForm::Leaf(LeafKind::Literal(literal))) =
                 (unit_ctx, &inner_done)
             {
-                match (&literal.value, &target) {
-                    (
-                        ValueKind::Quantity(_, _, _),
-                        SemanticConversionTarget::QuantityUnit(target_unit),
-                    ) => {
-                        let converted = fold_quantity_unit_literal(
-                            literal.as_ref(),
-                            target_unit.as_str(),
-                            *unit_context,
-                        )?;
-                        return Ok(NormalForm::Leaf(LeafKind::Literal(Arc::new(converted))));
-                    }
-                    (ValueKind::Number(number), SemanticConversionTarget::Number) => {
-                        return Ok(NormalForm::Leaf(LeafKind::Literal(Arc::new(
-                            LiteralValue::number_with_type(*number, primitive_number().clone()),
-                        ))));
-                    }
-                    (
-                        ValueKind::Number(number),
-                        SemanticConversionTarget::QuantityUnit(target_unit),
-                    ) => {
-                        let target_type = match unit_context {
-                            UnitResolutionContext::WithIndex(unit_index) => unit_index
-                                .get(target_unit.as_str())
-                                .ok_or_else(|| {
-                                    Error::validation(
-                                        format!(
-                                            "cannot fold number to quantity unit '{target_unit}'"
-                                        ),
-                                        source.clone(),
-                                        None::<String>,
-                                    )
-                                })?
-                                .clone(),
-                            UnitResolutionContext::NamedQuantityOnly => {
-                                return Ok(NormalForm::UnitConversion(
-                                    Arc::new(inner_done),
-                                    target.clone(),
-                                ));
-                            }
-                        };
-                        let to_factor = target_type.quantity_unit_factor(target_unit.as_str());
-                        let _ = to_factor;
-                        return Ok(NormalForm::Leaf(LeafKind::Literal(Arc::new(
-                            LiteralValue::quantity_with_type(
-                                *number,
-                                target_unit.clone(),
-                                target_type,
-                            ),
-                        ))));
-                    }
-                    _ => {}
+                if let (
+                    ValueKind::Number(number),
+                    SemanticConversionTarget::Type(PrimitiveKind::Number),
+                ) = (&literal.value, &target)
+                {
+                    return Ok(NormalForm::Leaf(LeafKind::Literal(Arc::new(
+                        LiteralValue::number_with_type(*number, primitive_number_arc().clone()),
+                    ))));
                 }
             }
             Ok(NormalForm::UnitConversion(Arc::new(inner_done), target))
@@ -1021,7 +886,74 @@ fn eliminate_identities(nf: NormalForm) -> NormalForm {
             }
             NormalForm::Divide(Arc::new(a), Arc::new(b))
         }
+        NormalForm::And(children) => {
+            if children.iter().any(|child| is_literal_bool(child, false)) {
+                return NormalForm::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
+                    false,
+                ))));
+            }
+            let children: Vec<_> = children
+                .into_iter()
+                .filter_map(|child| {
+                    if is_literal_bool(&child, true) {
+                        None
+                    } else {
+                        Some(eliminate_identities(child))
+                    }
+                })
+                .collect();
+            match children.len() {
+                0 => NormalForm::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(true)))),
+                1 => children.into_iter().next().expect("BUG: len 1"),
+                _ => NormalForm::And(children),
+            }
+        }
+        NormalForm::Or(children) => {
+            if children.iter().any(|child| is_literal_bool(child, true)) {
+                return NormalForm::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
+                    true,
+                ))));
+            }
+            let children: Vec<_> = children
+                .into_iter()
+                .filter_map(|child| {
+                    if is_literal_bool(&child, false) {
+                        None
+                    } else {
+                        Some(eliminate_identities(child))
+                    }
+                })
+                .collect();
+            match children.len() {
+                0 => NormalForm::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(false)))),
+                1 => children.into_iter().next().expect("BUG: len 1"),
+                _ => NormalForm::Or(children),
+            }
+        }
+        NormalForm::Not(inner) => {
+            let inner = eliminate_identities((*inner).clone());
+            if is_literal_bool(&inner, true) {
+                return NormalForm::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
+                    false,
+                ))));
+            }
+            if is_literal_bool(&inner, false) {
+                return NormalForm::Leaf(LeafKind::Literal(Arc::new(LiteralValue::from_bool(
+                    true,
+                ))));
+            }
+            NormalForm::Not(Arc::new(inner))
+        }
         other => other,
+    }
+}
+
+fn is_literal_bool(nf: &NormalForm, expected: bool) -> bool {
+    match nf {
+        NormalForm::Leaf(LeafKind::Literal(literal)) => {
+            matches!(literal.value, ValueKind::Boolean(value) if value == expected)
+        }
+        _ => false,
     }
 }
 
@@ -1364,11 +1296,15 @@ fn math_identities(nf: NormalForm) -> NormalForm {
 fn canonical_order(nf: NormalForm) -> NormalForm {
     match nf {
         NormalForm::Sum(mut children) => {
-            children.sort_by_cached_key(sort_key);
+            if children.iter().all(is_numeric_only) {
+                children.sort_by_cached_key(sort_key);
+            }
             NormalForm::Sum(children)
         }
         NormalForm::Product(mut children) => {
-            children.sort_by_cached_key(sort_key);
+            if children.iter().all(is_numeric_only) {
+                children.sort_by_cached_key(sort_key);
+            }
             NormalForm::Product(children)
         }
         // And/Or: operand order is semantically significant (guards, unless-chain / short-circuit).
@@ -1414,6 +1350,7 @@ mod tests {
     use crate::computation::UnitResolutionContext;
     use crate::planning::semantics::{
         ComparisonComputation, DataPath, ExpressionKind, NegationType, SemanticConversionTarget,
+        ValueKind,
     };
 
     fn num_expr(n: i64) -> Expression {
@@ -1754,7 +1691,10 @@ mod tests {
     fn unit_conversion_fold_number_to_number() {
         let inner = num_expr(42);
         let expr = Expression::with_source(
-            ExpressionKind::UnitConversion(Arc::new(inner), SemanticConversionTarget::Number),
+            ExpressionKind::UnitConversion(
+                Arc::new(inner),
+                SemanticConversionTarget::Type(PrimitiveKind::Number),
+            ),
             None,
         );
         let ctx = UnitResolutionContext::NamedQuantityOnly;
@@ -1767,31 +1707,39 @@ mod tests {
     }
 
     #[test]
-    fn unless_chain_shape_single_branch() {
+    fn decision_table_single_branch() {
         let branches = vec![(None as Option<Expression>, num_expr(9))];
-        let c = build_unless_chain(&branches);
-        assert!(matches!(c.kind, ExpressionKind::Literal(_)));
+        let table = build_decision_table(&branches);
+        assert_eq!(table.len(), 1);
+        assert!(is_literal_bool_expression(&table[0].0, true));
+        assert!(matches!(table[0].1.kind, ExpressionKind::Literal(_)));
     }
 
     #[test]
-    fn unless_chain_shape_ordered_or_and() {
+    fn decision_table_self_contained_conditions() {
         let c_big = lt_expr(num_expr(10), dx());
+        let c_small = lt_expr(num_expr(5), dx());
         let branches = vec![
             (None, num_expr(0)),
             (Some(c_big.clone()), num_expr(100)),
-            (Some(lt_expr(num_expr(5), dx())), num_expr(50)),
+            (Some(c_small.clone()), num_expr(50)),
         ];
-        let c = build_unless_chain(&branches);
-        // Or( And(c5, 50), Or(And(c10, 100), 0) ) with forward unless iteration
-        let ExpressionKind::LogicalOr(outer_left, outer_right) = c.kind else {
-            panic!("root Or");
+        let table = build_decision_table(&branches);
+        assert_eq!(table.len(), 3);
+        assert!(
+            matches!(table[0].1.kind, ExpressionKind::Literal(ref l) if matches!(l.value, ValueKind::Number(ref n) if *n == RationalInteger::new(50, 1)))
+        );
+        assert!(
+            matches!(table[1].1.kind, ExpressionKind::Literal(ref l) if matches!(l.value, ValueKind::Number(ref n) if *n == RationalInteger::new(100, 1)))
+        );
+        assert!(
+            matches!(table[2].1.kind, ExpressionKind::Literal(ref l) if matches!(l.value, ValueKind::Number(ref n) if *n == RationalInteger::new(0, 1)))
+        );
+        let ExpressionKind::LogicalAnd(ref left, ref right) = table[1].0.kind else {
+            panic!("expected And for middle branch condition");
         };
-        assert!(matches!(outer_left.kind, ExpressionKind::LogicalAnd(_, _)));
-        let ExpressionKind::LogicalOr(ref mid_left, ref mid_right) = outer_right.kind else {
-            panic!("right subtree Or");
-        };
-        assert!(matches!(mid_left.kind, ExpressionKind::LogicalAnd(_, _)));
-        assert!(matches!(mid_right.kind, ExpressionKind::Literal(_)));
+        assert!(matches!(left.kind, ExpressionKind::Comparison(_, _, _)));
+        assert!(matches!(right.kind, ExpressionKind::LogicalNegation(_, _)));
     }
 
     #[test]

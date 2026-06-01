@@ -2,7 +2,7 @@
 //! not normalized UTC instants. These tests document resolution behavior when two
 //! `effective_from` keys differ only in offset.
 
-use lemma::parsing::ast::TimezoneValue;
+use lemma::TimezoneValue;
 use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
@@ -24,7 +24,7 @@ fn utc_noon() -> DateTimeValue {
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
     let result = response.results.get(rule).expect("rule");
-    let val = result.result.value().expect("value");
+    let val = result.display.clone().expect("display");
     assert_eq!(val.to_string(), expected);
 }
 
@@ -49,14 +49,7 @@ rule out: v
         .expect("parse specs with offset on effective_from");
 
     let r = engine
-        .run(
-            None,
-            "rate",
-            Some(&utc_noon()),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
         .expect("run");
     assert_rule_value(&r, "out", "1");
 }
@@ -78,14 +71,7 @@ rule out: 20
         .unwrap();
 
     let r = engine
-        .run(
-            None,
-            "rate",
-            Some(&utc_noon()),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
         .unwrap();
     assert_rule_value(&r, "out", "10");
 }

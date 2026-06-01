@@ -111,7 +111,7 @@ node test.js
 
 Releases are independent:
 - `lemma-engine` tagged as `lemma-v{version}`
-- `lemma-cli` tagged as `v{version}` with GitHub release
+- `lemma` tagged as `v{version}` with GitHub release
 
 ## License
 

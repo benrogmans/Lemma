@@ -1,8 +1,7 @@
 //! Case-insensitive logical identifiers: parse canonicalization and API boundaries.
 
-use lemma::evaluation::OperationResult;
-use lemma::formatting::format_source;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::format_source;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -42,9 +41,13 @@ fn rule_value(result: &lemma::Response, name: &str) -> String {
         .results
         .get(name)
         .unwrap_or_else(|| panic!("rule '{name}' not found"));
-    match &rule_result.result {
-        OperationResult::Value(value) => value.to_string(),
-        OperationResult::Veto(reason) => format!("VETO({reason})"),
+    if rule_result.vetoed {
+        format!(
+            "VETO({})",
+            rule_result.veto_reason.as_deref().unwrap_or("Vetoed")
+        )
+    } else {
+        rule_result.display.clone().expect("display")
     }
 }
 
@@ -59,14 +62,7 @@ rule r: price
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -82,14 +78,7 @@ rule r: 500 Gram
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert!(rule_value(&resp, "r").contains("500"));
     assert!(rule_value(&resp, "r").contains("gram"));

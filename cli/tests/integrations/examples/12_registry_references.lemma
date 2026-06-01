@@ -11,7 +11,7 @@ locally, the engine would call the Registry (e.g. LemmaBase); a
 missing spec would then produce a Registry error.
 """
 
-uses lemma si
+uses lemma units
 
 uses @lemma/std finance 2026-01-01
 

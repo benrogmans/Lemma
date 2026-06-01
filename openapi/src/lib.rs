@@ -15,8 +15,7 @@
 //! For Scalar multi-source rendering, [`temporal_api_sources`] returns the list of
 //! temporal version boundaries so the Scalar UI can offer a source selector.
 
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, LemmaType, TypeSpecification};
+use lemma::{DateTimeValue, EffectiveDate, Engine, LemmaSpec, LemmaType, TypeSpecification};
 use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
@@ -123,22 +122,19 @@ pub fn generate_openapi_effective(
     );
 
     let workspace = engine.get_workspace();
-    let effective_instant = lemma::parsing::EffectiveDate::DateTimeValue(effective.clone());
+    let effective_instant = EffectiveDate::DateTimeValue(effective.clone());
 
-    let active_specs: Vec<(
-        Arc<lemma::LemmaSpec>,
-        Option<DateTimeValue>,
-        Option<DateTimeValue>,
-    )> = workspace
-        .specs
-        .iter()
-        .filter_map(|ss| {
-            ss.spec_at(&effective_instant).map(|spec| {
-                let (from, to) = ss.effective_range(&spec);
-                (spec, from, to)
+    let active_specs: Vec<(Arc<LemmaSpec>, Option<DateTimeValue>, Option<DateTimeValue>)> =
+        workspace
+            .specs
+            .iter()
+            .filter_map(|ss| {
+                ss.spec_at(&effective_instant).map(|spec| {
+                    let (from, to) = ss.effective_range(&spec);
+                    (spec, from, to)
+                })
             })
-        })
-        .collect();
+            .collect();
 
     let unique_spec_names: Vec<String> = active_specs
         .iter()
@@ -423,7 +419,7 @@ fn build_get_schema_response() -> Value {
     })
 }
 
-/// Single rule output: matches [cli::response::RuleResultJson].
+/// Single rule output: flat fields matching engine [`lemma::RuleResult`].
 fn build_rule_result_schema(explanations_enabled: bool) -> Value {
     let mut explanation = json!({
         "type": "object",
@@ -440,25 +436,45 @@ fn build_rule_result_schema(explanations_enabled: bool) -> Value {
         "type": "object",
         "required": ["vetoed", "rule_type"],
         "properties": {
-            "value": {
-                "description": "Serialized ValueKind when not vetoed (numeric magnitudes as strings; quantity/ratio/calendar as {value, unit})"
-            },
+            "vetoed": { "type": "boolean" },
             "display": {
                 "type": "string",
-                "description": "Human-readable formatted value"
+                "description": "Human-readable formatted value when not vetoed"
             },
-            "vetoed": { "type": "boolean" },
             "veto_reason": { "type": "string" },
             "rule_type": {
                 "type": "string",
                 "description": "Result type name (e.g. number, boolean, money)"
             },
+            "quantity": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Named quantity rule: unit name to magnitude string"
+            },
+            "ratio": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Named ratio rule: unit name to magnitude string"
+            },
+            "number": { "type": "string" },
+            "boolean": { "type": "boolean" },
+            "text": { "type": "string" },
+            "date": { "type": "object" },
+            "time": { "type": "object" },
+            "calendar": {
+                "type": "object",
+                "properties": {
+                    "value": { "type": "string" },
+                    "unit": { "type": "string" }
+                }
+            },
+            "range": { "type": "object" },
             "explanation": explanation
         }
     })
 }
 
-/// POST evaluate body: matches [cli::response::EvaluationEnvelope].
+/// POST evaluate body: matches engine [`lemma::Response`] JSON shape.
 fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[String]) -> Value {
     let mut result_props = Map::new();
     for rule_name in rule_names {
@@ -474,7 +490,7 @@ fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[Stri
 
     json!({
         "type": "object",
-        "required": ["spec", "effective", "result"],
+        "required": ["spec", "effective", "results"],
         "properties": {
             "spec": {
                 "type": "string",
@@ -484,10 +500,14 @@ fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[Stri
                 "type": "string",
                 "description": "Evaluation instant used for temporal resolution (matches request instant unless overridden)"
             },
-            "result": {
+            "results": {
                 "type": "object",
                 "description": "Rule names to evaluation results (definition order in response; keys match ?rules= filter when set)",
                 "properties": Value::Object(result_props)
+            },
+            "data": {
+                "type": "array",
+                "description": "Data entries used during evaluation when explanations are enabled"
             }
         }
     })
@@ -658,9 +678,8 @@ fn type_help(lemma_type: &LemmaType) -> String {
         TypeSpecification::Text { help, .. } => help.clone(),
         TypeSpecification::Date { help, .. } => help.clone(),
         TypeSpecification::DateRange { help, .. } => help.clone(),
+        TypeSpecification::TimeRange { help, .. } => help.clone(),
         TypeSpecification::Time { help, .. } => help.clone(),
-        TypeSpecification::Calendar { help, .. } => help.clone(),
-        TypeSpecification::CalendarRange { help, .. } => help.clone(),
         TypeSpecification::Veto { .. } => String::new(),
         TypeSpecification::Undetermined => unreachable!(
             "BUG: type_help called with Undetermined sentinel type; this type must never reach OpenAPI generation"
@@ -742,8 +761,7 @@ fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lemma::parsing::ast::DateTimeValue;
-    use lemma::SourceType;
+    use lemma::{DateTimeValue, SourceType};
 
     fn create_engine_with_code(code: &str) -> Engine {
         let mut engine = Engine::new();
@@ -880,7 +898,7 @@ mod tests {
     /// intentionally omitted; consumers must not rely on them for code
     /// generation or contract inspection.
     #[test]
-    fn test_openapi_omits_shell_and_legacy_schema_routes() {
+    fn test_openapi_omits_shell_and_unlisted_schema_routes() {
         let engine = create_engine_with_code(
             "spec pricing
             data quantity: 10
@@ -928,8 +946,8 @@ mod tests {
         assert!(evaluate["required"]
             .as_array()
             .unwrap()
-            .contains(&json!("result")));
-        let total_ref = evaluate["properties"]["result"]["properties"]["total"]["$ref"]
+            .contains(&json!("results")));
+        let total_ref = evaluate["properties"]["results"]["properties"]["total"]["$ref"]
             .as_str()
             .unwrap();
         assert_eq!(total_ref, "#/components/schemas/LemmaRuleResult");
@@ -1023,7 +1041,7 @@ rule surcharge:
 
         assert!(spec_v1["paths"]["/policy"].is_object());
         let v1_evaluate = &spec_v1["components"]["schemas"]["policy_evaluate_response"];
-        let v1_result = &v1_evaluate["properties"]["result"]["properties"];
+        let v1_result = &v1_evaluate["properties"]["results"]["properties"];
         assert_eq!(
             v1_result["discount"]["$ref"].as_str(),
             Some("#/components/schemas/LemmaRuleResult"),
@@ -1043,7 +1061,7 @@ rule surcharge:
         let spec_v2 = generate_openapi_effective(&engine, false, &after);
 
         let v2_evaluate = &spec_v2["components"]["schemas"]["policy_evaluate_response"];
-        let v2_result = &v2_evaluate["properties"]["result"]["properties"];
+        let v2_result = &v2_evaluate["properties"]["results"]["properties"];
         assert!(
             v2_result["discount"]["$ref"].is_string(),
             "v2 should have discount rule"

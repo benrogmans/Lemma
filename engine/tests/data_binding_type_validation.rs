@@ -1,11 +1,37 @@
-use lemma::error::ErrorKind;
-use lemma::parsing::ast::DateTimeValue;
-/// Comprehensive tests for data binding type validation
+use lemma::DateTimeValue;
+/// Comprehensive tests for data binding validation at runtime.
 ///
-/// These tests ensure that the engine correctly validates that data bindings
-/// match the expected types declared in the spec, preventing type confusion bugs.
+/// After planning succeeds, invalid overrides complete evaluation with Veto on
+/// affected rules — not `Err(Error)` from `set_data_values`. Unknown data keys
+/// remain planning/request errors.
 use lemma::Engine;
 use std::collections::HashMap;
+
+fn assert_run_completes_with_veto_on_rule(
+    result: Result<lemma::Response, lemma::Error>,
+    rule_name: &str,
+    reason_contains: &str,
+) {
+    let response = result.unwrap_or_else(|err| {
+        panic!("run must complete with veto, not abort with Error — got: {err}")
+    });
+    let rule = response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("rule '{rule_name}' not in results"));
+    assert!(
+        rule.vetoed,
+        "rule '{rule_name}' must veto on invalid override, got {:?}",
+        rule.display
+    );
+    if !reason_contains.is_empty() {
+        let reason = rule.veto_reason.as_deref().expect("veto reason");
+        assert!(
+            reason.contains(reason_contains),
+            "expected '{reason_contains}' in veto reason, got: {reason}"
+        );
+    }
+}
 
 #[test]
 fn test_number_type_validation_rejects_text() {
@@ -22,22 +48,9 @@ rule doubled: age * 2
     data.insert("age".to_string(), "twenty".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(
-        None,
-        "test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    );
+    let result = engine.run(None, "test", Some(&now), data, true);
 
-    assert!(result.is_err(), "Expected error but got: {:?}", result);
-    let error = result.unwrap_err().to_string();
-    assert!(
-        error.contains("Failed to parse data 'age'"),
-        "Error was: {}",
-        error
-    );
+    assert_run_completes_with_veto_on_rule(result, "doubled", "number");
 }
 
 #[test]
@@ -48,6 +61,7 @@ data price: number
 data quantity: number
 data active: boolean
 rule total: price * quantity
+rule flagged: active
 "#;
 
     let mut engine = Engine::new();
@@ -59,53 +73,33 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(
-        None,
-        "test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "test", Some(&now), data, true),
+        "total",
+        "number",
     );
-    assert!(result.is_err(), "Expected type mismatch error");
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Failed to parse data 'price'"));
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "100".to_string());
     data.insert("quantity".to_string(), "five".to_string());
     data.insert("active".to_string(), "true".to_string());
 
-    let err = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("quantity must reject non-number");
-    assert!(err.to_string().contains("Failed to parse data 'quantity'"));
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "test", Some(&now), data, true),
+        "total",
+        "number",
+    );
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "100".to_string());
     data.insert("quantity".to_string(), "5".to_string());
     data.insert("active".to_string(), "maybe".to_string());
 
-    let err = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("active must reject non-boolean");
-    assert!(err.to_string().contains("Failed to parse data 'active'"));
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "test", Some(&now), data, true),
+        "flagged",
+        "boolean",
+    );
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "100".to_string());
@@ -113,23 +107,10 @@ rule total: price * quantity
     data.insert("active".to_string(), "true".to_string());
 
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, true)
         .expect("valid data must evaluate");
-    let total = response
-        .results
-        .get("total")
-        .expect("total rule")
-        .result
-        .value()
-        .expect("total value");
-    assert_eq!(total.to_string(), "500");
+    let total = response.results.get("total").expect("total rule");
+    assert_eq!(total.display.as_deref(), Some("500"));
 }
 
 #[test]
@@ -147,45 +128,21 @@ rule total: base_price * 1.2
     data.insert("base_price".to_string(), "sixty".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("base_price must reject non-number");
-    assert!(err
-        .to_string()
-        .contains("Failed to parse data 'base_price'"));
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "test", Some(&now), data, true),
+        "total",
+        "number",
+    );
 
     let mut data = HashMap::new();
     data.insert("base_price".to_string(), "60".to_string());
 
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), data, true)
         .expect("valid base_price must evaluate");
-    let total = response
-        .results
-        .get("total")
-        .expect("total rule")
-        .result
-        .value()
-        .expect("total value");
-    assert!(
-        total.to_string().starts_with("72"),
-        "60 * 1.2 = 72, got {}",
-        total
-    );
+    let total = response.results.get("total").expect("total rule");
+    let display = total.display.as_deref().expect("display");
+    assert!(display.starts_with("72"), "60 * 1.2 = 72, got {}", display);
 }
 
 #[test]
@@ -204,14 +161,7 @@ rule total: price * 1.1
     data.insert("unknown_data".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(
-        None,
-        "test",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    );
+    let result = engine.run(None, "test", Some(&now), data, true);
     assert!(result.is_err(), "Expected error for unknown data binding");
     assert!(result.unwrap_err().to_string().contains("unknown_data"));
 }
@@ -243,20 +193,10 @@ rule r: p
     data.insert("p".to_string(), "5%".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("5% < 10%");
-    let s = err.to_string();
-    assert!(
-        s.contains("minimum") || s.contains("at least"),
-        "expected minimum violation, got: {s}"
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "s", Some(&now), data, true),
+        "r",
+        "minimum",
     );
 }
 
@@ -266,7 +206,6 @@ rule r: p
 /// tests above pass via the wrong path.
 #[test]
 fn percent_override_value_is_pinned() {
-    use lemma::evaluation::OperationResult;
     use lemma::ValueKind;
     use rust_decimal::Decimal;
     use std::str::FromStr;
@@ -291,24 +230,21 @@ rule r: p
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, true)
         .expect("'5%' must parse on a percent type without constraints");
     let rr = resp.results.get("r").expect("rule 'r' not found");
-    let lit = match &rr.result {
-        OperationResult::Value(v) => v.as_ref(),
-        OperationResult::Veto(v) => panic!("unexpected veto: {v}"),
-    };
+    assert!(!rr.vetoed, "unexpected veto: {:?}", rr.veto_reason);
+    let lit = rr
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
     match &lit.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("0.05")
             );
             assert_eq!(u.as_deref(), Some("percent"));
@@ -336,20 +272,10 @@ rule r: p
     data.insert("p".to_string(), "90%".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("90% > 50%");
-    let s = err.to_string();
-    assert!(
-        s.contains("maximum") || s.contains("at most") || s.contains("exceeds"),
-        "expected maximum violation, got: {s}"
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "maximum",
     );
 }
 
@@ -357,8 +283,8 @@ rule r: p
 fn duration_minimum_violation_on_override() {
     let code = r#"
 spec s
-uses lemma si
-data d: si.duration -> minimum 1 day
+uses lemma units
+data d: units.duration -> minimum 1 day
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -383,20 +309,10 @@ rule r: d
     data.insert("d".to_string(), "12 hours".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("12 hours < 1 day");
-    let s = err.to_string();
-    assert!(
-        s.contains("minimum") || s.contains("at least"),
-        "expected minimum violation, got: {s}"
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "minimum",
     );
 }
 
@@ -427,20 +343,10 @@ rule r: when
     data.insert("when".to_string(), "2023-06-15".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("date before minimum");
-    let s = err.to_string();
-    assert!(
-        s.contains("minimum") || s.contains("at least") || s.contains("2024"),
-        "expected minimum-date violation, got: {s}"
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "minimum",
     );
 }
 
@@ -466,34 +372,24 @@ rule r: n
     data.insert("n".to_string(), "3.14159".to_string());
 
     let now = DateTimeValue::now();
-    match engine.run(
-        None,
-        "s",
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    ) {
+    match engine.run(None, "s", Some(&now), data, false) {
         Ok(resp) => {
             let rr = resp.results.get("r").expect("rule 'r'");
-            match &rr.result {
-                lemma::OperationResult::Value(v) => {
-                    let s = v.to_string();
-                    assert!(
-                        !s.contains("3.14159"),
-                        "decimals 2 must not preserve 5 decimals; got: {s}"
-                    );
-                }
-                other => panic!("expected value, got: {:?}", other),
+            if rr.vetoed {
+                let reason = rr.veto_reason.as_deref().expect("veto reason");
+                assert!(
+                    reason.contains("decimals"),
+                    "rejection must reference the decimals constraint, got: {reason}"
+                );
+            } else {
+                let s = rr.display.as_deref().expect("display");
+                assert!(
+                    !s.contains("3.14159"),
+                    "decimals 2 must not preserve 5 decimals; got: {s}"
+                );
             }
         }
-        Err(e) => {
-            let s = e.to_string();
-            assert!(
-                s.contains("decimals"),
-                "rejection must reference the decimals constraint, got: {s}"
-            );
-        }
+        Err(e) => panic!("run must complete with veto or value, not Error: {e}"),
     }
 }
 
@@ -517,25 +413,16 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, false)
         .expect("5-char string must be accepted");
     let rr = resp.results.get("r").expect("rule 'r'");
-    match &rr.result {
-        lemma::OperationResult::Value(v) => assert_eq!(v.to_string(), "exact"),
-        other => panic!("expected value, got: {:?}", other),
-    }
+    assert!(!rr.vetoed, "expected value, got veto: {:?}", rr.veto_reason);
+    assert_eq!(rr.text.as_deref(), Some("exact"));
 }
 
 #[test]
 fn quantity_overwrites_inherited_unit_factors() {
-    use lemma::planning::semantics::TypeSpecification;
+    use lemma::TypeSpecification;
     use rust_decimal::Decimal;
     use std::str::FromStr;
 
@@ -550,7 +437,7 @@ fn quantity_overwrites_inherited_unit_factors() {
                     .iter()
                     .find(|u| u.name == name)
                     .unwrap_or_else(|| panic!("unit {name} missing"));
-                lemma::commit_rational_to_decimal(&u.factor).unwrap()
+                u.factor_decimal()
             }
             other => panic!("expected Quantity, got {other:?}"),
         }
@@ -621,25 +508,15 @@ rule r: price
     data.insert("price".to_string(), "100 meter".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("wrong quantity unit must fail");
-    let s = err.to_string();
-    assert!(
-        s.contains("unit") || s.contains("meter"),
-        "expected unit-mismatch error, got: {s}"
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "s", Some(&now), data, false),
+        "r",
+        "unit",
     );
 }
 
 #[test]
-fn test_structured_error_related_data_attribution() {
+fn test_veto_reason_on_invalid_quantity_unit_override() {
     let code = r#"
 spec bridge
 data bridge_height: quantity -> unit meter 1.0
@@ -660,33 +537,9 @@ rule span: bridge_height
     data.insert("bridge_height".to_string(), "4 mete".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "bridge",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("bad quantity unit must error");
-
-    assert_eq!(err.related_data(), Some("bridge_height"));
-    assert_eq!(err.kind(), ErrorKind::Validation);
-    assert!(
-        err.message().starts_with("Unknown unit"),
-        "message must be the inner reason only (no 'Failed to parse data' wrapper), got: {}",
-        err.message()
-    );
-
-    let display = err.to_string();
-    assert_eq!(
-        display.matches(" at ").count(),
-        1,
-        "Display must include the source location exactly once, got: {display}"
-    );
-    assert!(
-        display.contains("Failed to parse data 'bridge_height':"),
-        "Display must carry the data-binding prefix, got: {display}"
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "bridge", Some(&now), data, false),
+        "span",
+        "Unknown unit",
     );
 }

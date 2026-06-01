@@ -1,287 +1,371 @@
-//! Unit conversion system
-//!
-//! Handles quantity unit conversion and calendar conversions.
-//! Uses only planning/semantic types; no dependency on parsing types.
+//! Type casts (`as number`, `as text`, `as eur`, …).
 
 use crate::computation::rational::{
-    convert_quantity_magnitude_rational, rational_one, NumericFailure, RationalInteger,
+    checked_div, checked_mul, convert_quantity_magnitude_rational, rational_one, RationalInteger,
 };
-use crate::evaluation::operations::{OperationResult, VetoType};
+use crate::evaluation::operations::OperationResult;
+use crate::parsing::ast::PrimitiveKind;
 use crate::planning::semantics::{
-    primitive_number, LemmaType, LiteralValue, SemanticCalendarUnit, SemanticConversionTarget,
-    ValueKind,
+    calendar_unit_factor, primitive_number_arc, primitive_text_arc, LiteralValue,
+    SemanticCalendarUnit, SemanticConversionTarget, ValueKind,
 };
-use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Describes what type-resolution infrastructure is available at a `convert_unit` call site.
 #[derive(Copy, Clone)]
 pub enum UnitResolutionContext<'a> {
-    WithIndex(&'a HashMap<String, LemmaType>),
+    WithIndex(
+        &'a std::collections::HashMap<
+            String,
+            std::sync::Arc<crate::planning::semantics::LemmaType>,
+        >,
+    ),
     NamedQuantityOnly,
 }
 
-fn quantity_unit_from_index<'a>(
-    unit_index: &'a HashMap<String, LemmaType>,
-    unit: &str,
-    context: &str,
-) -> &'a LemmaType {
-    unit_index.get(unit).unwrap_or_else(|| {
-        unreachable!(
-            "BUG: unit '{}' missing from unit_index during {} after planning",
-            unit, context
-        )
-    })
-}
-
-fn numeric_failure_to_veto(failure: NumericFailure) -> VetoType {
-    VetoType::computation(failure.to_string())
-}
-
-fn convert_quantity_scalar_to_unit(
-    value: &LiteralValue,
-    from_unit: &str,
-    to_unit: &str,
-    resolution_context: UnitResolutionContext<'_>,
-) -> OperationResult {
-    let ValueKind::Quantity(magnitude, _, _) = &value.value else {
-        panic!("BUG: convert_quantity_scalar_to_unit called with non-quantity value");
-    };
-    let (from_factor, to_factor) = match resolution_context {
-        UnitResolutionContext::WithIndex(unit_index) => {
-            if from_unit.is_empty() {
-                let target_type =
-                    quantity_unit_from_index(unit_index, to_unit, "quantity unit conversion");
-                let to_factor = target_type.quantity_unit_factor(to_unit);
-                if value.lemma_type.is_anonymous_quantity() {
-                    (rational_one(), *to_factor)
-                } else {
-                    let from_unit_name = crate::evaluation::conversion_explanation::infer_anonymous_quantity_unit_name(
-                        &value.lemma_type,
-                        unit_index,
-                        to_unit,
-                    )
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "BUG: anonymous quantity unit name missing after planning for conversion to '{to_unit}'"
-                        )
-                    });
-                    let from_factor = *target_type.quantity_unit_factor(&from_unit_name);
-                    (from_factor, *to_factor)
-                }
-            } else {
-                let from_factor = *value.lemma_type.quantity_unit_factor(from_unit);
-                let to_factor = if !value.lemma_type.is_anonymous_quantity() {
-                    *value.lemma_type.quantity_unit_factor(to_unit)
-                } else {
-                    let target_type =
-                        quantity_unit_from_index(unit_index, to_unit, "quantity unit conversion");
-                    *target_type.quantity_unit_factor(to_unit)
-                };
-                (from_factor, to_factor)
-            }
-        }
-        UnitResolutionContext::NamedQuantityOnly => {
-            let from_factor = if from_unit.is_empty() && value.lemma_type.is_anonymous_quantity() {
-                rational_one()
-            } else {
-                *value.lemma_type.quantity_unit_factor(from_unit)
-            };
-            let to_factor = *value.lemma_type.quantity_unit_factor(to_unit);
-            (from_factor, to_factor)
-        }
-    };
-    let converted_magnitude =
-        match convert_quantity_magnitude_rational(*magnitude, &from_factor, &to_factor) {
-            Ok(decimal) => decimal,
-            Err(failure) => return OperationResult::Veto(numeric_failure_to_veto(failure)),
-        };
-    let target_type = match resolution_context {
-        UnitResolutionContext::WithIndex(unit_index) => {
-            quantity_unit_from_index(unit_index, to_unit, "quantity unit conversion").clone()
-        }
-        UnitResolutionContext::NamedQuantityOnly => value.lemma_type.clone(),
-    };
-    OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
-        converted_magnitude,
-        to_unit.to_string(),
-        target_type,
-    )))
-}
-
-/// Convert a value to a target unit (for `as` operator).
+/// Apply a type cast (`as <target>`).
 pub fn convert_unit(
     value: &LiteralValue,
     target: &SemanticConversionTarget,
     resolution_context: UnitResolutionContext<'_>,
 ) -> OperationResult {
+    match target {
+        SemanticConversionTarget::Type(PrimitiveKind::Number) => cast_to_number(value),
+        SemanticConversionTarget::Type(PrimitiveKind::Text) => OperationResult::Value(Box::new(
+            LiteralValue::text_with_type(value.display_value(), primitive_text_arc().clone()),
+        )),
+        SemanticConversionTarget::Type(PrimitiveKind::Boolean) => {
+            if value.lemma_type.is_boolean() {
+                OperationResult::Value(Box::new(value.clone()))
+            } else {
+                unreachable!(
+                    "BUG: boolean cast on non-boolean; planning should have rejected {:?}",
+                    value.lemma_type.name()
+                );
+            }
+        }
+        SemanticConversionTarget::Type(target_kind) => {
+            if same_primitive_kind(value, *target_kind) {
+                OperationResult::Value(Box::new(value.clone()))
+            } else {
+                unreachable!(
+                    "BUG: invalid identity cast {:?} -> {:?} reached runtime",
+                    value.lemma_type.name(),
+                    target_kind
+                );
+            }
+        }
+        SemanticConversionTarget::Unit { unit_name } => {
+            cast_to_unit(value, unit_name, resolution_context)
+        }
+    }
+}
+
+fn same_primitive_kind(value: &LiteralValue, target: PrimitiveKind) -> bool {
+    use crate::planning::semantics::TypeSpecification;
+    matches!(
+        (target, &value.lemma_type.specifications),
+        (PrimitiveKind::Number, TypeSpecification::Number { .. })
+            | (PrimitiveKind::Text, TypeSpecification::Text { .. })
+            | (PrimitiveKind::Boolean, TypeSpecification::Boolean { .. })
+            | (PrimitiveKind::Date, TypeSpecification::Date { .. })
+            | (PrimitiveKind::Time, TypeSpecification::Time { .. })
+            | (PrimitiveKind::Ratio, TypeSpecification::Ratio { .. })
+            | (PrimitiveKind::Quantity, TypeSpecification::Quantity { .. })
+    )
+}
+
+fn cast_to_unit(
+    value: &LiteralValue,
+    unit_name: &str,
+    resolution_context: UnitResolutionContext<'_>,
+) -> OperationResult {
     match &value.value {
-        ValueKind::Range(left, right) => match (&left.value, &right.value, target) {
-            (ValueKind::Date(_), ValueKind::Date(_), SemanticConversionTarget::Number) => {
-                let span = super::range::compute_span(left, right);
-                let OperationResult::Value(span_value) = span else {
-                    return span;
-                };
-                let magnitude = match &span_value.value {
-                    ValueKind::Number(n) => *n,
-                    ValueKind::Quantity(magnitude, _, _) => *magnitude,
-                    other => unreachable!(
-                        "BUG: date range span for number conversion must be number or quantity, got {other:?}"
-                    ),
-                };
-                OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                    magnitude,
-                    primitive_number().clone(),
-                )))
-            }
-            (
-                ValueKind::Date(_),
-                ValueKind::Date(_),
-                SemanticConversionTarget::QuantityUnit(_),
-            ) => {
-                let span = super::range::compute_span(left, right);
-                let OperationResult::Value(span_value) = span else {
-                    return span;
-                };
-                convert_unit(span_value.as_ref(), target, resolution_context)
-            }
-            (
-                ValueKind::Date(left_date),
-                ValueKind::Date(right_date),
-                SemanticConversionTarget::Calendar(target_unit),
-            ) => super::datetime::compute_date_calendar_difference(
+        ValueKind::Number(magnitude) => {
+            cast_number_to_unit(*magnitude, unit_name, resolution_context)
+        }
+        ValueKind::Quantity(magnitude, _) => {
+            cast_quantity_to_unit(*magnitude, unit_name, resolution_context)
+        }
+        ValueKind::Range(left, right) => {
+            cast_range_span_to_unit(left, right, unit_name, resolution_context)
+        }
+        ValueKind::Ratio(magnitude, from_unit) => cast_ratio_to_unit(
+            value,
+            *magnitude,
+            from_unit.as_deref(),
+            unit_name,
+            resolution_context,
+        ),
+        other => unreachable!(
+            "BUG: unit cast from {:?} should be rejected at planning",
+            other
+        ),
+    }
+}
+
+fn cast_number_to_unit(
+    magnitude: RationalInteger,
+    unit_name: &str,
+    resolution_context: UnitResolutionContext<'_>,
+) -> OperationResult {
+    let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
+        unreachable!("BUG: unit cast requires unit index at evaluation");
+    };
+    let target_type = unit_index.get(unit_name).unwrap_or_else(|| {
+        unreachable!(
+            "BUG: unit '{}' missing from expression unit index after planning",
+            unit_name
+        )
+    });
+    if target_type.is_ratio() {
+        return OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+            magnitude,
+            Some(unit_name.to_string()),
+            Arc::clone(target_type),
+        )));
+    }
+    let factor = target_type.quantity_unit_factor(unit_name);
+    let canonical = match checked_mul(&magnitude, factor) {
+        Ok(v) => v,
+        Err(failure) => {
+            return OperationResult::Veto(crate::evaluation::operations::VetoType::computation(
+                failure.to_string(),
+            ))
+        }
+    };
+    OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
+        canonical,
+        unit_name.to_string(),
+        Arc::clone(target_type),
+    )))
+}
+
+fn cast_quantity_to_unit(
+    magnitude: RationalInteger,
+    unit_name: &str,
+    resolution_context: UnitResolutionContext<'_>,
+) -> OperationResult {
+    let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
+        unreachable!("BUG: quantity unit cast requires unit index at evaluation");
+    };
+    let target_type = unit_index.get(unit_name).unwrap_or_else(|| {
+        unreachable!(
+            "BUG: unit '{}' missing from expression unit index after planning",
+            unit_name
+        )
+    });
+    OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
+        magnitude,
+        unit_name.to_string(),
+        Arc::clone(target_type),
+    )))
+}
+
+fn cast_ratio_to_unit(
+    value: &LiteralValue,
+    magnitude: RationalInteger,
+    from_unit: Option<&str>,
+    unit_name: &str,
+    resolution_context: UnitResolutionContext<'_>,
+) -> OperationResult {
+    let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
+        unreachable!("BUG: ratio unit cast requires unit index at evaluation");
+    };
+    let target_type = unit_index.get(unit_name).unwrap_or_else(|| {
+        unreachable!(
+            "BUG: unit '{}' missing from expression unit index after planning",
+            unit_name
+        )
+    });
+    if value.lemma_type.same_quantity_family(target_type.as_ref()) {
+        let from_factor = from_unit
+            .map(|u| *value.lemma_type.quantity_unit_factor(u))
+            .unwrap_or(rational_one());
+        let to_factor = *target_type.quantity_unit_factor(unit_name);
+        let converted =
+            match convert_quantity_magnitude_rational(magnitude, &from_factor, &to_factor) {
+                Ok(m) => m,
+                Err(failure) => {
+                    return OperationResult::Veto(
+                        crate::evaluation::operations::VetoType::computation(failure.to_string()),
+                    );
+                }
+            };
+        OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+            converted,
+            Some(unit_name.to_string()),
+            Arc::clone(target_type),
+        )))
+    } else {
+        OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+            magnitude,
+            Some(unit_name.to_string()),
+            Arc::clone(target_type),
+        )))
+    }
+}
+
+fn cast_range_span_to_unit(
+    left: &LiteralValue,
+    right: &LiteralValue,
+    unit_name: &str,
+    resolution_context: UnitResolutionContext<'_>,
+) -> OperationResult {
+    if let (ValueKind::Date(left_date), ValueKind::Date(right_date)) = (&left.value, &right.value) {
+        if calendar_unit_factor(unit_name).is_some() {
+            let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
+                unreachable!("BUG: calendar date span requires unit index after planning");
+            };
+            let calendar_type = Arc::clone(
+                unit_index
+                    .get(unit_name)
+                    .expect("BUG: calendar unit must be in index after planning"),
+            );
+            return super::datetime::compute_date_calendar_difference(
                 left_date,
                 right_date,
-                target_unit,
-            ),
-            (ValueKind::Date(..), ValueKind::Date(..), _) => unreachable!(
-                "BUG: unsupported date range conversion target; planning should have rejected this"
-            ),
-            _ => {
-                let span = super::range::compute_span(left, right);
-                let OperationResult::Value(span_value) = span else {
-                    return span;
-                };
-                convert_unit(span_value.as_ref(), target, resolution_context)
-            }
-        },
+                &semantic_calendar_unit(unit_name),
+                calendar_type,
+            );
+        }
+        let OperationResult::Value(span) = super::range::compute_span(left, right) else {
+            return super::range::compute_span(left, right);
+        };
+        return convert_span_quantity_to_unit(span.as_ref(), unit_name, resolution_context);
+    }
 
-        ValueKind::Calendar(v, from) => match target {
-            SemanticConversionTarget::Number => OperationResult::Value(Box::new(
-                LiteralValue::number_with_type(*v, primitive_number().clone()),
-            )),
-            SemanticConversionTarget::Calendar(to) => {
-                let val = convert_calendar(*v, from, to);
-                OperationResult::Value(Box::new(LiteralValue::calendar_with_type(
-                    val,
-                    to.clone(),
-                    value.lemma_type.clone(),
-                )))
-            }
-            _ => unreachable!(
-                "BUG: invalid conversion target {:?} for calendar; this should be rejected during planning",
-                target
-            ),
-        },
+    let OperationResult::Value(span) = super::range::compute_span(left, right) else {
+        return super::range::compute_span(left, right);
+    };
+    let span = span.as_ref();
+    match &span.value {
+        ValueKind::Quantity(_, _) => {
+            convert_span_quantity_to_unit(span, unit_name, resolution_context)
+        }
+        ValueKind::Ratio(_, _) => {
+            let ValueKind::Ratio(magnitude, from_unit) = &span.value else {
+                unreachable!("BUG: ratio span expected");
+            };
+            cast_ratio_to_unit(
+                span,
+                *magnitude,
+                from_unit.as_deref(),
+                unit_name,
+                resolution_context,
+            )
+        }
+        ValueKind::Number(magnitude) => {
+            cast_number_to_unit(*magnitude, unit_name, resolution_context)
+        }
+        other => unreachable!("BUG: unexpected range span value kind for unit cast: {other:?}"),
+    }
+}
 
-        ValueKind::Number(number) => match target {
-            SemanticConversionTarget::Number => OperationResult::Value(Box::new(
-                LiteralValue::number_with_type(*number, primitive_number().clone()),
-            )),
-            SemanticConversionTarget::Calendar(unit) => {
-                OperationResult::Value(Box::new(LiteralValue::calendar(*number, unit.clone())))
-            }
-            SemanticConversionTarget::QuantityUnit(unit_name) => {
-                match resolution_context {
-                    UnitResolutionContext::WithIndex(unit_index) => {
-                        let target_type = quantity_unit_from_index(
-                            unit_index,
-                            unit_name,
-                            "number-to-quantity conversion",
-                        );
-                        OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
-                            *number,
-                            unit_name.clone(),
-                            target_type.clone(),
-                        )))
-                    }
-                    UnitResolutionContext::NamedQuantityOnly => unreachable!(
-                        "BUG: number-to-quantity-unit conversion for '{}' reached a call site \
-                         that declared NamedQuantityOnly context. This is a planning inconsistency.",
-                        unit_name
-                    ),
-                }
-            }
-            SemanticConversionTarget::RatioUnit(unit) => {
-                OperationResult::Value(Box::new(LiteralValue::ratio(*number, Some(unit.clone()))))
-            }
-        },
+fn convert_span_quantity_to_unit(
+    span: &LiteralValue,
+    unit_name: &str,
+    resolution_context: UnitResolutionContext<'_>,
+) -> OperationResult {
+    let ValueKind::Quantity(magnitude, _) = &span.value else {
+        unreachable!("BUG: span quantity expected");
+    };
+    cast_quantity_to_unit(*magnitude, unit_name, resolution_context)
+}
 
-        ValueKind::Ratio(rational_value, _from_unit_opt) => match target {
-            SemanticConversionTarget::Number => OperationResult::Value(Box::new(
-                LiteralValue::number_with_type(*rational_value, primitive_number().clone()),
-            )),
-            SemanticConversionTarget::RatioUnit(to_unit) => OperationResult::Value(Box::new(
-                LiteralValue::ratio(*rational_value, Some(to_unit.clone())),
-            )),
-            _ => unreachable!(
-                "BUG: invalid conversion target {:?} for ratio; this should be rejected during planning",
-                target
-            ),
-        },
+fn semantic_calendar_unit(unit_name: &str) -> SemanticCalendarUnit {
+    match unit_name {
+        "month" | "months" => SemanticCalendarUnit::Month,
+        "year" | "years" => SemanticCalendarUnit::Year,
+        other => unreachable!("BUG: unknown calendar unit '{other}' after planning"),
+    }
+}
 
-        ValueKind::Quantity(_, from_unit, _) => match target {
-            SemanticConversionTarget::Number => {
-                let ValueKind::Quantity(magnitude, _, _) = &value.value else {
-                    unreachable!("BUG: matched Quantity arm with non-quantity value");
-                };
-                OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                    *magnitude,
-                    primitive_number().clone(),
-                )))
-            }
-            SemanticConversionTarget::QuantityUnit(to_unit) => {
-                convert_quantity_scalar_to_unit(value, from_unit, to_unit, resolution_context)
-            }
-            SemanticConversionTarget::Calendar(_) => unreachable!(
-                "BUG: cannot convert quantity to calendar; this should be rejected during planning"
-            ),
-            SemanticConversionTarget::RatioUnit(_) => unreachable!(
-                "BUG: cannot convert quantity to ratio unit; this should be rejected during planning"
-            ),
-        },
-
-        _ => unreachable!(
-            "BUG: unsupported unit conversion during evaluation: {} -> {}",
-            value,
-            target
+fn cast_to_number(value: &LiteralValue) -> OperationResult {
+    match &value.value {
+        ValueKind::Range(left, right) => {
+            let span = super::range::compute_span(left, right);
+            let OperationResult::Value(span_value) = span else {
+                return span;
+            };
+            cast_to_number(span_value.as_ref())
+        }
+        ValueKind::Quantity(magnitude, signature) if value.lemma_type.is_calendar_like() => {
+            let unit_name = signature
+                .first()
+                .map(|(name, _)| name.as_str())
+                .expect("BUG: calendar quantity must carry a unit signature");
+            let factor = *value.lemma_type.quantity_unit_factor(unit_name);
+            let in_unit = checked_div(magnitude, &factor)
+                .expect("BUG: calendar de-canonicalization by unit factor must not fail");
+            OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                in_unit,
+                primitive_number_arc().clone(),
+            )))
+        }
+        ValueKind::Number(number) => OperationResult::Value(Box::new(
+            LiteralValue::number_with_type(*number, primitive_number_arc().clone()),
+        )),
+        ValueKind::Boolean(b) => {
+            let n = if *b {
+                RationalInteger::new(1, 1)
+            } else {
+                RationalInteger::new(0, 1)
+            };
+            OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                n,
+                primitive_number_arc().clone(),
+            )))
+        }
+        ValueKind::Ratio(rational_value, _) => OperationResult::Value(Box::new(
+            LiteralValue::number_with_type(*rational_value, primitive_number_arc().clone()),
+        )),
+        ValueKind::Quantity(magnitude, signature) => {
+            let factor = match signature.as_slice() {
+                [(unit_name, 1)] => *value.lemma_type.quantity_unit_factor(unit_name),
+                [] => rational_one(),
+                _ => panic!(
+                    "BUG: cast_to_number with compound signature must be rejected at planning"
+                ),
+            };
+            let in_unit = checked_div(magnitude, &factor)
+                .expect("BUG: de-canonicalization by unit factor must not fail");
+            OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                in_unit,
+                primitive_number_arc().clone(),
+            )))
+        }
+        ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) => unreachable!(
+            "BUG: cast to number from {:?} should be rejected at planning",
+            value.lemma_type.name()
         ),
     }
 }
 
 pub(crate) fn convert_calendar_magnitude(
-    value: RationalInteger,
-    from: &SemanticCalendarUnit,
-    to: &SemanticCalendarUnit,
-) -> RationalInteger {
+    value: crate::computation::rational::RationalInteger,
+    from: &crate::planning::semantics::SemanticCalendarUnit,
+    to: &crate::planning::semantics::SemanticCalendarUnit,
+) -> crate::computation::rational::RationalInteger {
     convert_calendar(value, from, to)
 }
 
 fn convert_calendar(
-    value: RationalInteger,
-    from: &SemanticCalendarUnit,
-    to: &SemanticCalendarUnit,
-) -> RationalInteger {
-    use crate::computation::rational::{rational_one, RationalInteger};
+    value: crate::computation::rational::RationalInteger,
+    from: &crate::planning::semantics::SemanticCalendarUnit,
+    to: &crate::planning::semantics::SemanticCalendarUnit,
+) -> crate::computation::rational::RationalInteger {
+    use crate::computation::rational::{convert_quantity_magnitude_rational, rational_one};
     if from == to {
         return value;
     }
     let from_factor = match from {
-        SemanticCalendarUnit::Month => rational_one(),
-        SemanticCalendarUnit::Year => RationalInteger::new(12, 1),
+        crate::planning::semantics::SemanticCalendarUnit::Month => rational_one(),
+        crate::planning::semantics::SemanticCalendarUnit::Year => RationalInteger::new(12, 1),
     };
     let to_factor = match to {
-        SemanticCalendarUnit::Month => rational_one(),
-        SemanticCalendarUnit::Year => RationalInteger::new(12, 1),
+        crate::planning::semantics::SemanticCalendarUnit::Month => rational_one(),
+        crate::planning::semantics::SemanticCalendarUnit::Year => RationalInteger::new(12, 1),
     };
     convert_quantity_magnitude_rational(value, &from_factor, &to_factor)
         .expect("BUG: calendar unit conversion failed after planning")

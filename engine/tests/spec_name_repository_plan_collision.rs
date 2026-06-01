@@ -9,7 +9,7 @@
 //!
 //! This test **must fail** until that design is fixed; remove or rewrite when the landmine is gone.
 
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{Engine, SourceType};
 use rust_decimal::Decimal;
 use std::sync::Arc;
@@ -18,17 +18,21 @@ fn path_source(path: &str) -> SourceType {
     SourceType::Path(Arc::new(std::path::PathBuf::from(path)))
 }
 
-fn rule_answer_decimal(response: &lemma::evaluation::Response) -> Decimal {
+fn rule_answer_decimal(response: &lemma::Response) -> Decimal {
     let rr = response
         .results
         .get("answer")
         .expect("spec defines rule answer");
-    match &rr.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => lemma::commit_rational_to_decimal(n).unwrap(),
-            other => panic!("expected number answer, got {:?}", other),
-        },
-        other => panic!("expected value result, got {:?}", other),
+    let lit = rr
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+        other => panic!("expected number answer, got {:?}", other),
     }
 }
 
@@ -72,24 +76,10 @@ rule answer: 99
     );
 
     let run_alpha = engine
-        .run(
-            Some("alpha"),
-            "duped",
-            Some(&now),
-            Default::default(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(Some("alpha"), "duped", Some(&now), Default::default(), true)
         .expect("run alpha");
     let run_beta = engine
-        .run(
-            Some("beta"),
-            "duped",
-            Some(&now),
-            Default::default(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(Some("beta"), "duped", Some(&now), Default::default(), true)
         .expect("run beta");
 
     assert_eq!(

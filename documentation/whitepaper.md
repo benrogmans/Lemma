@@ -119,14 +119,14 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
-uses lemma si
+uses lemma units
 
 data mass: quantity
   -> unit kilogram 1.0
   -> unit pound 0.453592
 
 data salary:   75_000
-data vacation: si.duration
+data vacation: units.duration
   -> default 3 weeks
 
 data weight:   15 kilogram
@@ -161,8 +161,8 @@ spec manager
 
 uses employee: base_employee
 
-data employee.salary:     80_000
-data employee.bonus_rate: 15%
+with employee.salary:     80_000
+with employee.bonus_rate: 15%
 
 rule manager_bonus: employee.salary * employee.bonus_rate
 ```
@@ -296,13 +296,13 @@ Lemma provides several primitive types:
 - **Ratio**: Proportional values (percent, permille)
 
 ```lemma
-uses lemma si
+uses lemma units
 
 data count:     42
 data name:      "Alice"
 data is_active: true
 data deadline:  2024-12-31
-data workweek: si.duration
+data workweek: units.duration
   -> default 40 hours
 
 data tax_rate: 15%
@@ -384,12 +384,12 @@ data price: 100 eur
 rule price_usd: price as usd
 ```
 
-**Trait-duration quantities** (stdlib `si.duration` or your own `quantity` + `trait duration`) use the same `as` conversion rules as other quantities:
+**Trait-duration quantities** (stdlib `units.duration` or your own `quantity` + `trait duration`) use the same `as` conversion rules as other quantities:
 
 ```lemma
-uses lemma si
+uses lemma units
 
-data workweek: si.duration
+data workweek: units.duration
   -> default 40 hours
 
 rule workweek_days: workweek as days
@@ -440,7 +440,7 @@ spec employee/benefits
 Company benefits policy for full-time employees
 """
 
-uses lemma si
+uses lemma units
 
 data years_of_service: number
 
@@ -466,7 +466,7 @@ spec manager
 
 uses employee: base_employee
 
-data employee.salary: 80_000
+with employee.salary: 80_000
 
 rule manager_bonus: employee.salary * 0.15
 ```
@@ -486,8 +486,10 @@ data unit_price: 50
 
 spec wholesale_pricing
 
-data pricing.quantity:   1000
-data pricing.unit_price: 35
+uses pricing: pricing
+
+with pricing.quantity:   1000
+with pricing.unit_price: 35
 
 rule total: pricing.quantity * pricing.unit_price
 ```
@@ -983,7 +985,7 @@ Lemma is open source under the Apache 2.0 license. To get started:
 
 ```bash
 # Install
-cargo install lemma-cli
+cargo install lemma
 
 # Create a rule file
 cat > example.lemma << 'EOF'
@@ -1025,7 +1027,7 @@ This spec encodes the complete compensation rules including
 base salary, bonuses, equity, and benefits.
 """
 
-uses lemma si
+uses lemma units
 
 data employee_id:        text
 data base_salary:        number

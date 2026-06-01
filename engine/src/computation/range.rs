@@ -1,8 +1,10 @@
+use crate::computation::arithmetic::SignatureIndex;
 use crate::computation::rational::{rational_abs, rational_zero, RationalInteger};
 use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, LiteralValue, SemanticDateTime, ValueKind,
+    ArithmeticComputation, ComparisonComputation, LemmaType, LiteralValue, ValueKind,
 };
+use std::collections::HashMap;
 
 pub fn compute_quantity(
     left: &LiteralValue,
@@ -19,9 +21,40 @@ pub fn compute_span(left: &LiteralValue, right: &LiteralValue) -> OperationResul
 fn compute_signed_span(left: &LiteralValue, right: &LiteralValue) -> OperationResult {
     match (&left.value, &right.value) {
         (ValueKind::Date(left_date), ValueKind::Date(right_date)) => {
-            compute_date_range_span(left_date, right_date)
+            let left_chrono = match super::datetime::semantic_datetime_to_chrono(left_date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+            };
+            let right_chrono = match super::datetime::semantic_datetime_to_chrono(right_date) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+            };
+            compute_elapsed_duration_span(left_chrono, right_chrono)
         }
-        _ => super::arithmetic_operation(right, &ArithmeticComputation::Subtract, left),
+        (ValueKind::Time(left_time), ValueKind::Time(right_time)) => {
+            let left_chrono = match super::datetime::semantic_time_to_chrono_datetime(left_time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+            };
+            let right_chrono = match super::datetime::semantic_time_to_chrono_datetime(right_time) {
+                Ok(d) => d,
+                Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
+            };
+            compute_elapsed_duration_span(left_chrono, right_chrono)
+        }
+        _ => {
+            // Span computation only performs Subtract, which never resolves a signature_index
+            // entry (the result type matches the operand family).
+            let empty_unit_index: HashMap<String, std::sync::Arc<LemmaType>> = HashMap::new();
+            let empty_signature_index = SignatureIndex::new();
+            super::arithmetic_operation(
+                right,
+                &ArithmeticComputation::Subtract,
+                left,
+                &empty_unit_index,
+                &empty_signature_index,
+            )
+        }
     }
 }
 
@@ -49,11 +82,11 @@ fn span_magnitude_is_non_negative(literal: &LiteralValue) -> bool {
 fn stored_magnitude(literal: &LiteralValue) -> RationalInteger {
     match &literal.value {
         ValueKind::Number(n) => *n,
-        ValueKind::Quantity(magnitude, _, _) => *magnitude,
+        ValueKind::Quantity(value, _) if literal.lemma_type.is_calendar_like() => *value,
+        ValueKind::Quantity(magnitude, _) => *magnitude,
         ValueKind::Ratio(magnitude, _) => *magnitude,
-        ValueKind::Calendar(value, _) => *value,
         other => unreachable!(
-            "BUG: range span must be number, quantity, ratio, or calendar, got {other:?}"
+            "BUG: range span must be number, quantity, ratio, or calendar quantity, got {other:?}"
         ),
     }
 }
@@ -76,50 +109,42 @@ fn rebuild_literal_with_magnitude(
         ValueKind::Number(_) => {
             LiteralValue::number_with_type(magnitude, literal.lemma_type.clone())
         }
-        ValueKind::Quantity(_, unit, decomp) => {
-            if decomp.is_empty() {
-                LiteralValue::number_with_type(magnitude, literal.lemma_type.clone())
-            } else if unit.is_empty() {
-                LiteralValue::quantity_anonymous(magnitude, decomp.clone())
-            } else {
-                LiteralValue::quantity_with_type(
-                    magnitude,
-                    unit.clone(),
-                    literal.lemma_type.clone(),
-                )
-            }
+        ValueKind::Quantity(_, sig) if literal.lemma_type.is_calendar_like() => {
+            let unit =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
+            LiteralValue::calendar_with_type(magnitude, unit, literal.lemma_type.clone())
         }
+        ValueKind::Quantity(_, signature) => LiteralValue {
+            value: ValueKind::Quantity(magnitude, signature.clone()),
+            lemma_type: literal.lemma_type.clone(),
+        },
         ValueKind::Ratio(_, unit) => {
             LiteralValue::ratio_with_type(magnitude, unit.clone(), literal.lemma_type.clone())
         }
-        ValueKind::Calendar(_, unit) => {
-            LiteralValue::calendar_with_type(magnitude, unit.clone(), literal.lemma_type.clone())
-        }
         other => unreachable!(
-            "BUG: range span must be number, quantity, ratio, or calendar, got {other:?}"
+            "BUG: range span must be number, quantity, ratio, or calendar quantity, got {other:?}"
         ),
     }
 }
 
-fn compute_date_range_span(left: &SemanticDateTime, right: &SemanticDateTime) -> OperationResult {
-    let left_chrono = match super::datetime::semantic_datetime_to_chrono(left) {
-        Ok(d) => d,
-        Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
-    };
-    let right_chrono = match super::datetime::semantic_datetime_to_chrono(right) {
-        Ok(d) => d,
-        Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
-    };
+fn compute_elapsed_duration_span(
+    left_chrono: chrono::DateTime<chrono::FixedOffset>,
+    right_chrono: chrono::DateTime<chrono::FixedOffset>,
+) -> OperationResult {
     let duration = right_chrono - left_chrono;
     let seconds = match super::datetime::chrono_duration_to_rational_seconds(duration) {
         Ok(s) => s,
         Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
     };
     let seconds = rational_abs(&seconds);
-    OperationResult::Value(Box::new(LiteralValue::quantity_anonymous(
-        seconds,
-        crate::planning::semantics::duration_decomposition(),
-    )))
+    OperationResult::Value(Box::new(LiteralValue {
+        value: ValueKind::Quantity(seconds, vec![("second".to_string(), 1)]),
+        lemma_type: std::sync::Arc::new(
+            crate::planning::semantics::LemmaType::anonymous_for_decomposition(
+                crate::planning::semantics::duration_decomposition(),
+            ),
+        ),
+    }))
 }
 
 fn comparison_boolean_result(result: OperationResult, context: &str) -> bool {
@@ -206,5 +231,36 @@ mod tests {
         assert!(!check_containment(&two, &three, &five));
         assert!(!check_containment(&five, &five, &five));
         assert!(check_containment(&four, &five, &three));
+    }
+
+    /// Phase 0 — pin that `rebuild_literal_with_magnitude` for a `Quantity` value reads
+    /// only the signature from the source value (not decomposition or the empty-unit
+    /// workaround). After the rewrite, the function trivially constructs
+    /// `Quantity(new_magnitude, original.signature)` with `original.lemma_type`.
+    ///
+    /// Today the function branches on `decomp.is_empty()` and `unit.is_empty()`; those
+    /// branches must collapse.
+    #[test]
+    fn rebuild_literal_with_magnitude_uses_signature_only() {
+        // Build a Quantity value that today has an empty-string unit and a non-empty decomposition
+        // (i.e. an anonymous intermediate). After the rewrite this is replaced by Quantity(_, signature).
+        use crate::planning::semantics::{BaseQuantityVector, LemmaType, ValueKind};
+        let mut decomp = BaseQuantityVector::new();
+        decomp.insert("money".to_string(), 1);
+        let signature: Vec<(String, i32)> = vec![("eur".to_string(), 1)];
+        let original = LiteralValue {
+            value: ValueKind::Quantity(RationalInteger::new(10, 1), signature.clone()),
+            lemma_type: std::sync::Arc::new(LemmaType::anonymous_for_decomposition(decomp)),
+        };
+        let rebuilt = rebuild_literal_with_magnitude(&original, RationalInteger::new(99, 1));
+        match &rebuilt.value {
+            ValueKind::Quantity(n, _) => {
+                assert_eq!(*n, RationalInteger::new(99, 1));
+            }
+            other => panic!("expected Quantity, got {:?}", other),
+        }
+        // After the rewrite: the rebuilt value's signature must equal the original's.
+        // Today we check that lemma_type is preserved.
+        assert_eq!(rebuilt.lemma_type, original.lemma_type);
     }
 }

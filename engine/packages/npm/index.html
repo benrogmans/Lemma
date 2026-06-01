@@ -430,7 +430,22 @@
             if (kind === 'boolean') return v.boolean === true;
             if (kind === 'number') return v.number != null ? String(v.number) : display;
             if (kind === 'text') return typeof v.text === 'string' ? v.text : display;
-            if (kind === 'quantity' && v.quantity && typeof v.quantity === 'object') return { amount: String(v.quantity.value ?? ''), unit: String(v.quantity.unit ?? '') };
+            if (kind === 'quantity') {
+                if (display) {
+                    const parts = display.trim().split(/\s+/);
+                    if (parts.length >= 2) {
+                        return { amount: parts[0], unit: parts.slice(1).join(' ') };
+                    }
+                    if (parts.length === 1) return { amount: parts[0], unit: '' };
+                }
+                if (v.quantity && typeof v.quantity === 'object' && Array.isArray(v.quantity.signature)) {
+                    const sig = v.quantity.signature;
+                    const value = String(v.quantity.value ?? '');
+                    if (sig.length === 1 && Array.isArray(sig[0]) && sig[0].length === 2 && sig[0][1] === 1) {
+                        return { amount: value, unit: String(sig[0][0]) };
+                    }
+                }
+            }
             if (kind === 'ratio') {
                 if (Array.isArray(v.ratio)) return { amount: String(v.ratio[0] ?? ''), unit: (v.ratio[1] != null ? String(v.ratio[1]) : 'ratio') };
                 return { amount: display, unit: 'ratio' };
@@ -798,7 +813,6 @@
 
             for (const ruleName of ruleNames) {
                 const ruleData = rules[ruleName];
-                const resultData = ruleData.result;
 
                 const tableRow = document.createElement('tr');
 
@@ -810,25 +824,16 @@
                 const valueCell = document.createElement('td');
                 const detailsCell = document.createElement('td');
 
-                const isVeto = resultData && Object.prototype.hasOwnProperty.call(resultData, 'veto');
-                const isValue = resultData && Object.prototype.hasOwnProperty.call(resultData, 'value');
-
-                if (isVeto) {
+                if (ruleData && ruleData.vetoed) {
                     valueCell.className = 'veto';
                     valueCell.textContent = 'Vetoed';
                     detailsCell.className = 'veto';
-                    detailsCell.textContent = resultData.veto || 'Vetoed';
-                } else if (isValue) {
-                    const literal = resultData.value;
+                    detailsCell.textContent = ruleData.veto_reason || 'Vetoed';
+                } else if (ruleData && typeof ruleData.display === 'string' && ruleData.display.length > 0) {
                     valueCell.className = 'value';
-                    valueCell.textContent = (literal && literal.display_value !== null && literal.display_value !== undefined)
-                        ? literal.display_value
-                        : JSON.stringify(literal);
+                    valueCell.textContent = ruleData.display;
                     detailsCell.style.color = '#28a745';
-                    const typeKey = (literal && literal.value && typeof literal.value === 'object')
-                        ? Object.keys(literal.value)[0] || 'unknown'
-                        : 'unknown';
-                    detailsCell.textContent = 'Computed (' + typeKey + ')';
+                    detailsCell.textContent = 'Computed (' + (ruleData.rule_type || 'unknown') + ')';
                 } else {
                     valueCell.textContent = '-';
                     detailsCell.textContent = 'No result';
@@ -1146,7 +1151,7 @@
             const dataObj = serializeDataValues(key);
 
             try {
-                const response = engine.run(repo, name, [], dataObj, null, effective);
+                const response = engine.run(repo, name, [], dataObj, effective);
                 state.evalResults[key] = { success: true, response: response };
             } catch (e) {
                 state.evalResults[key] = { success: false, error: e.message || String(e) };

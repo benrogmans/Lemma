@@ -1,7 +1,5 @@
 use crate::evaluation::response::{EvaluatedRule, Response, RuleResult};
-use crate::planning::semantics::{
-    Expression, ExpressionKind, LiteralValue, RulePath, Source, Span,
-};
+use crate::planning::semantics::{LiteralValue, RulePath, Source, Span};
 use crate::OperationResult;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
@@ -22,14 +20,20 @@ fn dummy_rule(name: &str) -> EvaluatedRule {
     EvaluatedRule {
         name: name.to_string(),
         path: RulePath::new(vec![], name.to_string()),
-        default_expression: Expression::new(
-            ExpressionKind::Literal(Box::new(LiteralValue::from_bool(true))),
-            dummy_source(),
-        ),
-        unless_branches: vec![],
         source_location: dummy_source(),
         rule_type: crate::planning::semantics::primitive_boolean().clone(),
     }
+}
+
+fn number_rule_result(name: &str, value: Decimal) -> RuleResult {
+    let expression_units = std::collections::HashMap::new();
+    RuleResult::from_operation_result(
+        dummy_rule(name),
+        OperationResult::Value(Box::new(LiteralValue::number_from_decimal(value))),
+        crate::planning::semantics::primitive_number(),
+        &expression_units,
+        None,
+    )
 }
 
 #[test]
@@ -37,19 +41,11 @@ fn test_response_serialization() {
     let mut results = IndexMap::new();
     results.insert(
         "test_rule".to_string(),
-        RuleResult {
-            rule: dummy_rule("test_rule"),
-            result: OperationResult::Value(Box::new(LiteralValue::number_from_decimal(
-                Decimal::from(42),
-            ))),
-            data: vec![],
-            operations: vec![],
-            explanation: None,
-            rule_type: crate::planning::semantics::primitive_number().clone(),
-        },
+        number_rule_result("test_rule", 42.into()),
     );
     let response = Response {
         spec_name: "test_spec".to_string(),
+        effective: "2026-01-01".to_string(),
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
@@ -59,19 +55,14 @@ fn test_response_serialization() {
 
     let json = serde_json::to_string(&response).unwrap();
     let deserialized: serde_json::Value = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized["spec_name"], "test_spec");
+    assert_eq!(deserialized["spec"], "test_spec");
     assert!(deserialized["results"]
         .as_object()
         .unwrap()
         .contains_key("test_rule"));
-    assert_eq!(
-        deserialized["results"]["test_rule"]["result"]["value"]["display_value"],
-        "42"
-    );
-    let number = &deserialized["results"]["test_rule"]["result"]["value"]["value"]["number"];
-    assert!(number.is_string());
-    assert_eq!(number.as_str(), Some("42"));
-    assert!(!number.is_array(), "response number must be scalar JSON");
+    assert_eq!(deserialized["results"]["test_rule"]["display"], "42");
+    assert_eq!(deserialized["results"]["test_rule"]["number"], "42");
+    assert_eq!(deserialized["results"]["test_rule"]["vetoed"], false);
 }
 
 #[test]
@@ -79,19 +70,11 @@ fn response_number_json_is_scalar() {
     let mut results = IndexMap::new();
     results.insert(
         "double".to_string(),
-        RuleResult {
-            rule: dummy_rule("double"),
-            result: OperationResult::Value(Box::new(LiteralValue::number_from_decimal(
-                Decimal::from(20),
-            ))),
-            data: vec![],
-            operations: vec![],
-            explanation: None,
-            rule_type: crate::planning::semantics::primitive_number().clone(),
-        },
+        number_rule_result("double", 20.into()),
     );
     let response = Response {
         spec_name: "test_spec".to_string(),
+        effective: "2026-01-01".to_string(),
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
@@ -100,38 +83,38 @@ fn response_number_json_is_scalar() {
     };
     let json: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap();
-    let number = &json["results"]["double"]["result"]["value"]["value"]["number"];
+    let number = &json["results"]["double"]["number"];
     assert!(!number.is_array());
     assert_eq!(number.as_str(), Some("20"));
 }
 
 #[test]
 fn test_response_filter_rules() {
+    let expression_units = std::collections::HashMap::new();
     let mut results = IndexMap::new();
     results.insert(
         "rule1".to_string(),
-        RuleResult {
-            rule: dummy_rule("rule1"),
-            result: OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
-            data: vec![],
-            operations: vec![],
-            explanation: None,
-            rule_type: crate::planning::semantics::primitive_boolean().clone(),
-        },
+        RuleResult::from_operation_result(
+            dummy_rule("rule1"),
+            OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
+            crate::planning::semantics::primitive_boolean(),
+            &expression_units,
+            None,
+        ),
     );
     results.insert(
         "rule2".to_string(),
-        RuleResult {
-            rule: dummy_rule("rule2"),
-            result: OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
-            data: vec![],
-            operations: vec![],
-            explanation: None,
-            rule_type: crate::planning::semantics::primitive_boolean().clone(),
-        },
+        RuleResult::from_operation_result(
+            dummy_rule("rule2"),
+            OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
+            crate::planning::semantics::primitive_boolean(),
+            &expression_units,
+            None,
+        ),
     );
     let mut response = Response {
         spec_name: "test_spec".to_string(),
+        effective: "2026-01-01".to_string(),
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,

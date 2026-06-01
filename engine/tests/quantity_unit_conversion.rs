@@ -1,15 +1,33 @@
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
-use lemma::Engine;
-use lemma::EvaluationRequest;
-use lemma::ValueKind;
-use lemma::VetoType;
+use lemma::DateTimeValue;
+use lemma::{Engine, ExecutionPlan, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 fn decimal_lit(d: &str) -> Decimal {
     Decimal::from_str(d).unwrap()
+}
+
+fn run_override_veto_message(
+    engine: &Engine,
+    spec: &str,
+    data: HashMap<String, String>,
+    rule_name: &str,
+) -> String {
+    let now = DateTimeValue::now();
+    let resp = engine
+        .run(None, spec, Some(&now), data, true)
+        .unwrap_or_else(|err| panic!("run must complete with veto, not Error: {err}"));
+    let rr = resp
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("rule '{rule_name}' not found"));
+    assert!(
+        rr.vetoed,
+        "rule '{rule_name}' must veto on invalid override, got {:?}",
+        rr.display
+    );
+    rr.veto_reason.clone().expect("veto reason")
 }
 
 #[test]
@@ -39,7 +57,6 @@ rule check: accept
             Some(&now),
             HashMap::from([("price".to_string(), "150 eur".to_string())]),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
@@ -49,11 +66,10 @@ rule check: accept
         .find(|r| r.rule.name == "check")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("This price is too high.".to_string()),
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("This price is too high.")
     );
 }
 
@@ -67,38 +83,32 @@ data money: quantity
 
 data price: money
 
-rule check: accept
+rule check: price
 "#;
 
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile).unwrap();
 
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::from([("price".to_string(), "100 btc".to_string())]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let msg = err.to_string();
-    assert!(msg.contains("btc"), "actual error: {msg}");
+    let msg = run_override_veto_message(
+        &engine,
+        "pricing",
+        HashMap::from([("price".to_string(), "100 btc".to_string())]),
+        "check",
+    );
+    assert!(msg.contains("btc"), "actual veto: {msg}");
 }
 
 #[test]
 fn quantity_as_operator_converts_units() {
-    // unit usd 0.84: 1 USD = 0.84 EUR (canonical). 100 usd as eur => 100 * 0.84 = 84.
+    // unit usd 0.84: 1 USD = 0.84 EUR (canonical). 100 usd as eur = 84 eur.
     let code = r#"
 spec pricing
 data money: quantity
     -> unit eur 1
     -> unit usd 0.84
 
-rule price_eur: 100 usd as eur
+data amount: 100 usd
+rule price_eur: amount as eur
 "#;
 
     let mut engine = Engine::new();
@@ -106,14 +116,7 @@ rule price_eur: 100 usd as eur
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
     let rule_result = response
         .results
@@ -121,10 +124,15 @@ rule price_eur: 100 usd as eur
         .find(|r| r.rule.name == "price_eur")
         .unwrap();
 
-    let (value, lemma_type) = match &rule_result.result {
-        OperationResult::Value(lit) => (&lit.value, &lit.lemma_type),
-        other => panic!("Expected a Value result, got: {:?}", other),
-    };
+    assert!(!rule_result.vetoed);
+    let lit = rule_result
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let (value, lemma_type) = (&lit.value, &lit.lemma_type);
 
     assert!(
         lemma_type.is_quantity(),
@@ -132,12 +140,20 @@ rule price_eur: 100 usd as eur
     );
 
     let (amount, unit) = match value {
-        ValueKind::Quantity(amount, unit, _decomp) => (amount, unit),
+        ValueKind::Quantity(amount, sig) => (
+            amount,
+            sig.first()
+                .map(|(n, _)| n.as_str())
+                .unwrap_or("")
+                .to_string(),
+        ),
         other => panic!("Expected a quantity value, got: {other:?}"),
     };
 
     assert_eq!(
-        lemma::commit_rational_to_decimal(amount).unwrap(),
+        lemma::ValueKind::Number(*amount)
+            .as_decimal_magnitude()
+            .unwrap(),
         Decimal::from(84)
     );
     assert_eq!(unit.as_str(), "eur");
@@ -160,14 +176,7 @@ rule taxable: gross - pension
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "t",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "t", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let rule_result = response
@@ -176,21 +185,10 @@ rule taxable: gross - pension
         .find(|r| r.rule.name == "taxable")
         .unwrap();
 
-    match &rule_result.result {
-        OperationResult::Value(lit) => {
-            let (amount, unit) = match &lit.value {
-                ValueKind::Quantity(a, u, _decomp) => (a, u),
-                other => panic!("expected quantity, got {other:?}"),
-            };
-            assert_eq!(unit.as_str(), "usd", "result unit follows left operand");
-            assert_eq!(
-                lemma::commit_rational_to_decimal(amount).unwrap(),
-                Decimal::from(7600),
-                "7600 usd - 0 eur = 7600 usd"
-            );
-        }
-        OperationResult::Veto(msg) => panic!("expected Value, got Veto: {msg:?}"),
-    }
+    assert!(!rule_result.vetoed);
+    let quantity = rule_result.quantity.as_ref().expect("quantity map");
+    assert_eq!(quantity.get("eur"), Some(&"6384".to_string()));
+    assert_eq!(quantity.get("usd"), Some(&"7600".to_string()));
 }
 
 #[test]
@@ -201,7 +199,7 @@ data money: quantity
     -> unit eur 1
     -> unit usd 0.84
 
-rule price_gbp: 100 eur as gbp
+rule price_gbp: 100 as gbp
 "#;
 
     let mut engine = Engine::new();
@@ -239,14 +237,7 @@ rule base_shipping: 5.99
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "shipping",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "shipping", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let rule_result = response
@@ -256,17 +247,22 @@ rule base_shipping: 5.99
         .unwrap();
 
     // package_weight = 2.5 kg, which is > 1 kg but not > 5 kg, so second unless wins: 8.99
-    match &rule_result.result {
-        OperationResult::Value(v) => match &v.value {
-            ValueKind::Number(d) => {
-                assert_eq!(
-                    lemma::commit_rational_to_decimal(d).unwrap(),
-                    Decimal::new(899, 2)
-                );
-            }
-            other => panic!("Expected Number value, got {:?}", other),
-        },
-        OperationResult::Veto(reason) => panic!("Expected value, got Veto({:?})", reason),
+    assert!(!rule_result.vetoed);
+    let lit = rule_result
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        ValueKind::Number(d) => {
+            assert_eq!(
+                lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap(),
+                Decimal::new(899, 2)
+            );
+        }
+        other => panic!("Expected Number value, got {:?}", other),
     }
 }
 
@@ -290,14 +286,7 @@ rule total: base_fee + surcharge
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "shipping",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "shipping", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let rule_result = response
@@ -306,17 +295,22 @@ rule total: base_fee + surcharge
         .find(|r| r.rule.name == "total")
         .unwrap();
 
-    match &rule_result.result {
-        OperationResult::Value(v) => match &v.value {
-            ValueKind::Quantity(d, _, _) => {
-                assert_eq!(
-                    lemma::commit_rational_to_decimal(d).unwrap(),
-                    Decimal::new(799, 2)
-                );
-            }
-            other => panic!("Expected Quantity value, got {:?}", other),
-        },
-        OperationResult::Veto(reason) => panic!("Expected value, got Veto({:?})", reason),
+    assert!(!rule_result.vetoed);
+    let lit = rule_result
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        ValueKind::Quantity(d, _) => {
+            assert_eq!(
+                lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap(),
+                Decimal::new(799, 2)
+            );
+        }
+        other => panic!("Expected Quantity value, got {:?}", other),
     }
 }
 
@@ -332,8 +326,9 @@ spec physics
 data mass: quantity
     -> unit kilogram 1.0
     -> unit gram 0.001
+    -> default 2 kilogram
 
-rule result: 2 kilogram as gram
+rule result: mass as gram as number
 "#;
 
     let mut engine = Engine::new();
@@ -341,14 +336,7 @@ rule result: 2 kilogram as gram
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "physics", Some(&now), HashMap::new(), true)
         .unwrap();
     let rule = response
         .results
@@ -356,19 +344,25 @@ rule result: 2 kilogram as gram
         .find(|r| r.rule.name == "result")
         .unwrap();
 
-    let (amount, unit) = match &rule.result {
-        OperationResult::Value(lit) => match &lit.value {
-            ValueKind::Quantity(a, u, _decomp) => (*a, u.as_str()),
-            other => panic!("expected Quantity, got {other:?}"),
-        },
-        other => panic!("expected Value, got {other:?}"),
+    assert!(!rule.vetoed);
+    let lit = rule
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let amount = match &lit.value {
+        ValueKind::Number(n) => *n,
+        other => panic!("expected Number from unit extraction, got {other:?}"),
     };
 
-    assert_eq!(unit, "gram");
     assert_eq!(
-        lemma::commit_rational_to_decimal(&amount).unwrap(),
+        lemma::ValueKind::Number(amount)
+            .as_decimal_magnitude()
+            .unwrap(),
         Decimal::from(2000),
-        "2 kg = 2000 gram"
+        "2 kg in gram = 2000"
     );
 }
 
@@ -379,8 +373,9 @@ spec physics
 data mass: quantity
     -> unit kilogram 1.0
     -> unit gram 0.001
+    -> default 500 gram
 
-rule result: 500 gram as kilogram
+rule result: mass as kilogram as number
 "#;
 
     let mut engine = Engine::new();
@@ -388,14 +383,7 @@ rule result: 500 gram as kilogram
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "physics", Some(&now), HashMap::new(), true)
         .unwrap();
     let rule = response
         .results
@@ -403,19 +391,25 @@ rule result: 500 gram as kilogram
         .find(|r| r.rule.name == "result")
         .unwrap();
 
-    let (amount, unit) = match &rule.result {
-        OperationResult::Value(lit) => match &lit.value {
-            ValueKind::Quantity(a, u, _decomp) => (*a, u.as_str()),
-            other => panic!("expected Quantity, got {other:?}"),
-        },
-        other => panic!("expected Value, got {other:?}"),
+    assert!(!rule.vetoed);
+    let lit = rule
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let amount = match &lit.value {
+        ValueKind::Number(n) => *n,
+        other => panic!("expected Number from unit extraction, got {other:?}"),
     };
 
-    assert_eq!(unit, "kilogram");
     assert_eq!(
-        lemma::commit_rational_to_decimal(&amount).unwrap(),
+        lemma::ValueKind::Number(amount)
+            .as_decimal_magnitude()
+            .unwrap(),
         decimal_lit("0.5"),
-        "500 gram = 0.5 kg"
+        "500 gram in kilogram = 0.5"
     );
 }
 
@@ -427,8 +421,9 @@ data mass: quantity
     -> unit kilogram 1.0
     -> unit gram 0.001
     -> unit pound 0.453592
+    -> default 1 pound
 
-rule result: 1 pound as gram
+rule result: mass as gram as number
 "#;
 
     let mut engine = Engine::new();
@@ -436,14 +431,7 @@ rule result: 1 pound as gram
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "physics", Some(&now), HashMap::new(), true)
         .unwrap();
     let rule = response
         .results
@@ -451,19 +439,25 @@ rule result: 1 pound as gram
         .find(|r| r.rule.name == "result")
         .unwrap();
 
-    let (amount, unit) = match &rule.result {
-        OperationResult::Value(lit) => match &lit.value {
-            ValueKind::Quantity(a, u, _decomp) => (*a, u.as_str()),
-            other => panic!("expected Quantity, got {other:?}"),
-        },
-        other => panic!("expected Value, got {other:?}"),
+    assert!(!rule.vetoed);
+    let lit = rule
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let amount = match &lit.value {
+        ValueKind::Number(n) => *n,
+        other => panic!("expected Number from unit extraction, got {other:?}"),
     };
 
-    assert_eq!(unit, "gram");
     assert_eq!(
-        lemma::commit_rational_to_decimal(&amount).unwrap(),
+        lemma::ValueKind::Number(amount)
+            .as_decimal_magnitude()
+            .unwrap(),
         decimal_lit("453.592"),
-        "1 pound = 453.592 gram"
+        "1 pound in gram = 453.592"
     );
 }
 
@@ -486,14 +480,7 @@ rule total: a + b
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "physics", Some(&now), HashMap::new(), true)
         .unwrap();
     let rule = response
         .results
@@ -501,20 +488,10 @@ rule total: a + b
         .find(|r| r.rule.name == "total")
         .unwrap();
 
-    let (amount, unit) = match &rule.result {
-        OperationResult::Value(lit) => match &lit.value {
-            ValueKind::Quantity(a, u, _decomp) => (*a, u.as_str()),
-            other => panic!("expected Quantity, got {other:?}"),
-        },
-        other => panic!("expected Value, got {other:?}"),
-    };
-
-    assert_eq!(unit, "kilogram", "result unit follows left operand");
-    assert_eq!(
-        lemma::commit_rational_to_decimal(&amount).unwrap(),
-        decimal_lit("1.5"),
-        "1 kg + 500 g = 1.5 kg"
-    );
+    assert!(!rule.vetoed);
+    let quantity = rule.quantity.as_ref().expect("quantity map");
+    assert_eq!(quantity.get("kilogram"), Some(&"1.5".to_string()));
+    assert_eq!(quantity.get("gram"), Some(&"1500".to_string()));
 }
 
 #[test]
@@ -534,14 +511,7 @@ rule heavy: package > 1 kilogram
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "physics", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule = response
         .results
@@ -549,13 +519,7 @@ rule heavy: package > 1 kilogram
         .find(|r| r.rule.name == "heavy")
         .unwrap();
 
-    match &rule.result {
-        OperationResult::Value(lit) => match &lit.value {
-            ValueKind::Boolean(b) => assert!(*b, "1500 gram > 1 kilogram should be true"),
-            other => panic!("expected Boolean, got {other:?}"),
-        },
-        other => panic!("expected Value, got {other:?}"),
-    };
+    assert_eq!(rule.boolean, Some(true));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -590,7 +554,6 @@ rule result: weight
         Some(&now),
         HashMap::from([("weight".to_string(), "1500 gram".to_string())]),
         false,
-        lemma::EvaluationRequest::default(),
     );
 
     assert!(
@@ -625,7 +588,6 @@ rule result: weight
         Some(&now),
         HashMap::from([("weight".to_string(), "1500 gram".to_string())]),
         false,
-        lemma::EvaluationRequest::default(),
     );
 
     assert!(
@@ -652,27 +614,20 @@ rule result: weight
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile).unwrap();
 
-    let now = DateTimeValue::now();
     // 3000 gram = 3 kg, which exceeds the 2 kg maximum
-    let err = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::from([("weight".to_string(), "3000 gram".to_string())]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let msg = err.to_string();
-    assert!(
-        msg.contains("maximum") || msg.contains("above"),
-        "3000 gram (= 3 kg) should fail maximum 2 kg, got: {msg}"
+    let message = run_override_veto_message(
+        &engine,
+        "physics",
+        HashMap::from([("weight".to_string(), "3000 gram".to_string())]),
+        "result",
     );
     assert!(
-        !msg.to_lowercase().contains("canonical"),
-        "must not mention canonical units, got: {msg}"
+        message.contains("maximum") || message.contains("above"),
+        "3000 gram (= 3 kg) should fail maximum 2 kg, got: {message}"
+    );
+    assert!(
+        !message.to_lowercase().contains("canonical"),
+        "must not mention canonical units, got: {message}"
     );
 }
 
@@ -691,19 +646,12 @@ rule out: cost_per_unit
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile).unwrap();
 
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::from([("cost_per_unit".to_string(), "1 eur_per_kilo".to_string())]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let message = err.to_string();
+    let message = run_override_veto_message(
+        &engine,
+        "s",
+        HashMap::from([("cost_per_unit".to_string(), "1 eur_per_kilo".to_string())]),
+        "out",
+    );
     assert!(
         message.contains("below minimum"),
         "expected below minimum, got: {message}"
@@ -739,22 +687,15 @@ rule out: cost_per_unit
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile).unwrap();
 
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::from([(
-                "cost_per_unit".to_string(),
-                "2.01 usd_per_tonne".to_string(),
-            )]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let message = err.to_string();
+    let message = run_override_veto_message(
+        &engine,
+        "s",
+        HashMap::from([(
+            "cost_per_unit".to_string(),
+            "2.01 usd_per_tonne".to_string(),
+        )]),
+        "out",
+    );
     assert!(
         message.contains("below minimum"),
         "expected below minimum, got: {message}"
@@ -801,7 +742,6 @@ fn compound_quantity_below_maximum_in_other_unit_passes() {
             "2.01 usd_per_tonne".to_string(),
         )]),
         false,
-        lemma::EvaluationRequest::default(),
     );
 
     assert!(
@@ -818,22 +758,15 @@ fn compound_quantity_above_maximum_shows_converted_bound_in_user_unit() {
         .load(COMPOUND_COST_VALIDATION_SPEC, lemma::SourceType::Volatile)
         .unwrap();
 
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::from([(
-                "cost_per_unit".to_string(),
-                "5000 usd_per_tonne".to_string(),
-            )]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let message = err.to_string();
+    let message = run_override_veto_message(
+        &engine,
+        "s",
+        HashMap::from([(
+            "cost_per_unit".to_string(),
+            "5000 usd_per_tonne".to_string(),
+        )]),
+        "out",
+    );
     assert!(
         message.contains("above maximum"),
         "expected above maximum, got: {message}"
@@ -850,7 +783,7 @@ fn compound_quantity_above_maximum_shows_converted_bound_in_user_unit() {
 
 const TRI_COMPOUND_COST_VALIDATION_SPEC: &str = r#"
 spec s
-uses lemma si
+uses lemma units
 
 data money: quantity
   -> unit eur 1
@@ -888,7 +821,6 @@ fn tri_compound_quantity_below_maximum_in_other_unit_passes() {
             "2.01 usd_per_ton_hour".to_string(),
         )]),
         false,
-        lemma::EvaluationRequest::default(),
     );
 
     assert!(
@@ -908,22 +840,15 @@ fn tri_compound_quantity_above_maximum_shows_converted_bound_in_user_unit() {
         )
         .unwrap();
 
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            HashMap::from([(
-                "storage_cost".to_string(),
-                "5000 usd_per_ton_hour".to_string(),
-            )]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let message = err.to_string();
+    let message = run_override_veto_message(
+        &engine,
+        "s",
+        HashMap::from([(
+            "storage_cost".to_string(),
+            "5000 usd_per_ton_hour".to_string(),
+        )]),
+        "out",
+    );
     assert!(
         message.contains("above maximum"),
         "expected above maximum, got: {message}"
@@ -955,19 +880,12 @@ rule result: weight
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile).unwrap();
 
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "physics",
-            Some(&now),
-            HashMap::from([("weight".to_string(), "500 gram".to_string())]),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .unwrap_err();
-
-    let message = err.to_string();
+    let message = run_override_veto_message(
+        &engine,
+        "physics",
+        HashMap::from([("weight".to_string(), "500 gram".to_string())]),
+        "result",
+    );
     assert!(
         message.contains("500 gram is below minimum 1000 gram"),
         "expected cross-unit bound in user's unit, got: {message}"
@@ -992,59 +910,63 @@ fn reference_named_unit_conversion(
         .expect("reference conversion divide failed")
 }
 
-fn reference_named_unit_conversion_rational(
-    stored: lemma::RationalInteger,
-    from_factor: lemma::RationalInteger,
-    to_factor: lemma::RationalInteger,
-) -> lemma::RationalInteger {
-    let scaled = lemma::checked_mul(&stored, &from_factor).expect("reference conversion multiply");
-    let inverse_to = lemma::RationalInteger::new(*to_factor.denom(), *to_factor.numer());
-    lemma::checked_mul(&scaled, &inverse_to).expect("reference conversion divide")
-}
-
-fn rational_prime_unit(prime: u32) -> lemma::RationalInteger {
-    lemma::RationalInteger::new(i128::from(prime), 1)
-}
-
 fn eval_rule_quantity_magnitude(
     engine: &Engine,
     spec_name: &str,
     rule_name: &str,
 ) -> (Decimal, String) {
-    eval_rule_quantity_magnitude_with_request(
-        engine,
-        spec_name,
-        rule_name,
-        EvaluationRequest::default(),
-    )
-}
-
-fn eval_rule_quantity_magnitude_with_request(
-    engine: &Engine,
-    spec_name: &str,
-    rule_name: &str,
-    request: EvaluationRequest,
-) -> (Decimal, String) {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false, request)
+        .run(None, spec_name, Some(&now), HashMap::new(), true)
         .expect("precision stress evaluation must complete");
     let rule = response
         .results
         .values()
         .find(|r| r.rule.name == rule_name)
         .unwrap_or_else(|| panic!("rule '{rule_name}' missing in spec '{spec_name}'"));
-    match &rule.result {
-        OperationResult::Value(lit) => match &lit.value {
-            ValueKind::Quantity(amount, unit, _) => (
-                lemma::commit_rational_to_decimal(amount).unwrap(),
-                unit.clone(),
-            ),
+    assert!(
+        !rule.vetoed,
+        "rule '{rule_name}' must not Veto, got {:?}",
+        rule.veto_reason
+    );
+    if let Some(quantity) = &rule.quantity {
+        let lit = rule
+            .trace
+            .as_ref()
+            .expect("explanation")
+            .result
+            .value()
+            .expect("value");
+        let unit = match &lit.value {
+            ValueKind::Quantity(_, sig) => sig
+                .first()
+                .map(|(n, _)| n.clone())
+                .unwrap_or_else(|| panic!("quantity result missing signature unit")),
             other => panic!("expected Quantity from '{rule_name}', got {other:?}"),
-        },
-        OperationResult::Veto(reason) => {
-            panic!("rule '{rule_name}' must not Veto, got {reason:?}");
-        }
+        };
+        let amount = quantity
+            .get(&unit)
+            .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"));
+        return (
+            Decimal::from_str(amount).expect("quantity map decimal"),
+            unit,
+        );
+    }
+    let lit = rule
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        ValueKind::Quantity(amount, sig) => (
+            lemma::ValueKind::Number(*amount)
+                .as_decimal_magnitude()
+                .unwrap(),
+            sig.first().map(|(n, _)| n.clone()).unwrap_or_default(),
+        ),
+        other => panic!("expected Quantity from '{rule_name}', got {other:?}"),
     }
 }
 
@@ -1108,49 +1030,14 @@ fn precision_short_prime_chain_matches_stepwise_reference() {
     let mut engine = Engine::new();
     engine.load(&code, lemma::SourceType::Volatile).unwrap();
 
-    let mut reference = forward_prime_chain_reference(lemma::RationalInteger::new(37, 1), primes);
-    reference = reverse_prime_chain_reference(reference, primes);
-
     let (lemma_amount, unit) =
         eval_rule_quantity_magnitude(&engine, "prime_precision", &final_rule);
     assert_eq!(unit, "base");
     assert_eq!(
         lemma_amount,
-        lemma::commit_rational_to_decimal(&reference).unwrap()
+        Decimal::from(37),
+        "37 base through prime unit chain forward and back must stay exactly 37"
     );
-    assert_eq!(lemma_amount, Decimal::from(37));
-}
-
-fn forward_prime_chain_reference(
-    mut reference: lemma::RationalInteger,
-    primes: &[u32],
-) -> lemma::RationalInteger {
-    let mut from_factor = lemma::RationalInteger::new(1, 1);
-    for prime in primes {
-        let to_factor = rational_prime_unit(*prime);
-        reference = reference_named_unit_conversion_rational(reference, from_factor, to_factor);
-        from_factor = to_factor;
-    }
-    reference
-}
-
-fn reverse_prime_chain_reference(
-    mut reference: lemma::RationalInteger,
-    primes: &[u32],
-) -> lemma::RationalInteger {
-    let units_reverse: Vec<u32> = primes.iter().rev().copied().collect();
-    for index in 0..units_reverse.len() - 1 {
-        reference = reference_named_unit_conversion_rational(
-            reference,
-            rational_prime_unit(units_reverse[index]),
-            rational_prime_unit(units_reverse[index + 1]),
-        );
-    }
-    reference_named_unit_conversion_rational(
-        reference,
-        rational_prime_unit(*units_reverse.last().expect("prime list non-empty")),
-        lemma::RationalInteger::new(1, 1),
-    )
 }
 
 #[test]
@@ -1182,19 +1069,9 @@ fn precision_prime_ladder_forward_reverse_matches_reference() {
     let mut engine = Engine::new();
     engine.load(&code, lemma::SourceType::Volatile).unwrap();
 
-    let reference = reverse_prime_chain_reference(
-        forward_prime_chain_reference(lemma::RationalInteger::new(37, 1), primes),
-        primes,
-    );
-
     let (lemma_amount, unit) =
         eval_rule_quantity_magnitude(&engine, "prime_precision", &final_rule);
     assert_eq!(unit, "base");
-    assert_eq!(
-        lemma_amount,
-        lemma::commit_rational_to_decimal(&reference).unwrap(),
-        "Lemma must match stepwise reference"
-    );
     assert_eq!(
         lemma_amount,
         Decimal::from(37),
@@ -1320,30 +1197,21 @@ fn precision_api_display_ping_pong_twenty_unit_toggles() {
         other => panic!("unexpected in-spec unit {other}"),
     };
 
-    let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "api_ping_pong", Some(&now))
-        .expect("plan");
     for index in 0..20 {
+        let rule = format!("step{}", index + 1);
         let target_unit = if index % 2 == 0 { "p7" } else { "p11" };
         let target_factor = if index % 2 == 0 {
             Decimal::from(7)
         } else {
             Decimal::from(11)
         };
-        let request = EvaluationRequest::from_rule_conversion_strings(
-            HashMap::from([(previous.clone(), target_unit.to_string())]),
-            plan,
-        )
-        .expect("valid API unit toggle");
-        let (api_amount, api_unit) =
-            eval_rule_quantity_magnitude_with_request(&engine, "api_ping_pong", &previous, request);
-        assert_eq!(api_unit, target_unit);
+        let (amount, unit) = eval_rule_quantity_magnitude(&engine, "api_ping_pong", &rule);
+        assert_eq!(unit, target_unit);
         let expected =
             reference_named_unit_conversion(in_spec_amount, in_spec_factor, target_factor);
         assert_eq!(
-            api_amount, expected,
-            "API display at hop {index} must match in-spec conversion"
+            amount, expected,
+            "in-spec conversion at hop {index} must match reference"
         );
     }
 }
@@ -1360,25 +1228,250 @@ rule quotient: ten / zero
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "div0_control",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "div0_control", Some(&now), HashMap::new(), true)
         .expect("evaluation must complete");
     let rule = response
         .results
         .values()
         .find(|r| r.rule.name == "quotient")
         .expect("quotient missing");
+    assert!(rule.vetoed, "division by zero path must Veto, not panic");
+    let reason = rule.veto_reason.as_deref().expect("veto reason");
     assert!(
-        matches!(
-            rule.result,
-            OperationResult::Veto(lemma::VetoType::Computation { .. })
+        reason.contains("Division by zero") || reason.contains("division"),
+        "expected division veto, got: {reason}"
+    );
+}
+
+/// Regression: stale deserialized `unit_index` must return Error, not panic at eval.
+#[test]
+fn eval_stale_unit_index_returns_error_not_internal_panic() {
+    let code = r#"
+spec t
+uses lemma units
+data duration: units.duration
+data x: number -> default 5
+rule r: x as minutes
+"#;
+
+    let mut engine = Engine::new();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+
+    let plan = engine.get_plan(None, "t", Some(&now)).unwrap();
+
+    let mut json: serde_json::Value =
+        serde_json::to_value(lemma::ExecutionPlanSerialized::from(plan)).unwrap();
+    let unit_index = json["unit_index"]
+        .as_object_mut()
+        .expect("unit_index object");
+    assert!(
+        unit_index.contains_key("minutes") || unit_index.contains_key("minute"),
+        "plan must contain minutes/minute in unit_index before tampering; keys: {:?}",
+        unit_index.keys().collect::<Vec<_>>()
+    );
+    unit_index.remove("minutes");
+    unit_index.remove("minute");
+
+    let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
+    let tampered_plan: ExecutionPlan = ExecutionPlan::try_from(serialized).unwrap();
+
+    let result = engine.run_plan(&tampered_plan, Some(&now), HashMap::new(), false, true);
+    assert!(
+        result.is_err(),
+        "stale unit_index must surface as Error, not Ok: {:?}",
+        result.ok()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Cross-family relabel: `5 eur as kg` = 5 kg (no factor).
+// `amount as eur as kg` converts in the money family first, then relabels.
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn cross_family_relabel_quantity_literal_no_factor() {
+    // `5 eur as kg` — magnitude carried unchanged, target family is mass.
+    let code = r#"
+spec t
+data money: quantity -> unit eur 1 -> unit usd 0.91
+data mass: quantity -> unit kg 1
+rule out: 5 eur as kg
+"#;
+    let mut engine = Engine::new();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "t", Some(&now), HashMap::new(), true)
+        .unwrap();
+    let lit = response
+        .results
+        .get("out")
+        .unwrap()
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let (magnitude, sig) = match &lit.value {
+        ValueKind::Quantity(m, s) => (
+            lemma::ValueKind::Number(*m).as_decimal_magnitude().unwrap(),
+            s,
         ),
-        "division by zero path must Veto, not panic"
+        other => panic!("expected Quantity, got {other:?}"),
+    };
+    assert_eq!(
+        magnitude,
+        Decimal::from(5),
+        "5 eur as kg must carry magnitude 5 unchanged"
+    );
+    assert_eq!(
+        sig.first().map(|(n, _)| n.as_str()),
+        Some("kg"),
+        "target unit must be kg"
+    );
+    assert!(
+        lit.lemma_type.is_quantity(),
+        "result must be a quantity type"
+    );
+}
+
+#[test]
+fn cross_family_relabel_via_convert_then_relabel() {
+    // `amount as eur as kg`: 100 usd → 91 eur (money factor), then relabel → 91 kg (no factor).
+    let code = r#"
+spec t
+data money: quantity -> unit eur 1 -> unit usd 0.91
+data mass: quantity -> unit kg 1
+data amount: 100 usd
+rule out: amount as eur as kg
+"#;
+    let mut engine = Engine::new();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "t", Some(&now), HashMap::new(), true)
+        .unwrap();
+    let lit = response
+        .results
+        .get("out")
+        .unwrap()
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let (magnitude, sig) = match &lit.value {
+        ValueKind::Quantity(m, s) => (
+            lemma::ValueKind::Number(*m).as_decimal_magnitude().unwrap(),
+            s,
+        ),
+        other => panic!("expected Quantity, got {other:?}"),
+    };
+    // 100 usd × 0.91 = 91 eur (money family factor), then relabel to kg with the same magnitude.
+    assert_eq!(magnitude, Decimal::new(91, 0), "100 usd → 91 eur → 91 kg");
+    assert_eq!(
+        sig.first().map(|(n, _)| n.as_str()),
+        Some("kg"),
+        "target unit must be kg"
+    );
+}
+
+#[test]
+fn cross_family_extract_then_relabel_number_bridge() {
+    // `amount as eur as number as kg`: strip to 91, then construct 91 kg.
+    let code = r#"
+spec t
+data money: quantity -> unit eur 1 -> unit usd 0.91
+data mass: quantity -> unit kg 1
+data amount: 100 usd
+rule out: amount as eur as number as kg
+"#;
+    let mut engine = Engine::new();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "t", Some(&now), HashMap::new(), true)
+        .unwrap();
+    let lit = response
+        .results
+        .get("out")
+        .unwrap()
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    let (magnitude, sig) = match &lit.value {
+        ValueKind::Quantity(m, s) => (
+            lemma::ValueKind::Number(*m).as_decimal_magnitude().unwrap(),
+            s,
+        ),
+        other => panic!("expected Quantity, got {other:?}"),
+    };
+    assert_eq!(
+        magnitude,
+        Decimal::new(91, 0),
+        "91 eur → 91 (number) → 91 kg"
+    );
+    assert_eq!(sig.first().map(|(n, _)| n.as_str()), Some("kg"));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Rejections: bare quantity `as number` / bare cross-family `as <unit>`
+// require a source unit to be named first.
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn bare_quantity_reference_as_number_rejected() {
+    // `amount as number` without naming a unit must be rejected with a suggestion.
+    let code = r#"
+spec t
+data money: quantity -> unit eur 1 -> unit usd 0.91
+data amount: money
+rule out: amount as number
+"#;
+    let mut engine = Engine::new();
+    let err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
+    let msg = err
+        .errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        msg.contains("eur") || msg.contains("as eur"),
+        "error must suggest explicit unit, got: {msg}"
+    );
+    assert!(
+        msg.to_lowercase().contains("number"),
+        "error must mention 'number', got: {msg}"
+    );
+}
+
+#[test]
+fn bare_quantity_reference_cross_family_as_unit_rejected() {
+    // `amount as kg` without naming source unit must be rejected.
+    let code = r#"
+spec t
+data money: quantity -> unit eur 1
+data mass: quantity -> unit kg 1
+data amount: money
+rule out: amount as kg
+"#;
+    let mut engine = Engine::new();
+    let err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
+    let msg = err
+        .errors
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        msg.contains("eur") || msg.to_lowercase().contains("unit"),
+        "error must suggest expressing source unit first, got: {msg}"
     );
 }

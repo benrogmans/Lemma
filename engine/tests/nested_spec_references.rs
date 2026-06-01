@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -40,14 +40,7 @@ rule line_total: pricing.final_price * quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "line_item",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "line_item", Some(&now), HashMap::new(), true)
         .unwrap();
     let line_total = response
         .results
@@ -56,15 +49,20 @@ rule line_total: pricing.final_price * quantity
         .unwrap();
 
     // Should be: (100 * 1.21) * 10 = 1210
-    match &line_total.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(1210)
-            ),
-            other => panic!("Expected Number for line_total, got {:?}", other),
-        },
-        other => panic!("Expected Value for line_total, got {:?}", other),
+    assert!(!line_total.vetoed);
+    let lit = line_total
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(1210)
+        ),
+        other => panic!("Expected Number for line_total, got {:?}", other),
     }
 }
 
@@ -101,14 +99,7 @@ rule top_calc: middle_ref.middle_calc
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "top", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let top_calc = response
@@ -117,15 +108,20 @@ rule top_calc: middle_ref.middle_calc
         .find(|r| r.rule.name == "top_calc")
         .expect("top_calc rule not found in results");
 
-    match &top_calc.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(250)
-            ),
-            other => panic!("Expected Number for top_calc, got {:?}", other),
-        },
-        other => panic!("Expected Value for top_calc, got {:?}", other),
+    assert!(!top_calc.vetoed);
+    let lit = top_calc
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(250)
+        ),
+        other => panic!("Expected Number for top_calc, got {:?}", other),
     }
 }
 
@@ -147,7 +143,7 @@ data x: spec other
         .join("; ");
     assert!(
         (msg.contains("uses") && msg.contains("spec"))
-            || msg.contains("Dotted paths require `fill`"),
+            || msg.contains("Dotted paths require `with`"),
         "expected spec-import or dotted-LHS rejection, got: {msg}"
     );
 }
@@ -165,7 +161,7 @@ data value: 50
     let middle_spec = r#"
 spec middle
 uses config: base
-fill config.value: 100
+with config.value: 100
 "#;
 
     let top_spec = r#"
@@ -182,14 +178,7 @@ rule final_value: settings.config.value * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "top", Some(&now), HashMap::new(), true)
         .unwrap();
     let final_value = response
         .results
@@ -198,15 +187,20 @@ rule final_value: settings.config.value * 2
         .unwrap();
 
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
-    match &final_value.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(200)
-            ),
-            other => panic!("Expected Number for final_value, got {:?}", other),
-        },
-        other => panic!("Expected Value for final_value, got {:?}", other),
+    assert!(!final_value.vetoed);
+    let lit = final_value
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(200)
+        ),
+        other => panic!("Expected Number for final_value, got {:?}", other),
     }
 }
 
@@ -233,8 +227,8 @@ rule line_total: pricing.final_price * quantity
     let order_spec = r#"
 spec order
 uses line: line_item
-fill line.pricing.tax_rate: 10%
-fill line.quantity: 5
+with line.pricing.tax_rate: 10%
+with line.quantity: 5
 rule order_total: line.line_total
 "#;
 
@@ -250,14 +244,7 @@ rule order_total: line.line_total
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "order",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "order", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let order_total = response
@@ -268,15 +255,20 @@ rule order_total: line.line_total
 
     // base_price=100, tax_rate=10% (overridden), quantity=5
     // (100 * 1.10) * 5 = 550
-    match &order_total.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(550)
-            ),
-            other => panic!("Expected Number for order_total, got {:?}", other),
-        },
-        other => panic!("Expected Value for order_total, got {:?}", other),
+    assert!(!order_total.vetoed);
+    let lit = order_total
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(550)
+        ),
+        other => panic!("Expected Number for order_total, got {:?}", other),
     }
 }
 
@@ -302,7 +294,7 @@ uses base
 spec comparison
 uses path1: wrapper
 uses path2: wrapper
-fill path2.base.price: 75
+with path2.base.price: 75
 rule total1: path1.base.total
 rule total2: path2.base.total
 rule difference: total2 - total1
@@ -318,14 +310,7 @@ rule difference: total2 - total1
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "comparison",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "comparison", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let total1 = response
@@ -345,37 +330,52 @@ rule difference: total2 - total1
         .unwrap();
 
     // path1: 100 * 1.21 = 121
-    match &total1.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(121)
-            ),
-            other => panic!("Expected Number for total1, got {:?}", other),
-        },
-        other => panic!("Expected Value for total1, got {:?}", other),
+    assert!(!total1.vetoed);
+    let lit = total1
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(121)
+        ),
+        other => panic!("Expected Number for total1, got {:?}", other),
     }
     // path2: 75 * 1.21 = 90.75
-    match &total2.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::new(9075, 2)
-            ),
-            other => panic!("Expected Number for total2, got {:?}", other),
-        },
-        other => panic!("Expected Value for total2, got {:?}", other),
+    assert!(!total2.vetoed);
+    let lit = total2
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::new(9075, 2)
+        ),
+        other => panic!("Expected Number for total2, got {:?}", other),
     }
     // difference: 90.75 - 121 = -30.25
-    match &difference.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::new(-3025, 2)
-            ),
-            other => panic!("Expected Number for difference, got {:?}", other),
-        },
-        other => panic!("Expected Value for difference, got {:?}", other),
+    assert!(!difference.vetoed);
+    let lit = difference
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::new(-3025, 2)
+        ),
+        other => panic!("Expected Number for difference, got {:?}", other),
     }
 }
 
@@ -417,14 +417,7 @@ rule product: c1.value * c2.value
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "combined",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "combined", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let sum = response
@@ -439,26 +432,36 @@ rule product: c1.value * c2.value
         .unwrap();
 
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
-    match &sum.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(350)
-            ),
-            other => panic!("Expected Number for sum, got {:?}", other),
-        },
-        other => panic!("Expected Value for sum, got {:?}", other),
+    assert!(!sum.vetoed);
+    let lit = sum
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(350)
+        ),
+        other => panic!("Expected Number for sum, got {:?}", other),
     }
     // product: 100 * 50 = 5000
-    match &product.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(5000)
-            ),
-            other => panic!("Expected Number for product, got {:?}", other),
-        },
-        other => panic!("Expected Value for product, got {:?}", other),
+    assert!(!product.vetoed);
+    let lit = product
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(5000)
+        ),
+        other => panic!("Expected Number for product, got {:?}", other),
     }
 }
 
@@ -477,7 +480,7 @@ rule x_squared: x * x
     let middle_spec = r#"
 spec middle
 uses base_config: base
-fill base_config.x: 20
+with base_config.x: 20
 rule x_squared_plus_ten: base_config.x_squared + 10
 "#;
 
@@ -510,14 +513,7 @@ rule final_result: middle_config.x_squared_plus_ten * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "top", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let final_result = response
@@ -527,15 +523,20 @@ rule final_result: middle_config.x_squared_plus_ten * 2
         .unwrap();
 
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
-    match &final_result.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(820)
-            ),
-            other => panic!("Expected Number for final_result, got {:?}", other),
-        },
-        other => panic!("Expected Value for final_result, got {:?}", other),
+    assert!(!final_result.vetoed);
+    let lit = final_result
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(820)
+        ),
+        other => panic!("Expected Number for final_result, got {:?}", other),
     }
 }
 
@@ -555,11 +556,11 @@ rule final_price: price * (1 - discount)
     let scenario_spec = r#"
 spec scenarios
 uses retail: pricing
-fill retail.discount: 5%
+with retail.discount: 5%
 
 uses wholesale: pricing
-fill wholesale.discount: 15%
-fill wholesale.price: 80
+with wholesale.discount: 15%
+with wholesale.price: 80
 
 rule retail_final: retail.final_price
 rule wholesale_final: wholesale.final_price
@@ -575,14 +576,7 @@ rule price_difference: retail_final - wholesale_final
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "scenarios",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "scenarios", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let retail_final = response
@@ -602,41 +596,56 @@ rule price_difference: retail_final - wholesale_final
         .unwrap();
 
     // retail: 100 * (1 - 0.05) = 95
-    match &retail_final.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(95)
-            ),
-            other => panic!("Expected Number for retail_final, got {:?}", other),
-        },
-        other => panic!("Expected Value for retail_final, got {:?}", other),
+    assert!(!retail_final.vetoed);
+    let lit = retail_final
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(95)
+        ),
+        other => panic!("Expected Number for retail_final, got {:?}", other),
     }
     // wholesale: 80 * (1 - 0.15) = 68
-    match &wholesale_final.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(68)
-            ),
-            other => panic!("Expected Number for wholesale_final, got {:?}", other),
-        },
-        other => panic!("Expected Value for wholesale_final, got {:?}", other),
+    assert!(!wholesale_final.vetoed);
+    let lit = wholesale_final
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(68)
+        ),
+        other => panic!("Expected Number for wholesale_final, got {:?}", other),
     }
     // difference: 95 - 68 = 27
-    match &price_difference.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                Decimal::from(27)
-            ),
-            other => panic!("Expected Number for price_difference, got {:?}", other),
-        },
-        other => panic!("Expected Value for price_difference, got {:?}", other),
+    assert!(!price_difference.vetoed);
+    let lit = price_difference
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            Decimal::from(27)
+        ),
+        other => panic!("Expected Number for price_difference, got {:?}", other),
     }
 }
 
-/// `data …: spec …` RHS is rejected even when the LHS is dotted (use `fill`).
+/// `data …: spec …` RHS is rejected even when the LHS is dotted (use `with`).
 #[test]
 fn test_data_spec_shorthand_rejected_with_dotted_lhs() {
     let mut engine = Engine::new();
@@ -663,7 +672,7 @@ rule yy: cc.y
         .join("; ");
     assert!(
         (msg.contains("uses") && msg.contains("spec"))
-            || msg.contains("Dotted paths require `fill`"),
+            || msg.contains("Dotted paths require `with`"),
         "expected spec-import or dotted-LHS rejection, got: {msg}"
     );
 }

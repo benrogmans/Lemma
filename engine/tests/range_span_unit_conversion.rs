@@ -1,17 +1,17 @@
-//! Range span projection: `(lo...hi) as <unit>` = **width** of the interval in `<unit>`,
-//! not a range value and not `lo unit...hi unit` unless that is already a quantity range literal.
+//! Range span projection: `(lo...hi) as <unit> as number` = **width** of the interval.
+//! All ranges require an explicit unit before `as number`; bare `as number` on
+//! date/quantity ranges is rejected.
 //!
-//! | Range type | Correct `as` targets (when implemented) | Must reject |
-//! |------------|----------------------------------------|-------------|
-//! | **DateRange** | duration units (`days`, `seconds`), calendar (`years`, `months`), `number` | mass, ratio, … |
-//! | **NumberRange** | `number`, duration units | mass, ratio, … |
-//! | **QuantityRange** (duration) | duration units (`days`, `seconds`, `hours`, …) | — |
-//! | **QuantityRange** (mass/money) | — (no duration span) | duration + same-family unit |
-//! | **RatioRange** | ratio units (`percent`, …) when implemented | duration, mass, … |
+//! | Range type | Valid `as` targets | Must reject |
+//! |------------|--------------------|-------------|
+//! | **DateRange** | `as <duration_unit> as number`, `as year/month as number` | bare `as number`, mass units |
+//! | **NumberRange** | `as number` (no unit needed) | mass, duration units |
+//! | **QuantityRange** (any family) | `as <same-family unit> as number` | cross-family units, bare `as number` |
+//! | **RatioRange** | `as <ratio_unit>` | duration, mass |
 //!
-//! `CalendarRange` span `as` is not supported (calendar interval width uses month arithmetic, not quantity units).
+//! Calendar quantity-range span `as` is not supported.
 
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, LiteralValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,14 +46,16 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
             spec_name,
             Some(&default_effective()),
             HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
+            true,
         )
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -105,7 +107,7 @@ fn assert_contains_parts(actual: &str, parts: &[&str]) {
     }
 }
 
-const USES_SI: &str = "uses lemma si";
+const USES_UNITS: &str = "uses lemma units";
 
 const MONEY: &str = r#"data money: quantity
   -> unit eur 1.00
@@ -126,53 +128,56 @@ mod date_range {
     fn span_as_days() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule span: 2024-01-01...2024-01-11 as days"#
-        );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["10", "day"]);
-    }
-
-    #[test]
-    fn span_as_seconds() {
-        let code = format!(
-            r#"spec test
-{USES_SI}
-rule span: 2024-01-01...2024-01-02 as seconds"#
-        );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["86400", "second"]);
-    }
-
-    #[test]
-    fn span_as_years_calendar_unit() {
-        let code = r#"spec test
-rule span: 2024-01-15...2025-01-15 as years"#;
-        assert_contains_parts(&eval_rule(code, "test", "span"), &["1", "year"]);
-    }
-
-    #[test]
-    fn span_as_months_calendar_unit() {
-        let code = r#"spec test
-rule span: 2024-01-16...2024-02-16 as months"#;
-        assert_contains_parts(&eval_rule(code, "test", "span"), &["1", "month"]);
-    }
-
-    #[test]
-    fn span_as_number() {
-        let code = format!(
-            r#"spec test
-{USES_SI}
+{USES_UNITS}
 rule span: 2024-01-01...2024-01-11 as days as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["10"]);
     }
 
     #[test]
+    fn span_as_seconds() {
+        let code = format!(
+            r#"spec test
+{USES_UNITS}
+rule span: 2024-01-01...2024-01-02 as seconds as number"#
+        );
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["86400"]);
+    }
+
+    #[test]
+    fn span_as_years_calendar_unit() {
+        let code = r#"spec test
+uses lemma units
+rule span: 2024-01-15...2025-01-15 as year as number"#;
+        assert_contains_parts(&eval_rule(code, "test", "span"), &["1"]);
+    }
+
+    #[test]
+    fn span_as_months_calendar_unit() {
+        let code = r#"spec test
+uses lemma units
+rule span: 2024-01-16...2024-02-16 as month as number"#;
+        assert_contains_parts(&eval_rule(code, "test", "span"), &["1"]);
+    }
+
+    #[test]
+    fn rejects_bare_as_number_on_date_range() {
+        // Date range `as number` without a unit is not allowed.
+        let code = format!(
+            r#"spec test
+{USES_UNITS}
+rule bad: 2024-01-01...2024-01-11 as number"#
+        );
+        expect_plan_error(&code, "unit");
+    }
+
+    #[test]
     fn rejects_span_as_mass_unit() {
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 {WEIGHT}
-rule bad: 2024-01-01...2024-01-11 as stone"#
+rule bad: 2024-01-01...2024-01-11 as stone as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -180,7 +185,7 @@ rule bad: 2024-01-01...2024-01-11 as stone"#
     #[test]
     fn rejects_span_as_ratio_unit() {
         let code = r#"spec test
-rule bad: 2024-01-01...2024-01-11 as percent"#;
+rule bad: 2024-01-01...2024-01-11 as percent as number"#;
         expect_plan_error(code, "convert");
     }
 }
@@ -192,52 +197,39 @@ rule bad: 2024-01-01...2024-01-11 as percent"#;
 mod number_range {
     use super::*;
 
-    #[test]
-    fn span_as_days() {
-        let code = format!(
-            r#"spec test
-{USES_SI}
-rule span: (0...100) as days
-rule scalar: 100 as days"#
-        );
-        let span = eval_rule(&code, "test", "span");
-        let scalar = eval_rule(&code, "test", "scalar");
-        assert_contains_parts(&span, &["100", "day"]);
-        assert_eq!(span, scalar, "span and scalar cast should match");
-    }
-
-    #[test]
-    fn span_as_hours() {
-        let code = format!(
-            r#"spec test
-{USES_SI}
-rule span: (0...48) as hours"#
-        );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["48", "hour"]);
-    }
-
-    #[test]
-    fn reversed_endpoints_span_as_days() {
-        let code = format!(
-            r#"spec test
-{USES_SI}
-rule span: (100...0) as days"#
-        );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["100", "day"]);
-    }
+    // Number ranges have no unit, so `as number` is unambiguous and valid.
 
     #[test]
     fn span_as_number() {
         let code = r#"spec test
-rule span: (0...100) as number"#;
+rule span: (0...100) as number
+rule scalar: 100 as number"#;
+        let span = eval_rule(code, "test", "span");
+        let scalar = eval_rule(code, "test", "scalar");
+        assert_contains_parts(&span, &["100"]);
+        assert_eq!(span, scalar, "span and scalar cast should match");
+    }
+
+    #[test]
+    fn span_48_as_number() {
+        let code = r#"spec test
+rule span: (0...48) as number"#;
+        assert_contains_parts(&eval_rule(code, "test", "span"), &["48"]);
+    }
+
+    #[test]
+    fn reversed_endpoints_span_as_number() {
+        let code = r#"spec test
+rule span: (100...0) as number"#;
         assert_contains_parts(&eval_rule(code, "test", "span"), &["100"]);
     }
 
     #[test]
     fn rejects_span_as_mass_unit() {
+        // Number range `as <quantity unit>` is rejected — no unit basis for span.
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 {WEIGHT}
 rule bad: (0...100) as stone"#
         );
@@ -253,7 +245,7 @@ rule bad: (0...100) as percent"#;
 }
 
 // =============================================================================
-// QuantityRange (trait duration / si.duration)
+// QuantityRange (trait duration / units.duration)
 // =============================================================================
 
 mod duration_quantity_range {
@@ -263,49 +255,60 @@ mod duration_quantity_range {
     fn span_as_days() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule span: (7 days...14 days) as days"#
+{USES_UNITS}
+rule span: (7 days...14 days) as days as number"#
         );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["7", "day"]);
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["7"]);
     }
 
     #[test]
     fn span_as_hours() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule span: (2 hours...5 hours) as hours"#
+{USES_UNITS}
+rule span: (2 hours...5 hours) as hours as number"#
         );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["3", "hour"]);
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["3"]);
     }
 
     #[test]
     fn span_as_seconds() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule span: (7 days...14 days) as seconds"#
+{USES_UNITS}
+rule span: (7 days...14 days) as seconds as number"#
         );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["604800", "second"]);
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["604800"]);
     }
 
     #[test]
     fn span_as_weeks_mixed_day_endpoint() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule span: (7 days...2 weeks) as days"#
+{USES_UNITS}
+rule span: (7 days...2 weeks) as days as number"#
         );
-        assert_contains_parts(&eval_rule(&code, "test", "span"), &["7", "day"]);
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["7"]);
+    }
+
+    #[test]
+    fn rejects_bare_as_number_on_quantity_range() {
+        // Duration quantity range `as number` without explicit unit is rejected.
+        let code = format!(
+            r#"spec test
+{USES_UNITS}
+rule bad: (7 days...14 days) as number"#
+        );
+        expect_plan_error(&code, "unit");
     }
 
     #[test]
     fn rejects_span_as_mass_unit() {
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 {WEIGHT}
-rule bad: (7 days...14 days) as stone"#
+rule bad: (7 days...14 days) as stone as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -314,8 +317,8 @@ rule bad: (7 days...14 days) as stone"#
     fn rejects_span_as_ratio_unit() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule bad: (7 days...14 days) as percent"#
+{USES_UNITS}
+rule bad: (7 days...14 days) as percent as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -330,32 +333,43 @@ mod mass_quantity_range {
 
     #[test]
     fn rejects_span_as_duration_with_mass_endpoints() {
+        // Mass quantity range cannot produce a duration span.
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 {WEIGHT}
-rule bad: (3 stone...5 stone) as days"#
+rule bad: (3 stone...5 stone) as days as number"#
         );
         expect_plan_error(&code, "convert");
     }
 
     #[test]
-    fn rejects_span_as_same_mass_unit() {
+    fn span_as_same_mass_unit() {
         let code = format!(
             r#"spec test
 {WEIGHT}
-rule bad: (3 stone...5 stone) as stone"#
+rule span: (3 stone...5 stone) as stone as number"#
         );
-        expect_plan_error(&code, "convert");
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["2"]);
+    }
+
+    #[test]
+    fn span_as_pound_cross_unit_within_family() {
+        let code = format!(
+            r#"spec test
+{WEIGHT}
+rule span: (1 stone...3 stone) as pound as number"#
+        );
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["28"]);
     }
 
     #[test]
     fn rejects_span_as_duration_nonsensical_unit_pairing() {
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 data cargo: quantity -> unit crate 1
-rule bad: (3 crate...5 crate) as days"#
+rule bad: (3 crate...5 crate) as days as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -368,31 +382,31 @@ mod money_quantity_range {
     fn rejects_span_as_duration_with_money_endpoints() {
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 {MONEY}
-rule bad: (10 eur...50 eur) as days"#
+rule bad: (10 eur...50 eur) as days as number"#
         );
         expect_plan_error(&code, "convert");
     }
 
     #[test]
-    fn rejects_span_as_same_money_unit() {
+    fn span_as_same_money_unit() {
         let code = format!(
             r#"spec test
 {MONEY}
-rule bad: (10 eur...50 eur) as eur"#
+rule span: (10 eur...50 eur) as eur as number"#
         );
-        expect_plan_error(&code, "convert");
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["40"]);
     }
 
     #[test]
-    fn rejects_span_as_other_money_unit() {
+    fn span_as_usd_cross_unit_within_family() {
         let code = format!(
             r#"spec test
 {MONEY}
-rule bad: (10 eur...50 eur) as usd"#
+rule span: (10 eur...50 eur) as usd as number"#
         );
-        expect_plan_error(&code, "convert");
+        assert_contains_parts(&eval_rule(&code, "test", "span"), &["43.956"]);
     }
 }
 
@@ -405,6 +419,7 @@ mod ratio_range {
 
     #[test]
     fn span_as_percent() {
+        // Ratio range span in same ratio unit.
         let code = r#"spec test
 rule span: (10%...50%) as percent"#;
         assert_contains_parts(&eval_rule(code, "test", "span"), &["40", "%"]);
@@ -421,8 +436,8 @@ rule span: (100 permille...500 permille) as permille"#;
     fn rejects_span_as_duration_unit() {
         let code = format!(
             r#"spec test
-{USES_SI}
-rule bad: (10%...50%) as days"#
+{USES_UNITS}
+rule bad: (10%...50%) as days as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -431,16 +446,16 @@ rule bad: (10%...50%) as days"#
     fn rejects_span_as_mass_unit() {
         let code = format!(
             r#"spec test
-{USES_SI}
+{USES_UNITS}
 {WEIGHT}
-rule bad: (10%...50%) as stone"#
+rule bad: (10%...50%) as stone as number"#
         );
         expect_plan_error(&code, "convert");
     }
 }
 
 // =============================================================================
-// CalendarRange — span `as` not supported
+// Calendar interval — span `as` not supported
 // =============================================================================
 
 mod calendar_range_span {
@@ -448,11 +463,20 @@ mod calendar_range_span {
 
     #[test]
     fn rejects_span_as_duration_unit() {
+        // Calendar range span in duration units is not supported.
         let code = format!(
             r#"spec test
-{USES_SI}
-rule bad: (18 years...67 years) as days"#
+{USES_UNITS}
+rule bad: (18 year...67 year) as days as number"#
         );
         expect_plan_error(&code, "convert");
+    }
+
+    #[test]
+    fn rejects_bare_as_number() {
+        let code = r#"spec test
+uses lemma units
+rule bad: (18 year...67 year) as number"#;
+        expect_plan_error(code, "quantity range");
     }
 }

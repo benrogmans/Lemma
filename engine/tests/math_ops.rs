@@ -1,6 +1,6 @@
-use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::ValueKind;
+use lemma::DateTimeValue;
 use lemma::Engine;
+use lemma::ValueKind;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
@@ -9,21 +9,14 @@ fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
     engine.load(code, lemma::SourceType::Volatile)?;
     let now = DateTimeValue::now();
     let mut resp = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), HashMap::new(), true)
         .expect("run should succeed after load");
     resp.filter_rules(&[rule.to_string()]);
     let v = resp
         .results
         .values()
         .find(|r| r.rule.name == rule)
-        .and_then(|r| r.result.value().cloned())
+        .and_then(|r| r.display.clone())
         .expect("rule value");
     Ok(v.to_string())
 }
@@ -31,7 +24,7 @@ fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
 fn run_decimal(code: &str, rule: &str) -> Result<Decimal, lemma::Errors> {
     let lit = run_literal(code, rule)?;
     match &lit.value {
-        ValueKind::Number(d) => Ok(lemma::commit_rational_to_decimal(d).unwrap()),
+        ValueKind::Number(d) => Ok(lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap()),
         other => panic!("expected stored Number(Decimal), got {:?}", other),
     }
 }
@@ -41,22 +34,19 @@ fn run_literal(code: &str, rule: &str) -> Result<lemma::LiteralValue, lemma::Err
     engine.load(code, lemma::SourceType::Volatile)?;
     let now = DateTimeValue::now();
     let mut resp = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), HashMap::new(), true)
         .expect("run should succeed after load");
     resp.filter_rules(&[rule.to_string()]);
     Ok(resp
         .results
         .values()
         .find(|r| r.rule.name == rule)
-        .and_then(|r| r.result.value().cloned())
-        .expect("rule value"))
+        .and_then(|r| r.trace.as_ref())
+        .expect("trace")
+        .result
+        .value()
+        .expect("value")
+        .clone())
 }
 
 fn assert_close_decimal(actual: Decimal, expected: Decimal, tol: Decimal) {

@@ -8,7 +8,7 @@ This example demonstrates:
 - Type annotations
 """
 
-uses lemma si
+uses lemma units
 
 data age:                  32
 data base_salary:          75_000

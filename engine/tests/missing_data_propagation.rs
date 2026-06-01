@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -22,7 +22,7 @@ rule final_total: total_before_discount
     let main_spec = r#"
 spec rules_and_unless
 uses rules: private_rules
-fill rules.base_price: 500
+with rules.base_price: 500
 rule total: rules.final_total
 "#;
 
@@ -44,14 +44,7 @@ rule total: rules.final_total
     let now = DateTimeValue::now();
     // Evaluate with missing quantity data
     let response = engine
-        .run(
-            None,
-            "rules_and_unless",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "rules_and_unless", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let total_rule = response
@@ -60,23 +53,18 @@ rule total: rules.final_total
         .find(|r| r.rule.name == "total")
         .expect("total rule should be in results");
 
-    // The result should be a Veto with "Missing data" message, not "Rule not found"
-    match &total_rule.result {
-        lemma::OperationResult::Veto(reason) => {
-            let msg_str = reason.to_string();
-            assert!(
-                msg_str.contains("Missing data"),
-                "Error message should contain 'Missing data', but got: {}",
-                msg_str
-            );
-            assert!(
-                !msg_str.contains("not found"),
-                "Error message should NOT contain 'not found', but got: {}",
-                msg_str
-            );
-        }
-        _ => panic!("Expected Veto result, but got: {:?}", total_rule.result),
-    }
+    assert!(total_rule.vetoed, "total should be vetoed");
+    let msg_str = total_rule.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        msg_str.contains("Missing data"),
+        "Error message should contain 'Missing data', but got: {}",
+        msg_str
+    );
+    assert!(
+        !msg_str.contains("not found"),
+        "Error message should NOT contain 'not found', but got: {}",
+        msg_str
+    );
 }
 
 /// Test that rules not depending on missing data still evaluate correctly
@@ -99,14 +87,7 @@ rule message: "Order processed"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test_spec",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test_spec", Some(&now), data, false)
         .unwrap();
 
     // subtotal should fail due to missing quantity
@@ -116,7 +97,7 @@ rule message: "Order processed"
         .find(|r| r.rule.name == "subtotal")
         .expect("subtotal rule should be in results");
     assert!(
-        matches!(subtotal_rule.result, lemma::OperationResult::Veto(_)),
+        subtotal_rule.vetoed,
         "subtotal should be Veto due to missing quantity"
     );
 
@@ -126,19 +107,11 @@ rule message: "Order processed"
         .values()
         .find(|r| r.rule.name == "message")
         .expect("message rule should be in results");
-    match &message_rule.result {
-        lemma::OperationResult::Value(lit) => {
-            if let lemma::ValueKind::Text(text) = &lit.value {
-                assert_eq!(text, "Order processed");
-            } else {
-                panic!("Expected text result");
-            }
-        }
-        _ => panic!(
-            "message rule should evaluate successfully, but got: {:?}",
-            message_rule.result
-        ),
-    }
+    assert!(
+        !message_rule.vetoed,
+        "message rule should evaluate successfully"
+    );
+    assert_eq!(message_rule.text.as_deref(), Some("Order processed"));
 }
 
 /// A reference whose target has no value at eval time must surface as a
@@ -152,8 +125,7 @@ data slot: number
 
 spec outer
 uses i: inner
-fill here: i.slot
-rule r: here
+rule r: i.slot
 "#;
     let mut engine = Engine::new();
     engine
@@ -167,27 +139,17 @@ rule r: here
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
 
     let rr = resp.results.get("r").expect("rule 'r'");
-    match &rr.result {
-        lemma::OperationResult::Veto(lemma::VetoType::MissingData { data }) => {
-            // The reference's own name is what the rule referenced. It
-            // should be the one reported, not the target path in the inner
-            // spec.
+    assert!(rr.vetoed, "expected MissingData veto");
+    match rr.veto_detail.as_ref().expect("veto detail") {
+        lemma::VetoType::MissingData { data } => {
             let shown = data.to_string();
             assert!(
-                shown.contains("here"),
-                "missing-data veto from reference consumption should name 'here' (the reference path); \
-                 got: {shown}"
+                shown.contains("slot") || shown.contains("i.slot"),
+                "missing-data veto should name the missing data path; got: {shown}"
             );
         }
         other => panic!("expected MissingData veto, got: {:?}", other),
@@ -205,8 +167,7 @@ rule divided: 10 / denom
 
 spec top
 uses i: inner
-fill x: i.divided
-rule out: x
+rule out: i.divided
 "#;
     let mut engine = Engine::new();
     engine
@@ -220,26 +181,15 @@ rule out: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "top",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "top", Some(&now), HashMap::new(), false)
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = resp.results.get("out").expect("rule 'out'");
-    match &rr.result {
-        lemma::OperationResult::Veto(v) => {
-            let s = v.to_string();
-            assert!(
-                s.contains("Division by zero"),
-                "rule-target reference must propagate the exact veto reason of the target rule, \
-                 got: {s}"
-            );
-        }
-        other => panic!("expected propagated veto, got: {:?}", other),
-    }
+    assert!(rr.vetoed, "expected propagated veto");
+    let s = rr.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        s.contains("Division by zero"),
+        "rule-target reference must propagate the exact veto reason of the target rule, \
+         got: {s}"
+    );
 }

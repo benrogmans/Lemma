@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::parsing::ast::{BooleanValue, CalendarUnit, ConversionTarget, PrimitiveKind, Span};
+use crate::parsing::ast::{BooleanValue, PrimitiveKind, Span};
 use crate::parsing::source::Source;
 use std::sync::Arc;
 
@@ -18,11 +18,10 @@ pub enum TokenKind {
     As,
     Type,
     Uses,
-    Fill,
+    With,
     Meta,
     Veto,
     Now,
-    Calendar,
     Past,
     Future,
 
@@ -116,11 +115,10 @@ impl std::fmt::Display for TokenKind {
             TokenKind::As => write!(f, "'as'"),
             TokenKind::Type => write!(f, "'type'"),
             TokenKind::Uses => write!(f, "'uses'"),
-            TokenKind::Fill => write!(f, "'fill'"),
+            TokenKind::With => write!(f, "'with'"),
             TokenKind::Meta => write!(f, "'meta'"),
             TokenKind::Veto => write!(f, "'veto'"),
             TokenKind::Now => write!(f, "'now'"),
-            TokenKind::Calendar => write!(f, "'calendar'"),
             TokenKind::Past => write!(f, "'past'"),
             TokenKind::Future => write!(f, "'future'"),
             TokenKind::True => write!(f, "'true'"),
@@ -677,11 +675,10 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "as" => TokenKind::As,
         "type" => TokenKind::Type,
         "uses" => TokenKind::Uses,
-        "fill" => TokenKind::Fill,
+        "with" => TokenKind::With,
         "meta" => TokenKind::Meta,
         "veto" => TokenKind::Veto,
         "now" => TokenKind::Now,
-        "calendar" => TokenKind::Calendar,
         "past" => TokenKind::Past,
         "future" => TokenKind::Future,
         "true" => TokenKind::True,
@@ -736,7 +733,7 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
             | TokenKind::As
             | TokenKind::Type
             | TokenKind::Uses
-            | TokenKind::Fill
+            | TokenKind::With
             | TokenKind::Meta
             | TokenKind::Veto
             | TokenKind::Now
@@ -780,7 +777,6 @@ pub fn token_kind_to_primitive(kind: &TokenKind) -> Option<PrimitiveKind> {
         TokenKind::TextKw => Some(PrimitiveKind::Text),
         TokenKind::DateKw => Some(PrimitiveKind::Date),
         TokenKind::TimeKw => Some(PrimitiveKind::Time),
-        TokenKind::Calendar => Some(PrimitiveKind::Calendar),
         _ => None,
     }
 }
@@ -796,20 +792,6 @@ pub fn is_boolean_keyword(kind: &TokenKind) -> bool {
             | TokenKind::Accept
             | TokenKind::Reject
     )
-}
-
-/// Builds ConversionTarget from a token.
-/// Duration/calendar unit labels map to their primitive targets; `number` -> Type(Number);
-/// identifiers/units -> Unit.
-#[must_use]
-pub fn conversion_target_from_token(kind: &TokenKind, fallback_text: &str) -> ConversionTarget {
-    if let Some(unit) = CalendarUnit::from_keyword(fallback_text) {
-        ConversionTarget::Calendar(unit)
-    } else if *kind == TokenKind::NumberKw {
-        ConversionTarget::Type(PrimitiveKind::Number)
-    } else {
-        ConversionTarget::Unit(fallback_text.to_string())
-    }
 }
 
 /// Maps a boolean-keyword token kind to BooleanValue. Call only when `is_boolean_keyword(kind)`.
@@ -854,7 +836,7 @@ pub fn is_math_function(kind: &TokenKind) -> bool {
 pub fn is_spec_body_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Data | TokenKind::Fill | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
+        TokenKind::Data | TokenKind::With | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
     )
 }
 
@@ -864,12 +846,17 @@ pub fn can_be_label(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Identifier
-            | TokenKind::Calendar
             | TokenKind::Past
             | TokenKind::Future
             | TokenKind::Permille
             | TokenKind::Is
     )
+}
+
+/// `calendar` in `in calendar month` / `past calendar year` — not a type keyword.
+#[must_use]
+pub fn token_is_calendar_period_marker(tok: &Token) -> bool {
+    tok.kind == TokenKind::Identifier && tok.text == "calendar"
 }
 
 /// Returns true if the token kind can be used as a reference segment

@@ -6,8 +6,8 @@
 //! 3. Unless clauses can provide alternative values, so the veto doesn't apply
 //! 4. Veto in unless clause conditions or results will apply to the dependent rule
 
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, LiteralValue, OperationResult, VetoType};
+use lemma::DateTimeValue;
+use lemma::{Engine, LiteralValue};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -16,6 +16,7 @@ use std::str::FromStr;
 fn test_veto_blocks_rule_evaluation() {
     let code = r#"
 spec age_check
+uses lemma units
 data age: 15
 rule is_adult: age >= 18
     unless age < 18 then veto "Must be at least 18 years old"
@@ -26,14 +27,7 @@ rule is_adult: age >= 18
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "age_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "age_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -41,11 +35,10 @@ rule is_adult: age >= 18
         .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Must be at least 18 years old".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Must be at least 18 years old")
     );
 }
 
@@ -63,14 +56,7 @@ rule is_valid: value > 0
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "validation",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -78,16 +64,15 @@ rule is_valid: value > 0
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
 
-    assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined { message: None })
-    );
+    assert!(rule_result.vetoed);
+    assert_eq!(rule_result.veto_reason.as_deref(), Some("Vetoed"));
 }
 
 #[test]
 fn test_veto_does_not_trigger_when_condition_false() {
     let code = r#"
 spec age_check
+uses lemma units
 data age: 25
 rule is_adult: age >= 18
     unless age < 18 then veto "Must be at least 18 years old"
@@ -98,14 +83,7 @@ rule is_adult: age >= 18
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "age_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "age_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -113,10 +91,8 @@ rule is_adult: age >= 18
         .find(|r| r.rule.name == "is_adult")
         .unwrap();
 
-    assert_eq!(
-        rule_result.result,
-        OperationResult::Value(Box::new(LiteralValue::from_bool(true)))
-    );
+    assert!(!rule_result.vetoed);
+    assert_eq!(rule_result.boolean, Some(true));
 }
 
 #[test]
@@ -135,14 +111,7 @@ rule eligible: age >= 18 and score >= 80
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "validation",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -150,11 +119,10 @@ rule eligible: age >= 18 and score >= 80
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Age requirement not met".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Age requirement not met")
     );
 }
 
@@ -174,14 +142,7 @@ rule eligible: age >= 18 and score >= 80
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "validation",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -189,11 +150,10 @@ rule eligible: age >= 18 and score >= 80
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Score requirement not met".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Score requirement not met")
     );
 }
 
@@ -212,14 +172,7 @@ rule valid_compensation: salary >= 40000
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "salary_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "salary_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -227,11 +180,10 @@ rule valid_compensation: salary >= 40000
         .find(|r| r.rule.name == "valid_compensation")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Insufficient salary for experience level".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Insufficient salary for experience level")
     );
 }
 
@@ -253,14 +205,7 @@ rule can_drive: age >= 16
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "mixed_validation",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "mixed_validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -268,10 +213,8 @@ rule can_drive: age >= 16
         .find(|r| r.rule.name == "can_drive")
         .unwrap();
 
-    assert_eq!(
-        rule_result.result,
-        OperationResult::Value(Box::new(LiteralValue::from_bool(false)))
-    );
+    assert!(!rule_result.vetoed);
+    assert_eq!(rule_result.boolean, Some(false));
 }
 
 #[test]
@@ -288,14 +231,7 @@ rule can_ship: package_weight <= 50
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "weight_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "weight_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -303,11 +239,10 @@ rule can_ship: package_weight <= 50
         .find(|r| r.rule.name == "can_ship")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Package exceeds maximum weight limit".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Package exceeds maximum weight limit")
     );
 }
 
@@ -325,14 +260,7 @@ rule is_affordable: price <= 1000
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -340,11 +268,10 @@ rule is_affordable: price <= 1000
         .find(|r| r.rule.name == "is_affordable")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Price exceeds budget limit".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Price exceeds budget limit")
     );
 }
 
@@ -363,14 +290,7 @@ rule is_valid_date: event_date >= min_date
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "date_validation",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "date_validation", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -378,11 +298,10 @@ rule is_valid_date: event_date >= min_date
         .find(|r| r.rule.name == "is_valid_date")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Event date is too early in the year".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Event date is too early in the year")
     );
 }
 
@@ -400,14 +319,7 @@ rule is_complete: completion >= 95%
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "completion_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "completion_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -415,11 +327,10 @@ rule is_complete: completion >= 95%
         .find(|r| r.rule.name == "is_complete")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Project barely started".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Project barely started")
     );
 }
 
@@ -439,14 +350,7 @@ rule eligible: has_permission
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "eligibility",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "eligibility", Some(&now), HashMap::new(), false)
         .unwrap();
     let eligible_result = response
         .results
@@ -454,11 +358,10 @@ rule eligible: has_permission
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
+    assert!(eligible_result.vetoed);
     assert_eq!(
-        eligible_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Must be adult or have permission".to_string())
-        })
+        eligible_result.veto_reason.as_deref(),
+        Some("Must be adult or have permission")
     );
 }
 
@@ -477,14 +380,7 @@ rule within_budget: expenses < income
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "budget_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "budget_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -492,11 +388,10 @@ rule within_budget: expenses < income
         .find(|r| r.rule.name == "within_budget")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Expenses exceed 90% of income".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Expenses exceed 90% of income")
     );
 }
 
@@ -514,14 +409,7 @@ rule is_active: status is "active"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "status_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "status_check", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -529,11 +417,10 @@ rule is_active: status is "active"
         .find(|r| r.rule.name == "is_active")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Cannot process cancelled items".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Cannot process cancelled items")
     );
 }
 
@@ -553,14 +440,7 @@ rule double_value: value * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "multi_rule",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "multi_rule", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let check_positive = response
@@ -568,11 +448,10 @@ rule double_value: value * 2
         .values()
         .find(|r| r.rule.name == "check_positive")
         .unwrap();
+    assert!(check_positive.vetoed);
     assert_eq!(
-        check_positive.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Value must be positive".to_string())
-        })
+        check_positive.veto_reason.as_deref(),
+        Some("Value must be positive")
     );
 
     let check_negative = response
@@ -580,10 +459,8 @@ rule double_value: value * 2
         .values()
         .find(|r| r.rule.name == "check_negative")
         .unwrap();
-    assert_eq!(
-        check_negative.result,
-        OperationResult::Value(Box::new(LiteralValue::from_bool(true)))
-    );
+    assert!(!check_negative.vetoed);
+    assert_eq!(check_negative.boolean, Some(true));
 
     let double_value = response
         .results
@@ -591,7 +468,7 @@ rule double_value: value * 2
         .find(|r| r.rule.name == "double_value")
         .unwrap();
     assert_eq!(
-        double_value.result.value().unwrap().to_string(),
+        double_value.display.clone().expect("display"),
         LiteralValue::number_from_decimal(Decimal::from_str("-20.0").unwrap()).to_string(),
     );
 }
@@ -610,14 +487,7 @@ rule valid: age >= 18
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "special_chars",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "special_chars", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -625,13 +495,10 @@ rule valid: age >= 18
         .find(|r| r.rule.name == "valid")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some(
-                "Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)".to_string(),
-            ),
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Error: Age < 18! Must be 18+. Contact: admin@example.com (555-1234)")
     );
 }
 
@@ -654,14 +521,7 @@ rule valid: value > 0
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "long_message",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "long_message", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -669,12 +529,8 @@ rule valid: value > 0
         .find(|r| r.rule.name == "valid")
         .unwrap();
 
-    assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some(message.to_string())
-        })
-    );
+    assert!(rule_result.vetoed);
+    assert_eq!(rule_result.veto_reason.as_deref(), Some(message));
 }
 
 #[test]
@@ -692,14 +548,7 @@ rule check: value > 10
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "priority_test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "priority_test", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -707,12 +556,8 @@ rule check: value > 10
         .find(|r| r.rule.name == "check")
         .unwrap();
 
-    assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Value too small".to_string())
-        })
-    );
+    assert!(rule_result.vetoed);
+    assert_eq!(rule_result.veto_reason.as_deref(), Some("Value too small"));
 }
 
 #[test]
@@ -731,14 +576,7 @@ rule eligible: age >= 18
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "multi_unless",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "multi_unless", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -746,11 +584,10 @@ rule eligible: age >= 18
         .find(|r| r.rule.name == "eligible")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Eligibility criteria not met".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Eligibility criteria not met")
     );
 }
 
@@ -768,14 +605,7 @@ rule can_proceed: true
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "negation_test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "negation_test", Some(&now), HashMap::new(), false)
         .unwrap();
     let rule_result = response
         .results
@@ -783,10 +613,9 @@ rule can_proceed: true
         .find(|r| r.rule.name == "can_proceed")
         .unwrap();
 
+    assert!(rule_result.vetoed);
     assert_eq!(
-        rule_result.result,
-        OperationResult::Veto(VetoType::UserDefined {
-            message: Some("Account must be verified".to_string())
-        })
+        rule_result.veto_reason.as_deref(),
+        Some("Account must be verified")
     );
 }

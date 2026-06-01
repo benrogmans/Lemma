@@ -1,4 +1,4 @@
-use lemma::parsing::lexer::{Lexer, TokenKind};
+use lemma::{Lexer, TokenKind};
 use tower_lsp::lsp_types::*;
 
 /// Legend indices — must stay in sync with TOKEN_TYPES order and monaco.js SEMANTIC_TOKEN_TYPES.
@@ -72,7 +72,6 @@ fn type_in_body(kind: &TokenKind) -> Option<u32> {
         | TokenKind::Meta
         | TokenKind::Veto
         | TokenKind::Now
-        | TokenKind::Calendar
         | TokenKind::Past
         | TokenKind::Future
         // Structural `repo` in body/stray position (not `repo` declaration or qualifier segment)
@@ -198,7 +197,7 @@ pub fn tokenize(text: &str) -> Vec<SemanticToken> {
                 state = HeaderState::Data;
                 Some((IDX_PROPERTY, 0))
             }
-            TokenKind::Fill => {
+            TokenKind::With => {
                 state = HeaderState::Data;
                 Some((IDX_PROPERTY, 0))
             }
@@ -413,10 +412,10 @@ mod tests {
     }
 
     #[test]
-    fn fill_dotted_path_colon_punctuation() {
-        // fill → PROPERTY, employee → PROPERTY, . transparent, name → PROPERTY, : PUNCTUATION
+    fn with_dotted_path_colon_punctuation() {
+        // with → PROPERTY, employee → PROPERTY, . transparent, name → PROPERTY, : PUNCTUATION
         assert_eq!(
-            token_types("fill employee.name:"),
+            token_types("with employee.name:"),
             vec![IDX_PROPERTY, IDX_PROPERTY, IDX_PROPERTY, IDX_PUNCTUATION]
         );
     }

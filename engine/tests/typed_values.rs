@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::{ValueKind, *};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -16,29 +16,25 @@ rule net_multiplier: 1 - discount
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "pricing", Some(&now), HashMap::new(), true)
         .unwrap();
     let result = response
         .results
         .get("net_multiplier")
         .unwrap()
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
-        .unwrap();
+        .expect("value");
 
     match result {
         LiteralValue {
             value: ValueKind::Number(n),
             ..
         } => assert_eq!(
-            lemma::commit_rational_to_decimal(n).unwrap(),
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
             Decimal::new(75, 2)
         ),
         _ => panic!("Expected Number, got {:?}", result),
@@ -49,7 +45,7 @@ rule net_multiplier: 1 - discount
 fn test_duration_operations() {
     let code = r#"
 spec scheduling
-uses lemma si
+uses lemma units
 data meeting_length: 30 minutes
 rule double_meeting: meeting_length * 2
 "#;
@@ -59,47 +55,22 @@ rule double_meeting: meeting_length * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "scheduling",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "scheduling", Some(&now), HashMap::new(), true)
         .unwrap();
-    let result = response
-        .results
-        .get("double_meeting")
-        .unwrap()
-        .result
-        .value()
-        .unwrap();
-
-    match result {
-        LiteralValue {
-            value: ValueKind::Quantity(value, unit, _),
-            ..
-        } => {
-            // 30 minutes * 2 = 60 (stored as the numeric value in minutes unit)
-            assert_eq!(
-                lemma::commit_rational_to_decimal(value).unwrap(),
-                Decimal::from(60)
-            );
-            assert!(
-                unit.to_ascii_lowercase().contains("minute"),
-                "unit={unit:?}"
-            );
-        }
-        _ => panic!("Expected Quantity, got {:?}", result),
-    }
+    let rule = response.results.get("double_meeting").unwrap();
+    let quantity = rule.quantity.as_ref().expect("quantity map");
+    assert_eq!(
+        quantity.get("minutes").map(String::as_str),
+        Some("60"),
+        "30 minutes * 2 = 60 minutes"
+    );
 }
 
 #[test]
 fn test_date_arithmetic_with_duration() {
     let code = r#"
 spec dates
-uses lemma si
+uses lemma units
 data start: 2024-01-15
 rule end: start + 7 days
 "#;
@@ -109,16 +80,18 @@ rule end: start + 7 days
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "dates",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "dates", Some(&now), HashMap::new(), true)
         .unwrap();
-    let result = response.results.get("end").unwrap().result.value().unwrap();
+    let result = response
+        .results
+        .get("end")
+        .unwrap()
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
 
     match result {
         LiteralValue {
@@ -147,29 +120,25 @@ rule can_access: is_active and not is_premium
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "logic",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "logic", Some(&now), HashMap::new(), true)
         .unwrap();
     let result = response
         .results
         .get("can_access")
         .unwrap()
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
-        .unwrap();
+        .expect("value");
 
     match result {
         LiteralValue {
             value: ValueKind::Boolean(b),
             ..
         } => {
-            assert!(*b);
+            assert!(b);
         }
         _ => panic!("Expected Boolean, got {:?}", result),
     }

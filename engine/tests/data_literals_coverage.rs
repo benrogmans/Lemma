@@ -4,8 +4,7 @@
 //! values. Tests that encode invariants the implementation may not satisfy
 //! are EXPECTED TO FAIL and must remain red. Do not weaken.
 
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -42,28 +41,41 @@ fn load_err_joined(engine: &mut Engine, code: &str) -> String {
         .join("\n")
 }
 
-fn rule_value(result: &lemma::evaluation::Response, rule_name: &str) -> String {
+fn rule_value(result: &lemma::Response, rule_name: &str) -> String {
     let rr = result
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule_name));
-    match &rr.result {
-        OperationResult::Value(v) => v.to_string(),
-        OperationResult::Veto(v) => format!("VETO({})", v),
+    if rr.vetoed {
+        return format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
+    rr.display.clone().expect("display")
 }
 
-fn run(engine: &Engine, spec: &str) -> lemma::evaluation::Response {
+fn rule_quantity_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> String {
+    let rr = result
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("rule '{}' not found", rule_name));
+    assert!(!rr.vetoed, "rule '{}' vetoed", rule_name);
+    rr.quantity
+        .as_ref()
+        .and_then(|map| map.get(unit))
+        .cloned()
+        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}' for rule '{rule_name}'"))
+}
+
+fn run(engine: &Engine, spec: &str) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(
-            None,
-            spec,
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec, Some(&now), HashMap::new(), false)
+        .expect("run")
+}
+
+fn run_explain(engine: &Engine, spec: &str) -> lemma::Response {
+    let now = DateTimeValue::now();
+    engine
+        .run(None, spec, Some(&now), HashMap::new(), true)
         .expect("run")
 }
 
@@ -341,8 +353,8 @@ rule r: t
 fn duration_literal_years_plural() {
     let code = r#"
 spec s
-uses lemma si
-data d: 5 years
+uses lemma units
+data d: 5 year
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -355,7 +367,7 @@ rule r: d
 fn duration_literal_year_singular() {
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: 1 year
 rule r: d
 "#;
@@ -369,8 +381,8 @@ rule r: d
 fn duration_literal_months() {
     let code = r#"
 spec s
-uses lemma si
-data d: 3 months
+uses lemma units
+data d: 3 month
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -383,7 +395,7 @@ rule r: d
 fn duration_literal_weeks() {
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: 2 weeks
 rule r: d
 "#;
@@ -397,21 +409,20 @@ rule r: d
 fn duration_literal_days() {
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: 7 days
 rule r: d
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let out = rule_value(&run(&engine, "s"), "r");
-    assert!(out.contains("7") && out.contains("day"), "got: {out}");
+    assert_eq!(rule_quantity_unit(&run(&engine, "s"), "r", "days"), "7");
 }
 
 #[test]
 fn duration_literal_hours() {
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: 12 hours
 rule r: d
 "#;
@@ -425,7 +436,7 @@ rule r: d
 fn duration_literal_minutes() {
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: 90 minutes
 rule r: d
 "#;
@@ -439,7 +450,7 @@ rule r: d
 fn duration_literal_seconds() {
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: 45 seconds
 rule r: d
 "#;
@@ -455,7 +466,7 @@ fn duration_literal_negative_rejected_or_supported_consistently() {
     // accepts and stores -5, or rejects. Silent coercion to 0 or +5 is a bug.
     let code = r#"
 spec s
-uses lemma si
+uses lemma units
 data d: -5 days
 rule r: d
 "#;
@@ -494,7 +505,7 @@ rule r: d
 /// unit name fails loudly (substring matches on `Display` cannot — a 100x off
 /// value renders as `"5000%"` which still contains `"50"` and `"%"`).
 fn rule_ratio(
-    result: &lemma::evaluation::Response,
+    result: &lemma::Response,
     rule_name: &str,
 ) -> (rust_decimal::Decimal, Option<String>) {
     use lemma::ValueKind;
@@ -502,12 +513,24 @@ fn rule_ratio(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule_name));
-    let lit = match &rr.result {
-        OperationResult::Value(v) => v.as_ref(),
-        OperationResult::Veto(v) => panic!("rule '{}' produced veto: {}", rule_name, v),
-    };
+    assert!(
+        !rr.vetoed,
+        "rule '{}' produced veto: {}",
+        rule_name,
+        rr.veto_reason.as_deref().unwrap_or("Vetoed")
+    );
+    let lit = rr
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
     match &lit.value {
-        ValueKind::Ratio(n, u) => (lemma::commit_rational_to_decimal(n).unwrap(), u.clone()),
+        ValueKind::Ratio(n, u) => (
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            u.clone(),
+        ),
         other => panic!("rule '{}' produced non-Ratio value {:?}", rule_name, other),
     }
 }
@@ -521,7 +544,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let resp = run(&engine, "s");
+    let resp = run_explain(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
     assert_eq!(value, rust_decimal::Decimal::new(50, 2));
     assert_eq!(unit.as_deref(), Some("percent"));
@@ -537,7 +560,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let resp = run(&engine, "s");
+    let resp = run_explain(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
     assert_eq!(value, rust_decimal::Decimal::new(25, 3));
     assert_eq!(unit.as_deref(), Some("permille"));
@@ -553,7 +576,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let resp = run(&engine, "s");
+    let resp = run_explain(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
     assert_eq!(value, rust_decimal::Decimal::new(50, 2));
     assert_eq!(unit.as_deref(), Some("percent"));
@@ -569,7 +592,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let resp = run(&engine, "s");
+    let resp = run_explain(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
     assert_eq!(value, rust_decimal::Decimal::new(25, 3));
     assert_eq!(unit.as_deref(), Some("permille"));
@@ -585,7 +608,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let resp = run(&engine, "s");
+    let resp = run_explain(&engine, "s");
     let (value, unit) = rule_ratio(&resp, "out");
     assert_eq!(value, rust_decimal::Decimal::new(-50, 2));
     assert_eq!(unit.as_deref(), Some("percent"));
@@ -601,23 +624,27 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let resp = run(&engine, "s");
+    let resp = run_explain(&engine, "s");
     let rr = resp.results.get("out").expect("rule 'out' not found");
-    let lit = match &rr.result {
-        OperationResult::Value(v) => v.as_ref(),
-        OperationResult::Veto(v) => panic!("rule 'out' produced veto: {}", v),
-    };
+    assert!(!rr.vetoed, "rule 'out' produced veto: {:?}", rr.veto_reason);
+    let lit = rr
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
     use lemma::ValueKind;
     match &lit.value {
         ValueKind::Number(n) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 rust_decimal::Decimal::new(25, 2)
             );
         }
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 rust_decimal::Decimal::new(25, 2)
             );
             assert_eq!(u.as_deref(), None);

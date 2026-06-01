@@ -2,7 +2,7 @@
 
 A Lemma source file defines one or more **specs**. Each spec is a namespace of **data** and **rules**. With **`uses`**, you import another spec under an alias and refer to its members through that alias:
 
-- **Data** — `alias.field` in expressions, or `data alias.field: …` to supply or override values in the consumer spec.
+- **Data** — `alias.field` in expressions, or `with alias.field: …` to supply or override values in the consumer spec.
 - **Rules** — `alias.rule_name` in expressions (the engine evaluates the dependency rule in the composed graph).
 - **Types** — `data name: alias.TypeName` when the dependency exposes a named type (qualified parent on a `data` declaration).
 
@@ -39,8 +39,6 @@ rule bonus_points: membership.monthly_bonus_points
 - **`uses premium_membership`** — implicit alias: last path segment of the target name.
 - **`membership.discount_rate`** — read data from the imported spec.
 - **`membership.monthly_bonus_points`** — use a rule from the imported spec.
-
-Comma-separated imports (`uses a, b, c`) are for quick bare imports only. Use separate `uses` lines when you need aliases or temporal pins.
 
 ---
 
@@ -205,9 +203,9 @@ Cycles across temporal rows (2026 → 2027 → 2026) are rejected as **dependenc
 
 ---
 
-## Local data from an import (`fill`)
+## Setting data on an import (`with`)
 
-`uses` registers an import; it does not copy runtime values. To bind **local** data from a field on the dependency:
+`uses` registers an import; it does not set runtime values on the dependency. Use **`with alias.field: …`** to assign a literal or reference to a **data slot declared on the imported spec**:
 
 ```lemma
 spec inner
@@ -219,22 +217,24 @@ data x: number
 spec outer
 
 uses i: inner
+with i.x: 42
 
-fill copy_of_x: i.x
-
-rule r: copy_of_x
+rule r: i.x
 ```
 
-- **`fill copy_of_x: i.x`** — value from **data** `x` on `inner`.
-- **`fill copy_of_x: i`** — error: `i` is a spec reference, not a value.
+- **`with i.x: 42`** — sets **data** `x` on `inner` to `42`.
+- **`with i.x: i`** — error: `i` is a spec reference, not a value.
+- **`with copy: i.x`** — parse error: `with` must use an import path on the left (`with i.x: …`), not a local name.
 
-Runtime inputs to `run` can still override `copy_of_x` where planning allows.
+Runtime inputs to `run` can still override bound import paths (e.g. `i.x`) where planning allows.
+
+To read import data without overriding it, reference the path in a rule: `rule r: i.x`.
 
 ---
 
 ## Registry and shared libraries
 
-External packages use **`@org/path`** qualifiers ([registry.md](registry.md)). The engine does not fetch the network; load sources with `lemma fetch` (or your embedder), then `uses fin: @lemma/std/finance` resolves like any other repo-qualified import.
+External packages use **`@org/path`** qualifiers ([registry.md](registry.md)). The engine does not fetch the network; load sources with `lemma fetch` (or your embedder), then `uses fin: @lemma/std finance` resolves like any other repo-qualified import.
 
 ---
 
@@ -261,7 +261,8 @@ Use **`lemma schema`** with the same `--effective` to see required inputs for th
 | Track compatible dependency rows across the consumer’s lifetime | `uses dep` (unpinned) |
 | Lock a regulation / tariff / schema at a known date | `uses dep 2025-06-01` |
 | Import an earlier row of the same spec name | `uses prev: finance 2026-01-01` |
-| Shared types from a library | `uses fin: @lemma/std/finance` and `data x: fin.Money` |
-| Local copy of dependency data | `fill local: dep.field` |
+| Shared types from a library | `uses fin: @lemma/std finance` and `data x: fin.Money` |
+| Set data on an imported spec | `with alias.field: value` |
+| Read import data in a rule | `rule r: alias.field` |
 
 If planning fails, check whether the message is **coverage**, **interface**, **self-reference**, or **cycle** — each remedy is different above.

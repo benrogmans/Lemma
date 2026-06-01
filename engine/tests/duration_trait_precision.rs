@@ -1,4 +1,4 @@
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -34,19 +34,15 @@ fn eval_literal(
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), HashMap::new(), true)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -89,6 +85,27 @@ fn assert_contains_all(actual: &str, expected_parts: &[&str]) {
             part
         );
     }
+}
+
+fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
+    let code = code.as_ref();
+    let mut engine = Engine::new();
+    let result = engine.load(code, source());
+    assert!(result.is_err(), "Expected planning error");
+    let combined = result
+        .unwrap_err()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined
+            .to_lowercase()
+            .contains(&expected_fragment.to_lowercase()),
+        "Expected error containing '{}', got: {}",
+        expected_fragment,
+        combined
+    );
 }
 
 fn contains_expected_fragment(haystack: &str, needle: &str) -> bool {
@@ -163,7 +180,7 @@ fn is_numeric_context_character(character: char) -> bool {
 #[test]
 fn precision_duration_microsecond_addition_exact() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: ((1 microsecond + 999 microseconds) as milliseconds)"#;
     let value = eval_rule(
         code,
@@ -177,7 +194,7 @@ rule value: ((1 microsecond + 999 microseconds) as milliseconds)"#;
 #[test]
 fn precision_duration_microsecond_to_millisecond_fraction() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 1500 microseconds as milliseconds"#;
     let value = eval_rule(
         code,
@@ -191,7 +208,7 @@ rule value: 1500 microseconds as milliseconds"#;
 #[test]
 fn precision_second_to_millisecond_exact() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 0.001 second as milliseconds"#;
     let value = eval_rule(
         code,
@@ -205,7 +222,7 @@ rule value: 0.001 second as milliseconds"#;
 #[test]
 fn precision_datetime_range_to_microseconds() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2024-01-01T00:00:00.000001Z...2024-01-01T00:00:00.000003Z) as microseconds"#;
     let value = eval_rule(
         code,
@@ -219,7 +236,7 @@ rule value: (2024-01-01T00:00:00.000001Z...2024-01-01T00:00:00.000003Z) as micro
 #[test]
 fn precision_reversed_datetime_range_span_is_absolute_microseconds() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2024-01-01T00:00:00.000003Z...2024-01-01T00:00:00.000001Z) as microseconds"#;
     let value = eval_rule(
         code,
@@ -231,23 +248,17 @@ rule value: (2024-01-01T00:00:00.000003Z...2024-01-01T00:00:00.000001Z) as micro
 }
 
 #[test]
-fn precision_time_minus_time_to_microseconds() {
+fn precision_time_minus_time_rejected_with_datetime_range_suggestion() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (00:00:00.000001 - 00:00:00.000000) as microseconds"#;
-    let value = eval_rule(
-        code,
-        "test",
-        "value",
-        &effective_us(2026, 3, 8, 12, 0, 0, 0),
-    );
-    assert_contains_all(&value, &["1", "microsecond"]);
+    expect_plan_error(code, "datetime range");
 }
 
 #[test]
 fn precision_datetime_plus_microsecond() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 2024-01-01T00:00:00.000001Z + 1 microsecond"#;
     let value = eval_rule(
         code,
@@ -261,7 +272,7 @@ rule value: 2024-01-01T00:00:00.000001Z + 1 microsecond"#;
 #[test]
 fn precision_datetime_crosses_second_boundary_exactly() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 2024-01-01T00:00:00.999999Z + 2 microseconds"#;
     let value = eval_rule(
         code,
@@ -275,7 +286,7 @@ rule value: 2024-01-01T00:00:00.999999Z + 2 microseconds"#;
 #[test]
 fn precision_past_one_microsecond_includes_exact_left_boundary() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-08T12:00:00.000001Z
 rule ok: event in past 1 microsecond"#;
     assert!(eval_bool(
@@ -289,7 +300,7 @@ rule ok: event in past 1 microsecond"#;
 #[test]
 fn precision_explicit_now_minus_one_microsecond_range_includes_start() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-08T12:00:00.000001Z
 rule ok: event in now - 1 microsecond...now"#;
     assert!(eval_bool(
@@ -303,7 +314,7 @@ rule ok: event in now - 1 microsecond...now"#;
 #[test]
 fn precision_explicit_now_minus_one_microsecond_range_excludes_just_outside() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-08T12:00:00.000000Z
 rule ok: event in now - 1 microsecond...now"#;
     assert!(!eval_bool(
@@ -317,7 +328,7 @@ rule ok: event in now - 1 microsecond...now"#;
 #[test]
 fn precision_future_one_microsecond_excludes_upper_boundary() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-08T12:00:00.000001Z
 rule ok: event in future 1 microsecond"#;
     assert!(!eval_bool(
@@ -331,7 +342,7 @@ rule ok: event in future 1 microsecond"#;
 #[test]
 fn precision_time_literal_without_subseconds_is_still_compatible() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 14:30:00 + 1 microsecond"#;
     let value = eval_rule(
         code,

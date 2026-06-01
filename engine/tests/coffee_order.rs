@@ -2,7 +2,7 @@
 //!
 //! Tests `uses`, qualified parent types, inline type declarations with constraints, and complex rule chains
 
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -10,9 +10,6 @@ use std::str::FromStr;
 
 fn decimal_lit(d: &str) -> Decimal {
     Decimal::from_str(d).unwrap()
-}
-fn rational_lit(d: &str) -> lemma::RationalInteger {
-    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
 }
 
 fn load_coffee_order() -> Engine {
@@ -117,14 +114,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     ]);
 
     let response = engine
-        .run(
-            None,
-            "coffee_order",
-            Some(&now),
-            data_values,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "coffee_order", Some(&now), data_values, true)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -135,21 +125,24 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("base_price rule not found");
 
     let base_price_value = base_price
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("base_price should have value");
     // base_price should be Quantity with unit "eur"
     match &base_price_value.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
+        lemma::ValueKind::Quantity(n, signature) => {
+            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
-                unit.as_str(),
-                "eur",
+                unit, "eur",
                 "base_price should have unit 'eur', got: {:?}",
                 unit
             );
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("2.50"),
                 "base_price should be exactly 2.50 (2.50 eur), got: {}",
                 n
@@ -169,6 +162,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("size_multiplier rule not found");
 
     let multiplier_value = size_multiplier
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("size_multiplier should have value");
@@ -176,7 +172,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     match &multiplier_value.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("0.80"),
                 "size_multiplier should be 0.80, got: {}",
                 n
@@ -196,22 +192,25 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("price_per_cup rule not found");
 
     let cup_price = price_per_cup
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("price_per_cup should have value");
     // price_per_cup should be Quantity with unit "eur" (inherited from base_price)
     match &cup_price.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
+        lemma::ValueKind::Quantity(n, signature) => {
+            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
-                unit.as_str(),
-                "eur",
+                unit, "eur",
                 "price_per_cup should have unit 'eur', got: {:?}",
                 unit
             );
             // base_price = 2.50, size_multiplier = 0.80
             // price_per_cup = 2.50 * 0.80 = 2.00
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("2.00"),
                 "price_per_cup should be exactly 2.00 (2.50 * 0.80), got: {}",
                 n
@@ -230,13 +229,19 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .find(|r| r.rule.name == "subtotal")
         .expect("subtotal rule not found");
 
-    let subtotal_value = subtotal.result.value().expect("subtotal should have value");
+    let subtotal_value = subtotal
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("subtotal should have value");
     // subtotal should be Quantity with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
+        lemma::ValueKind::Quantity(n, signature) => {
+            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
-                unit.as_str(),
-                "eur",
+                unit, "eur",
                 "subtotal should have unit 'eur', got: {:?}",
                 unit
             );
@@ -250,10 +255,11 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     // price_per_cup = 2.00, number_of_cups = 2
     // subtotal = 2.00 * 2 = 4.00
     assert_eq!(
-        subtotal_num,
-        rational_lit("4.00"),
-        "subtotal should be exactly 4.00 (2.00 * 2), got: {}",
-        subtotal_num
+        lemma::ValueKind::Number(subtotal_num)
+            .as_decimal_magnitude()
+            .unwrap(),
+        decimal_lit("4.00"),
+        "subtotal should be exactly 4.00 (2.00 * 2)"
     );
 
     // Check loyalty_discount: false = 0.0
@@ -264,6 +270,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("loyalty_discount rule not found");
 
     let discount = loyalty_discount
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("loyalty_discount should have value");
@@ -271,7 +280,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     match &discount.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("0.00"),
                 "loyalty_discount should be 0.00, got: {}",
                 n
@@ -290,25 +299,22 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .find(|r| r.rule.name == "total")
         .expect("total rule not found");
 
-    let total_value = total.result.value().expect("total should have value");
-    // total should be Quantity with unit "eur" (inherited from subtotal)
-    let total_num = match &total_value.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
-            assert_eq!(
-                unit.as_str(),
-                "eur",
-                "total should have unit 'eur', got: {:?}",
-                unit
-            );
-            *n
-        }
-        _ => panic!(
-            "total should be Quantity type, got: {:?}",
-            total_value.value
-        ),
-    };
+    let total_eur = total
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get("eur"))
+        .expect("total quantity map must include eur");
+    let subtotal_eur = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "subtotal")
+        .expect("subtotal rule not found")
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get("eur"))
+        .expect("subtotal quantity map must include eur");
     assert_eq!(
-        total_num, subtotal_num,
+        total_eur, subtotal_eur,
         "total should equal subtotal when discount is 0"
     );
 }
@@ -326,14 +332,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
     ]);
 
     let response = engine
-        .run(
-            None,
-            "coffee_order",
-            Some(&now),
-            data_values,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "coffee_order", Some(&now), data_values, true)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -344,21 +343,24 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("base_price rule not found");
 
     let base_price_value = base_price
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("base_price should have value");
     // base_price should be Quantity with unit "eur"
     match &base_price_value.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
+        lemma::ValueKind::Quantity(n, signature) => {
+            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
-                unit.as_str(),
-                "eur",
+                unit, "eur",
                 "base_price should have unit 'eur', got: {:?}",
                 unit
             );
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("3.50"),
                 "base_price should be exactly 3.50 (3.50 eur), got: {}",
                 n
@@ -378,6 +380,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("size_multiplier rule not found");
 
     let multiplier_value = size_multiplier
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("size_multiplier should have value");
@@ -385,7 +390,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
     match &multiplier_value.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("1.20"),
                 "size_multiplier should be 1.20, got: {}",
                 n
@@ -406,6 +411,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("loyalty_discount rule not found");
 
     let discount = loyalty_discount
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .expect("loyalty_discount should have value");
@@ -413,7 +421,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
     match &discount.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit("0.10"),
                 "loyalty_discount should be exactly 0.10, got: {}",
                 n
@@ -438,15 +446,27 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .find(|r| r.rule.name == "total")
         .expect("total rule not found");
 
-    let subtotal_value = subtotal.result.value().expect("subtotal should have value");
-    let total_value = total.result.value().expect("total should have value");
+    let subtotal_value = subtotal
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("subtotal should have value");
+    total
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("total should have value");
 
     // subtotal should be Quantity with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
+        lemma::ValueKind::Quantity(n, signature) => {
+            let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
-                unit.as_str(),
-                "eur",
+                unit, "eur",
                 "subtotal should have unit 'eur', got: {:?}",
                 unit
             );
@@ -460,35 +480,23 @@ fn test_coffee_order_latte_large_with_loyalty() {
     // price_per_cup = 3.50 * 1.20 = 4.20, number_of_cups = 3
     // subtotal = 4.20 * 3 = 12.60
     assert_eq!(
-        subtotal_num,
-        rational_lit("12.60"),
-        "subtotal should be exactly 12.60 (4.20 * 3), got: {}",
-        subtotal_num
+        lemma::ValueKind::Number(subtotal_num)
+            .as_decimal_magnitude()
+            .unwrap(),
+        decimal_lit("12.60"),
+        "subtotal should be exactly 12.60 (4.20 * 3)"
     );
 
-    // total should be Quantity with unit "eur" (inherited from subtotal)
-    let total_num = match &total_value.value {
-        lemma::ValueKind::Quantity(n, unit, _decomp) => {
-            assert_eq!(
-                unit.as_str(),
-                "eur",
-                "total should have unit 'eur', got: {:?}",
-                unit
-            );
-            *n
-        }
-        _ => panic!(
-            "total should be Quantity type, got: {:?}",
-            total_value.value
-        ),
-    };
+    let total_eur = total
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get("eur"))
+        .expect("total quantity map must include eur");
     // discount_amount = 12.60 * 0.10 = 1.26
     // total = 12.60 - 1.26 = 11.34
     assert_eq!(
-        total_num,
-        rational_lit("11.34"),
-        "total should be exactly 11.34 (12.60 - 1.26), got: {}",
-        total_num
+        total_eur, "11.34",
+        "total should be exactly 11.34 (12.60 - 1.26)"
     );
 }
 
@@ -505,14 +513,7 @@ fn test_coffee_order_ordered_priority() {
         let data_values = HashMap::from([("priority".to_string(), priority.to_string())]);
 
         let response = engine
-            .run(
-                None,
-                "coffee_order",
-                Some(&now),
-                data_values,
-                false,
-                lemma::EvaluationRequest::default(),
-            )
+            .run(None, "coffee_order", Some(&now), data_values, false)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -521,17 +522,13 @@ fn test_coffee_order_ordered_priority() {
             .find(|r| r.rule.name == "ordered_priority")
             .expect("ordered_priority rule not found");
 
-        let priority_value = ordered_priority
-            .result
-            .value()
-            .expect("ordered_priority should have value");
         assert_eq!(
-            priority_value.to_string(),
+            ordered_priority.display.clone().expect("display"),
             *expected,
             "priority '{}' should map to {}, got: {}",
             priority,
             expected,
-            priority_value
+            ordered_priority.display.as_deref().unwrap_or("")
         );
     }
 }
@@ -550,14 +547,7 @@ fn test_coffee_order_invalid_size_veto() {
     ]);
 
     let response = engine
-        .run(
-            None,
-            "coffee_order",
-            Some(&now),
-            data_values,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "coffee_order", Some(&now), data_values, false)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response
@@ -568,7 +558,7 @@ fn test_coffee_order_invalid_size_veto() {
 
     // size_multiplier should veto because "extra large" is not handled
     assert!(
-        size_multiplier.result.vetoed(),
+        size_multiplier.vetoed,
         "size_multiplier should veto for 'extra large' size"
     );
 
@@ -580,7 +570,7 @@ fn test_coffee_order_invalid_size_veto() {
 
     if let Some(price_per_cup) = price_per_cup {
         assert!(
-            price_per_cup.result.vetoed() || price_per_cup.result.value().is_none(),
+            price_per_cup.vetoed,
             "price_per_cup should fail when size_multiplier vetoes"
         );
     }

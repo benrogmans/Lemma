@@ -1,2 +1,2 @@
-//! Embedded SI stdlib loaded at compile time from [`SI_LEMMA`].
-pub const SI_LEMMA: &str = include_str!("lemma/si.lemma.std");
+//! Embedded units stdlib loaded at compile time from [`UNITS_LEMMA`].
+pub const UNITS_LEMMA: &str = include_str!("lemma/units.lemma.std");

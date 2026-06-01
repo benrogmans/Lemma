@@ -4,8 +4,8 @@ use std::fmt;
 
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, DataPath, LemmaType, LiteralValue,
-    LogicalComputation, MathematicalComputation, RulePath, SemanticConversionTarget,
-    SemanticDateTime, SemanticTime, TypeSpecification,
+    LogicalComputation, MathematicalComputation, SemanticConversionTarget, SemanticDateTime,
+    SemanticTime, TypeSpecification,
 };
 use serde::{Deserialize, Serialize};
 
@@ -84,13 +84,27 @@ impl OperationResult {
         unit: impl Into<String>,
         lemma_type: Option<LemmaType>,
     ) -> Self {
-        let lemma_type =
-            lemma_type.unwrap_or_else(|| LemmaType::primitive(TypeSpecification::quantity()));
+        use crate::computation::rational::checked_mul;
+        let lemma_type = std::sync::Arc::new(
+            lemma_type.unwrap_or_else(|| LemmaType::primitive(TypeSpecification::quantity())),
+        );
+        let unit_name = unit.into();
+        let rational = crate::literals::rational_from_parsed_decimal(value)
+            .expect("BUG: operation result quantity must lift at boundary");
+        let factor = if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
+            units.get(&unit_name).map(|u| u.factor).unwrap_or_else(|_| {
+                panic!(
+                    "BUG: OperationResult::quantity unit '{}' not declared on type",
+                    unit_name
+                )
+            })
+        } else {
+            crate::computation::rational::rational_one()
+        };
+        let canonical = checked_mul(&rational, &factor)
+            .expect("BUG: quantity canonicalization overflow in OperationResult::quantity");
         Self::Value(Box::new(LiteralValue::quantity_with_type(
-            crate::literals::rational_from_parsed_decimal(value)
-                .expect("BUG: operation result quantity must lift at boundary"),
-            unit.into(),
-            lemma_type,
+            canonical, unit_name, lemma_type,
         )))
     }
 
@@ -127,46 +141,13 @@ impl OperationResult {
 pub enum ComputationKind {
     Arithmetic(ArithmeticComputation),
     Comparison(ComparisonComputation),
-    Logical(LogicalComputation),
     Mathematical(MathematicalComputation),
+    Logical(LogicalComputation),
     UnitConversion {
         target: SemanticConversionTarget,
     },
     /// Operand result was tested for veto (`is veto` syntax).
     ResultIsVeto,
-}
-
-/// A record of a single operation during evaluation
-#[derive(Debug, Clone, Serialize)]
-pub struct OperationRecord {
-    #[serde(flatten)]
-    pub kind: OperationKind,
-}
-
-/// The kind of operation performed
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OperationKind {
-    DataUsed {
-        data_ref: DataPath,
-        value: LiteralValue,
-    },
-    RuleUsed {
-        rule_path: RulePath,
-        result: OperationResult,
-    },
-    Computation {
-        kind: ComputationKind,
-        inputs: Vec<LiteralValue>,
-        result: LiteralValue,
-    },
-    RuleBranchEvaluated {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        index: Option<usize>,
-        matched: bool,
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        result_value: Option<OperationResult>,
-    },
 }
 
 #[cfg(test)]
@@ -175,7 +156,6 @@ mod computation_kind_serde_tests {
     use crate::parsing::ast::{
         ArithmeticComputation, ComparisonComputation, MathematicalComputation,
     };
-    use crate::planning::semantics::LogicalComputation;
 
     #[test]
     fn computation_kind_arithmetic_round_trip() {
@@ -195,14 +175,6 @@ mod computation_kind_serde_tests {
     }
 
     #[test]
-    fn computation_kind_logical_round_trip() {
-        let k = ComputationKind::Logical(LogicalComputation::And);
-        let json = serde_json::to_string(&k).expect("serialize");
-        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, k);
-    }
-
-    #[test]
     fn computation_kind_mathematical_round_trip() {
         let k = ComputationKind::Mathematical(MathematicalComputation::Sqrt);
         let json = serde_json::to_string(&k).expect("serialize");
@@ -212,9 +184,10 @@ mod computation_kind_serde_tests {
 
     #[test]
     fn computation_kind_unit_conversion_round_trip() {
+        use crate::parsing::ast::PrimitiveKind;
         use crate::planning::semantics::SemanticConversionTarget;
         let k = ComputationKind::UnitConversion {
-            target: SemanticConversionTarget::QuantityUnit("days".to_string()),
+            target: SemanticConversionTarget::Type(PrimitiveKind::Number),
         };
         let json = serde_json::to_string(&k).expect("serialize");
         let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");

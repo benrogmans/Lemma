@@ -7,13 +7,11 @@
 //! containing all valid solutions with their domains.
 
 mod constraint;
-mod derived;
 mod domain;
 mod solve;
 mod target;
 mod world;
 
-pub use derived::{DerivedExpression, DerivedExpressionKind};
 pub use domain::{extract_domains_from_constraint, Bound, Domain};
 pub use target::{Target, TargetOp};
 pub use world::World;
@@ -355,16 +353,20 @@ fn compare_values(a: &LiteralValue, b: &LiteralValue) -> Option<std::cmp::Orderi
     match (&a.value, &b.value) {
         (ValueKind::Number(a_val), ValueKind::Number(b_val)) => Some(a_val.cmp(b_val)),
         (ValueKind::Ratio(a_val, _), ValueKind::Ratio(b_val, _)) => Some(a_val.cmp(b_val)),
-        (ValueKind::Quantity(a_val, _, _), ValueKind::Quantity(b_val, _, _)) => {
-            Some(a_val.cmp(b_val))
-        }
-        (ValueKind::Calendar(a_val, unit_a), ValueKind::Calendar(b_val, unit_b)) => {
+        (ValueKind::Quantity(a_val, sig_a), ValueKind::Quantity(b_val, sig_b))
+            if a.lemma_type.is_calendar_like() && b.lemma_type.is_calendar_like() =>
+        {
+            let unit_a =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig_a);
+            let unit_b =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig_b);
             if unit_a == unit_b {
                 Some(a_val.cmp(b_val))
             } else {
                 None
             }
         }
+        (ValueKind::Quantity(a_val, _), ValueKind::Quantity(b_val, _)) => Some(a_val.cmp(b_val)),
         _ => None,
     }
 }

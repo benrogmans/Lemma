@@ -19,7 +19,7 @@ fn date(y: i32, m: u32, d: u32) -> DateTimeValue {
 
 fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
     let result = response.results.get(rule).expect("rule in results");
-    let val = result.result.value().expect("expected value not veto");
+    let val = result.display.clone().expect("display");
     assert_eq!(val.to_string(), expected, "rule {rule}");
 }
 
@@ -58,14 +58,7 @@ rule out: d.val
         .expect("planning must resolve money type with usd when dep is pinned to 2025-07");
 
     let r = engine
-        .run(
-            None,
-            "app",
-            Some(&date(2025, 3, 1)),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "app", Some(&date(2025, 3, 1)), HashMap::new(), false)
         .expect("run");
     assert_rule_value(&r, "out", "1.00 usd");
 }

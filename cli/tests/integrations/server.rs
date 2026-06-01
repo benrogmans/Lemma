@@ -30,6 +30,7 @@ rule result: x
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut child = std::process::Command::new(bin)
         .arg("server")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("--port")
         .arg(SERVER_TEST_PORT.to_string())
@@ -73,6 +74,7 @@ rule result: x
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut child = std::process::Command::new(bin)
         .arg("server")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("--port")
         .arg(port.to_string())
@@ -92,8 +94,8 @@ rule result: x
     let resp = client
         .post(&url)
         .header("x-explanations", "true")
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body("x=42")
+        .header("Content-Type", "application/json")
+        .body(r#"{"x":"42"}"#)
         .send()
         .expect("POST request");
     let status = resp.status();
@@ -108,8 +110,8 @@ rule result: x
         status
     );
     let results = body
-        .get("result")
-        .expect("response should have envelope 'result' key");
+        .get("results")
+        .expect("response should have envelope 'results' key");
     let rule_result = results
         .get("result")
         .expect("results should have 'result' rule");
@@ -118,7 +120,7 @@ rule result: x
         "response should include explanation when x-explanations header sent: {:?}",
         body
     );
-    assert_eq!(rule_result["value"]["number"].as_str(), Some("42"));
+    assert_eq!(rule_result["number"].as_str(), Some("42"));
     assert!(body.get("spec").is_some(), "envelope should include spec");
 }
 
@@ -142,6 +144,7 @@ rule total: base
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut child = std::process::Command::new(bin)
         .arg("server")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("--port")
         .arg(port.to_string())
@@ -162,8 +165,8 @@ rule total: base
         let resp = client
             .post(&url)
             .header("Accept-Datetime", accept_dt)
-            .header("Content-Type", "application/x-www-form-urlencoded")
-            .body("")
+            .header("Content-Type", "application/json")
+            .body("{}")
             .send()
             .expect("POST");
         let text = resp.text().expect("body");
@@ -178,12 +181,12 @@ rule total: base
     let _ = child.wait();
 
     assert_eq!(
-        j2025["result"]["total"]["value"]["number"].as_str(),
+        j2025["results"]["total"]["number"].as_str(),
         Some("10"),
         "Accept-Datetime 2025 should resolve pricing v1: {j2025:?}"
     );
     assert_eq!(
-        j2026["result"]["total"]["value"]["number"].as_str(),
+        j2026["results"]["total"]["number"].as_str(),
         Some("99"),
         "Accept-Datetime 2026 should resolve pricing v2: {j2026:?}"
     );
@@ -213,6 +216,7 @@ rule total: base
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut child = std::process::Command::new(bin)
         .arg("server")
+        .arg("--prefix")
         .arg(temp_dir.path())
         .arg("--port")
         .arg(port.to_string())

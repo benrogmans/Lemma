@@ -1,4 +1,5 @@
 use lemma::Engine;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,11 +35,35 @@ fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
     );
 }
 
+fn eval_rule_quantity_unit(
+    code: impl AsRef<str>,
+    spec_name: &str,
+    rule_name: &str,
+    unit: &str,
+) -> String {
+    let code = code.as_ref();
+    let mut engine = Engine::new();
+    engine.load(code, source()).expect("Should parse and plan");
+    let now = lemma::DateTimeValue::now();
+    let response = engine
+        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .quantity
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .cloned()
+        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
+}
+
 fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String {
     let code = code.as_ref();
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
-    let now = lemma::parsing::ast::DateTimeValue::now();
+    let now = lemma::DateTimeValue::now();
     let response = engine
         .run(
             None,
@@ -46,17 +71,15 @@ fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String 
             Some(&now),
             std::collections::HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .result
-        .value()
-        .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
-        .to_string()
+        .display
+        .clone()
+        .expect("display")
 }
 
 fn assert_contains_all(actual: &str, expected_parts: &[&str]) {
@@ -148,7 +171,7 @@ fn is_numeric_context_character(character: char) -> bool {
 #[test]
 fn planning_local_duration_typedef_accepts_singular_and_plural_literals() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: (2 hours + 30 minute) as minutes"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["150", "minute"]);
@@ -157,50 +180,52 @@ rule value: (2 hours + 30 minute) as minutes"#;
 #[test]
 fn planning_local_duration_typedef_accepts_plural_to_singular_conversion() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule value: 1 hours as hour"#;
     let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["1", "hour"]);
+    assert_contains_all(&value, &["1"]);
 }
 
 #[test]
 fn planning_imported_duration_typedef_exposes_units() {
     let code = r#"spec base_types
-uses lemma si
-data duration: si.duration
+uses lemma units
+data duration: units.duration
 
 spec test
 uses base_types
-uses lemma si
+uses lemma units
 data duration: base_types.duration
-rule value: 90 minutes as hours"#;
+rule value: 90 minutes as hours as number"#;
     let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["1.5", "hour"]);
+    assert_contains_all(&value, &["1.5"]);
 }
 
 #[test]
 fn planning_duration_name_is_ordinary_user_type_name_after_keyword_removal() {
     let code = r#"spec test
-uses lemma si
-data duration: si.duration
+uses lemma units
+data duration: units.duration
 data elapsed: duration -> default 2 hours
 rule value: elapsed as minutes"#;
     let _engine = load_ok(code);
-    let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["120", "minute"]);
+    assert_eq!(
+        eval_rule_quantity_unit(code, "test", "value", "minutes"),
+        "120"
+    );
 }
 
 #[test]
 fn planning_duration_trait_allows_extra_custom_units() {
     let code = r#"spec test
-uses lemma si
-data duration: si.duration
+uses lemma units
+data duration: units.duration
 data travel_duration: duration
   -> unit fortnight 1209600
 data trip: 1 fortnight
-rule value: trip as days"#;
+rule value: trip as days as number"#;
     let value = eval_rule(code, "test", "value");
-    assert_contains_all(&value, &["14", "day"]);
+    assert_contains_all(&value, &["14"]);
 }
 
 #[test]

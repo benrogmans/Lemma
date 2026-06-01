@@ -30,7 +30,7 @@ This package is a thin Node.js launcher. The actual `lemma` binary is shipped as
 If your platform is not supported, install via Cargo instead:
 
 ```bash
-cargo install lemma-cli
+cargo install lemma
 ```
 
 ## Common commands
@@ -41,7 +41,7 @@ npx lemma run tax_calculation --rules=tax_owed
 npx lemma run tax_calculation income=75000 filing_status="married"
 npx lemma list
 npx lemma schema pricing
-npx lemma server ./examples --port 8012
+npx lemma server --prefix ./examples --port 8012
 ```
 
 Each command supports `--help`.
@@ -57,7 +57,7 @@ Each command supports `--help`.
 To rebuild and test this package locally:
 
 ```bash
-cargo build --release -p lemma-cli
+cargo build --release -p lemma
 mkdir -p /tmp/lemma-bins/linux-x64
 cp target/release/lemma /tmp/lemma-bins/linux-x64/lemma
 node cli/packages/npm/build.js --binaries /tmp/lemma-bins

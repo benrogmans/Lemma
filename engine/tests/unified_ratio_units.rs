@@ -3,10 +3,9 @@
 //! (anonymous) ratios. Assertions use canonical `ValueKind` + `RationalInteger`, not display
 //! substrings alone.
 
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::{TypeSpecification, ValueKind};
+use lemma::DateTimeValue;
 use lemma::{Engine, LiteralValue};
+use lemma::{TypeSpecification, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,10 +14,6 @@ use std::sync::Arc;
 
 fn decimal_lit(s: &str) -> Decimal {
     Decimal::from_str(s).unwrap()
-}
-
-fn rational_lit(s: &str) -> lemma::RationalInteger {
-    lemma::decimal_to_rational(decimal_lit(s)).unwrap()
 }
 
 fn path_source(file: &str) -> lemma::SourceType {
@@ -59,14 +54,7 @@ fn expect_load_error(code: &str, file: &str, fragments: &[&str]) {
 fn run_spec(engine: &Engine, spec: &str, data: HashMap<String, String>) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(
-            None,
-            spec,
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec, Some(&now), data, true)
         .unwrap_or_else(|e| panic!("run({spec}) failed: {e}"))
 }
 
@@ -75,10 +63,18 @@ fn rule_value<'a>(response: &'a lemma::Response, rule: &str) -> &'a LiteralValue
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("rule '{rule}' missing; keys: {:?}", response.results.keys()));
-    match &rr.result {
-        OperationResult::Value(v) => v.as_ref(),
-        OperationResult::Veto(v) => panic!("rule '{rule}' vetoed: {v:?}"),
+    if rr.vetoed {
+        panic!(
+            "rule '{rule}' vetoed: {}",
+            rr.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
     }
+    rr.trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value")
 }
 
 fn assert_ratio_exact(
@@ -90,7 +86,7 @@ fn assert_ratio_exact(
     match &lit.value {
         ValueKind::Ratio(r, u) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(r).unwrap(),
+                lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
                 decimal_lit(expected_canonical),
                 "{ctx}: canonical magnitude"
             );
@@ -104,7 +100,7 @@ fn assert_number_exact(lit: &LiteralValue, ctx: &str, expected: &str) {
     match &lit.value {
         ValueKind::Number(n) => {
             assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
                 decimal_lit(expected),
                 "{ctx}"
             );
@@ -189,12 +185,10 @@ fn targets_spec_schema_both_ratio_types_have_builtin_units() {
     }
 
     let margin = schema.data.get("standard_margin_pct").expect("margin");
-    match &margin.lemma_type.specifications {
-        TypeSpecification::Ratio { minimum, .. } => {
-            assert_eq!(*minimum, Some(rational_lit("0")));
-        }
-        other => panic!("expected Ratio for margin, got {other:?}"),
-    }
+    assert_eq!(
+        margin.lemma_type.specifications.minimum_decimal(),
+        Some(decimal_lit("0"))
+    );
 }
 
 #[test]
@@ -549,14 +543,14 @@ rule anon: 0.25 as percent
 
 #[test]
 fn ratio_display_none_vs_percent_unit() {
-    let bare = LiteralValue::ratio(rational_lit("0.5"), None);
+    let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
     let display = bare.display_value();
     assert!(
         !display.contains("percent") && display.contains("0.5"),
         "ratio without unit must not show percent label, got: {display}"
     );
 
-    let tagged = LiteralValue::ratio(rational_lit("0.5"), Some("percent".to_string()));
+    let tagged = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), Some("percent".to_string()));
     let display_tagged = tagged.display_value();
     assert!(
         display_tagged.contains('%'),

@@ -82,9 +82,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-pub use crate::literals::{
-    BooleanValue, CalendarUnit, DateTimeValue, TimeValue, TimezoneValue, Value,
-};
+pub use crate::literals::{BooleanValue, DateTimeValue, TimeValue, TimezoneValue, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EffectiveDate {
@@ -573,16 +571,12 @@ impl ComparisonComputation {
     }
 }
 
-/// The target unit for unit conversion expressions.
-/// Non-calendar units (for example `percent`, `eur`, `hours`) are stored as [`ConversionTarget::Unit`]
-/// and resolved to ratio or quantity during planning via the unit index.
-/// Type targets (for example `number`) strip units and return a bare value.
+/// The target type for `as` cast expressions (e.g. `as number`, `as eur`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversionTarget {
-    Calendar(CalendarUnit),
-    Unit(String),
     Type(PrimitiveKind),
+    Unit { unit_name: String },
 }
 
 /// Types of logical negation
@@ -621,6 +615,15 @@ pub enum MathematicalComputation {
     Floor,
     Ceil,
     Round,
+}
+
+/// Logical computations
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogicalComputation {
+    And,
+    Or,
+    Not,
 }
 
 /// A spec reference written in source.
@@ -855,10 +858,10 @@ pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintComman
 /// A single constraint command and its typed arguments.
 pub type Constraint = (TypeConstraintCommand, Vec<CommandArg>);
 
-/// Right-hand side of a `fill` statement: literal value or reference to copy.
+/// Right-hand side of a `with` statement: literal value or reference to copy.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum FillRhs {
+pub enum WithRhs {
     Literal(Value),
     Reference { target: Reference },
 }
@@ -883,12 +886,12 @@ pub enum DataValue {
     },
     /// Import from another spec (surface syntax is `uses`; alias is [`LemmaData::reference`]).
     Import(SpecRef),
-    /// Value assignment into an existing data slot (surface syntax is `fill`). Planning folds
+    /// Value assignment into an existing data slot (surface syntax is `with`). Planning folds
     /// this into resolved slot values; it does not declare a new type row.
     ///
     /// `data x: someident` (LHS without segments, RHS without dots) uses [`DataValue::Definition`]
     /// with `someident` as the parent type name. See parser [`crate::parsing::parser::Parser::parse_data_value`].
-    Fill(FillRhs),
+    With(WithRhs),
 }
 
 impl DataValue {
@@ -919,13 +922,13 @@ impl DataValue {
                 constraints: None,
                 value: Some(v),
             } => !matches!(v, Value::NumberWithUnit(_, _)),
-            DataValue::Import(_) | DataValue::Fill(_) | DataValue::Definition { .. } => false,
+            DataValue::Import(_) | DataValue::With(_) | DataValue::Definition { .. } => false,
         }
     }
 }
 
 /// Render a chain of `-> command args ...` constraints for display purposes.
-/// Shared between [`DataValue::Definition`] and [`DataValue::Fill`] reference payloads.
+/// Shared between [`DataValue::Definition`] and [`DataValue::With`] reference payloads.
 fn format_constraint_chain(constraints: &[Constraint]) -> String {
     constraints
         .iter()
@@ -979,9 +982,9 @@ impl fmt::Display for DataValue {
             DataValue::Import(spec_ref) => {
                 write!(f, "with {}", spec_ref)
             }
-            DataValue::Fill(fill_rhs) => match fill_rhs {
-                FillRhs::Literal(v) => write!(f, "{v}"),
-                FillRhs::Reference { target } => write!(f, "{target}"),
+            DataValue::With(with_rhs) => match with_rhs {
+                WithRhs::Literal(v) => write!(f, "{v}"),
+                WithRhs::Reference { target } => write!(f, "{target}"),
             },
         }
     }
@@ -1250,9 +1253,8 @@ impl fmt::Display for Expression {
 impl fmt::Display for ConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConversionTarget::Calendar(unit) => write!(f, "{}", unit),
-            ConversionTarget::Unit(unit) => write!(f, "{}", unit),
             ConversionTarget::Type(kind) => write!(f, "{:?}", kind),
+            ConversionTarget::Unit { unit_name } => write!(f, "{unit_name}"),
         }
     }
 }
@@ -1303,6 +1305,16 @@ impl fmt::Display for MathematicalComputation {
     }
 }
 
+impl fmt::Display for LogicalComputation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LogicalComputation::And => write!(f, "and"),
+            LogicalComputation::Or => write!(f, "or"),
+            LogicalComputation::Not => write!(f, "not"),
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Primitive type kinds and parent type references
 // -----------------------------------------------------------------------------
@@ -1323,8 +1335,7 @@ pub enum PrimitiveKind {
     Date,
     DateRange,
     Time,
-    Calendar,
-    CalendarRange,
+    TimeRange,
 }
 
 impl std::fmt::Display for PrimitiveKind {
@@ -1342,8 +1353,7 @@ impl std::fmt::Display for PrimitiveKind {
             PrimitiveKind::Date => "date",
             PrimitiveKind::DateRange => "date range",
             PrimitiveKind::Time => "time",
-            PrimitiveKind::Calendar => "calendar",
-            PrimitiveKind::CalendarRange => "calendar range",
+            PrimitiveKind::TimeRange => "time range",
         };
         write!(f, "{}", s)
     }
@@ -1368,6 +1378,10 @@ pub enum ParentType {
         spec_alias: String,
         inner: Box<ParentType>,
     },
+    /// Range over an element type: `<inner> range` (e.g. `money range`, `date range`).
+    Ranged {
+        inner: Box<ParentType>,
+    },
 }
 
 impl std::fmt::Display for ParentType {
@@ -1378,6 +1392,7 @@ impl std::fmt::Display for ParentType {
             ParentType::Qualified { spec_alias, inner } => {
                 write!(f, "{spec_alias}.{inner}")
             }
+            ParentType::Ranged { inner } => write!(f, "{inner} range"),
         }
     }
 }
@@ -1450,9 +1465,6 @@ impl<'a> fmt::Display for AsLemmaSource<'a, CommandArg> {
             }
             CommandArg::Literal(Value::Boolean(bv)) => write!(f, "{}", bv),
             CommandArg::Literal(Value::NumberWithUnit(d, unit)) => {
-                write!(f, "{} {}", group_digits(&d.to_string()), unit)
-            }
-            CommandArg::Literal(Value::Calendar(d, unit)) => {
                 write!(f, "{} {}", group_digits(&d.to_string()), unit)
             }
             CommandArg::Literal(value @ Value::Range(_, _)) => {
@@ -1529,7 +1541,6 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
                 "permille" => write!(f, "{}%%", format_decimal_source(n)),
                 unit => write!(f, "{} {}", format_decimal_source(n), unit),
             },
-            Value::Calendar(n, u) => write!(f, "{} {}", format_decimal_source(n), u),
             Value::Range(left, right) => {
                 write!(
                     f,
@@ -1590,9 +1601,9 @@ impl<'a> fmt::Display for AsLemmaSource<'a, DataValue> {
             DataValue::Import(spec_ref) => {
                 write!(f, "with {}", spec_ref)
             }
-            DataValue::Fill(fill_rhs) => match fill_rhs {
-                FillRhs::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
-                FillRhs::Reference { target } => write!(f, "{target}"),
+            DataValue::With(with_rhs) => match with_rhs {
+                WithRhs::Literal(v) => write!(f, "{}", AsLemmaSource(v)),
+                WithRhs::Reference { target } => write!(f, "{target}"),
             },
         }
     }
@@ -1627,6 +1638,9 @@ pub(crate) fn canonicalize_parent_type(parent: &mut ParentType) {
             *spec_alias = ascii_lowercase_logical_name(std::mem::take(spec_alias));
             canonicalize_parent_type(inner);
         }
+        ParentType::Ranged { inner } => {
+            canonicalize_parent_type(inner);
+        }
         ParentType::Primitive { .. } => {}
     }
 }
@@ -1658,12 +1672,6 @@ pub(crate) fn canonicalize_constraints(constraints: &mut [Constraint]) {
         for arg in args {
             canonicalize_command_arg(arg);
         }
-    }
-}
-
-pub(crate) fn canonicalize_conversion_target(target: &mut ConversionTarget) {
-    if let ConversionTarget::Unit(unit) = target {
-        *unit = ascii_lowercase_logical_name(std::mem::take(unit));
     }
 }
 
@@ -1701,9 +1709,8 @@ pub(crate) fn canonicalize_expression(expression: &mut Expression) {
             canonicalize_expression(Arc::make_mut(left));
             canonicalize_expression(Arc::make_mut(right));
         }
-        ExpressionKind::UnitConversion(expression, target) => {
+        ExpressionKind::UnitConversion(expression, _) => {
             canonicalize_expression(Arc::make_mut(expression));
-            canonicalize_conversion_target(target);
         }
         ExpressionKind::LogicalNegation(expression, _) => {
             canonicalize_expression(Arc::make_mut(expression));
@@ -1741,9 +1748,9 @@ pub(crate) fn canonicalize_data_value(data_value: &mut DataValue) {
             }
         }
         DataValue::Import(spec_ref) => canonicalize_spec_ref(spec_ref),
-        DataValue::Fill(fill_rhs) => match fill_rhs {
-            FillRhs::Literal(value) => canonicalize_value(value),
-            FillRhs::Reference { target } => canonicalize_reference(target),
+        DataValue::With(with_rhs) => match with_rhs {
+            WithRhs::Literal(value) => canonicalize_value(value),
+            WithRhs::Reference { target } => canonicalize_reference(target),
         },
     }
 }
@@ -1787,12 +1794,8 @@ mod tests {
     #[test]
     fn test_conversion_target_display() {
         assert_eq!(
-            format!("{}", ConversionTarget::Unit("hours".to_string())),
-            "hours"
-        );
-        assert_eq!(
-            format!("{}", ConversionTarget::Unit("usd".to_string())),
-            "usd"
+            format!("{}", ConversionTarget::Type(PrimitiveKind::Number)),
+            "Number"
         );
     }
 

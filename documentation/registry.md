@@ -56,7 +56,7 @@ Call `resolve_registry_references` with a `Context`, sources map, and your regis
 use lemma::{resolve_registry_references, Context, Engine, ResourceLimits, SourceType};
 use std::collections::HashMap;
 
-let mut context = Context::new(); // includes embedded stdlib (`repo lemma`, `spec si`); import with `uses lemma si`
+let mut context = Context::new(); // includes embedded stdlib (`repo lemma`, `spec units`); import with `uses lemma units`
 // List: context.repositories / Engine::list() always includes `lemma`. Source: engine.format_repository("lemma").
 let mut sources = HashMap::new();
 // ... insert local workspace specs into `context`, mirror their text in `sources` ...
@@ -82,7 +82,7 @@ After loading, the engine enforces **dependency isolation**: repos loaded as a d
 
 1. **Spec names are normal identifiers.** Write `spec billing`, `spec rates`, and so on — the same surface syntax as local files.
 
-2. **Cross-bundle references use `@` on `uses` targets.** To depend on another registry identifier, qualify the target (`uses x: @org/rates`, `uses finance: @lemma/std/finance`, …). Unqualified references (`uses x: rates`) resolve only within **the same** repository as the importing spec.
+2. **Cross-bundle references use `@` on `uses` targets.** To depend on another registry identifier, qualify the target (`uses x: @org/rates`, `uses finance: @lemma/std finance`, …). Unqualified references (`uses x: rates`) resolve only within **the same** repository as the importing spec.
 
 3. **Transitive loads.** The resolver fetches every unresolved repository reference until all qualifiers are satisfied. A single `.lemma` response per identifier is enough; you do not need to paste transitive dependencies into one megabundle unless your registry chooses to.
 

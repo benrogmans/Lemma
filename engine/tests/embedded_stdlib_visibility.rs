@@ -1,8 +1,8 @@
-use lemma::engine::EMBEDDED_STDLIB_REPOSITORY;
+use lemma::EMBEDDED_STDLIB_REPOSITORY;
 use lemma::{Engine, ErrorKind};
 
 #[test]
-fn list_includes_embedded_lemma_repository_with_si() {
+fn list_includes_embedded_lemma_repository_with_units() {
     let engine = Engine::new();
     let repos = engine.list();
     let lemma = repos
@@ -14,13 +14,13 @@ fn list_includes_embedded_lemma_repository_with_si() {
             .specs
             .iter()
             .flat_map(|ss| ss.iter_specs())
-            .any(|s| s.name == "si"),
-        "expected spec si in lemma repo"
+            .any(|s| s.name == "units"),
+        "expected spec units in lemma repo"
     );
 }
 
 #[test]
-fn format_repository_lemma_contains_si_duration() {
+fn format_repository_lemma_contains_units_duration() {
     let engine = Engine::new();
     let text = engine
         .format_repository(EMBEDDED_STDLIB_REPOSITORY)
@@ -30,8 +30,8 @@ fn format_repository_lemma_contains_si_duration() {
         "expected repo header, got:\n{text}"
     );
     assert!(
-        text.contains("spec si"),
-        "expected spec si in formatted output, got:\n{text}"
+        text.contains("spec units"),
+        "expected spec units in formatted output, got:\n{text}"
     );
     assert!(
         text.contains("duration") && text.contains("trait duration"),

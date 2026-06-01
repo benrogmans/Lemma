@@ -1,7 +1,5 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
-use lemma::LiteralValue;
-use lemma::ValueKind;
 use std::collections::HashMap;
 
 #[test]
@@ -25,53 +23,18 @@ rule with_spaces: not  (  x  )
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test", Some(&now), HashMap::new(), false)
         .unwrap();
 
-    // not(x) evaluates to false (since x = true)
     let not_x_rule = response.results.get("not_x").unwrap();
-    match not_x_rule.result.value().unwrap() {
-        LiteralValue {
-            value: ValueKind::Boolean(b),
-            ..
-        } => assert!(!*b, "not(x) with x=true should be false"),
-        v => panic!("Expected boolean false, got {:?}", v),
-    }
+    assert_eq!(not_x_rule.boolean, Some(false));
 
-    // sqrt(16) evaluates to 4
     let sqrt_rule = response.results.get("sqrt_num").unwrap();
-    match sqrt_rule.result.value().unwrap() {
-        LiteralValue {
-            value: ValueKind::Number(n),
-            ..
-        } => assert_eq!(n.to_string(), "4"),
-        v => panic!("Expected number 4, got {:?}", v),
-    }
+    assert_eq!(sqrt_rule.display.as_deref(), Some("4"));
 
-    // sin(0) evaluates to 0
     let sin_rule = response.results.get("sin_zero").unwrap();
-    match sin_rule.result.value().unwrap() {
-        LiteralValue {
-            value: ValueKind::Number(n),
-            ..
-        } => assert_eq!(n.to_string(), "0"),
-        v => panic!("Expected number 0, got {:?}", v),
-    }
+    assert_eq!(sin_rule.display.as_deref(), Some("0"));
 
-    // combined expression: not(true) and (sqrt(16) is 4) => false and true => false
     let combined_rule = response.results.get("combined").unwrap();
-    match combined_rule.result.value().unwrap() {
-        LiteralValue {
-            value: ValueKind::Boolean(b),
-            ..
-        } => assert!(!*b, "not(x) and sqrt(16) is 4 with x=true should be false"),
-        v => panic!("Expected boolean false, got {:?}", v),
-    }
+    assert_eq!(combined_rule.boolean, Some(false));
 }

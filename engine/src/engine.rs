@@ -1,8 +1,8 @@
-use crate::evaluation::{EvaluationRequest, Evaluator};
+use crate::evaluation::Evaluator;
 use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::parsing::source::SourceType;
 use crate::parsing::EffectiveDate;
-use crate::planning::{LemmaSpecSet, SpecSchema};
+use crate::planning::{DataValueInput, LemmaSpecSet, SpecSchema};
 use crate::{parse, Error, ResourceLimits, Response};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ impl Errors {
     }
 }
 
-/// Repository name reserved for the embedded standard library (`repo lemma`, `spec si`).
+/// Repository name reserved for the embedded standard library (`repo lemma`, `spec units`).
 /// User [`Engine::load`] / [`Engine::load_batch`] must not target this name.
 pub const EMBEDDED_STDLIB_REPOSITORY: &str = "lemma";
 
@@ -137,37 +137,14 @@ impl Default for Context {
 }
 
 impl Context {
-    /// Empty workspace plus embedded `repo lemma` / `spec si` from [`crate::stdlib::SI_LEMMA`]
-    /// under repository [`EMBEDDED_STDLIB_REPOSITORY`] (dependency `lemma`).
-    /// User [`Engine::load`] / [`Engine::load_batch`] cannot replace that repository.
+    /// Empty workspace repository; specs are inserted via [`Self::insert_spec`].
     pub fn new() -> Self {
         let workspace = Arc::new(LemmaRepository::new(None));
         let mut repositories = IndexMap::new();
         repositories.insert(Arc::clone(&workspace), IndexMap::new());
-        let mut ctx = Self {
+        Self {
             repositories,
             workspace,
-        };
-        ctx.insert_embedded_stdlib();
-        ctx
-    }
-
-    fn insert_embedded_stdlib(&mut self) {
-        let result = parse(
-            crate::stdlib::SI_LEMMA,
-            SourceType::Volatile,
-            &ResourceLimits::default(),
-        )
-        .expect("BUG: stdlib source must parse");
-        let repo = Arc::new(
-            LemmaRepository::new(Some(EMBEDDED_STDLIB_REPOSITORY.to_string()))
-                .with_dependency("lemma"),
-        );
-        for (_parsed_repo, specs) in result.repositories {
-            for spec in specs {
-                self.insert_spec(Arc::clone(&repo), Arc::new(spec))
-                    .expect("BUG: stdlib spec insertion must not fail");
-            }
         }
     }
 
@@ -356,29 +333,39 @@ pub struct Engine {
 
 impl Default for Engine {
     fn default() -> Self {
-        Self {
-            plan_sets: HashMap::new(),
-            specs: Context::new(),
-            evaluator: Evaluator,
-            limits: ResourceLimits::default(),
-            total_expression_count: 0,
-        }
+        Self::new()
     }
 }
 
 impl Engine {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_limits(ResourceLimits::default())
     }
 
     pub fn with_limits(limits: ResourceLimits) -> Self {
-        Self {
+        let mut engine = Self {
             plan_sets: HashMap::new(),
             specs: Context::new(),
             evaluator: Evaluator,
             limits,
             total_expression_count: 0,
-        }
+        };
+        engine
+            .add_sources_inner(
+                HashMap::from([(SourceType::Volatile, crate::stdlib::UNITS_LEMMA.to_string())]),
+                Some("lemma"),
+                true,
+            )
+            .expect("BUG: embedded stdlib must load");
+        engine
+    }
+
+    pub fn specs(&self) -> &Context {
+        &self.specs
+    }
+
+    pub fn specs_mut(&mut self) -> &mut Context {
+        &mut self.specs
     }
 
     fn apply_planning_result(&mut self, pr: crate::planning::PlanningResult) {
@@ -389,18 +376,6 @@ impl Engine {
                 .or_default()
                 .insert(r.name.clone(), r.execution_plan_set());
         }
-    }
-
-    /// Re-run planning for all loaded specs (stdlib on [`Self::new`], workspace after load/remove).
-    pub fn replan(&mut self) -> Result<(), Error> {
-        let pr = crate::planning::plan(&self.specs);
-        let planning_errs: Vec<Error> = pr
-            .results
-            .iter()
-            .flat_map(|r| r.errors().cloned())
-            .collect();
-        self.apply_planning_result(pr);
-        planning_errs.into_iter().next().map_or(Ok(()), Err)
     }
 
     /// Load one Lemma source (workspace; not a tagged dependency).
@@ -417,7 +392,7 @@ impl Engine {
         sources: HashMap<SourceType, String>,
         dependency: Option<&str>,
     ) -> Result<(), Errors> {
-        self.add_sources_inner(sources, dependency)
+        self.add_sources_inner(sources, dependency, false)
     }
 
     fn validate_source_for_load(source: &SourceType) -> Result<(), Errors> {
@@ -468,48 +443,20 @@ impl Engine {
         &mut self,
         sources: HashMap<SourceType, String>,
         dependency: Option<&str>,
+        embedded_stdlib: bool,
     ) -> Result<(), Errors> {
         for st in sources.keys() {
             Self::validate_source_for_load(st)?;
         }
-        let limits = &self.limits;
-        if sources.len() > limits.max_sources {
-            return Err(Errors {
-                errors: vec![Error::resource_limit_exceeded(
-                    "max_sources",
-                    limits.max_sources.to_string(),
-                    sources.len().to_string(),
-                    "Reduce the number of paths or sources in one load",
-                    None::<crate::parsing::source::Source>,
-                    None,
-                    None,
-                )],
-                sources,
-            });
-        }
-        let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
-        if total_loaded_bytes > limits.max_loaded_bytes {
-            return Err(Errors {
-                errors: vec![Error::resource_limit_exceeded(
-                    "max_loaded_bytes",
-                    limits.max_loaded_bytes.to_string(),
-                    total_loaded_bytes.to_string(),
-                    "Load fewer or smaller sources",
-                    None::<crate::parsing::source::Source>,
-                    None,
-                    None,
-                )],
-                sources,
-            });
-        }
-        for code in sources.values() {
-            if code.len() > limits.max_source_size_bytes {
+        if !embedded_stdlib {
+            let limits = &self.limits;
+            if sources.len() > limits.max_sources {
                 return Err(Errors {
                     errors: vec![Error::resource_limit_exceeded(
-                        "max_source_size_bytes",
-                        limits.max_source_size_bytes.to_string(),
-                        code.len().to_string(),
-                        "Use a smaller source text or increase limit",
+                        "max_sources",
+                        limits.max_sources.to_string(),
+                        sources.len().to_string(),
+                        "Reduce the number of paths or sources in one load",
                         None::<crate::parsing::source::Source>,
                         None,
                         None,
@@ -517,25 +464,63 @@ impl Engine {
                     sources,
                 });
             }
-        }
-
-        let mut errors: Vec<Error> = Vec::new();
-
-        for (source_id, code) in &sources {
-            match parse(code, source_id.clone(), &self.limits) {
-                Ok(result) => {
-                    self.total_expression_count += result.expression_count;
-                    if self.total_expression_count > self.limits.max_total_expression_count {
-                        errors.push(Error::resource_limit_exceeded(
-                            "max_total_expression_count",
-                            self.limits.max_total_expression_count.to_string(),
-                            self.total_expression_count.to_string(),
-                            "Split logic across fewer sources or reduce expression complexity",
+            let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
+            if total_loaded_bytes > limits.max_loaded_bytes {
+                return Err(Errors {
+                    errors: vec![Error::resource_limit_exceeded(
+                        "max_loaded_bytes",
+                        limits.max_loaded_bytes.to_string(),
+                        total_loaded_bytes.to_string(),
+                        "Load fewer or smaller sources",
+                        None::<crate::parsing::source::Source>,
+                        None,
+                        None,
+                    )],
+                    sources,
+                });
+            }
+            for code in sources.values() {
+                if code.len() > limits.max_source_size_bytes {
+                    return Err(Errors {
+                        errors: vec![Error::resource_limit_exceeded(
+                            "max_source_size_bytes",
+                            limits.max_source_size_bytes.to_string(),
+                            code.len().to_string(),
+                            "Use a smaller source text or increase limit",
                             None::<crate::parsing::source::Source>,
                             None,
                             None,
-                        ));
-                        return Err(Errors { errors, sources });
+                        )],
+                        sources,
+                    });
+                }
+            }
+        }
+
+        let parse_limits = if embedded_stdlib {
+            &ResourceLimits::default()
+        } else {
+            &self.limits
+        };
+        let mut errors: Vec<Error> = Vec::new();
+
+        for (source_id, code) in &sources {
+            match parse(code, source_id.clone(), parse_limits) {
+                Ok(result) => {
+                    if !embedded_stdlib {
+                        self.total_expression_count += result.expression_count;
+                        if self.total_expression_count > self.limits.max_total_expression_count {
+                            errors.push(Error::resource_limit_exceeded(
+                                "max_total_expression_count",
+                                self.limits.max_total_expression_count.to_string(),
+                                self.total_expression_count.to_string(),
+                                "Split logic across fewer sources or reduce expression complexity",
+                                None::<crate::parsing::source::Source>,
+                                None,
+                                None,
+                            ));
+                            return Err(Errors { errors, sources });
+                        }
                     }
                     if result.repositories.is_empty() {
                         continue;
@@ -556,24 +541,26 @@ impl Engine {
                         } else {
                             Arc::clone(parsed_repo)
                         };
-                        if let Some(reserved_err) =
-                            Self::reject_reserved_stdlib_repository(&repository_arc)
-                        {
-                            let source = crate::parsing::source::Source::new(
-                                source_id.clone(),
-                                crate::parsing::ast::Span {
-                                    start: 0,
-                                    end: 0,
-                                    line: parsed_repo.start_line,
-                                    col: 0,
-                                },
-                            );
-                            errors.push(Error::validation(
-                                reserved_err.to_string(),
-                                Some(source),
-                                reserved_err.suggestion().map(str::to_string),
-                            ));
-                            continue;
+                        if !embedded_stdlib {
+                            if let Some(reserved_err) =
+                                Self::reject_reserved_stdlib_repository(&repository_arc)
+                            {
+                                let source = crate::parsing::source::Source::new(
+                                    source_id.clone(),
+                                    crate::parsing::ast::Span {
+                                        start: 0,
+                                        end: 0,
+                                        line: parsed_repo.start_line,
+                                        col: 0,
+                                    },
+                                );
+                                errors.push(Error::validation(
+                                    reserved_err.to_string(),
+                                    Some(source),
+                                    reserved_err.suggestion().map(str::to_string),
+                                ));
+                                continue;
+                            }
                         }
                         for spec in specs {
                             match self
@@ -748,19 +735,15 @@ impl Engine {
         spec: &str,
         effective: Option<&DateTimeValue>,
         data_values: HashMap<String, String>,
-        record_operations: bool,
-        request: EvaluationRequest,
+        explain: bool,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
         let plan = self.get_plan(repo, spec, Some(&effective))?;
-        let data_values = crate::serialization::data_values_from_strings(data_values);
-        self.run_plan(
-            plan,
-            Some(&effective),
-            data_values,
-            record_operations,
-            request,
-        )
+        let data_values: HashMap<String, DataValueInput> = data_values
+            .into_iter()
+            .map(|(k, v)| (k, DataValueInput::convenience(v)))
+            .collect();
+        self.run_plan(plan, Some(&effective), data_values, explain, true)
     }
 
     /// Invert a rule to find input domains that produce a desired outcome.
@@ -779,7 +762,10 @@ impl Engine {
         let base_plan = self.get_plan(None, name, Some(&effective))?;
 
         let plan = base_plan.clone().set_data_values(
-            crate::serialization::data_values_from_strings(values),
+            values
+                .into_iter()
+                .map(|(k, v)| (k, DataValueInput::convenience(v)))
+                .collect(),
             &self.limits,
         )?;
         let provided_data: std::collections::HashSet<_> = plan
@@ -844,37 +830,33 @@ impl Engine {
 
     /// Run a plan from [`get_plan`]: apply data values and evaluate all rules.
     ///
-    /// When `record_operations` is true, each rule's [`RuleResult::operations`] will
-    /// contain a trace of data used, rules used, computations, and branch evaluations.
+    /// When `apply_defaults` is true, `-> default` suggestions on the plan are materialized
+    /// before evaluation ([`ExecutionPlan::with_defaults`]). When false, defaults stay
+    /// suggestions (interactive trial runs).
+    ///
+    /// When `explain` is true, each rule's [`RuleResult::explanation`] will
+    /// contain a compact explanation of data used, rules used, computations, and branch evaluations.
     pub fn run_plan(
         &self,
         plan: &crate::planning::ExecutionPlan,
         effective: Option<&DateTimeValue>,
-        data_values: HashMap<String, serde_json::Value>,
-        record_operations: bool,
-        request: EvaluationRequest,
+        data_values: HashMap<String, DataValueInput>,
+        explain: bool,
+        apply_defaults: bool,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
-        let plan = plan
-            .clone()
-            .with_defaults()
-            .set_data_values(data_values, &self.limits)?;
-        self.evaluate_plan(plan, &effective, record_operations, request)
-    }
-
-    /// Evaluate after [`ExecutionPlan::set_data_values`] without [`ExecutionPlan::with_defaults`].
-    /// Defaults stay suggestions; interactive and inversion use this path.
-    pub fn run_plan_without_defaults(
-        &self,
-        plan: &crate::planning::ExecutionPlan,
-        effective: Option<&DateTimeValue>,
-        data_values: HashMap<String, serde_json::Value>,
-        record_operations: bool,
-        request: EvaluationRequest,
-    ) -> Result<Response, Error> {
-        let effective = self.effective_or_now(effective);
-        let plan = plan.clone().set_data_values(data_values, &self.limits)?;
-        self.evaluate_plan(plan, &effective, record_operations, request)
+        let mut plan = plan.clone();
+        if apply_defaults {
+            plan = plan.with_defaults();
+        }
+        let plan = plan.set_data_values(data_values, &self.limits)?;
+        crate::planning::execution_plan::validate_unit_index_references(&plan)?;
+        let now_semantic = crate::planning::semantics::date_time_to_semantic(&effective);
+        let now_literal = crate::planning::semantics::LiteralValue {
+            value: crate::planning::semantics::ValueKind::Date(now_semantic),
+            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
+        };
+        Ok(self.evaluator.evaluate(&plan, now_literal, explain))
     }
 
     pub fn remove(&mut self, name: &str, effective: Option<&DateTimeValue>) -> Result<(), Error> {
@@ -923,44 +905,22 @@ impl Engine {
         Error::request_not_found(msg, None::<String>)
     }
 
-    #[must_use]
-    pub(crate) fn repository_qualifier_for_message(repository: &LemmaRepository) -> String {
-        match &repository.name {
-            Some(n) => n.clone(),
-            None => "(workspace)".to_string(),
-        }
-    }
-
     fn spec_not_found_in_repository_error(
         &self,
         repository: &LemmaRepository,
         spec_name: &str,
         effective: &DateTimeValue,
     ) -> Error {
+        let repo_label = match &repository.name {
+            Some(n) => n.clone(),
+            None => "(workspace)".to_string(),
+        };
         Error::request_not_found(
             format!(
-                "Spec '{spec_name}' not found in repository {} at effective {effective}",
-                Self::repository_qualifier_for_message(repository),
+                "Spec '{spec_name}' not found in repository {repo_label} at effective {effective}",
             ),
-            Some("Try `lemma list <repository>`"),
+            Some("Try `lemma list`"),
         )
-    }
-
-    fn evaluate_plan(
-        &self,
-        plan: crate::planning::ExecutionPlan,
-        effective: &DateTimeValue,
-        record_operations: bool,
-        request: EvaluationRequest,
-    ) -> Result<Response, Error> {
-        let now_semantic = crate::planning::semantics::date_time_to_semantic(effective);
-        let now_literal = crate::planning::semantics::LiteralValue {
-            value: crate::planning::semantics::ValueKind::Date(now_semantic),
-            lemma_type: crate::planning::semantics::primitive_date().clone(),
-        };
-        Ok(self
-            .evaluator
-            .evaluate(&plan, now_literal, record_operations, &request))
     }
 
     /// Effective datetime for a request: `explicit` or now.
@@ -1249,14 +1209,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "test",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(response.results.len(), 2);
 
@@ -1265,14 +1218,14 @@ mod tests {
             .values()
             .find(|r| r.rule.name == "sum")
             .unwrap();
-        assert_eq!(sum_result.result.value().unwrap().to_string(), "15");
+        assert_eq!(sum_result.display.clone().expect("display"), "15");
 
         let product_result = response
             .results
             .values()
             .find(|r| r.rule.name == "product")
             .unwrap();
-        assert_eq!(product_result.result.value().unwrap().to_string(), "50");
+        assert_eq!(product_result.display.clone().expect("display"), "50");
     }
 
     #[test]
@@ -1291,14 +1244,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "test",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(
@@ -1307,10 +1253,9 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
-                .result
-                .value()
-                .unwrap()
-                .to_string(),
+                .display
+                .clone()
+                .expect("display"),
             "200"
         );
     }
@@ -1331,18 +1276,11 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "test",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(
-            response.results.values().next().unwrap().result,
-            crate::OperationResult::Value(Box::new(crate::planning::LiteralValue::from_bool(true)))
+            response.results.values().next().unwrap().boolean,
+            Some(true)
         );
     }
 
@@ -1363,14 +1301,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "test",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(
             response
@@ -1378,10 +1309,9 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
-                .result
-                .value()
-                .unwrap()
-                .to_string(),
+                .display
+                .clone()
+                .expect("display"),
             "10"
         );
     }
@@ -1390,14 +1320,7 @@ mod tests {
     fn test_spec_not_found() {
         let engine = Engine::new();
         let now = DateTimeValue::now();
-        let result = engine.run(
-            None,
-            "nonexistent",
-            Some(&now),
-            HashMap::new(),
-            false,
-            EvaluationRequest::default(),
-        );
+        let result = engine.run(None, "nonexistent", Some(&now), HashMap::new(), false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -1429,34 +1352,14 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response1 = engine
-            .run(
-                None,
-                "spec1",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "spec1", Some(&now), HashMap::new(), false)
             .unwrap();
-        assert_eq!(
-            response1.results[0].result.value().unwrap().to_string(),
-            "20"
-        );
+        assert_eq!(response1.results[0].display.clone().expect("display"), "20");
 
         let response2 = engine
-            .run(
-                None,
-                "spec2",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "spec2", Some(&now), HashMap::new(), false)
             .unwrap();
-        assert_eq!(
-            response2.results[0].result.value().unwrap().to_string(),
-            "15"
-        );
+        assert_eq!(response2.results[0].display.clone().expect("display"), "15");
     }
 
     #[test]
@@ -1475,14 +1378,7 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let result = engine.run(
-            None,
-            "test",
-            Some(&now),
-            HashMap::new(),
-            false,
-            EvaluationRequest::default(),
-        );
+        let result = engine.run(None, "test", Some(&now), HashMap::new(), false);
         // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
@@ -1494,16 +1390,17 @@ mod tests {
             division_result.is_some(),
             "Should have division rule result"
         );
-        match &division_result.unwrap().result {
-            crate::OperationResult::Veto(crate::VetoType::Computation { message }) => {
-                assert!(
-                    message.contains("Division by zero"),
-                    "Veto message should mention division by zero: {:?}",
-                    message
-                );
-            }
-            other => panic!("Expected Veto for division by zero, got {:?}", other),
-        }
+        let division = division_result.unwrap();
+        assert!(division.vetoed);
+        assert!(
+            division
+                .veto_reason
+                .as_deref()
+                .unwrap()
+                .contains("Division by zero"),
+            "Veto message should mention division by zero: {:?}",
+            division.veto_reason
+        );
     }
 
     #[test]
@@ -1525,14 +1422,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "test",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         assert_eq!(response.results.len(), 3);
 
@@ -1589,14 +1479,7 @@ mod tests {
         let now = DateTimeValue::now();
         let rules = vec!["total".to_string()];
         let mut response = engine
-            .run(
-                None,
-                "test",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "test", Some(&now), HashMap::new(), false)
             .unwrap();
         response.filter_rules(&rules);
 
@@ -1605,7 +1488,7 @@ mod tests {
 
         // But the value should be correct (dependencies were computed)
         let total = response.results.values().next().unwrap();
-        assert_eq!(total.result.value().unwrap().to_string(), "220");
+        assert_eq!(total.display.clone().expect("display"), "220");
     }
 
     // -------------------------------------------------------------------
@@ -1639,21 +1522,14 @@ rule value: external.quantity"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "main_spec",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "main_spec", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
         let value_result = response
             .results
             .get("value")
             .expect("rule 'value' should exist");
-        assert_eq!(value_result.result.value().unwrap().to_string(), "42");
+        assert_eq!(value_result.display.clone().expect("display"), "42");
     }
 
     #[test]
@@ -1700,24 +1576,11 @@ rule doubled: price * 2"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "local_only",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "local_only", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
-        let doubled = response
-            .results
-            .get("doubled")
-            .expect("doubled rule")
-            .result
-            .value()
-            .expect("value");
-        assert_eq!(doubled.to_string(), "200");
+        let doubled = response.results.get("doubled").expect("doubled rule");
+        assert_eq!(doubled.display.clone().expect("display"), "200");
     }
 
     #[test]
@@ -1780,14 +1643,7 @@ rule formatted: helper_value + 0"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(
-                None,
-                "registry_demo",
-                Some(&now),
-                HashMap::new(),
-                false,
-                EvaluationRequest::default(),
-            )
+            .run(None, "registry_demo", Some(&now), HashMap::new(), false)
             .expect("evaluate should succeed");
 
         assert_eq!(
@@ -1795,20 +1651,18 @@ rule formatted: helper_value + 0"#,
                 .results
                 .get("helper_value")
                 .expect("helper_value")
-                .result
-                .value()
-                .expect("value")
-                .to_string(),
+                .display
+                .clone()
+                .expect("display"),
             "42"
         );
         let line = response
             .results
             .get("line_total")
             .expect("line_total")
-            .result
-            .value()
-            .expect("value")
-            .to_string();
+            .display
+            .clone()
+            .expect("display");
         assert!(
             line.contains("10") && line.to_lowercase().contains("eur"),
             "5 eur * 2 => ~10 eur, got {line}"
@@ -1818,10 +1672,9 @@ rule formatted: helper_value + 0"#,
                 .results
                 .get("formatted")
                 .expect("formatted")
-                .result
-                .value()
-                .expect("value")
-                .to_string(),
+                .display
+                .clone()
+                .expect("display"),
             "42"
         );
     }
@@ -1969,7 +1822,8 @@ rule formatted: helper_value + 0"#,
 
         let result = engine.load(
             r#"spec demo
-fill money: nonexistent_type_source.amount
+uses type_src: nonexistent_type_source
+with type_src.amount: 10
 uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#,

@@ -18,7 +18,7 @@ if (!pkg) {
   console.error(
     `lemma: unsupported platform ${key}. ` +
       `Supported: ${Object.keys(PLATFORM_PACKAGES).join(', ')}. ` +
-      `Install from source instead: cargo install lemma-cli`
+      `Install from source instead: cargo install lemma`
   );
   process.exit(1);
 }

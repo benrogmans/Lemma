@@ -22,7 +22,7 @@
 //!
 //! // Evaluate the spec (all rules, no data values)
 //! let now = lemma::DateTimeValue::now();
-//! let response = engine.run(None, "example", Some(&now), std::collections::HashMap::new(), false, lemma::EvaluationRequest::default()).unwrap();
+//! let response = engine.run(None, "example", Some(&now), std::collections::HashMap::new(), false).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -47,46 +47,87 @@
 mod tests;
 
 pub(crate) mod computation;
-pub mod deps;
-pub mod engine;
-pub mod error;
-pub mod evaluation;
-pub mod formatting;
-pub mod inversion;
-pub mod limits;
+pub(crate) mod engine;
+pub(crate) mod error;
+pub(crate) mod evaluation;
+pub(crate) mod formatting;
+pub(crate) mod inversion;
+pub(crate) mod limits;
 pub(crate) mod literals;
-pub mod parsing;
-pub mod planning;
-pub mod registry;
-pub mod serialization;
-pub mod spec_set_id;
-pub mod stdlib;
+pub(crate) mod parsing;
+pub(crate) mod planning;
+pub(crate) mod registry;
+pub(crate) mod spec_set_id;
+pub(crate) mod stdlib;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod deps;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
 
-pub use computation::rational::{
-    checked_mul, commit_rational_to_decimal, decimal_to_rational, rational_to_display_str,
-    NumericFailure, NumericOperation, RationalInteger,
-};
-pub use deps::{
-    dependency_cache_file, dependency_identifier_from_dependency_path, lemma_deps_dir,
-    relative_dependency_cache_path, LEMMA_DEPS_DIR_NAME,
-};
+// === Construction + orchestration ===
 #[cfg(not(target_arch = "wasm32"))]
-pub use engine::collect_lemma_sources;
-pub use engine::{Context, Engine, Errors, ResolvedRepository};
-pub use error::{Error, ErrorKind, RequestErrorKind};
-pub use evaluation::explanation;
-pub use evaluation::operations::{OperationResult, VetoType};
-pub use evaluation::request::{parse_rule_result_conversion_strings, EvaluationRequest};
+pub use engine::{
+    collect_lemma_sources, Context, Engine, Errors, ResolvedRepository, EMBEDDED_STDLIB_REPOSITORY,
+};
+#[cfg(target_arch = "wasm32")]
+pub use engine::{Context, Engine, Errors, ResolvedRepository, EMBEDDED_STDLIB_REPOSITORY};
+
+// === Errors ===
+pub use error::{Error, ErrorDetails, ErrorKind, RequestErrorKind};
+
+// === Limits ===
+pub use limits::{
+    ResourceLimits, MAX_DATA_NAME_LENGTH, MAX_RULE_NAME_LENGTH, MAX_SPEC_NAME_LENGTH,
+};
+
+// === Source + parsing ===
+pub use parsing::ast::{
+    DataValue, DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, Span, SpecRef,
+    TimezoneValue,
+};
+pub use parsing::source::{Source, SourceType};
+// Planning [`semantics::DataValue`] (bindings) vs parse [`ast::DataValue`]; only the parse enum is `DataValue` at the root.
+pub use parsing::lexer::{Lexer, TokenKind};
+pub use parsing::{parse, ParseResult};
+pub use planning::semantics::DataValue as BindingDataValue;
+
+// === Data input ===
+pub use planning::data_input::DataValueInput;
+
+// === Execution plan + schema ===
+pub use planning::execution_plan::{
+    type_detail_lines, DataEntry, ExecutionPlan, ExecutionPlanSerialized, SpecSchema,
+};
+pub use planning::plan;
+pub use planning::semantics::{
+    DataDefinition, DataPath, LemmaType, LiteralValue, QuantityUnit, QuantityUnits, RatioUnit,
+    RatioUnits, RulePath, Source as PlanningSource, TypeSpecification, ValueKind,
+};
+pub use planning::spec_set::LemmaSpecSet;
+
+// === Evaluation output ===
+pub use evaluation::evaluation_trace::{
+    trace_expression, ConversionTraceRole, ConversionTraceStep, EvaluationTrace, TraceBranch,
+    TraceNode, TraceNonMatchedBranch, TraceValueSource,
+};
+pub use evaluation::operations::{ComputationKind, OperationResult, VetoType};
 pub use evaluation::response::{DataGroup, Response, RuleResult};
-pub use formatting::format_source;
-pub use inversion::{Bound, Domain, Target};
-pub use limits::ResourceLimits;
-pub use parsing::ast::{DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec};
-pub use parsing::parse;
-pub use parsing::source::SourceType;
-pub use parsing::ParseResult;
-pub use planning::semantics::{DataPath, LemmaType, LiteralValue, TypeSpecification, ValueKind};
-pub use planning::{ExecutionPlan, LemmaSpecSet, SpecSchema};
+
+// === Inversion ===
+pub use inversion::{Bound, Domain, InversionResponse, Target, TargetOp};
+
+// === Formatting ===
+pub use formatting::{format_parse_result, format_source, format_specs};
+
+// === Registry ===
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+pub use registry::resolve_registry_references;
+pub use registry::{LemmaBase, Registry, RegistryBundle, RegistryError, RegistryErrorKind};
+
+// === Spec set ID ===
+pub use spec_set_id::parse_spec_set_id;
+
+// === Stdlib ===
+pub use stdlib::UNITS_LEMMA;

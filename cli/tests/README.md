@@ -1,11 +1,11 @@
 # CLI integration tests
 
-Black-box tests for `lemma-cli`. Entry: [integration.rs](integration.rs) → `integrations/`.
+Black-box tests for `lemma`. Entry: [integration.rs](integration.rs) → `integrations/`.
 
 Run:
 
 ```bash
-cargo nextest run -p lemma-cli --tests
+cargo nextest run -p lemma --tests
 ```
 
 ## Modules

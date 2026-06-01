@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -7,33 +7,29 @@ use std::str::FromStr;
 fn decimal_lit(d: &str) -> Decimal {
     Decimal::from_str(d).unwrap()
 }
-fn rational_lit(d: &str) -> lemma::RationalInteger {
-    lemma::decimal_to_rational(decimal_lit(d)).unwrap()
-}
-
 #[test]
 fn test_employee_contract_comprehensive() {
     let mut engine = Engine::new();
 
     let base_contract = r#"
 spec base_contract
-uses lemma si
+uses lemma units
 data min_salary: 30000
 data max_salary: 200000
 data standard_vacation_days: 20 days
 data probation_period: 90 days
-data min_age: 18 years
+data min_age: 18 year
 "#;
 
     let employment_terms = r#"
 spec employment_terms
-uses lemma si
+uses lemma units
 uses base: base_contract
 data salary: 75000
 data bonus_percentage: 10%
 data start_date: 2024-01-15
 data vacation_days: 20 days
-data employee_age: 28 years
+data employee_age: 28 year
 
 rule total_compensation: salary + (salary * bonus_percentage)
 rule is_salary_valid: salary >= base.min_salary and salary <= base.max_salary
@@ -54,14 +50,7 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "employment_terms",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "employment_terms", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let total_comp = response
@@ -70,15 +59,20 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         .find(|r| r.rule.name == "total_compensation")
         .unwrap();
 
-    match &total_comp.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                decimal_lit("82500")
-            ),
-            other => panic!("Expected Number for total_compensation, got {:?}", other),
-        },
-        other => panic!("Expected Value for total_compensation, got {:?}", other),
+    assert!(!total_comp.vetoed);
+    let lit = total_comp
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            decimal_lit("82500")
+        ),
+        other => panic!("Expected Number for total_compensation, got {:?}", other),
     }
 
     let contract_valid = response
@@ -86,10 +80,7 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         .values()
         .find(|r| r.rule.name == "contract_valid")
         .unwrap();
-    assert_eq!(
-        contract_valid.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
+    assert_eq!(contract_valid.boolean, Some(true));
 
     let _ = engine.remove("employment_terms", Some(&now));
     let _ = engine.remove("base_contract", Some(&now));
@@ -127,14 +118,7 @@ rule effective_rate: (tax_amount / income) * 100%
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "tax_calculation",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "tax_calculation", Some(&now), HashMap::new(), true)
         .unwrap();
 
     let taxable = response
@@ -142,15 +126,20 @@ rule effective_rate: (tax_amount / income) * 100%
         .values()
         .find(|r| r.rule.name == "taxable_income")
         .unwrap();
-    match &taxable.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                decimal_lit("70000")
-            ),
-            other => panic!("Expected Number for taxable_income, got {:?}", other),
-        },
-        other => panic!("Expected Value for taxable_income, got {:?}", other),
+    assert!(!taxable.vetoed);
+    let lit = taxable
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            decimal_lit("70000")
+        ),
+        other => panic!("Expected Number for taxable_income, got {:?}", other),
     }
 
     let in_mid = response
@@ -158,23 +147,31 @@ rule effective_rate: (tax_amount / income) * 100%
         .values()
         .find(|r| r.rule.name == "in_mid_bracket")
         .unwrap();
-    assert_eq!(
-        in_mid.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
+    assert_eq!(in_mid.boolean, Some(true));
 
     let tax_rate = response
         .results
         .values()
         .find(|r| r.rule.name == "tax_rate")
         .unwrap();
-    assert_eq!(
-        tax_rate.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::ratio(
-            rational_lit("0.2"),
-            Some("percent".to_string())
-        )))
-    );
+    assert!(!tax_rate.vetoed);
+    let lit = tax_rate
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Ratio(n, u) => {
+            assert_eq!(
+                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                decimal_lit("0.2")
+            );
+            assert_eq!(u.as_deref(), Some("percent"));
+        }
+        other => panic!("Expected Ratio for tax_rate, got {:?}", other),
+    }
 
     let _ = engine.remove("tax_calculation", Some(&now));
 }
@@ -205,14 +202,7 @@ rule status: "LOW"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "dynamic_config",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "dynamic_config", Some(&now), data, false)
         .unwrap();
 
     let calculated = response
@@ -220,28 +210,21 @@ rule status: "LOW"
         .values()
         .find(|r| r.rule.name == "calculated_value")
         .unwrap();
-    assert_eq!(calculated.result.value().unwrap().to_string(), "200");
+    assert_eq!(calculated.display.clone().expect("display"), "200");
 
     let status = response
         .results
         .values()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status.result.value().unwrap().to_string(), "LOW");
+    assert_eq!(status.display.clone().expect("display"), "LOW");
 
     let mut data2 = std::collections::HashMap::new();
     data2.insert("threshold".to_string(), "150".to_string());
     data2.insert("multiplier".to_string(), "2".to_string());
 
     let response2 = engine
-        .run(
-            None,
-            "dynamic_config",
-            Some(&now),
-            data2,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "dynamic_config", Some(&now), data2, false)
         .unwrap();
 
     let status2 = response2
@@ -249,7 +232,7 @@ rule status: "LOW"
         .values()
         .find(|r| r.rule.name == "status")
         .unwrap();
-    assert_eq!(status2.result.value().unwrap().to_string(), "HIGH");
+    assert_eq!(status2.display.clone().expect("display"), "HIGH");
 
     let _ = engine.remove("dynamic_config", Some(&now));
 }
@@ -260,7 +243,7 @@ fn test_date_arithmetic_comprehensive() {
 
     let timeline_spec = r#"
 spec project_timeline
-uses lemma si
+uses lemma units
 data project_start: 2024-01-15
 data phase1_duration: 30 days
 data phase2_duration: 45 days
@@ -286,14 +269,7 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "project_timeline",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "project_timeline", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let phase1_complete = response
@@ -301,17 +277,14 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
         .values()
         .find(|r| r.rule.name == "is_phase1_complete")
         .unwrap();
-    assert_eq!(phase1_complete.result.value().unwrap().to_string(), "true");
+    assert_eq!(phase1_complete.display.clone().expect("display"), "true");
 
     let phase2_complete = response
         .results
         .values()
         .find(|r| r.rule.name == "is_phase2_complete")
         .unwrap();
-    assert_eq!(
-        phase2_complete.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(false)))
-    );
+    assert_eq!(phase2_complete.boolean, Some(false));
 
     let _ = engine.remove("project_timeline", Some(&now));
 }
@@ -345,14 +318,7 @@ rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.ma
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "child",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "child", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let is_valid = response
@@ -360,10 +326,7 @@ rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.ma
         .values()
         .find(|r| r.rule.name == "is_valid")
         .unwrap();
-    assert_eq!(
-        is_valid.result,
-        lemma::OperationResult::Value(Box::new(lemma::LiteralValue::from_bool(true)))
-    );
+    assert_eq!(is_valid.boolean, Some(true));
 }
 
 #[test]
@@ -372,14 +335,14 @@ fn test_spec_ref_field_access_arithmetic() {
 
     let base_spec = r#"
 spec base
-uses lemma si
+uses lemma units
 data project_start: 2024-01-15
 data probation_period: 90 days
 "#;
 
     let child_spec = r#"
 spec child
-uses lemma si
+uses lemma units
 uses base_contract: base
 
 rule probation_end: base_contract.project_start + base_contract.probation_period
@@ -392,14 +355,7 @@ rule probation_end: base_contract.project_start + base_contract.probation_period
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "child",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "child", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let probation_end = response
@@ -408,15 +364,9 @@ rule probation_end: base_contract.project_start + base_contract.probation_period
         .find(|r| r.rule.name == "probation_end")
         .unwrap();
 
-    match &probation_end.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Date(date) => {
-                assert_eq!(date.year, 2024);
-                assert_eq!(date.month, 4);
-                assert_eq!(date.day, 14);
-            }
-            other => panic!("Expected Date for probation_end, got {:?}", other),
-        },
-        other => panic!("Expected Value for probation_end, got {:?}", other),
-    }
+    assert!(!probation_end.vetoed);
+    let date = probation_end.date.as_ref().expect("date");
+    assert_eq!(date.year, 2024);
+    assert_eq!(date.month, 4);
+    assert_eq!(date.day, 14);
 }

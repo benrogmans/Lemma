@@ -1,4 +1,4 @@
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -29,15 +29,14 @@ rule equal_false: a is c
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let equal_true = response.results.get("equal_true").unwrap();
-    assert_eq!(equal_true.result.value().unwrap().to_string(), "true");
+    assert_eq!(equal_true.display.clone().expect("display"), "true");
 
     let equal_false = response.results.get("equal_false").unwrap();
-    assert_eq!(equal_false.result.value().unwrap().to_string(), "false");
+    assert_eq!(equal_false.display.clone().expect("display"), "false");
 }
 
 #[test]
@@ -60,21 +59,14 @@ rule different_greeting: greeting is other
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(
-            None,
-            "test_equal_text",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "test_equal_text", Some(&now), HashMap::new(), false)
         .unwrap();
 
     let same = response.results.get("same_greeting").unwrap();
-    assert_eq!(same.result.value().unwrap().to_string(), "true");
+    assert_eq!(same.display.clone().expect("display"), "true");
 
     let different = response.results.get("different_greeting").unwrap();
-    assert_eq!(different.result.value().unwrap().to_string(), "false");
+    assert_eq!(different.display.clone().expect("display"), "false");
 }
 
 #[test]
@@ -104,15 +96,14 @@ rule mixed: flag_a is flag_c
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let both_true = response.results.get("both_true").unwrap();
-    assert_eq!(both_true.result.value().unwrap().to_string(), "true");
+    assert_eq!(both_true.display.clone().expect("display"), "true");
 
     let mixed = response.results.get("mixed").unwrap();
-    assert_eq!(mixed.result.value().unwrap().to_string(), "false");
+    assert_eq!(mixed.display.clone().expect("display"), "false");
 }
 
 #[test]
@@ -142,10 +133,9 @@ rule message: "inactive"
             Some(&now),
             HashMap::new(),
             false,
-            lemma::EvaluationRequest::default(),
         )
         .unwrap();
 
     let message = response.results.get("message").unwrap();
-    assert_eq!(message.result.value().unwrap().to_string(), "count is 10");
+    assert_eq!(message.display.clone().expect("display"), "count is 10");
 }

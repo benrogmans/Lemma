@@ -1,8 +1,8 @@
-//! Defaults on the stored plan are suggestions until [`lemma::planning::ExecutionPlan::with_defaults`] runs.
+//! Defaults on the stored plan are suggestions until [`lemma::ExecutionPlan::with_defaults`] runs.
 
-use lemma::parsing::ast::DateTimeValue;
-use lemma::planning::semantics::{DataDefinition, DataPath};
+use lemma::DateTimeValue;
 use lemma::Engine;
+use lemma::{DataDefinition, DataPath};
 use std::collections::HashMap;
 
 #[test]
@@ -54,13 +54,7 @@ fn run_plan_without_defaults_surfaces_missing_data_for_typedecl_default() {
     let now = DateTimeValue::now();
     let plan = engine.get_plan(None, "s", Some(&now)).expect("plan");
     let response = engine
-        .run_plan_without_defaults(
-            plan,
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run_plan(plan, Some(&now), HashMap::new(), false, false)
         .expect("response");
 
     assert!(

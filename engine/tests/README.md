@@ -50,11 +50,11 @@ cargo nextest run -p lemma-engine --tests
 | `temporal_interface_deep_slice.rs` | Deep temporal interface |
 | `temporal_boundary_explosion.rs` | Boundary cases |
 | `temporal_cycle_panic.rs` | Invalid temporal cycles |
-| `spec_reference_scenarios.rs` | Composability contracts (unpinned/pinned `uses`, coverage, self-ref, `fill`; see [spec_composability.md](../documentation/spec_composability.md)) |
+| `spec_reference_scenarios.rs` | Composability contracts (unpinned/pinned `uses`, coverage, self-ref, `with`; see [spec_composability.md](../documentation/spec_composability.md)) |
 | `temporal_self_uses.rs` | Cross-temporal same-name `uses` (implicit or explicit alias) |
 | `type_import_temporal.rs` | Type-only deps + temporal versions |
 | `spec_name_repository_plan_collision.rs` | Cross-repo spec name collision (regression) |
-| `uses_lemma_compound_unit_planning.rs` | Compound units via `uses lemma si` |
+| `uses_lemma_compound_unit_planning.rs` | Compound units via `uses lemma units` |
 | `validator_type_checking.rs` | Type validation at plan time |
 | `semantic_validation.rs` | Semantic checks |
 | `duration_trait_planning.rs` | Duration trait planning |
@@ -153,7 +153,7 @@ cargo nextest run -p lemma-engine --tests
 
 | File | Focus |
 |------|--------|
-| `duration_conversion.rs` | `uses lemma si` duration unit conversion |
+| `duration_conversion.rs` | `uses lemma units` duration unit conversion |
 | `fuzz_api_surface.rs` | Fuzz-related API smoke |
 
 ### Repro / regression guards

@@ -8,8 +8,7 @@
 //! to be red (e.g. `text -> decimals 2` may be silently accepted). Do NOT
 //! mask, delete, or weaken.
 
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -42,14 +41,15 @@ fn load_err_joined(engine: &mut Engine, code: &str) -> String {
         .join("\n")
 }
 
-fn rule_value(result: &lemma::evaluation::Response, name: &str) -> String {
+fn rule_value(result: &lemma::Response, name: &str) -> String {
     let rr = result
         .results
         .get(name)
         .unwrap_or_else(|| panic!("rule '{}' not found", name));
-    match &rr.result {
-        OperationResult::Value(v) => v.to_string(),
-        OperationResult::Veto(v) => format!("VETO({})", v),
+    if rr.vetoed {
+        format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"))
+    } else {
+        rr.display.clone().expect("display")
     }
 }
 
@@ -57,16 +57,9 @@ fn run(
     engine: &Engine,
     spec: &str,
     data: HashMap<String, String>,
-) -> Result<lemma::evaluation::Response, lemma::Error> {
+) -> Result<lemma::Response, lemma::Error> {
     let now = DateTimeValue::now();
-    engine.run(
-        None,
-        spec,
-        Some(&now),
-        data,
-        false,
-        lemma::EvaluationRequest::default(),
-    )
+    engine.run(None, spec, Some(&now), data, false)
 }
 
 // ─── Type-only data + missing at runtime → MissingData veto ──────────
@@ -83,12 +76,9 @@ rule r: x
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
     let rr = resp.results.get("r").unwrap();
     assert!(
-        matches!(
-            rr.result,
-            OperationResult::Veto(lemma::VetoType::MissingData { .. })
-        ),
+        rr.vetoed,
         "type-only number data missing at runtime must produce MissingData veto, got: {:?}",
-        rr.result
+        rr.veto_reason
     );
 }
 
@@ -104,12 +94,9 @@ rule r: x
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
     let rr = resp.results.get("r").unwrap();
     assert!(
-        matches!(
-            rr.result,
-            OperationResult::Veto(lemma::VetoType::MissingData { .. })
-        ),
+        rr.vetoed,
         "type-only text missing must produce MissingData veto, got: {:?}",
-        rr.result
+        rr.veto_reason
     );
 }
 
@@ -124,14 +111,7 @@ rule r: b
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
     let rr = resp.results.get("r").unwrap();
-    assert!(
-        matches!(
-            rr.result,
-            OperationResult::Veto(lemma::VetoType::MissingData { .. })
-        ),
-        "got: {:?}",
-        rr.result
-    );
+    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
 }
 
 #[test]
@@ -145,36 +125,22 @@ rule r: d
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
     let rr = resp.results.get("r").unwrap();
-    assert!(
-        matches!(
-            rr.result,
-            OperationResult::Veto(lemma::VetoType::MissingData { .. })
-        ),
-        "got: {:?}",
-        rr.result
-    );
+    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
 }
 
 #[test]
 fn lemma_typedef_duration_missing_data_vetoes() {
     let code = r#"
 spec s
-uses lemma si
-data d: si.duration
+uses lemma units
+data d: units.duration
 rule r: d
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
     let rr = resp.results.get("r").unwrap();
-    assert!(
-        matches!(
-            rr.result,
-            OperationResult::Veto(lemma::VetoType::MissingData { .. })
-        ),
-        "got: {:?}",
-        rr.result
-    );
+    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
 }
 
 #[test]
@@ -188,14 +154,7 @@ rule r: p
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
     let rr = resp.results.get("r").unwrap();
-    assert!(
-        matches!(
-            rr.result,
-            OperationResult::Veto(lemma::VetoType::MissingData { .. })
-        ),
-        "got: {:?}",
-        rr.result
-    );
+    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
 }
 
 // ─── Constraint × primitive compatibility matrix ─────────────────────
@@ -212,11 +171,13 @@ rule r: n
     load_ok(&mut engine, code);
     let mut data = HashMap::new();
     data.insert("n".to_string(), "5".to_string());
-    let err = run(&engine, "s", data).expect_err("5 < 10 must be rejected");
+    let resp = run(&engine, "s", data).expect("5 < 10 must complete with veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "5 < 10 must veto rule r");
+    let reason = rr.veto_reason.as_deref().expect("veto reason");
     assert!(
-        err.to_string().contains("minimum") || err.to_string().contains("at least"),
-        "expected minimum constraint error, got: {}",
-        err
+        reason.contains("minimum") || reason.contains("at least"),
+        "expected minimum constraint veto, got: {reason}"
     );
 }
 
@@ -231,11 +192,13 @@ rule r: n
     load_ok(&mut engine, code);
     let mut data = HashMap::new();
     data.insert("n".to_string(), "10".to_string());
-    let err = run(&engine, "s", data).expect_err("10 > 5 must be rejected");
-    let s = err.to_string();
+    let resp = run(&engine, "s", data).expect("10 > 5 must complete with veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "10 > 5 must veto rule r");
+    let reason = rr.veto_reason.as_deref().expect("veto reason");
     assert!(
-        s.contains("maximum") || s.contains("at most") || s.contains("exceeds"),
-        "expected maximum constraint error, got: {s}"
+        reason.contains("maximum") || reason.contains("at most") || reason.contains("exceeds"),
+        "expected maximum constraint veto, got: {reason}"
     );
 }
 
@@ -315,11 +278,13 @@ rule r: msg
     load_ok(&mut engine, code);
     let mut data = HashMap::new();
     data.insert("msg".to_string(), "way too long".to_string());
-    let err = run(&engine, "s", data).expect_err("length 5 must reject longer text");
+    let resp = run(&engine, "s", data).expect("length 5 must complete with veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "length 5 must reject longer text");
+    let reason = rr.veto_reason.as_deref().expect("veto reason");
     assert!(
-        err.to_string().contains("length"),
-        "expected length constraint error, got: {}",
-        err
+        reason.contains("length"),
+        "expected length constraint veto, got: {reason}"
     );
 }
 
@@ -420,13 +385,14 @@ rule r: n
         Ok(()) => {
             let mut data = HashMap::new();
             data.insert("n".to_string(), "7".to_string());
-            let err = run(&engine, "s", data).expect_err(
-                "either last-wins (7<10 rejected) or this case should have been a plan error",
-            );
-            let s = err.to_string();
+            let resp = run(&engine, "s", data)
+                .expect("either last-wins (7<10 veto) or this case should have been a plan error");
+            let rr = resp.results.get("r").expect("rule r");
+            assert!(rr.vetoed, "7 < effective minimum 10 must veto rule r");
+            let reason = rr.veto_reason.as_deref().expect("veto reason");
             assert!(
-                s.contains("minimum") || s.contains("at least"),
-                "expected minimum violation; got: {s}"
+                reason.contains("minimum") || reason.contains("at least"),
+                "expected minimum violation; got: {reason}"
             );
         }
         Err(errs) => {
@@ -473,11 +439,13 @@ rule r: person_age
     load_ok(&mut engine, code);
     let mut data = HashMap::new();
     data.insert("person_age".to_string(), "200".to_string());
-    let err = run(&engine, "s", data).expect_err("200 > 150 must be rejected via inherited max");
-    let s = err.to_string();
+    let resp = run(&engine, "s", data).expect("200 > 150 must complete with veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "200 > 150 must veto via inherited max");
+    let reason = rr.veto_reason.as_deref().expect("veto reason");
     assert!(
-        s.contains("maximum") || s.contains("150") || s.contains("at most"),
-        "expected inherited max to reject; got: {s}"
+        reason.contains("maximum") || reason.contains("150") || reason.contains("at most"),
+        "expected inherited max veto; got: {reason}"
     );
 }
 
@@ -528,15 +496,15 @@ rule r: small_number
     load_ok(&mut engine, code);
     let mut data = HashMap::new();
     data.insert("small_number".to_string(), "200".to_string());
-    let err = run(&engine, "s", data).expect_err("narrowed max 100 must reject 200");
-    let s = err.to_string();
+    let resp = run(&engine, "s", data).expect("narrowed max 100 must complete with veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "narrowed max 100 must reject 200");
+    let reason = rr.veto_reason.as_deref().expect("veto reason");
     assert!(
-        s.contains("maximum") || s.contains("100") || s.contains("at most"),
-        "narrowed max must reject; got: {s}"
+        reason.contains("maximum") || reason.contains("100") || reason.contains("at most"),
+        "narrowed max must veto; got: {reason}"
     );
 }
-
-// ─── Cross-spec value-copy reference (replacement for legacy `from <spec>` data imports)
 
 #[test]
 fn cross_spec_value_copy_reference_resolves() {
@@ -546,7 +514,7 @@ data money: quantity -> unit eur 1 -> unit usd 0.84
 
 spec app
 uses lib
-fill price: lib.money
+data price: lib.money
 rule r: price
 "#;
     let mut engine = Engine::new();
@@ -566,8 +534,8 @@ data money: quantity -> unit eur 1
 
 spec app
 uses lib
-fill price: lib.nonexistent
-rule r: price
+with lib.money: lib.nonexistent
+rule r: lib.money
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
@@ -581,9 +549,9 @@ rule r: price
 fn cross_spec_value_copy_to_unknown_spec_is_rejected() {
     let code = r#"
 spec app
-uses nonexistent_spec
-fill price: nonexistent_spec.money
-rule r: price
+uses dep: nonexistent_spec
+with dep.money: 1
+rule r: dep.money
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);

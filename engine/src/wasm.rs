@@ -1,7 +1,7 @@
 use crate::error::ErrorKind;
 use crate::parsing::ast::DateTimeValue;
 use crate::parsing::source::Source;
-use crate::serialization::data_values_from_map;
+use crate::planning::DataValueInput;
 use crate::{Engine, Error, SourceType};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -10,6 +10,12 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = Engine)]
 pub struct WasmEngine {
     engine: Engine,
+}
+
+impl Default for WasmEngine {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[wasm_bindgen]
@@ -100,7 +106,6 @@ impl WasmEngine {
     /// Does not load this [`WasmEngine`]; call [`Self::load_batch`], etc., yourself.
     #[wasm_bindgen(js_name = fetch)]
     pub fn fetch_wasm(&self, name: &str) -> js_sys::Promise {
-        let _ = self;
         match crate::spec_set_id::parse_spec_set_id(name) {
             Err(e) => {
                 let js_err_array = {
@@ -114,9 +119,11 @@ impl WasmEngine {
             Ok(normalized) => {
                 #[cfg(not(feature = "registry"))]
                 {
-                    let _: String = normalized;
                     let err = Error::request(
-                        "fetch requires the lemma-engine crate to be built with the `registry` feature",
+                        format!(
+                            "fetch of '{normalized}' requires the lemma-engine crate to be built with the `registry` feature (engine has {} loaded repositories)",
+                            self.engine.list().len()
+                        ),
                         None::<String>,
                     );
                     let js_err_array = {
@@ -146,7 +153,6 @@ impl WasmEngine {
         spec: &str,
         rule_names: JsValue,
         data_values: JsValue,
-        rule_result_units: JsValue,
         effective: Option<String>,
     ) -> Result<JsValue, JsValue> {
         let effective_dt = effective
@@ -168,33 +174,9 @@ impl WasmEngine {
             .get_plan(repo, spec, Some(&effective_dt))
             .map_err(|e| error_to_js(&e))?;
 
-        let conversion_map = parse_rule_result_units(&rule_result_units).map_err(js_err)?;
-        let rule_result_units_list: Vec<String> = conversion_map
-            .into_iter()
-            .map(|(rule, unit)| format!("{rule}:{unit}"))
-            .collect();
-        let evaluation_request = if rule_result_units_list.is_empty() {
-            crate::evaluation::EvaluationRequest::default()
-        } else {
-            let joined = rule_result_units_list.join(",");
-            let strings = crate::evaluation::parse_rule_result_conversion_strings(&joined)
-                .map_err(|e| error_to_js(&e))?;
-            if !rule_names.is_empty() {
-                for rule_name in strings.keys() {
-                    if !rule_names.contains(rule_name) {
-                        return Err(js_err(format!(
-                            "Conversion for rule '{rule_name}' was requested but that rule is not in rule_names"
-                        )));
-                    }
-                }
-            }
-            crate::evaluation::EvaluationRequest::from_rule_conversion_strings(strings, plan)
-                .map_err(|e| error_to_js(&e))?
-        };
-
         let mut response = self
             .engine
-            .run_plan(plan, Some(&effective_dt), data, false, evaluation_request)
+            .run_plan(plan, Some(&effective_dt), data, false, true)
             .map_err(|e| error_to_js(&e))?;
 
         if !rule_names.is_empty() {
@@ -248,28 +230,26 @@ impl WasmEngine {
         serialize_engine_json(&schema)
     }
 
-    #[wasm_bindgen(js_name = invert)]
     pub fn invert(
         &self,
-        _spec_name: &str,
-        _rule_name: &str,
-        _target_json: &str,
-        _provided_values_json: &str,
+        spec_name: &str,
+        rule_name: &str,
+        target_json: &str,
+        provided_values_json: &str,
     ) -> Result<JsValue, JsValue> {
-        Err(js_err("Inversion not implemented"))
+        todo!(
+            "WASM invert not implemented (spec={spec_name}, rule={rule_name}, target={target_json}, values={provided_values_json})"
+        )
     }
 
     /// Returns formatted source string on success; throws with error message on failure.
     #[wasm_bindgen(js_name = format)]
     pub fn format_wasm(&self, code: &str, attribute: Option<String>) -> Result<JsValue, JsValue> {
-        let attr = match attribute
+        let attr = attribute
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
-        {
-            Some(s) => s,
-            None => "inline source (no path)",
-        };
+            .unwrap_or("inline source (no path)");
         match crate::format_source(
             code,
             crate::parsing::source::SourceType::Path(std::sync::Arc::new(
@@ -371,7 +351,7 @@ fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
     js_sys::JSON::parse(&s).map_err(|e| {
         let detail = e
             .as_string()
-            .unwrap_or_else(|| format!("(non-string error from JSON.parse)"));
+            .unwrap_or_else(|| "(non-string error from JSON.parse)".to_string());
         js_err(format!("BUG: JSON.parse failed: {}", detail))
     })
 }
@@ -466,21 +446,51 @@ fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {
     Err("rule_names must be an array of strings".into())
 }
 
-fn parse_rule_result_units(v: &JsValue) -> Result<HashMap<String, String>, String> {
-    if v.is_undefined() || v.is_null() {
-        return Ok(HashMap::new());
+fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput, String> {
+    use std::collections::BTreeMap;
+    match value {
+        serde_json::Value::String(s) => Ok(DataValueInput::Convenience(s)),
+        serde_json::Value::Bool(b) => Ok(DataValueInput::Boolean(b)),
+        serde_json::Value::Number(n) => Ok(DataValueInput::Convenience(n.to_string())),
+        serde_json::Value::Object(obj) => {
+            if obj.is_empty() {
+                return Err("data value object must not be empty".to_string());
+            }
+            if obj.len() == 2 && obj.contains_key("value") && obj.contains_key("unit") {
+                return Err(
+                    "the {value, unit} object shape is not supported; use a unit map like {\"eur\": \"84\"}"
+                        .to_string(),
+                );
+            }
+            if obj.values().all(|v| v.is_string()) {
+                let map: BTreeMap<String, String> = obj
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            v.as_str()
+                                .expect("BUG: object values checked as strings")
+                                .to_string(),
+                        )
+                    })
+                    .collect();
+                return Ok(DataValueInput::QuantityMap(map));
+            }
+            Err("data value object must be a unit map with string magnitudes".to_string())
+        }
+        serde_json::Value::Null => Err("data value must not be null".to_string()),
+        serde_json::Value::Array(_) => Err("data value must not be an array".to_string()),
     }
-    let map: HashMap<String, String> = serde_wasm_bindgen::from_value(v.clone()).map_err(|e| {
-        format!("rule_result_units must be a plain object of rule name to unit: {e}")
-    })?;
-    Ok(map)
 }
 
-fn parse_data_values(v: &JsValue) -> Result<HashMap<String, serde_json::Value>, String> {
+fn parse_data_values(v: &JsValue) -> Result<HashMap<String, DataValueInput>, String> {
     if v.is_undefined() || v.is_null() {
         return Ok(HashMap::new());
     }
     let map: HashMap<String, serde_json::Value> = serde_wasm_bindgen::from_value(v.clone())
         .map_err(|e| format!("data_values must be a plain object: {}", e))?;
-    Ok(data_values_from_map(map))
+    map.into_iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, v)| data_input_from_json_value(v).map(|input| (k, input)))
+        .collect()
 }

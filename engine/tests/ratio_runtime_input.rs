@@ -9,8 +9,7 @@
 //! with the friendly Quantity message (no leftover `%`/`%%` handling in the Quantity
 //! literal parser).
 
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use lemma::ValueKind;
 use rust_decimal::Decimal;
@@ -44,25 +43,29 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            spec,
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec, Some(&now), data, true)
         .unwrap_or_else(|e| panic!("run failed for input '{raw}': {e}"));
     let rr = resp
         .results
         .get("out")
         .unwrap_or_else(|| panic!("rule 'out' not found"));
-    let lit = match &rr.result {
-        OperationResult::Value(v) => v.as_ref(),
-        OperationResult::Veto(v) => panic!("input '{raw}' produced veto: {v}"),
-    };
+    assert!(
+        !rr.vetoed,
+        "input '{raw}' produced veto: {:?}",
+        rr.veto_reason
+    );
+    let lit = rr
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
     match &lit.value {
-        ValueKind::Ratio(n, u) => (lemma::commit_rational_to_decimal(n).unwrap(), u.clone()),
+        ValueKind::Ratio(n, u) => (
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            u.clone(),
+        ),
         other => panic!("input '{raw}' produced non-Ratio: {:?}", other),
     }
 }
@@ -71,18 +74,19 @@ fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
     let mut data = HashMap::new();
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
-    engine
-        .run(
-            None,
-            spec,
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .err()
-        .unwrap_or_else(|| panic!("expected '{raw}' to be rejected, but run succeeded"))
-        .to_string()
+    let resp = engine
+        .run(None, spec, Some(&now), data, false)
+        .unwrap_or_else(|e| panic!("run must complete with veto, not Error for '{raw}': {e}"));
+    let rr = resp
+        .results
+        .get("out")
+        .unwrap_or_else(|| panic!("rule 'out' not found"));
+    assert!(
+        rr.vetoed,
+        "expected '{raw}' to be rejected via veto, got value {:?}",
+        rr.display
+    );
+    rr.veto_reason.clone().expect("veto reason")
 }
 
 fn percent_spec() -> &'static str {
@@ -384,20 +388,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
-    let mut data = HashMap::new();
-    data.insert("r".to_string(), "5%".to_string());
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("'5%' must not parse as a Quantity value");
-    let msg = err.to_string();
+    let msg = run_err(&engine, "s", "5%");
     assert!(
         msg.contains("Quantity value")
             || msg.contains("must include a unit")
@@ -419,20 +410,7 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
-    let mut data = HashMap::new();
-    data.insert("r".to_string(), "5%%".to_string());
-    let now = DateTimeValue::now();
-    let err = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
-        .expect_err("'5%%' must not parse as a Quantity value");
-    let msg = err.to_string();
+    let msg = run_err(&engine, "s", "5%%");
     assert!(
         !msg.contains("Unknown unit 'permille'"),
         "Quantity path must not leak a 'permille' unit lookup, got: {msg}"

@@ -1,4 +1,4 @@
-use lemma::parsing::ast::{DateTimeValue, TimezoneValue};
+use lemma::{DateTimeValue, TimezoneValue};
 use lemma::{Engine, LiteralValue, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -38,19 +38,15 @@ fn eval_literal_with_data(
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(effective),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, spec_name, Some(effective), data, true)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .trace
+        .as_ref()
+        .expect("explanation")
         .result
         .value()
         .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
@@ -69,6 +65,27 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     eval_literal(code, spec_name, rule_name).to_string()
+}
+
+fn eval_rule_number(code: &str, spec_name: &str, rule_name: &str) -> String {
+    let mut engine = Engine::new();
+    engine.load(code, source()).expect("Should parse and plan");
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&default_effective()),
+            HashMap::new(),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .number
+        .clone()
+        .expect("number result")
 }
 
 fn eval_rule_with_effective(
@@ -198,35 +215,37 @@ fn is_numeric_context_character(character: char) -> bool {
 #[test]
 fn a1_date_range_in_years() {
     let code = r#"spec test
-rule age: 1990-05-20...2024-06-15 as years"#;
+uses lemma units
+rule age: 1990-05-20...2024-06-15 as year as number"#;
     let val = eval_rule(code, "test", "age");
-    assert_contains_all(&val, &["34", "year"]);
+    assert_contains_all(&val, &["34"]);
 }
 
 #[test]
 fn a2_date_range_in_months() {
     let code = r#"spec test
-rule months: 2024-01-15...2024-06-15 as months"#;
+uses lemma units
+rule months: 2024-01-15...2024-06-15 as month as number"#;
     let val = eval_rule(code, "test", "months");
-    assert_contains_all(&val, &["5", "month"]);
+    assert_contains_all(&val, &["5"]);
 }
 
 #[test]
 fn a3_date_range_in_days() {
     let code = r#"spec test
-uses lemma si
-rule r: 2024-06-01...2024-06-15 as days"#;
+uses lemma units
+rule r: 2024-06-01...2024-06-15 as days as number"#;
     let val = eval_rule(code, "test", "r");
-    assert_contains_all(&val, &["14", "day"]);
+    assert_contains_all(&val, &["14"]);
 }
 
 #[test]
 fn a4_date_range_in_hours() {
     let code = r#"spec test
-uses lemma si
-rule hours: 2024-01-01...2024-01-02 as hours"#;
+uses lemma units
+rule hours: 2024-01-01...2024-01-02 as hours as number"#;
     let val = eval_rule(code, "test", "hours");
-    assert_contains_all(&val, &["24", "hour"]);
+    assert_contains_all(&val, &["24"]);
 }
 
 // =============================================================================
@@ -236,45 +255,48 @@ rule hours: 2024-01-01...2024-01-02 as hours"#;
 #[test]
 fn b1_indirect_in_years() {
     let code = r#"spec test
+uses lemma units
 data d1: 1990-05-20
 data d2: 2024-06-15
 rule span: d1...d2
-rule age: span as years"#;
+rule age: span as year as number"#;
     let val = eval_rule(code, "test", "age");
-    assert_contains_all(&val, &["34", "year"]);
+    assert_contains_all(&val, &["34"]);
 }
 
 #[test]
 fn b2_indirect_in_days() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data d1: 2024-06-01
 data d2: 2024-06-15
 rule span: d1...d2
-rule days: span as days"#;
+rule days: span as days as number"#;
     let val = eval_rule(code, "test", "days");
-    assert_contains_all(&val, &["14", "day"]);
+    assert_contains_all(&val, &["14"]);
 }
 
 #[test]
 fn b3_chained_refs() {
     let code = r#"spec test
+uses lemma units
 data d1: 1990-05-20
 data d2: 2024-06-15
 rule span: d1...d2
 rule mid: span
-rule age: mid as years"#;
+rule age: mid as year as number"#;
     let val = eval_rule(code, "test", "age");
-    assert_contains_all(&val, &["34", "year"]);
+    assert_contains_all(&val, &["34"]);
 }
 
 #[test]
 fn b4_indirect_comparison() {
     let code = r#"spec test
+uses lemma units
 data d1: 2000-01-01
 data d2: 2026-01-01
 rule span: d1...d2
-rule adult: span as years >= 18"#;
+rule adult: span as year as number >= 18"#;
     assert!(eval_bool(code, "test", "adult", &default_effective()));
 }
 
@@ -285,28 +307,27 @@ rule adult: span as years >= 18"#;
 #[test]
 fn c1_date_range_plus_duration_uses_span() {
     let code = r#"spec test
-uses lemma si
-rule value: ((2024-02-15...2024-03-15) + 1 day) as days"#;
+uses lemma units
+rule value: ((2024-02-15...2024-03-15) + 1 day) as days as number"#;
     let val = eval_rule(code, "test", "value");
-    assert_contains_all(&val, &["30", "day"]);
+    assert_contains_all(&val, &["30"]);
 }
 
 #[test]
-fn c2_duration_plus_date_range_uses_span() {
+fn c2_duration_plus_number_rejected() {
     let code = r#"spec test
-uses lemma si
-rule value: 1 day + (2024-02-15...2024-03-15) as days"#;
-    let val = eval_rule(code, "test", "value");
-    assert_contains_all(&val, &["30", "day"]);
+uses lemma units
+rule value: 1 day + (2024-02-15...2024-03-15) as days as number"#;
+    expect_plan_error(code, "Cannot apply '+'");
 }
 
 #[test]
 fn c4_date_range_times_number() {
     let code = r#"spec test
-uses lemma si
-rule scaled: ((2024-02-28...2024-03-01) * 3) as days"#;
+uses lemma units
+rule scaled: (((2024-02-28...2024-03-01 as days) * 3) as days) as number"#;
     let val = eval_rule(code, "test", "scaled");
-    assert_contains_all(&val, &["6", "day"]);
+    assert_contains_all(&val, &["6"]);
 }
 
 // =============================================================================
@@ -316,34 +337,37 @@ rule scaled: ((2024-02-28...2024-03-01) * 3) as days"#;
 #[test]
 fn d1_plus_calendar_months_uses_span() {
     let code = r#"spec test
-rule value: ((2024-01-01...2024-06-15) + 1 month) as months"#;
+uses lemma units
+rule value: ((2024-01-01...2024-06-15) + 1 month) as month as number"#;
     let val = eval_rule(code, "test", "value");
-    assert_contains_all(&val, &["6", "month"]);
+    assert_contains_all(&val, &["6"]);
 }
 
 #[test]
 fn d2_plus_calendar_years_uses_span() {
     let code = r#"spec test
-rule value: ((2024-01-01...2024-06-15) + 1 year) as months"#;
+uses lemma units
+rule value: ((2024-01-01...2024-06-15) + 1 year) as month as number"#;
     let val = eval_rule(code, "test", "value");
-    assert_contains_all(&val, &["17", "month"]);
+    assert_contains_all(&val, &["17"]);
 }
 
 #[test]
 fn d3_plus_calendar_in_days_uses_span() {
     let code = r#"spec test
-uses lemma si
-rule value: ((2024-01-01...2024-06-15) + 1 month) as days"#;
+uses lemma units
+rule value: ((2024-01-01...2024-06-15) + 1 month) as days as number"#;
     let val = eval_rule(code, "test", "value");
-    assert_contains_all(&val, &["196", "day"]);
+    assert_contains_all(&val, &["196"]);
 }
 
 #[test]
 fn d4_minus_calendar_uses_span() {
     let code = r#"spec test
-rule value: ((2024-01-01...2024-06-15) - 2 months) as months"#;
+uses lemma units
+rule value: ((2024-01-01...2024-06-15) - 2 month) as month as number"#;
     let val = eval_rule(code, "test", "value");
-    assert_contains_all(&val, &["3", "month"]);
+    assert_contains_all(&val, &["3"]);
 }
 
 // =============================================================================
@@ -353,7 +377,7 @@ rule value: ((2024-01-01...2024-06-15) - 2 months) as months"#;
 #[test]
 fn e1_gte_duration() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: (2024-06-01...2024-06-15) >= 7 days"#;
     assert!(eval_bool(code, "test", "ok", &default_effective()));
 }
@@ -361,7 +385,7 @@ rule ok: (2024-06-01...2024-06-15) >= 7 days"#;
 #[test]
 fn e2_lt_duration() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: (2024-06-01...2024-06-15) < 7 days"#;
     assert!(!eval_bool(code, "test", "ok", &default_effective()));
 }
@@ -369,14 +393,15 @@ rule ok: (2024-06-01...2024-06-15) < 7 days"#;
 #[test]
 fn e3_gte_calendar() {
     let code = r#"spec test
-rule ok: (2024-01-01...2024-06-15) >= 3 months"#;
+uses lemma units
+rule ok: (2024-01-01...2024-06-15) >= 3 month"#;
     assert!(eval_bool(code, "test", "ok", &default_effective()));
 }
 
 #[test]
 fn e4_gte_number_after_conversion() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule ok: (2024-06-01...2024-06-15) as days as number >= 7"#;
     assert!(eval_bool(code, "test", "ok", &default_effective()));
 }
@@ -388,13 +413,13 @@ rule ok: (2024-06-01...2024-06-15) as days as number >= 7"#;
 #[test]
 fn f1_hours() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data money: quantity -> unit eur 1.00
 data rate: quantity
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 data hourly_rate: 50 eur_per_hour
-rule cost: (hourly_rate * 2024-01-01...2024-01-02) as eur"#;
+rule cost: (hourly_rate * (2024-01-01...2024-01-02 as hours))"#;
     let val = eval_rule(code, "test", "cost");
     assert_contains_all(&val, &["1200", "eur"]);
 }
@@ -402,10 +427,11 @@ rule cost: (hourly_rate * 2024-01-01...2024-01-02) as eur"#;
 #[test]
 fn f2_months() {
     let code = r#"spec test
+uses lemma units
 data money: quantity -> unit eur 1.00
 data monthly_rate: quantity -> unit eur_per_month eur/month
 data rate: 50 eur_per_month
-rule cost: (rate * 2024-01-01...2024-06-15) as eur"#;
+rule cost: (rate * (2024-01-01...2024-06-15 as month))"#;
     let val = eval_rule(code, "test", "cost");
     assert_contains_all(&val, &["250", "eur"]);
 }
@@ -417,57 +443,66 @@ rule cost: (rate * 2024-01-01...2024-06-15) as eur"#;
 #[test]
 fn g1_same_date_zero_years() {
     let code = r#"spec test
-rule span: 2024-06-15...2024-06-15 as years"#;
+uses lemma units
+rule span: 2024-06-15...2024-06-15 as year as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["0", "year"]);
+    assert_contains_all(&val, &["0"]);
 }
 
 #[test]
 fn g2_same_date_zero_months() {
     let code = r#"spec test
-rule span: 2024-06-15...2024-06-15 as months"#;
+uses lemma units
+rule span: 2024-06-15...2024-06-15 as month as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["0", "month"]);
+    assert_contains_all(&val, &["0"]);
 }
 
 #[test]
 fn g3_one_day_short_of_year() {
     let code = r#"spec test
-rule span: 2024-01-15...2025-01-14 as years"#;
-    let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["0", "year"]);
+uses lemma units
+rule span: 2024-01-15...2025-01-14 as year as number"#;
+    // 364-day span is 11 calendar months → 11/12 year when de-canonicalized to years.
+    assert_eq!(
+        eval_rule_number(code, "test", "span"),
+        "0.9166666666666666666666666667"
+    );
 }
 
 #[test]
 fn g4_exactly_one_year() {
     let code = r#"spec test
-rule span: 2024-01-15...2025-01-15 as years"#;
+uses lemma units
+rule span: 2024-01-15...2025-01-15 as year as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["1", "year"]);
+    assert_contains_all(&val, &["1"]);
 }
 
 #[test]
 fn g5_leap_year_boundary() {
     let code = r#"spec test
-rule span: 2023-03-01...2024-02-29 as months"#;
+uses lemma units
+rule span: 2023-03-01...2024-02-29 as month as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["11", "month"]);
+    assert_contains_all(&val, &["11"]);
 }
 
 #[test]
 fn g6_reversed_range_span_is_absolute_months() {
     let code = r#"spec test
-rule span: 2024-06-01...2024-01-01 as months"#;
+uses lemma units
+rule span: 2024-06-01...2024-01-01 as month as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["5", "month"]);
+    assert_contains_all(&val, &["5"]);
 }
 
 #[test]
 fn g6b_reversed_date_range_span_as_days_matches_forward() {
     let code = r#"spec test
-uses lemma si
-rule forward: (2024-01-01...2024-01-03) as days
-rule reversed: (2024-01-03...2024-01-01) as days"#;
+uses lemma units
+rule forward: (2024-01-01...2024-01-03) as days as number
+rule reversed: (2024-01-03...2024-01-01) as days as number"#;
     assert_eq!(
         eval_rule(code, "test", "forward"),
         eval_rule(code, "test", "reversed")
@@ -477,25 +512,28 @@ rule reversed: (2024-01-03...2024-01-01) as days"#;
 #[test]
 fn g7_reversed_range_span_is_absolute_years() {
     let code = r#"spec test
-rule span: 2024-01-01...2020-01-01 as years"#;
+uses lemma units
+rule span: 2024-01-01...2020-01-01 as year as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["4", "year"]);
+    assert_contains_all(&val, &["4"]);
 }
 
 #[test]
 fn g8_partial_month_floor() {
     let code = r#"spec test
-rule span: 2024-01-16...2024-02-15 as months"#;
+uses lemma units
+rule span: 2024-01-16...2024-02-15 as month as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["0", "month"]);
+    assert_contains_all(&val, &["0"]);
 }
 
 #[test]
 fn g9_exactly_one_month() {
     let code = r#"spec test
-rule span: 2024-01-16...2024-02-16 as months"#;
+uses lemma units
+rule span: 2024-01-16...2024-02-16 as month as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["1", "month"]);
+    assert_contains_all(&val, &["1"]);
 }
 
 // =============================================================================
@@ -505,8 +543,8 @@ rule span: 2024-01-16...2024-02-16 as months"#;
 #[test]
 fn h1_date_plus_months_plus_hours() {
     let code = r#"spec test
-uses lemma si
-rule end: 2024-01-15 + 2 months + 12 hours"#;
+uses lemma units
+rule end: 2024-01-15 + 2 month + 12 hours"#;
     let val = eval_rule(code, "test", "end");
     assert_contains_all(&val, &["2024-03-15", "12:00:00"]);
 }
@@ -514,7 +552,7 @@ rule end: 2024-01-15 + 2 months + 12 hours"#;
 #[test]
 fn h2_date_plus_years_plus_days() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule end: 2024-01-01 + 1 year + 30 days"#;
     let val = eval_rule(code, "test", "end");
     assert_contains_all(&val, &["2025-01-31"]);
@@ -523,8 +561,8 @@ rule end: 2024-01-01 + 1 year + 30 days"#;
 #[test]
 fn h3_date_plus_months_minus_days() {
     let code = r#"spec test
-uses lemma si
-rule end: 2024-06-15 + 3 months - 10 days"#;
+uses lemma units
+rule end: 2024-06-15 + 3 month - 10 days"#;
     let val = eval_rule(code, "test", "end");
     assert_contains_all(&val, &["2024-09-05"]);
 }
@@ -536,30 +574,33 @@ rule end: 2024-06-15 + 3 months - 10 days"#;
 #[test]
 fn i1_employee_age() {
     let code = r#"spec test
+uses lemma units
 data employee_birth_date: 1990-05-20
 data current_date: 2024-06-15
-rule employee_age: employee_birth_date...current_date as years"#;
+rule employee_age: employee_birth_date...current_date as year as number"#;
     let val = eval_rule(code, "test", "employee_age");
-    assert_contains_all(&val, &["34", "year"]);
+    assert_contains_all(&val, &["34"]);
 }
 
 #[test]
 fn i2_years_employed_indirect() {
     let code = r#"spec test
+uses lemma units
 data hire_date: 2024-03-01
 data current_date: 2026-03-01
 rule time_employed: hire_date...current_date
-rule years_employed: time_employed as years"#;
+rule years_employed: time_employed as year as number"#;
     let val = eval_rule(code, "test", "years_employed");
-    assert_contains_all(&val, &["2", "year"]);
+    assert_contains_all(&val, &["2"]);
 }
 
 #[test]
 fn i3_age_comparison() {
     let code = r#"spec test
+uses lemma units
 data d1: 2000-01-01
 data d2: 2026-01-01
-rule age: d1...d2 as years
+rule age: d1...d2 as year as number
 rule adult: age >= 18"#;
     assert!(eval_bool(code, "test", "adult", &default_effective()));
 }
@@ -567,8 +608,9 @@ rule adult: age >= 18"#;
 #[test]
 fn i4_candrive_pattern() {
     let code = r#"spec test
+uses lemma units
 data dob: 2000-01-01
-rule candrive: dob...now >= 16 years"#;
+rule candrive: dob...now >= 16 year"#;
     assert!(eval_bool(
         code,
         "test",
@@ -584,49 +626,53 @@ rule candrive: dob...now >= 16 years"#;
 #[test]
 fn j1_time_plus_time() {
     let code = r#"spec test
-uses lemma si
-rule total: (1 day + 12 hours) as hours"#;
+uses lemma units
+rule total: (1 day + 12 hours) as hours as number"#;
     let val = eval_rule(code, "test", "total");
-    assert_contains_all(&val, &["36", "hour"]);
+    assert_contains_all(&val, &["36"]);
 }
 
 #[test]
 fn j2_calendar_plus_calendar() {
     let code = r#"spec test
-rule total: (1 year + 6 months) as months"#;
+uses lemma units
+rule total: (1 year + 6 month) as month"#;
     let val = eval_rule(code, "test", "total");
-    assert_contains_all(&val, &["18", "month"]);
+    assert_contains_all(&val, &["18"]);
 }
 
 #[test]
 fn j3_time_plus_calendar_rejected() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 rule total: 1 week + 1 month"#;
     expect_plan_error(code, "duration and calendar");
 }
 
 #[test]
-fn j4_time_in_years_rejected() {
+fn j4_duration_ref_as_number_rejected() {
     let code = r#"spec test
-uses lemma si
-rule total: 90 days as years"#;
-    expect_plan_error(code, "Cannot convert duration to calendar");
+uses lemma units
+data elapsed: units.duration
+data d: elapsed -> default 90 days
+rule total: d as number"#;
+    expect_plan_error(code, "Cannot use 'as number' on quantity");
 }
 
 #[test]
-fn j5_calendar_in_days_rejected() {
+fn j5_calendar_ref_as_days_rejected() {
     let code = r#"spec test
-uses lemma si
-rule total: 6 months as days"#;
-    expect_plan_error(code, "Cannot convert calendar to quantity unit");
+uses lemma units
+data span: units.calendar -> default 6 month
+rule total: span as days as number"#;
+    expect_plan_error(code, "as days");
 }
 
 #[test]
 fn j6_duration_slot_rejects_calendar() {
     let code = r#"spec test
-uses lemma si
-data duration: si.duration
+uses lemma units
+data duration: units.duration
 data x: duration -> default 1 month"#;
     expect_plan_error(code, "Unit 'month' is for calendar data");
     expect_plan_error(code, "Valid 'duration' units are");
@@ -639,7 +685,7 @@ data x: duration -> default 1 month"#;
 #[test]
 fn k1_duration_slot_rejects_date_range_default() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data elapsed: duration -> default 2024-01-01...2024-01-02"#;
     expect_plan_error(code, "duration");
 }
@@ -647,16 +693,17 @@ data elapsed: duration -> default 2024-01-01...2024-01-02"#;
 #[test]
 fn k1_date_range_literal_span_as_days() {
     let code = r#"spec test
-uses lemma si
-rule span: 2024-01-01...2024-01-02 as days"#;
+uses lemma units
+rule span: 2024-01-01...2024-01-02 as days as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["1", "day"]);
+    assert_contains_all(&val, &["1"]);
 }
 
 #[test]
 fn k2_rejects_calendar_slot() {
     let code = r#"spec test
-data elapsed: calendar -> default 2024-01-01...2024-06-15"#;
+uses lemma units
+data elapsed: units.calendar -> default 2024-01-01...2024-06-15"#;
     expect_plan_error(code, "calendar");
 }
 
@@ -667,26 +714,28 @@ data elapsed: calendar -> default 2024-01-01...2024-06-15"#;
 #[test]
 fn l1_literal_basic() {
     let code = r#"spec test
-uses lemma si
-rule span: 2024-01-01...2024-06-15 as days"#;
+uses lemma units
+rule span: 2024-01-01...2024-06-15 as days as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["166", "day"]);
+    assert_contains_all(&val, &["166"]);
 }
 
 #[test]
 fn l2_literal_with_spaces() {
     let code = r#"spec test
-rule span: 2024-01-01 ... 2024-06-15 as months"#;
+uses lemma units
+rule span: 2024-01-01 ... 2024-06-15 as month as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["5", "month"]);
+    assert_contains_all(&val, &["5"]);
 }
 
 #[test]
 fn l3_literal_in_years() {
     let code = r#"spec test
-rule span: 1990-05-20 ... 2024-06-15 as years"#;
+uses lemma units
+rule span: 1990-05-20 ... 2024-06-15 as year as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["34", "year"]);
+    assert_contains_all(&val, &["34"]);
 }
 
 #[test]
@@ -713,10 +762,11 @@ rule check: 2028-01-01 in 2028-01-01...2024-01-01"#;
 #[test]
 fn l5_user_declared_type() {
     let code = r#"spec test
+uses lemma units
 data period: date range -> default 2024-01-01...2025-01-01
-rule months: period as months"#;
+rule months: period as month as number"#;
     let val = eval_rule(code, "test", "months");
-    assert_contains_all(&val, &["12", "month"]);
+    assert_contains_all(&val, &["12"]);
 }
 
 #[test]
@@ -741,7 +791,7 @@ rule check: event in period"#;
 #[test]
 fn m1_past_containment() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-05
 rule check: event in past 7 days"#;
     assert!(eval_bool(code, "test", "check", &default_effective()));
@@ -750,7 +800,7 @@ rule check: event in past 7 days"#;
 #[test]
 fn m2_past_outside() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-02-15
 rule check: event in past 7 days"#;
     assert!(!eval_bool(code, "test", "check", &default_effective()));
@@ -759,7 +809,7 @@ rule check: event in past 7 days"#;
 #[test]
 fn m3_future_containment() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-20
 rule check: event in future 30 days"#;
     assert!(eval_bool(code, "test", "check", &default_effective()));
@@ -768,7 +818,7 @@ rule check: event in future 30 days"#;
 #[test]
 fn m4_past_as_standalone_rule() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-05
 rule window: past 7 days
 rule check: event in window"#;
@@ -789,8 +839,9 @@ rule check: event in window"#;
 #[test]
 fn m6_past_calendar() {
     let code = r#"spec test
+uses lemma units
 data event: 2026-02-15
-rule check: event in past 3 months"#;
+rule check: event in past 3 month"#;
     assert!(eval_bool(code, "test", "check", &default_effective()));
 }
 
@@ -802,15 +853,15 @@ rule check: event in past 3 months"#;
 fn n1_date_minus_date_rejected() {
     let code = r#"spec test
 rule range: 2024-06-15 - 2024-01-01"#;
-    expect_plan_error(code, "...");
+    expect_plan_error(code, "date range");
 }
 
 #[test]
 fn n2_with_conversion_rejected() {
     let code = r#"spec test
 data dob: 2000-01-01
-rule age: (now - dob) as years"#;
-    expect_plan_error(code, "Cannot convert");
+rule age: (now - dob) as number"#;
+    expect_plan_error(code, "date range");
 }
 
 #[test]
@@ -819,7 +870,7 @@ fn n3_indirect_rejected() {
 data d1: date
 data d2: date
 rule range: d1 - d2"#;
-    expect_plan_error(code, "...");
+    expect_plan_error(code, "date range");
 }
 
 // =============================================================================
@@ -829,10 +880,10 @@ rule range: d1 - d2"#;
 #[test]
 fn date_range_can_cross_march_first_boundary() {
     let code = r#"spec test
-uses lemma si
-rule span: 2024-02-28...2024-03-01 as days"#;
+uses lemma units
+rule span: 2024-02-28...2024-03-01 as days as number"#;
     let val = eval_rule(code, "test", "span");
-    assert_contains_all(&val, &["2", "day"]);
+    assert_contains_all(&val, &["2"]);
 }
 
 #[test]
@@ -852,7 +903,7 @@ rule check: 2024-02-29 in 2024-02-28...2024-03-01"#;
 #[test]
 fn past_range_is_window_relative_to_effective_time() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-02-28T12:00:00Z
 rule check: event in past 7 days"#;
     let val = eval_bool(code, "test", "check", &effective(2026, 3, 7, 12, 0, 0));
@@ -862,7 +913,7 @@ rule check: event in past 7 days"#;
 #[test]
 fn future_range_is_window_relative_to_effective_time() {
     let code = r#"spec test
-uses lemma si
+uses lemma units
 data event: 2026-03-14T11:00:00Z
 rule check: event in future 7 days"#;
     let val = eval_bool(code, "test", "check", &effective(2026, 3, 7, 12, 0, 0));
@@ -872,8 +923,9 @@ rule check: event in future 7 days"#;
 #[test]
 fn candrive_pattern_reads_cleanly_with_now() {
     let code = r#"spec test
+uses lemma units
 data dob: 2012-03-07
-rule candrive: dob...now >= 16 years"#;
+rule candrive: dob...now >= 16 year"#;
     let val = eval_bool(code, "test", "candrive", &effective(2026, 3, 7, 12, 0, 0));
     assert!(!val);
 }
@@ -881,8 +933,9 @@ rule candrive: dob...now >= 16 years"#;
 #[test]
 fn readable_shifted_range_expression() {
     let code = r#"spec test
+uses lemma units
 data dob: 2000-01-01
-rule older: (dob + 12 years)...now as years"#;
+rule older: (dob + 12 year)...now as year as number"#;
     let val = eval_rule_with_effective(code, "test", "older", &effective(2026, 1, 1, 0, 0, 0));
-    assert_contains_all(&val, &["14", "year"]);
+    assert_contains_all(&val, &["14"]);
 }

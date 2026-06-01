@@ -4,17 +4,8 @@ use crate::computation::rational::RationalInteger;
 use crate::computation::UnitResolutionContext;
 use crate::evaluation::OperationResult;
 use crate::planning::semantics::{
-    primitive_boolean, ComparisonComputation, LemmaType, LiteralValue, ValueKind,
+    primitive_boolean_arc, ComparisonComputation, LiteralValue, ValueKind,
 };
-
-fn quantity_magnitude_in_canonical(
-    magnitude: RationalInteger,
-    unit_name: &str,
-    lemma_type: &LemmaType,
-) -> RationalInteger {
-    super::arithmetic::quantity_canonical_magnitude_rational(magnitude, unit_name, lemma_type)
-        .expect("BUG: quantity canonical conversion failed after planning")
-}
 
 /// Perform type-aware comparison, returning OperationResult (Veto on error)
 pub fn comparison_operation(
@@ -25,8 +16,8 @@ pub fn comparison_operation(
 ) -> OperationResult {
     let _ = unit_context;
     match (&left.value, &right.value) {
-        (ValueKind::Range(range_left, range_right), ValueKind::Calendar(_, calendar_unit))
-            if left.lemma_type.is_date_range() =>
+        (ValueKind::Range(range_left, range_right), ValueKind::Quantity(_, sig))
+            if left.lemma_type.is_date_range() && right.lemma_type.is_calendar_like() =>
         {
             let (ValueKind::Date(left_date), ValueKind::Date(right_date)) =
                 (&range_left.value, &range_right.value)
@@ -35,13 +26,19 @@ pub fn comparison_operation(
                     "BUG: date range calendar comparison received non-date endpoints; planning should have rejected this"
                 );
             };
-            let measure =
-                super::datetime::compute_date_calendar_difference(left_date, right_date, calendar_unit);
+            let calendar_unit =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
+            let measure = super::datetime::compute_date_calendar_difference(
+                left_date,
+                right_date,
+                &calendar_unit,
+                right.lemma_type.clone(),
+            );
             compare_with_operation_result(measure, op, right)
         }
 
-        (ValueKind::Calendar(_, calendar_unit), ValueKind::Range(range_left, range_right))
-            if right.lemma_type.is_date_range() =>
+        (ValueKind::Quantity(_, sig), ValueKind::Range(range_left, range_right))
+            if right.lemma_type.is_date_range() && left.lemma_type.is_calendar_like() =>
         {
             let (ValueKind::Date(left_date), ValueKind::Date(right_date)) =
                 (&range_left.value, &range_right.value)
@@ -50,8 +47,14 @@ pub fn comparison_operation(
                     "BUG: date range calendar comparison received non-date endpoints; planning should have rejected this"
                 );
             };
-            let measure =
-                super::datetime::compute_date_calendar_difference(left_date, right_date, calendar_unit);
+            let calendar_unit =
+                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
+            let measure = super::datetime::compute_date_calendar_difference(
+                left_date,
+                right_date,
+                &calendar_unit,
+                left.lemma_type.clone(),
+            );
             compare_with_right_result(left, op, measure)
         }
 
@@ -72,7 +75,7 @@ pub fn comparison_operation(
             ComparisonComputation::IsNot => {
                 OperationResult::Value(Box::new(LiteralValue {
                     value: ValueKind::Boolean(l != r),
-                    lemma_type: primitive_boolean().clone(),
+                    lemma_type: primitive_boolean_arc().clone(),
                 }))
             }
             _ => unreachable!(
@@ -88,7 +91,7 @@ pub fn comparison_operation(
             ComparisonComputation::IsNot => {
                 OperationResult::Value(Box::new(LiteralValue {
                     value: ValueKind::Boolean(l != r),
-                    lemma_type: primitive_boolean().clone(),
+                    lemma_type: primitive_boolean_arc().clone(),
                 }))
             }
             _ => unreachable!(
@@ -100,58 +103,70 @@ pub fn comparison_operation(
         (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => OperationResult::Value(Box::new(
             LiteralValue::from_bool(compare_stored_rationals(l, op, r)),
         )),
-        (ValueKind::Quantity(l, lu, _l_decomp), ValueKind::Quantity(r, ru, _r_decomp)) => {
+        (ValueKind::Quantity(left_value, _), ValueKind::Quantity(right_value, _))
+            if left.lemma_type.is_calendar_like() && right.lemma_type.is_calendar_like() =>
+        {
+            OperationResult::Value(Box::new(LiteralValue::from_bool(
+                compare_stored_rationals(left_value, op, right_value),
+            )))
+        }
+
+        (ValueKind::Quantity(l, _), ValueKind::Quantity(r, _)) => {
+            let l_decomp = left
+                .lemma_type
+                .quantity_type_decomposition()
+                .expect("BUG: decomposition must be resolved after planning");
+            let r_decomp = right
+                .lemma_type
+                .quantity_type_decomposition()
+                .expect("BUG: decomposition must be resolved after planning");
+            let same_decomp = l_decomp == r_decomp;
             if !left.lemma_type.same_quantity_family(&right.lemma_type)
                 && !left.lemma_type.compatible_with_anonymous_quantity(&right.lemma_type)
+                && !same_decomp
             {
                 unreachable!(
-                    "BUG: compared different quantity families ({} vs {}); this should be rejected during planning",
+                    "BUG: compared incompatible quantity types ({} vs {}); planning must reject this",
                     left.lemma_type.name(),
                     right.lemma_type.name()
                 );
             }
-
-            let left_canonical = quantity_magnitude_in_canonical(*l, lu, &left.lemma_type);
-            let right_canonical = quantity_magnitude_in_canonical(*r, ru, &right.lemma_type);
             OperationResult::Value(Box::new(LiteralValue::from_bool(
-                compare_stored_rationals(&left_canonical, op, &right_canonical),
+                compare_stored_rationals(l, op, r),
             )))
         }
 
         (ValueKind::Date(_), ValueKind::Date(_)) => super::datetime::datetime_comparison(left, op, right),
         (ValueKind::Time(_), ValueKind::Time(_)) => super::datetime::time_comparison(left, op, right),
 
-        (ValueKind::Calendar(left_value, left_unit), ValueKind::Calendar(right_value, right_unit)) => {
-            let right_cmp = if left_unit == right_unit {
-                *right_value
-            } else {
-                super::units::convert_calendar_magnitude(*right_value, right_unit, left_unit)
-            };
-            OperationResult::Value(Box::new(LiteralValue::from_bool(
-                compare_stored_rationals(left_value, op, &right_cmp),
-            )))
-        }
-
-        (ValueKind::Quantity(value, _, _), ValueKind::Number(n))
+        (ValueKind::Quantity(value, _), ValueKind::Number(n))
             if left.lemma_type.is_duration_like_quantity() =>
         {
             OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
                 value, op, n,
             ))))
         }
-        (ValueKind::Number(n), ValueKind::Quantity(value, _, _))
+        (ValueKind::Number(n), ValueKind::Quantity(value, _))
             if right.lemma_type.is_duration_like_quantity() =>
         {
             OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
                 n, op, value,
             ))))
         }
-        (ValueKind::Calendar(value, _), ValueKind::Number(n)) => OperationResult::Value(Box::new(
-            LiteralValue::from_bool(compare_stored_rationals(value, op, n)),
-        )),
-        (ValueKind::Number(n), ValueKind::Calendar(value, _)) => OperationResult::Value(Box::new(
-            LiteralValue::from_bool(compare_stored_rationals(n, op, value)),
-        )),
+        (ValueKind::Quantity(value, _), ValueKind::Number(n))
+            if left.lemma_type.is_calendar_like() =>
+        {
+            OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
+                value, op, n,
+            ))))
+        }
+        (ValueKind::Number(n), ValueKind::Quantity(value, _))
+            if right.lemma_type.is_calendar_like() =>
+        {
+            OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
+                n, op, value,
+            ))))
+        }
 
         _ => unreachable!(
             "BUG: unsupported comparison during evaluation: {} {} {}",

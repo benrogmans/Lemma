@@ -2,7 +2,7 @@
 //!
 //! Ensures all example files in cli/tests/integrations/examples/ are valid and can be evaluated
 
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -64,36 +64,33 @@ fn test_02_rules_and_unless() {
     data.insert("customer_age".to_string(), "17".to_string());
 
     let response = engine
-        .run(
-            None,
-            "rules_and_unless",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "rules_and_unless", Some(&now), data, true)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rules_and_unless");
 
     let final_total = response.results.get("final_total").unwrap();
-    match &final_total.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                decimal_lit("800")
-            ),
-            other => panic!("Expected Number for final_total, got {:?}", other),
-        },
-        other => panic!("Expected Value for final_total, got {:?}", other),
+    assert!(!final_total.vetoed);
+    let lit = final_total
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            decimal_lit("800")
+        ),
+        other => panic!("Expected Number for final_total, got {:?}", other),
     }
 
     let age_validation = response.results.get("age_validation").unwrap();
+    assert!(age_validation.vetoed);
     assert_eq!(
-        age_validation.result,
-        lemma::OperationResult::Veto(lemma::VetoType::UserDefined {
-            message: Some("Customer must be 18 or older".to_string()),
-        })
+        age_validation.veto_reason.as_deref(),
+        Some("Customer must be 18 or older")
     );
 }
 
@@ -104,37 +101,29 @@ fn test_03_spec_references() {
 
     // specific_employee (references base_employee)
     let response = engine
-        .run(
-            None,
-            "specific_employee",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "specific_employee", Some(&now), HashMap::new(), true)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "specific_employee");
     let salary_with_bonus = response.results.get("salary_with_bonus").unwrap();
-    match &salary_with_bonus.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Number(n) => assert_eq!(
-                lemma::commit_rational_to_decimal(n).unwrap(),
-                decimal_lit("99000")
-            ),
-            other => panic!("Expected Number for salary_with_bonus, got {:?}", other),
-        },
-        other => panic!("Expected Value for salary_with_bonus, got {:?}", other),
+    assert!(!salary_with_bonus.vetoed);
+    let lit = salary_with_bonus
+        .trace
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .expect("value");
+    match &lit.value {
+        lemma::ValueKind::Number(n) => assert_eq!(
+            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            decimal_lit("99000")
+        ),
+        other => panic!("Expected Number for salary_with_bonus, got {:?}", other),
     }
 
     let employee_summary = response.results.get("employee_summary").unwrap();
-    match &employee_summary.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Text(s) => assert_eq!(s, "Alice Smith"),
-            other => panic!("Expected Text for employee_summary, got {:?}", other),
-        },
-        other => panic!("Expected Value for employee_summary, got {:?}", other),
-    }
+    assert_eq!(employee_summary.text.as_deref(), Some("Alice Smith"));
 }
 
 #[test]
@@ -144,51 +133,36 @@ fn test_04_unit_conversions() {
 
     // Spec has all data defined, no type annotations needed
     let response = engine
-        .run(
-            None,
-            "unit_conversions",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "unit_conversions", Some(&now), HashMap::new(), true)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "unit_conversions");
 
     let duration_hours = response.results.get("duration_hours").unwrap();
-    match &duration_hours.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Quantity(v, unit, _) => {
-                assert_eq!(
-                    lemma::commit_rational_to_decimal(v).unwrap(),
-                    decimal_lit("1.5")
-                );
-                assert!(unit.eq_ignore_ascii_case("hours"), "unit={unit:?}");
-            }
-            other => panic!("Expected Quantity for duration_hours, got {:?}", other),
-        },
-        other => panic!("Expected Value for duration_hours, got {:?}", other),
-    }
+    assert!(!duration_hours.vetoed);
+    assert_eq!(
+        duration_hours
+            .quantity
+            .as_ref()
+            .and_then(|m| m.get("hours"))
+            .map(String::as_str),
+        Some("1.5")
+    );
 
     let duration_seconds = response.results.get("duration_seconds").unwrap();
-    match &duration_seconds.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Quantity(v, unit, _) => {
-                assert_eq!(
-                    lemma::commit_rational_to_decimal(v).unwrap(),
-                    decimal_lit("5400")
-                );
-                assert!(unit.eq_ignore_ascii_case("seconds"), "unit={unit:?}");
-            }
-            other => panic!("Expected Quantity for duration_seconds, got {:?}", other),
-        },
-        other => panic!("Expected Value for duration_seconds, got {:?}", other),
-    }
+    assert!(!duration_seconds.vetoed);
+    assert_eq!(
+        duration_seconds
+            .quantity
+            .as_ref()
+            .and_then(|m| m.get("seconds"))
+            .map(String::as_str),
+        Some("5400")
+    );
 
     let is_quick_processing = response.results.get("is_quick_processing").unwrap();
     assert_eq!(
-        is_quick_processing.result.value().unwrap().to_string(),
+        is_quick_processing.display.clone().expect("display"),
         lemma::LiteralValue::from_bool(true).to_string(),
     );
 }
@@ -202,35 +176,21 @@ fn test_05_date_handling() {
     data.insert("current_date".to_string(), "2024-06-15".to_string());
 
     let response = engine
-        .run(
-            None,
-            "date_handling",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "date_handling", Some(&now), data, false)
         .expect("Evaluation failed");
 
     // Spec evaluates successfully
     assert_eq!(response.spec_name, "date_handling");
 
     let probation_end = response.results.get("probation_end_date").unwrap();
-    match &probation_end.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Date(date) => {
-                assert_eq!(date.year, 2024);
-                assert_eq!(date.month, 5);
-                assert_eq!(date.day, 30);
-            }
-            other => panic!("Expected Date for probation_end_date, got {:?}", other),
-        },
-        other => panic!("Expected Value for probation_end_date, got {:?}", other),
-    }
+    let date = probation_end.date.as_ref().expect("date");
+    assert_eq!(date.year, 2024);
+    assert_eq!(date.month, 5);
+    assert_eq!(date.day, 30);
 
     let is_probation_complete = response.results.get("is_probation_complete").unwrap();
     assert_eq!(
-        is_probation_complete.result.value().unwrap().to_string(),
+        is_probation_complete.display.clone().expect("display"),
         lemma::LiteralValue::from_bool(true).to_string(),
     );
 }
@@ -242,67 +202,35 @@ fn test_08_rule_references() {
 
     // Test examples/rule_references spec
     let response = engine
-        .run(
-            None,
-            "rule_references",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "rule_references", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rule_references");
     assert_eq!(
-        response
-            .results
-            .get("can_drive_legally")
-            .unwrap()
-            .result
-            .value()
-            .unwrap()
-            .to_string(),
-        lemma::LiteralValue::from_bool(true).to_string(),
+        response.results.get("can_drive_legally").unwrap().boolean,
+        Some(true)
     );
 
     let driving_status = response.results.get("driving_status").unwrap();
-    match &driving_status.result {
-        lemma::OperationResult::Value(lit) => match &lit.value {
-            lemma::ValueKind::Text(s) => assert_eq!(s, "Can drive legally"),
-            other => panic!("Expected Text for driving_status, got {:?}", other),
-        },
-        other => panic!("Expected Value for driving_status, got {:?}", other),
-    }
+    assert_eq!(driving_status.text.as_deref(), Some("Can drive legally"));
 
     // Test examples/eligibility_check spec (also in the same file)
     let response = engine
-        .run(
-            None,
-            "eligibility_check",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "eligibility_check", Some(&now), HashMap::new(), false)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "eligibility_check");
+    let can_travel = response.results.get("can_travel_internationally").unwrap();
+    assert!(can_travel.vetoed);
     assert_eq!(
-        response
-            .results
-            .get("can_travel_internationally")
-            .unwrap()
-            .result,
-        lemma::OperationResult::Veto(lemma::VetoType::UserDefined {
-            message: Some("Valid travel documents required".to_string()),
-        })
+        can_travel.veto_reason.as_deref(),
+        Some("Valid travel documents required")
     );
 
     let eligibility_message = response.results.get("eligibility_message").unwrap();
+    assert!(eligibility_message.vetoed);
     assert_eq!(
-        eligibility_message.result,
-        lemma::OperationResult::Veto(lemma::VetoType::UserDefined {
-            message: Some("Valid travel documents required".to_string()),
-        })
+        eligibility_message.veto_reason.as_deref(),
+        Some("Valid travel documents required")
     );
 }

@@ -1,8 +1,7 @@
-//! QA coverage for nested LHS paths (`fill outer.inner: ...` for values; `data` for slot defs) — the binding
+//! QA coverage for nested LHS paths (`with outer.inner: ...` for values; `data` for slot defs) — the binding
 //! mechanism used to push values into child specs via `with` references.
 
-use lemma::evaluation::OperationResult;
-use lemma::parsing::ast::DateTimeValue;
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -39,14 +38,15 @@ fn load_err_joined(engine: &mut Engine, code: &str) -> String {
         .join("\n")
 }
 
-fn rule_value(result: &lemma::evaluation::Response, name: &str) -> String {
+fn rule_value(result: &lemma::Response, name: &str) -> String {
     let rr = result
         .results
         .get(name)
         .unwrap_or_else(|| panic!("rule '{}' not found", name));
-    match &rr.result {
-        OperationResult::Value(v) => v.to_string(),
-        OperationResult::Veto(v) => format!("VETO({})", v),
+    if rr.vetoed {
+        format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"))
+    } else {
+        rr.display.clone().expect("display")
     }
 }
 
@@ -60,21 +60,14 @@ data x: number
 
 spec outer
 uses i: inner
-fill i.x: 42
+with i.x: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -90,21 +83,14 @@ uses l: leaf
 
 spec outer
 uses m: middle
-fill m.l.v: 7
+with m.l.v: 7
 rule r: m.l.v
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            HashMap::new(),
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), HashMap::new(), false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "7");
 }
@@ -116,7 +102,7 @@ fn binding_where_first_segment_is_not_spec_ref_is_rejected() {
     let code = r#"
 spec s
 data x: number -> default 1
-fill x.y: 42
+with x.y: 42
 rule r: x
 "#;
     let mut engine = Engine::new();
@@ -135,7 +121,7 @@ data x: number
 
 spec outer
 uses i: inner
-fill i.nonexistent: 42
+with i.nonexistent: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -156,8 +142,8 @@ data x: number
 
 spec outer
 uses i: inner
-fill i.x: 1
-fill i.x: 2
+with i.x: 1
+with i.x: 2
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -189,14 +175,14 @@ rule r: i.x
         joined.contains("literal value")
             || joined.contains("data definition")
             || joined.contains("Binding paths")
-            || joined.contains("`fill`"),
+            || joined.contains("`with`"),
         "binding with schema definition RHS must be rejected, got: {joined}"
     );
 }
 
 #[test]
 fn binding_rhs_as_spec_reference_is_rejected() {
-    // `fill i.x: spec …` cannot use `spec` as the start of a reference (structural keyword).
+    // `with i.x: spec …` cannot use `spec` as the start of a reference (structural keyword).
     let code = r#"
 spec other
 data y: number -> default 1
@@ -207,14 +193,14 @@ data x: number
 spec outer
 uses i: inner
 uses o: other
-fill i.x: spec other
+with i.x: spec other
 rule r: i.x
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
         joined.contains("spec") && joined.contains("Expected a reference"),
-        "fill RHS `spec` token must not parse as a value reference, got: {joined}"
+        "with RHS `spec` token must not parse as a value reference, got: {joined}"
     );
 }
 
@@ -228,7 +214,7 @@ data x: number
 
 spec outer
 uses i: inner
-fill i.x: 42
+with i.x: 42
 rule r: i.x
 "#;
     let mut engine = Engine::new();
@@ -237,14 +223,7 @@ rule r: i.x
     data.insert("i.x".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(
         rule_value(&resp, "r"),
@@ -264,7 +243,7 @@ uses l: leaf
 
 spec outer
 uses m: middle
-fill m.l.v: 5
+with m.l.v: 5
 rule r: m.l.v
 "#;
     let mut engine = Engine::new();
@@ -273,14 +252,7 @@ rule r: m.l.v
     data.insert("m.l.v".to_string(), "123".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "outer",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "outer", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "123");
 }
@@ -300,14 +272,7 @@ rule r: x
     data.insert("X".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(
-            None,
-            "s",
-            Some(&now),
-            data,
-            false,
-            lemma::EvaluationRequest::default(),
-        )
+        .run(None, "s", Some(&now), data, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }

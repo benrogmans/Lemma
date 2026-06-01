@@ -81,7 +81,7 @@ rule discount: 0
 | `Lemma.new/1` | Create engine (optional limits map) |
 | `Lemma.load/3` | Load spec from string |
 | `Lemma.load_from_paths/2` | Load specs from file paths |
-| `Lemma.list/1` | List loaded specs (includes embedded `lemma` / `spec si`) |
+| `Lemma.list/1` | List loaded specs (includes embedded `lemma` / `spec units`) |
 | `Lemma.format_repository/2` | Formatted Lemma source for a repository (e.g. `"lemma"`) |
 | `Lemma.schema/3` | Get spec schema (data, rules, types) |
 | `Lemma.run/3` | Evaluate a spec with data |
