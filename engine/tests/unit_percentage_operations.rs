@@ -34,7 +34,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .expect("run should succeed after load");
 
     // Check discount rule result
@@ -45,7 +45,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
         .expect("discount rule not found");
 
     let lit = discount_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -70,7 +70,7 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
         .expect("price rule not found");
 
     let lit = price_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -79,7 +79,9 @@ fn test_unit_subtract_percentage() -> Result<(), lemma::Errors> {
     {
         if let lemma::ValueKind::Number(n) = &lit.value {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("180")
             );
         } else {
@@ -108,7 +110,14 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "tax_calculation", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "tax_calculation",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("run should succeed after load");
 
     let result = response
@@ -118,7 +127,7 @@ fn test_unit_add_percentage() -> Result<(), lemma::Errors> {
         .expect("price_with_tax rule not found");
 
     let lit = result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -168,6 +177,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
             Some(&now),
             HashMap::new(),
             true,
+            None,
         )
         .expect("run should succeed after load");
 
@@ -179,7 +189,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
         .expect("increased rule not found");
 
     let lit = increased_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -204,7 +214,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
         .expect("decreased rule not found");
 
     let lit = decreased_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -232,7 +242,7 @@ fn test_various_unit_percentage_operations() -> Result<(), lemma::Errors> {
         .expect("scaled rule not found");
 
     let lit = scaled_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -277,7 +287,14 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "complex_pricing", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "complex_pricing",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("run should succeed after load");
 
     // Check after_bulk (1000 - 15% = 850)
@@ -288,7 +305,7 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
         .expect("after_bulk rule not found");
 
     let lit = after_bulk_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -316,7 +333,7 @@ fn test_complex_discount_scenario() -> Result<(), lemma::Errors> {
         .expect("final_price rule not found");
 
     let lit = final_price_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -364,7 +381,14 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "percentage_ops", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "percentage_ops",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("run should succeed after load");
 
     // Check combined_discount (5% + 10% = 15%)
@@ -375,7 +399,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .expect("combined_discount rule not found");
 
     let lit = combined_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -407,7 +431,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .expect("net_rate rule not found");
 
     let lit = net_rate_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -439,7 +463,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .expect("compound rule not found");
 
     let lit = compound_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -471,7 +495,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         .expect("ratio rule not found");
 
     let lit = ratio_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -482,7 +506,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         match &lit.value {
             lemma::ValueKind::Ratio(rational_val, unit) => {
                 assert_eq!(
-                    lemma::ValueKind::Number(*rational_val)
+                    lemma::ValueKind::Number(rational_val.clone())
                         .as_decimal_magnitude()
                         .unwrap(),
                     decimal_lit("4")

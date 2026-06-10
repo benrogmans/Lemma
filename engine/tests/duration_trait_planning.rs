@@ -46,7 +46,7 @@ fn eval_rule_quantity_unit(
     engine.load(code, source()).expect("Should parse and plan");
     let now = lemma::DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
         .expect("Should evaluate");
     response
         .results
@@ -71,6 +71,7 @@ fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String 
             Some(&now),
             std::collections::HashMap::new(),
             false,
+            None,
         )
         .expect("Should evaluate");
     response

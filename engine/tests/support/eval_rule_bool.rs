@@ -10,7 +10,14 @@ pub fn eval_rule_bool(
     data: HashMap<String, String>,
 ) -> bool {
     let response = engine
-        .run(None, spec_name, Some(effective), data, false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            data,
+            false,
+            Some(&[rule.to_string()]),
+        )
         .expect("run");
     let rule_result = response.get(rule).unwrap_or_else(|_| panic!("rule {rule}"));
     if rule_result.vetoed {

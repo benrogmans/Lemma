@@ -1,7 +1,7 @@
 //! Adversarial: qualified parent types under `uses` must resolve the dependency
 //! spec at the same instant as the rest of that parent's body (not only the root slice).
 
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 fn date(y: i32, m: u32, d: u32) -> DateTimeValue {
@@ -14,6 +14,7 @@ fn date(y: i32, m: u32, d: u32) -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
@@ -58,7 +59,14 @@ rule out: d.val
         .expect("planning must resolve money type with usd when dep is pinned to 2025-07");
 
     let r = engine
-        .run(None, "app", Some(&date(2025, 3, 1)), HashMap::new(), false)
+        .run(
+            None,
+            "app",
+            Some(&date(2025, 3, 1)),
+            HashMap::new(),
+            false,
+            None,
+        )
         .expect("run");
     assert_rule_value(&r, "out", "1.00 usd");
 }

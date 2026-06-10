@@ -2,7 +2,7 @@
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
-use lemma::{DateTimeValue, Engine, LiteralValue, ValueKind};
+use lemma::{DateGranularity, DateTimeValue, Engine, LiteralValue, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -18,12 +18,21 @@ fn get_rule_value(
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
-    let response = engine.run(None, spec_name, Some(&now), data, true).unwrap();
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&now),
+            data,
+            true,
+            Some(&[rule_name.to_string()]),
+        )
+        .unwrap();
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found in {}", rule_name, spec_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -42,7 +51,7 @@ fn load_specs_folder_examples() -> Engine {
         "../documentation/examples/03_recipe_scaling.lemma",
         "../documentation/examples/04_membership_benefits.lemma",
         "../documentation/examples/05_weather_clothing.lemma",
-        "../documentation/examples/06_dutch_net_salary.lemma",
+        "../documentation/examples/nl/tax/net_salary.lemma",
     ];
 
     for path in examples {
@@ -89,7 +98,7 @@ fn test_01_coffee_order() {
     match &total.value {
         ValueKind::Quantity(n, signature) => {
             assert_eq!(
-                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("6.72")
             );
             assert_eq!(
@@ -114,7 +123,7 @@ fn test_02_library_fees() {
     match &final_fee.value {
         ValueKind::Quantity(n, signature) => {
             assert_eq!(
-                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("1.25")
             );
             assert_eq!(
@@ -148,7 +157,7 @@ fn test_03_recipe_scaling() {
     match &baking_time.value {
         ValueKind::Quantity(n, signature) => {
             assert_eq!(
-                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("2400")
             );
             assert_eq!(
@@ -163,7 +172,7 @@ fn test_03_recipe_scaling() {
     match &oven_temp.value {
         ValueKind::Quantity(n, signature) => {
             assert_eq!(
-                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("175")
             );
             assert_eq!(
@@ -242,7 +251,7 @@ fn test_05_weather_clothing() {
 }
 
 #[test]
-fn test_06_dutch_net_salary() {
+fn test_nl_tax_net_salary() {
     let engine = load_specs_folder_examples();
 
     let effective = DateTimeValue {
@@ -254,14 +263,15 @@ fn test_06_dutch_net_salary() {
         second: 0,
         microsecond: 0,
         timezone: None,
+
+        granularity: DateGranularity::DateTime,
     };
 
     let mut data = HashMap::new();
     data.insert("gross_salary".to_string(), "5000 eur".to_string());
     data.insert("pay_period".to_string(), "month".to_string());
-
     let response = engine
-        .run(None, "net_salary", Some(&effective), data, false)
+        .run(None, "net_salary", Some(&effective), data, true, None)
         .expect("net_salary run");
 
     let net = response

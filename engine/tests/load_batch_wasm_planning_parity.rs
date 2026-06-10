@@ -6,7 +6,7 @@
 //! `WasmEngine::schema` defaulting effective to [`DateTimeValue::now`]) and cross-load patterns
 //! that stress type resolution after a dependency batch.
 
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -26,6 +26,8 @@ fn wasm_style_instants() -> [DateTimeValue; 4] {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         },
         DateTimeValue {
             year: 2024,
@@ -36,6 +38,8 @@ fn wasm_style_instants() -> [DateTimeValue; 4] {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         },
         DateTimeValue {
             year: 2020,
@@ -46,6 +50,8 @@ fn wasm_style_instants() -> [DateTimeValue; 4] {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::DateTime,
         },
     ]
 }
@@ -73,7 +79,7 @@ rule total: F.money
         let plan = engine
             .get_plan(Some("@lemma/std"), "cashier", Some(&instant))
             .expect("get_plan(Some(dep), cashier) mirrors wasm.schema with repository set");
-        let _ = plan.schema();
+        let _ = plan.schema(&lemma::DataOverlay::default());
 
         engine
             .schema(Some("@lemma/std"), "cashier", Some(&instant))
@@ -117,7 +123,7 @@ rule tally: drawer
         let plan = engine.get_plan(None, "kiosk", Some(&instant));
         match plan {
             Ok(p) => {
-                let _ = p.schema();
+                let _ = p.schema(&lemma::DataOverlay::default());
                 let _ = engine.schema(None, "kiosk", Some(&instant));
             }
             Err(e) => {

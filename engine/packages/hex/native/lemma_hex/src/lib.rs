@@ -5,7 +5,7 @@ mod error_encoding;
 use error_encoding::encode_error;
 use lemma::{
     collect_lemma_sources, DateTimeValue, Engine, ExecutionPlanSerialized, LemmaRepository,
-    LiteralValue, OperationResult, ResourceLimits, SourceType, Target, TargetOp,
+    ResourceLimits, SourceType,
 };
 use rustler::types::atom;
 use rustler::types::MapIterator;
@@ -13,7 +13,6 @@ use rustler::{Encoder, Env, NifResult, OwnedBinary, Resource, ResourceArc, Term}
 use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::sync::Mutex;
 
 pub struct LemmaEngineResource(pub Mutex<Engine>);
@@ -219,12 +218,13 @@ fn lemma_list<'a>(env: Env<'a>, resource: ResourceArc<LemmaEngineResource>) -> N
                         ))))
                     }
                 };
-                let schema_json = serde_json::to_vec(&plan.schema()).map_err(|e| {
-                    rustler::Error::RaiseTerm(Box::new(format!(
-                        "Schema serialization failed: {}",
-                        e
-                    )))
-                })?;
+                let schema_json = serde_json::to_vec(&plan.schema(&lemma::DataOverlay::default()))
+                    .map_err(|e| {
+                        rustler::Error::RaiseTerm(Box::new(format!(
+                            "Schema serialization failed: {}",
+                            e
+                        )))
+                    })?;
                 let mut schema_bin = OwnedBinary::new(schema_json.len()).ok_or_else(|| {
                     rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
                 })?;
@@ -353,55 +353,21 @@ fn lemma_run<'a>(
         })?),
         None => None,
     };
-    let values = map_term_to_data_values(data_values)?;
-    match engine.run(None, &spec, effective, values, false) {
+    let values: HashMap<String, lemma::DataValueInput> = map_term_to_data_values(data_values)?
+        .into_iter()
+        .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
+        .collect();
+    let plan = match engine.get_plan(None, &spec, effective) {
+        Ok(plan) => plan,
+        Err(err) => {
+            let term = encode_error(env, &err)?;
+            return Ok((rustler::Atom::from_str(env, "error")?, term).encode(env));
+        }
+    };
+    match engine.run_plan(plan, effective, values, true, None) {
         Ok(response) => {
             let json = serde_json::to_vec(&response).map_err(|e| {
                 rustler::Error::RaiseTerm(Box::new(format!("Response serialization failed: {}", e)))
-            })?;
-            let mut owned = OwnedBinary::new(json.len()).ok_or_else(|| {
-                rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
-            })?;
-            owned.as_mut_slice().copy_from_slice(&json);
-            let binary = rustler::Binary::from_owned(owned, env);
-            Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
-        }
-        Err(err) => {
-            let term = encode_error(env, &err)?;
-            Ok((rustler::Atom::from_str(env, "error")?, term).encode(env))
-        }
-    }
-}
-
-#[rustler::nif]
-fn lemma_invert<'a>(
-    env: Env<'a>,
-    resource: ResourceArc<LemmaEngineResource>,
-    spec_name: String,
-    effective_opt: Option<String>,
-    rule_name: String,
-    target_term: Term<'a>,
-    values: Term<'a>,
-) -> NifResult<Term<'a>> {
-    let engine = resource
-        .0
-        .lock()
-        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
-    let effective = match effective_opt {
-        Some(s) => Some(&s.parse::<DateTimeValue>().map_err(|e| {
-            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
-        })?),
-        None => None,
-    };
-    let data_values = map_term_to_data_values(values)?;
-    let target = decode_target(env, target_term)?;
-    match engine.invert(&spec_name, effective, &rule_name, target, data_values) {
-        Ok(inversion) => {
-            let json = serde_json::to_vec(&inversion).map_err(|e| {
-                rustler::Error::RaiseTerm(Box::new(format!(
-                    "Inversion serialization failed: {}",
-                    e
-                )))
             })?;
             let mut owned = OwnedBinary::new(json.len()).ok_or_else(|| {
                 rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
@@ -647,82 +613,6 @@ fn term_to_string(term: Term) -> Result<String, rustler::Error> {
     Err(rustler::Error::RaiseTerm(Box::new(
         "data value must be a string, integer, float, or atom".to_string(),
     )))
-}
-
-fn get_atom_key<'a>(env: Env<'a>, map: Term<'a>, key: &str) -> Option<Term<'a>> {
-    let atom_key = rustler::Atom::from_str(env, key).ok()?;
-    map.map_get(atom_key.encode(env)).ok()
-}
-
-fn decode_target<'a>(env: Env<'a>, term: Term<'a>) -> Result<Target, rustler::Error> {
-    let outcome_term = get_atom_key(env, term, "outcome").ok_or_else(|| {
-        rustler::Error::RaiseTerm(Box::new("target map requires :outcome key".to_string()))
-    })?;
-    let outcome: String = outcome_term
-        .atom_to_string()
-        .or_else(|_| outcome_term.decode::<String>())
-        .map_err(|_| {
-            rustler::Error::RaiseTerm(Box::new(
-                "target :outcome must be a string or atom".to_string(),
-            ))
-        })?;
-
-    let op_str: String = get_atom_key(env, term, "op")
-        .and_then(|t| t.atom_to_string().or_else(|_| t.decode::<String>()).ok())
-        .unwrap_or_else(|| "eq".to_string());
-
-    let op = match op_str.as_str() {
-        "eq" => TargetOp::Eq,
-        "neq" => TargetOp::Neq,
-        "lt" => TargetOp::Lt,
-        "lte" => TargetOp::Lte,
-        "gt" => TargetOp::Gt,
-        "gte" => TargetOp::Gte,
-        other => {
-            return Err(rustler::Error::RaiseTerm(Box::new(format!(
-                "unknown target op: '{}'",
-                other
-            ))));
-        }
-    };
-
-    match outcome.as_str() {
-        "any_value" => Ok(Target::any_value()),
-        "any_veto" => Ok(Target::any_veto()),
-        "veto" => {
-            let message: Option<String> =
-                get_atom_key(env, term, "message").and_then(|t| t.decode().ok());
-            Ok(Target::veto(message))
-        }
-        "value" => {
-            let value_term = get_atom_key(env, term, "value").ok_or_else(|| {
-                rustler::Error::RaiseTerm(Box::new(
-                    "target with outcome 'value' requires a :value field".to_string(),
-                ))
-            })?;
-            let value_str = term_to_string(value_term)?;
-            let literal = parse_value_string_to_literal(&value_str)?;
-            let result = OperationResult::Value(Box::new(literal));
-            Ok(Target::with_op(op, result))
-        }
-        other => Err(rustler::Error::RaiseTerm(Box::new(format!(
-            "unknown target outcome: '{}' (expected: value, veto, any_value, any_veto)",
-            other
-        )))),
-    }
-}
-
-fn parse_value_string_to_literal(s: &str) -> Result<LiteralValue, rustler::Error> {
-    if let Ok(b) = s.parse::<bool>() {
-        return Ok(LiteralValue::from_bool(b));
-    }
-    if let Ok(d) = rust_decimal::Decimal::from_str(s) {
-        return Ok(LiteralValue::number_from_decimal(d));
-    }
-    if let Ok(dt) = s.parse::<DateTimeValue>() {
-        return Ok(LiteralValue::from_datetime(&dt));
-    }
-    Ok(LiteralValue::text(s.to_string()))
 }
 
 rustler::init!("Elixir.Lemma.Native", load = load);

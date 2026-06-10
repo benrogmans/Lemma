@@ -1,6 +1,18 @@
 use lemma::DataValueInput;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+/// Parse `application/x-www-form-urlencoded` fields into data inputs (all convenience strings).
+pub fn form_urlencoded_to_data_values(
+    body: &[u8],
+) -> Result<HashMap<String, DataValueInput>, String> {
+    let fields: HashMap<String, String> =
+        serde_urlencoded::from_bytes(body).map_err(|e| format!("invalid form body: {e}"))?;
+    Ok(fields
+        .into_iter()
+        .map(|(k, v)| (k, DataValueInput::convenience(v)))
+        .collect())
+}
 
 /// Convert one JSON value to [`DataValueInput`]. Rejects unsupported shapes.
 pub fn json_value_to_data_input(value: Value) -> Result<DataValueInput, String> {
@@ -77,6 +89,32 @@ mod tests {
         let err =
             json_value_to_data_input(Value::Array(vec![Value::String("x".into())])).unwrap_err();
         assert!(err.contains("array"));
+    }
+
+    #[test]
+    fn form_urlencoded_parsed_as_convenience() {
+        let map = form_urlencoded_to_data_values(b"code=AD&qty=3").unwrap();
+        assert_eq!(
+            map.get("code"),
+            Some(&DataValueInput::Convenience("AD".to_string()))
+        );
+        assert_eq!(
+            map.get("qty"),
+            Some(&DataValueInput::Convenience("3".to_string()))
+        );
+    }
+
+    #[test]
+    fn form_urlencoded_decodes_plus_and_percent() {
+        let map = form_urlencoded_to_data_values(b"name=hello+world&city=S%C3%A3o+Paulo").unwrap();
+        assert_eq!(
+            map.get("name"),
+            Some(&DataValueInput::Convenience("hello world".to_string()))
+        );
+        assert_eq!(
+            map.get("city"),
+            Some(&DataValueInput::Convenience("São Paulo".to_string()))
+        );
     }
 
     #[test]

@@ -157,7 +157,10 @@ fn ratio_from_unit_map(
             );
         }
     }
-    Ok(ValueKind::Ratio(*first_canonical, first_unit.clone()))
+    Ok(ValueKind::Ratio(
+        first_canonical.clone(),
+        first_unit.clone(),
+    ))
 }
 
 fn value_kind_tag_for_type(spec: &TypeSpecification) -> &'static str {
@@ -182,7 +185,7 @@ fn value_kind_tag_for_type(spec: &TypeSpecification) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computation::rational::{decimal_to_rational, rational_one};
+    use crate::computation::rational::{decimal_to_rational, rational_new, rational_one};
     use crate::planning::semantics::{
         primitive_number_arc, QuantityUnit, QuantityUnits, RatioUnit, RatioUnits, TypeExtends,
     };
@@ -286,7 +289,7 @@ mod tests {
         let ValueKind::Quantity(magnitude, signature) = &lit.value else {
             panic!("expected quantity");
         };
-        assert_eq!(*magnitude, rational_one() + rational_one());
+        assert_eq!(magnitude, &rational_new(2, 1));
         assert_eq!(signature.len(), 1);
         assert_eq!(signature[0].1, 1);
     }

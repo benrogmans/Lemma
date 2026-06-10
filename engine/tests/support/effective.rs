@@ -1,4 +1,4 @@
-use lemma::{DateTimeValue, TimezoneValue};
+use lemma::{DateGranularity, DateTimeValue, TimezoneValue};
 
 pub fn make_effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTimeValue {
     DateTimeValue {
@@ -13,6 +13,7 @@ pub fn make_effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateT
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -32,5 +33,6 @@ pub fn make_effective_tz(
             offset_hours: tz_h,
             offset_minutes: tz_m,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }

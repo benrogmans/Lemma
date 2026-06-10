@@ -178,30 +178,6 @@ defmodule Lemma do
   end
 
   @doc """
-  Inverts a rule to find input domains that produce a desired outcome.
-
-  `effective` is a datetime string or nil.
-
-  Target is a map with `:outcome` ("value" | "veto" | "any_value" | "any_veto"),
-  optionally `:op` ("eq" | "neq" | "lt" | etc.), and for "value"/"veto": `:value` or `:message`.
-  """
-  @spec invert(engine(), spec_name(), String.t() | nil, String.t(), map(), map()) ::
-          {:ok, map()} | {:error, term()}
-  def invert(engine, spec_name, effective, rule_name, target, values \\ %{}) do
-    case Lemma.Native.lemma_invert(
-           engine,
-           spec_name,
-           effective,
-           rule_name,
-           target,
-           values
-         ) do
-      {:ok, binary} -> {:ok, Jason.decode!(binary)}
-      err -> err
-    end
-  end
-
-  @doc """
   Removes a spec from the engine by name and effective datetime.
   """
   @spec remove_spec(engine(), spec_name(), String.t()) :: :ok | {:error, term()}

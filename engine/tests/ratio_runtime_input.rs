@@ -43,7 +43,7 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, true)
+        .run(None, spec, Some(&now), data, true, None)
         .unwrap_or_else(|e| panic!("run failed for input '{raw}': {e}"));
     let rr = resp
         .results
@@ -55,7 +55,7 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
         rr.veto_reason
     );
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -63,7 +63,9 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
         .expect("value");
     match &lit.value {
         ValueKind::Ratio(n, u) => (
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             u.clone(),
         ),
         other => panic!("input '{raw}' produced non-Ratio: {:?}", other),
@@ -75,7 +77,7 @@ fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, false)
+        .run(None, spec, Some(&now), data, true, None)
         .unwrap_or_else(|e| panic!("run must complete with veto, not Error for '{raw}': {e}"));
     let rr = resp
         .results

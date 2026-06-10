@@ -315,6 +315,8 @@ mod tests {
         Arc::new(LemmaRepository::new(None))
     }
 
+    use crate::literals::DateGranularity;
+
     fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         DateTimeValue {
             year,
@@ -325,6 +327,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: DateGranularity::Full,
         }
     }
 

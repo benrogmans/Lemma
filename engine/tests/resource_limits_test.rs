@@ -145,7 +145,7 @@ fn test_data_value_size_limit() {
     data.insert("name".to_string(), large_string);
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, false);
+    let result = engine.run(None, "test", Some(&now), data, false, None);
 
     match result {
         Err(Error::ResourceLimitExceeded { ref limit_name, .. }) => {
@@ -335,7 +335,7 @@ fn performance_test_10k_rules() {
     let now = DateTimeValue::now();
     let eval_start = Instant::now();
     let resp = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let eval_time = eval_start.elapsed();
 
@@ -430,7 +430,7 @@ fn bench_deep_chains_body() {
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
         let resp = engine
-            .run(None, "chain", Some(&now), HashMap::new(), false)
+            .run(None, "chain", Some(&now), HashMap::new(), false, None)
             .unwrap();
         let eval_time = eval_start.elapsed();
 
@@ -468,7 +468,7 @@ fn bench_deep_chains_body() {
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
         let resp = engine
-            .run(None, "tree", Some(&now), HashMap::new(), false)
+            .run(None, "tree", Some(&now), HashMap::new(), false, None)
             .unwrap();
         let eval_time = eval_start.elapsed();
 

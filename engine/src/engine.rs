@@ -2,7 +2,7 @@ use crate::evaluation::Evaluator;
 use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::parsing::source::SourceType;
 use crate::parsing::EffectiveDate;
-use crate::planning::{DataValueInput, LemmaSpecSet, SpecSchema};
+use crate::planning::{DataOverlay, DataValueInput, LemmaSpecSet, SpecSchema};
 use crate::{parse, Error, ResourceLimits, Response};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -368,6 +368,25 @@ impl Engine {
         &mut self.specs
     }
 
+    /// Resolve an optional effective datetime string for planning or evaluation.
+    ///
+    /// `None` or whitespace-only input resolves to [`DateTimeValue::now`].
+    /// Non-empty invalid strings return a request [`Error`].
+    pub fn resolve_effective(raw: Option<&str>) -> Result<DateTimeValue, Error> {
+        match raw {
+            Some(s) if !s.trim().is_empty() => s.trim().parse::<DateTimeValue>().map_err(|_| {
+                Error::request(
+                    format!(
+                        "Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime",
+                        s.trim()
+                    ),
+                    None::<String>,
+                )
+            }),
+            _ => Ok(DateTimeValue::now()),
+        }
+    }
+
     fn apply_planning_result(&mut self, pr: crate::planning::PlanningResult) {
         self.plan_sets.clear();
         for r in &pr.results {
@@ -592,7 +611,7 @@ impl Engine {
             }
         }
 
-        let planning_result = crate::planning::plan(&self.specs);
+        let planning_result = crate::planning::plan(&self.specs, &self.limits);
         for set_result in &planning_result.results {
             for spec_result in &set_result.slice_results {
                 let ctx = Arc::clone(&spec_result.spec);
@@ -723,12 +742,29 @@ impl Engine {
         spec: &str,
         effective: Option<&DateTimeValue>,
     ) -> Result<SpecSchema, Error> {
-        Ok(self.get_plan(repo, spec, effective)?.schema())
+        Ok(self
+            .get_plan(repo, spec, effective)?
+            .schema(&DataOverlay::default()))
+    }
+
+    /// Return the resource limits configured for this engine.
+    ///
+    /// Exposed so callers can pass the same limits to [`DataOverlay::resolve`].
+    pub fn limits(&self) -> &ResourceLimits {
+        &self.limits
     }
 
     /// Evaluate a spec. When `repo` is `None`, the spec must be unambiguous
     /// across loaded repositories; when `Some`, scoped to that repository
     /// qualifier (e.g. `"@org/pkg"`).
+    ///
+    /// When `explain` is `true`, each requested rule's [`RuleResult::explanation`]
+    /// contains a structural explanation tree; when `false`, explanations are omitted.
+    ///
+    /// `rules` scopes which rule results appear in the response. `None` means all local
+    /// rules. `Some(&[])` is an error. When `explain` is `true`, all local rules (and
+    /// nested `uses` rules needed for explanation resolution) are evaluated so explanation
+    /// trees can embed dependency rules.
     pub fn run(
         &self,
         repo: Option<&str>,
@@ -736,6 +772,7 @@ impl Engine {
         effective: Option<&DateTimeValue>,
         data_values: HashMap<String, String>,
         explain: bool,
+        rules: Option<&[String]>,
     ) -> Result<Response, Error> {
         let effective = self.effective_or_now(effective);
         let plan = self.get_plan(repo, spec, Some(&effective))?;
@@ -743,39 +780,7 @@ impl Engine {
             .into_iter()
             .map(|(k, v)| (k, DataValueInput::convenience(v)))
             .collect();
-        self.run_plan(plan, Some(&effective), data_values, explain, true)
-    }
-
-    /// Invert a rule to find input domains that produce a desired outcome.
-    ///
-    /// Values are provided as name -> value string pairs (e.g., "quantity" -> "5").
-    /// They are automatically parsed to the expected type based on the spec schema.
-    pub fn invert(
-        &self,
-        name: &str,
-        effective: Option<&DateTimeValue>,
-        rule_name: &str,
-        target: crate::inversion::Target,
-        values: HashMap<String, String>,
-    ) -> Result<crate::inversion::InversionResponse, Error> {
-        let effective = self.effective_or_now(effective);
-        let base_plan = self.get_plan(None, name, Some(&effective))?;
-
-        let plan = base_plan.clone().set_data_values(
-            values
-                .into_iter()
-                .map(|(k, v)| (k, DataValueInput::convenience(v)))
-                .collect(),
-            &self.limits,
-        )?;
-        let provided_data: std::collections::HashSet<_> = plan
-            .data
-            .iter()
-            .filter(|(_, d)| d.value().is_some())
-            .map(|(p, _)| p.clone())
-            .collect();
-
-        crate::inversion::invert(rule_name, target, &plan, &provided_data)
+        self.run_plan(plan, Some(&effective), data_values, explain, rules)
     }
 
     /// Execution plan for `name`. When `repo` is `None`, the spec must be
@@ -828,35 +833,42 @@ impl Engine {
         })
     }
 
-    /// Run a plan from [`get_plan`]: apply data values and evaluate all rules.
+    /// Run a plan from [`get_plan`]: apply data values and evaluate rules.
     ///
-    /// When `apply_defaults` is true, `-> default` suggestions on the plan are materialized
-    /// before evaluation ([`ExecutionPlan::with_defaults`]). When false, defaults stay
-    /// suggestions (interactive trial runs).
+    /// Spec-declared defaults (`-> default ...`) are applied by the evaluator when
+    /// the caller does not supply a value for that data path.
     ///
-    /// When `explain` is true, each rule's [`RuleResult::explanation`] will
-    /// contain a compact explanation of data used, rules used, computations, and branch evaluations.
+    /// `rules`: `None` evaluates all local rules in the response; `Some(slice)` evaluates
+    /// only those names (`Some(&[])` errors). Each name in `Some` must be a local rule.
+    ///
+    /// When `explain` is `false`, only the VM scope runs (requested rules, or all local
+    /// when `None`). When `explain` is `true`, all local and nested `uses` rules run so
+    /// explanation trees have full `rule_results`, but only the response scope appears in
+    /// `response.results` and receives attached explanations.
     pub fn run_plan(
         &self,
         plan: &crate::planning::ExecutionPlan,
         effective: Option<&DateTimeValue>,
         data_values: HashMap<String, DataValueInput>,
         explain: bool,
-        apply_defaults: bool,
+        rules: Option<&[String]>,
     ) -> Result<Response, Error> {
+        let response_rules = plan.validated_response_rule_names(rules)?;
         let effective = self.effective_or_now(effective);
-        let mut plan = plan.clone();
-        if apply_defaults {
-            plan = plan.with_defaults();
-        }
-        let plan = plan.set_data_values(data_values, &self.limits)?;
-        crate::planning::execution_plan::validate_unit_index_references(&plan)?;
+        let overlay = DataOverlay::resolve(plan, data_values, &self.limits)?;
+        crate::planning::execution_plan::validate_unit_index_references(plan)?;
         let now_semantic = crate::planning::semantics::date_time_to_semantic(&effective);
         let now_literal = crate::planning::semantics::LiteralValue {
             value: crate::planning::semantics::ValueKind::Date(now_semantic),
             lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
-        Ok(self.evaluator.evaluate(&plan, now_literal, explain))
+        let (mut response, mut context) =
+            self.evaluator
+                .evaluate(plan, &overlay, now_literal, explain, &response_rules);
+        if explain {
+            self.evaluator.explain(&mut response, plan, &mut context);
+        }
+        Ok(response)
     }
 
     pub fn remove(&mut self, name: &str, effective: Option<&DateTimeValue>) -> Result<(), Error> {
@@ -864,7 +876,7 @@ impl Engine {
         let repository_arc = self.specs.workspace();
         let spec_arc = self.get_spec(name, Some(&effective))?;
         self.specs.remove_spec(&repository_arc, &spec_arc);
-        let pr = crate::planning::plan(&self.specs);
+        let pr = crate::planning::plan(&self.specs, &self.limits);
         let planning_errs: Vec<Error> = pr
             .results
             .iter()
@@ -944,6 +956,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: crate::literals::DateGranularity::Full,
         }
     }
 
@@ -1008,6 +1021,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: crate::literals::DateGranularity::Full,
         };
         let jul = DateTimeValue {
             year: 2025,
@@ -1018,6 +1032,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: crate::literals::DateGranularity::Full,
         };
 
         let v1 = DateTimeValue {
@@ -1029,6 +1044,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: crate::literals::DateGranularity::Full,
         };
         let v2 = DateTimeValue {
             year: 2025,
@@ -1039,6 +1055,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: crate::literals::DateGranularity::Full,
         };
 
         let s_jan = engine.get_spec("pricing", Some(&jan)).expect("jan spec");
@@ -1209,7 +1226,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(response.results.len(), 2);
 
@@ -1244,7 +1261,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(response.results.len(), 1);
         assert_eq!(
@@ -1276,7 +1293,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(
             response.results.values().next().unwrap().boolean,
@@ -1301,7 +1318,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(
             response
@@ -1320,7 +1337,7 @@ mod tests {
     fn test_spec_not_found() {
         let engine = Engine::new();
         let now = DateTimeValue::now();
-        let result = engine.run(None, "nonexistent", Some(&now), HashMap::new(), false);
+        let result = engine.run(None, "nonexistent", Some(&now), HashMap::new(), false, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -1352,12 +1369,11 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response1 = engine
-            .run(None, "spec1", Some(&now), HashMap::new(), false)
+            .run(None, "spec1", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(response1.results[0].display.clone().expect("display"), "20");
-
         let response2 = engine
-            .run(None, "spec2", Some(&now), HashMap::new(), false)
+            .run(None, "spec2", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(response2.results[0].display.clone().expect("display"), "15");
     }
@@ -1378,7 +1394,7 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let result = engine.run(None, "test", Some(&now), HashMap::new(), false);
+        let result = engine.run(None, "test", Some(&now), HashMap::new(), false, None);
         // Division by zero returns a Veto (not an error)
         assert!(result.is_ok(), "Evaluation should succeed");
         let response = result.unwrap();
@@ -1422,7 +1438,7 @@ mod tests {
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+            .run(None, "test", Some(&now), HashMap::new(), false, None)
             .unwrap();
         assert_eq!(response.results.len(), 3);
 
@@ -1475,13 +1491,17 @@ mod tests {
             )
             .unwrap();
 
-        // User filters to 'total' after run (deps were still computed)
         let now = DateTimeValue::now();
-        let rules = vec!["total".to_string()];
-        let mut response = engine
-            .run(None, "test", Some(&now), HashMap::new(), false)
+        let response = engine
+            .run(
+                None,
+                "test",
+                Some(&now),
+                HashMap::new(),
+                false,
+                Some(&["total".to_string()]),
+            )
             .unwrap();
-        response.filter_rules(&rules);
 
         assert_eq!(response.results.len(), 1);
         assert_eq!(response.results.keys().next().unwrap(), "total");
@@ -1522,7 +1542,7 @@ rule value: external.quantity"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "main_spec", Some(&now), HashMap::new(), false)
+            .run(None, "main_spec", Some(&now), HashMap::new(), false, None)
             .expect("evaluate should succeed");
 
         let value_result = response
@@ -1576,7 +1596,7 @@ rule doubled: price * 2"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "local_only", Some(&now), HashMap::new(), false)
+            .run(None, "local_only", Some(&now), HashMap::new(), false, None)
             .expect("evaluate should succeed");
 
         let doubled = response.results.get("doubled").expect("doubled rule");
@@ -1643,7 +1663,14 @@ rule formatted: helper_value + 0"#,
 
         let now = DateTimeValue::now();
         let response = engine
-            .run(None, "registry_demo", Some(&now), HashMap::new(), false)
+            .run(
+                None,
+                "registry_demo",
+                Some(&now),
+                HashMap::new(),
+                false,
+                None,
+            )
             .expect("evaluate should succeed");
 
         assert_eq!(
@@ -2016,5 +2043,46 @@ rule total: helper.value + price"#,
         assert!(json.contains("\"name\":\"a\""));
         assert!(json.contains("\"data\""));
         assert!(json.contains("\"rules\""));
+    }
+
+    #[test]
+    fn out_of_memory_during_exact_multiply_vetoes_without_crashing() {
+        use crate::computation::bigint::{test_clear_alloc_fail, test_force_alloc_fail};
+
+        let code = r#"
+spec oom_multiply
+data a: 9999999999999999999999999999
+data b: 9999999999999999999999999999
+rule huge: a * b
+"#;
+
+        let mut engine = Engine::new();
+        engine
+            .load(code, SourceType::Volatile)
+            .expect("load must succeed");
+
+        test_force_alloc_fail(50);
+
+        let now = DateTimeValue::now();
+        let response = engine
+            .run(
+                None,
+                "oom_multiply",
+                Some(&now),
+                HashMap::new(),
+                false,
+                None,
+            )
+            .expect("evaluation must complete without process crash");
+
+        test_clear_alloc_fail();
+
+        let rule = response
+            .results
+            .get("huge")
+            .expect("huge rule must be present");
+
+        assert!(rule.vetoed);
+        assert_eq!(rule.veto_reason.as_deref(), Some("out of memory"));
     }
 }

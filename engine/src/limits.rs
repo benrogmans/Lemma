@@ -67,6 +67,18 @@ pub struct ResourceLimits {
 
     /// Maximum number of sources in one load batch (e.g. after expanding paths on disk)
     pub max_sources: usize,
+
+    /// Maximum expression nodes for one rule after transitive rule inlining
+    /// during planning. Inlining materializes shared subtrees, so a short
+    /// chain of self-doubling rules grows exponentially; this limit rejects
+    /// such chains with a planning error before any tree is materialized.
+    ///
+    /// The default is chosen so the compiled instruction operands always fit
+    /// `u16`: compilation allocates at most two registers (and at most one
+    /// constant/data/veto table entry) per node, and normalization passes
+    /// grow the tree by at most a small constant factor, so 30,000 nodes
+    /// stays well below the 65,535 register ceiling.
+    pub max_normalized_expression_nodes: usize,
 }
 
 impl Default for ResourceLimits {
@@ -79,6 +91,7 @@ impl Default for ResourceLimits {
             max_data_value_bytes: 1024,         // 1 KB
             max_loaded_bytes: 50 * 1024 * 1024, // 50 MB
             max_sources: 4096,
+            max_normalized_expression_nodes: 30_000,
         }
     }
 }

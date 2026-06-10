@@ -103,9 +103,9 @@ enum Commands {
     ///
     /// Routes:
     ///   GET  /{spec}              — evaluate all rules (data as query params)
-    ///   POST /{spec}              — evaluate all rules (data as JSON body)
+    ///   POST /{spec}              — evaluate all rules (data as JSON or form body)
     ///   GET  /{spec}/{rules}      — evaluate specific rules (comma-separated)
-    ///   POST /{spec}/{rules}      — evaluate specific rules (JSON body)
+    ///   POST /{spec}/{rules}      — evaluate specific rules (JSON or form body)
     ///   GET  /                   — list all specs
     ///   GET  /docs               — interactive API documentation
     ///   GET  /openapi.json       — OpenAPI 3.1 specification
@@ -127,6 +127,8 @@ enum Commands {
         #[arg(long)]
         explanations: bool,
     },
+    /// Start Language Server Protocol server (stdio)
+    Lsp,
     /// Start MCP server for AI assistant integration (stdio)
     Mcp {
         /// Workspace directory or `.lemma` file
@@ -231,13 +233,8 @@ fn resolve_spec(engine: &Engine, spec: Option<&str>, interactive: bool) -> Resul
 }
 
 fn resolve_effective(cli_effective: Option<&String>) -> Result<DateTimeValue> {
-    match cli_effective {
-        Some(s) => s
-            .parse::<DateTimeValue>()
-            .ok()
-            .ok_or_else(|| anyhow::anyhow!("Invalid --effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or full ISO 8601 datetime", s)),
-        None => Ok(DateTimeValue::now()),
-    }
+    lemma::Engine::resolve_effective(cli_effective.map(String::as_str))
+        .map_err(|e| anyhow::anyhow!("{}", e.message()))
 }
 
 fn main() {
@@ -293,6 +290,7 @@ fn main() {
             *watch,
             *explanations,
         ),
+        Commands::Lsp => lsp_command(),
         Commands::Mcp { prefix, admin } => mcp_command(prefix.as_deref(), *admin),
         Commands::Fetch {
             dependency,
@@ -448,26 +446,33 @@ fn run_command(options: RunOptions<'_>) -> Result<()> {
             )
         };
 
-    let mut response = engine
-        .run(
+    let plan = engine
+        .get_plan(
             repository_qualifier_for_run.as_deref(),
             &spec_set_identifier,
             Some(&now),
-            evaluation_inputs,
-            options.explain,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    if !rule_names.is_empty() {
-        response.filter_rules(&rule_names);
-    }
+    let data_values: HashMap<String, lemma::DataValueInput> = evaluation_inputs
+        .into_iter()
+        .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
+        .collect();
+    let rules = if rule_names.is_empty() {
+        None
+    } else {
+        Some(rule_names.as_slice())
+    };
+    let response = engine
+        .run_plan(plan, Some(&now), data_values, options.explain, rules)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let formatter = Formatter;
 
     if options.json {
-        if !options.explain {
-            response.data.clear();
-        }
-        let json_document = serde_json::to_string_pretty(&response)
-            .expect("BUG: failed to serialize response JSON");
+        let json_document = if options.explain {
+            serde_json::to_string_pretty(&response).expect("BUG: failed to serialize response JSON")
+        } else {
+            formatter.serialize_response_json(&response, false)
+        };
         println!("{}", json_document);
     } else {
         print!("{}", formatter.format_response(&response, options.explain));
@@ -536,7 +541,7 @@ fn schema_command(
             Some(&now),
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?
-        .interface_schema();
+        .interface_schema(&lemma::DataOverlay::default());
 
     let workspace = engine.get_workspace();
     if let Some(spec_set) = workspace
@@ -653,6 +658,10 @@ fn server_command(
         .await
     })?;
     Ok(())
+}
+
+fn lsp_command() -> Result<()> {
+    lsp::stdio::run_stdio().map_err(|e| anyhow::anyhow!(e))
 }
 
 fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {

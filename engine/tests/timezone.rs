@@ -10,14 +10,14 @@ fn decimal_lit(s: &str) -> Decimal {
 fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
         .unwrap();
     response
         .results
         .values()
         .find(|r| r.rule.name == rule_name)
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result

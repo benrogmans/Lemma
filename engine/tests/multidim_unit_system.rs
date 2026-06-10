@@ -22,7 +22,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false)
+        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
         .expect("Should evaluate");
     let result = response
         .results
@@ -42,7 +42,7 @@ fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
         .expect("Should evaluate");
     let result = response
         .results
@@ -404,7 +404,7 @@ rule runway_months: (balance / burn_rate) as month"#;
         .expect("runway spec must load and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "d10_runway", Some(&now), HashMap::new(), false)
+        .run(None, "d10_runway", Some(&now), HashMap::new(), false, None)
         .expect("runway spec must evaluate");
     let display = response
         .results

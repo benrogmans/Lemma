@@ -1,7 +1,9 @@
 pub mod http {
+    use crate::formatter::Formatter;
     use axum::{
+        body::Bytes,
         extract::{Path, Query, State},
-        http::{HeaderMap, HeaderValue, StatusCode},
+        http::{header::CONTENT_TYPE, HeaderMap, HeaderValue, StatusCode},
         response::{Html, IntoResponse, Json},
         routing::get,
         Router,
@@ -49,17 +51,14 @@ pub mod http {
     fn resolve_effective(
         raw: Option<&str>,
     ) -> Result<DateTimeValue, (StatusCode, Json<ErrorResponse>)> {
-        match raw {
-            Some(s) => s.parse::<DateTimeValue>().ok().ok_or_else(|| {
-                (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse {
-                        error: format!("Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime", s),
-                    }),
-                )
-            }),
-            None => Ok(DateTimeValue::now()),
-        }
+        lemma::Engine::resolve_effective(raw).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: e.message().to_string(),
+                }),
+            )
+        })
     }
 
     #[derive(Clone)]
@@ -122,7 +121,7 @@ pub mod http {
     ///
     ///         The server auto-generates typed REST endpoints for each loaded spec:
     /// - `GET /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as query params
-    /// - `POST /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as JSON body
+    /// - `POST /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as JSON or form body
     ///
     /// Meta routes:
     /// - `GET /` — list all specs
@@ -367,14 +366,15 @@ pub mod http {
                         }),
                     )
                 })?;
-            plan.schema_for_rules(&rule_names).map_err(|err| {
-                (
-                    lemma_error_to_status(&err),
-                    Json(ErrorResponse {
-                        error: err.to_string(),
-                    }),
-                )
-            })?
+            plan.schema_for_rules(&rule_names, &lemma::DataOverlay::default())
+                .map_err(|err| {
+                    (
+                        lemma_error_to_status(&err),
+                        Json(ErrorResponse {
+                            error: err.to_string(),
+                        }),
+                    )
+                })?
         };
 
         let spec_arc = engine.get_spec(&spec_name, Some(&effective)).map_err(|e| {
@@ -423,17 +423,79 @@ pub mod http {
         Ok(response)
     }
 
-    /// `POST /{*path}` — evaluate; path = specset id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = JSON data object.
+    fn parse_post_evaluate_body(
+        headers: &HeaderMap,
+        body: &[u8],
+    ) -> Result<
+        std::collections::HashMap<String, lemma::DataValueInput>,
+        (StatusCode, Json<ErrorResponse>),
+    > {
+        if body.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let content_type = headers
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(';').next().unwrap_or(s).trim().to_ascii_lowercase())
+            .unwrap_or_default();
+
+        let data_values = match content_type.as_str() {
+            "application/json" => {
+                let map: std::collections::HashMap<String, serde_json::Value> =
+                    serde_json::from_slice(body).map_err(|e| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(ErrorResponse {
+                                error: format!("invalid JSON body: {e}"),
+                            }),
+                        )
+                    })?;
+                map.into_iter()
+                    .filter(|(_, v)| !v.is_null())
+                    .map(|(k, v)| {
+                        crate::data_json::json_value_to_data_input(v).map(|input| (k, input))
+                    })
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
+            }
+            "application/x-www-form-urlencoded" => {
+                crate::data_json::form_urlencoded_to_data_values(body)
+                    .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
+            }
+            "" => {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    Json(ErrorResponse {
+                        error: "Expected request with Content-Type: application/json or application/x-www-form-urlencoded".to_string(),
+                    }),
+                ));
+            }
+            other => {
+                return Err((
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    Json(ErrorResponse {
+                        error: format!(
+                            "Unsupported Content-Type '{other}'; expected application/json or application/x-www-form-urlencoded"
+                        ),
+                    }),
+                ));
+            }
+        };
+
+        Ok(data_values)
+    }
+
+    /// `POST /{*path}` — evaluate; path = specset id. `Accept-Datetime` for temporal, `?rules=` to limit. Body = JSON or form data.
     async fn spec_post_evaluate(
         State(state): State<AppState>,
         Path(path): Path<String>,
         Query(q): Query<SpecQuery>,
         headers: HeaderMap,
-        body: Option<Json<std::collections::HashMap<String, serde_json::Value>>>,
+        body: Bytes,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_set_id = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
-        let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
         let engine = state.engine.read().await;
 
         let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
@@ -445,18 +507,7 @@ pub mod http {
             )
         })?;
 
-        let data_values: std::collections::HashMap<String, lemma::DataValueInput> = body
-            .map(|Json(map)| {
-                map.into_iter()
-                    .filter(|(_, v)| !v.is_null())
-                    .map(|(k, v)| {
-                        crate::data_json::json_value_to_data_input(v).map(|input| (k, input))
-                    })
-                    .collect::<Result<_, _>>()
-            })
-            .transpose()
-            .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?
-            .unwrap_or_default();
+        let data_values = parse_post_evaluate_body(&headers, &body)?;
 
         let plan = engine
             .get_plan(None, &spec_name, Some(&effective))
@@ -469,14 +520,30 @@ pub mod http {
                 )
             })?;
 
+        let parsed_rules: Option<Vec<String>> = match q.rules.as_deref() {
+            None => None,
+            Some(rules_query) => {
+                let parsed = parse_rule_names(rules_query);
+                if parsed.is_empty() {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: "at least one rule required".to_string(),
+                        }),
+                    ));
+                }
+                Some(parsed)
+            }
+        };
+
         let include_explanations = want_explanations(&state, &headers);
-        let mut response = engine
+        let response = engine
             .run_plan(
                 plan,
                 Some(&effective),
                 data_values,
                 include_explanations,
-                true,
+                parsed_rules.as_deref(),
             )
             .map_err(|err| {
                 (
@@ -486,16 +553,10 @@ pub mod http {
                     }),
                 )
             })?;
-        if !rule_names.is_empty() {
-            response.filter_rules(&rule_names);
-        }
 
         let spec_arc = engine.get_spec(&spec_name, Some(&effective)).ok();
         let effective_from = spec_arc.as_ref().and_then(|a| a.effective_from());
-        let mut payload = response.clone();
-        if !include_explanations {
-            payload.data.clear();
-        }
+        let payload = Formatter.response_json_value(&response, include_explanations);
         let mut axum_response = Json(payload).into_response();
         let headers_mut = axum_response.headers_mut();
         for (k, v) in spec_response_headers(effective_from) {

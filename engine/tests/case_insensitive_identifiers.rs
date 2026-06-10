@@ -62,7 +62,7 @@ rule r: price
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false)
+        .run(None, "s", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -78,7 +78,7 @@ rule r: 500 Gram
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false)
+        .run(None, "s", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
     assert!(rule_value(&resp, "r").contains("500"));
     assert!(rule_value(&resp, "r").contains("gram"));

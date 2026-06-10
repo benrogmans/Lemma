@@ -17,14 +17,16 @@ fn rule_number(resp: &lemma::Response, rule: &str) -> Decimal {
         );
     }
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Number(d) => lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap(),
+        ValueKind::Number(d) => lemma::ValueKind::Number(d.clone())
+            .as_decimal_magnitude()
+            .unwrap(),
         other => panic!("rule '{rule}' expected Number, got {:?}", other),
     }
 }
@@ -58,14 +60,14 @@ rule double: x * 2
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true)
+        .run(None, "s", Some(&now), HashMap::new(), true, None)
         .expect("run");
     assert_eq!(rule_number(&resp, "double"), Decimal::from(20));
     let lit = resp
         .results
         .get("double")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -86,13 +88,17 @@ rule doubled: number_data * 2
         .load(code, lemma::SourceType::Volatile)
         .expect("load");
     let now = DateTimeValue::now();
+    let plan = engine.get_plan(None, "s", Some(&now)).expect("plan");
     let resp = engine
-        .run(
-            None,
-            "s",
+        .run_plan(
+            plan,
             Some(&now),
-            HashMap::from([("number_data".to_string(), "50".to_string())]),
+            HashMap::from([(
+                "number_data".to_string(),
+                lemma::DataValueInput::convenience("50".to_string()),
+            )]),
             true,
+            None,
         )
         .expect("run");
     assert_eq!(rule_number(&resp, "doubled"), Decimal::from(100));
@@ -100,7 +106,7 @@ rule doubled: number_data * 2
         .results
         .get("doubled")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -121,7 +127,7 @@ rule root: sqrt 9
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true)
+        .run(None, "s", Some(&now), HashMap::new(), true, None)
         .expect("run");
     assert_eq!(rule_number(&resp, "root"), Decimal::from(3));
 }
@@ -138,7 +144,7 @@ rule root: sqrt 2
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true)
+        .run(None, "s", Some(&now), HashMap::new(), true, None)
         .expect("run");
     let d = rule_number(&resp, "root");
     assert!(d > Decimal::from(1));
@@ -147,7 +153,7 @@ rule root: sqrt 2
         .results
         .get("root")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -169,13 +175,13 @@ rule s: sin 1
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true)
+        .run(None, "s", Some(&now), HashMap::new(), true, None)
         .expect("run");
     let lit = resp
         .results
         .get("s")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -201,14 +207,14 @@ rule converted: amount as eur
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true)
+        .run(None, "s", Some(&now), HashMap::new(), true, None)
         .expect("run");
     let rr = resp.results.get("converted").unwrap();
     if rr.vetoed {
         panic!("veto: {}", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -218,7 +224,7 @@ rule converted: amount as eur
         ValueKind::Quantity(magnitude, signature) => {
             assert_eq!(*signature, vec![("eur".to_string(), 1)]);
             assert_eq!(
-                lemma::ValueKind::Number(*magnitude)
+                lemma::ValueKind::Number(magnitude.clone())
                     .as_decimal_magnitude()
                     .unwrap(),
                 Decimal::from(84)

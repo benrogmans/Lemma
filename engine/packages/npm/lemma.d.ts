@@ -57,6 +57,7 @@ declare module './lemma.bindings.js' {
       rule_names: string[] | string,
       data_values: Record<string, unknown>,
       effective?: string | null,
+      explain?: boolean,
     ): EvaluationResponse;
   }
 }

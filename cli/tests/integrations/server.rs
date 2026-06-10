@@ -192,6 +192,57 @@ rule total: base
     );
 }
 
+#[test]
+fn post_evaluate_form_urlencoded_body() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("single.lemma"),
+        r#"spec single_spec
+data x: number
+rule result: x
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 4;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, Duration::from_secs(5));
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within 5s");
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("http://127.0.0.1:{}/single_spec", port);
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body("x=42")
+        .send()
+        .expect("POST request");
+    let status = resp.status();
+    let body: serde_json::Value =
+        serde_json::from_str(&resp.text().expect("response body")).expect("JSON body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        status.is_success(),
+        "POST form body should return 2xx, got {status}: {body:?}"
+    );
+    assert_eq!(body["results"]["result"]["number"].as_str(), Some("42"));
+}
+
 /// GET `/{spec}` must expose each temporal version's half-open
 /// `[effective_from, effective_to)` range. The latest version's `effective_to`
 /// is `null` (no successor); earlier versions' `effective_to` equals the next

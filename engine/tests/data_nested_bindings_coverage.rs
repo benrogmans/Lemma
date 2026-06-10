@@ -67,7 +67,7 @@ rule r: i.x
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -90,7 +90,7 @@ rule r: m.l.v
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "7");
 }
@@ -204,7 +204,7 @@ rule r: i.x
     );
 }
 
-// ─── User override via set_data_values uses dotted input_key ────────
+// ─── User override via DataOverlay::resolve uses dotted input_key ────────
 
 #[test]
 fn user_override_of_nested_binding_via_dotted_key() {
@@ -223,7 +223,7 @@ rule r: i.x
     data.insert("i.x".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false, None)
         .expect("evaluates");
     assert_eq!(
         rule_value(&resp, "r"),
@@ -252,7 +252,7 @@ rule r: m.l.v
     data.insert("m.l.v".to_string(), "123".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "123");
 }
@@ -272,7 +272,7 @@ rule r: x
     data.insert("X".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }

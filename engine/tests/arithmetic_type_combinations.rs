@@ -21,7 +21,7 @@ fn eval_result(
         .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), data, false)
+        .run(None, spec_name, Some(&now), data, false, None)
         .expect("Should evaluate");
     let result = response
         .results

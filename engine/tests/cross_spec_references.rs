@@ -26,7 +26,7 @@ rule total: base_data.price * base_data.quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let total = response
         .results
@@ -61,7 +61,7 @@ rule derived_value: base_data.doubled + 10
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let derived_value = response
         .results
@@ -97,7 +97,7 @@ rule manager_bonus: employee.annual_salary * 0.15
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "manager", Some(&now), HashMap::new(), false)
+        .run(None, "manager", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let bonus = response
         .results
@@ -135,7 +135,7 @@ rule derived_total: config.total
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let total = response
         .results
@@ -183,7 +183,7 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let total = response
         .results
@@ -220,7 +220,7 @@ rule status: "invalid"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let status = response
         .results
@@ -255,7 +255,7 @@ rule combined: base_data.input + base_data.calculated
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let combined = response
         .results
@@ -293,7 +293,7 @@ rule sum: b.x + b.y + b.z
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let sum = response
         .results
@@ -332,7 +332,7 @@ rule total: config.price * config.quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false)
+        .run(None, "derived", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let total = response
         .results
@@ -383,7 +383,7 @@ rule total2: base2.base.total
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "example3", Some(&now), HashMap::new(), false)
+        .run(None, "example3", Some(&now), HashMap::new(), false, None)
         .unwrap();
 
     let total1 = response
@@ -422,7 +422,7 @@ rule total: p.base_price
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false)
+        .run(None, "order", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let total = response
         .results
@@ -466,7 +466,14 @@ rule employee_summary: employee.monthly_salary
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "specific_employee", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "specific_employee",
+            Some(&now),
+            HashMap::new(),
+            false,
+            None,
+        )
         .unwrap();
 
     let mut result_names: Vec<&str> = response.results.keys().map(|k| k.as_str()).collect();
@@ -506,7 +513,7 @@ rule total: p.base_price
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false)
+        .run(None, "order", Some(&now), HashMap::new(), false, None)
         .unwrap();
     let total = response
         .results
@@ -537,9 +544,8 @@ rule short: yes
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
     data.insert("units.duration".to_string(), "1 hour".to_string());
-
     let resp = engine
-        .run(None, "t", Some(&now), data, false)
+        .run(None, "t", Some(&now), data, false, None)
         .expect("evaluation must run");
 
     let short = resp
@@ -575,9 +581,8 @@ rule short: yes
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
     data.insert("units.duration".to_string(), "3 hours".to_string());
-
     let resp = engine
-        .run(None, "t", Some(&now), data, false)
+        .run(None, "t", Some(&now), data, false, None)
         .expect("evaluation must run");
 
     let short = resp

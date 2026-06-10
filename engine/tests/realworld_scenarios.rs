@@ -18,7 +18,9 @@ fn run_spec(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Respon
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.run(None, spec, Some(&now), data_map, true).unwrap()
+    engine
+        .run(None, spec, Some(&now), data_map, false, None)
+        .unwrap()
 }
 
 fn rule_display(response: &lemma::Response, rule_name: &str) -> String {
@@ -408,7 +410,7 @@ rule in_q1_2023: hire_date in 2023-01-01...2023-04-01
 
     // tenure: 2023-03-15 to 2024-03-15 = 366 days (2024 is leap year)
     let tenure = rule_display(&resp, "tenure_days");
-    assert_eq!(tenure, "366 day", "one year including leap day");
+    assert_eq!(tenure, "366 days", "one year including leap day");
 }
 
 // ===========================================================================
@@ -632,7 +634,14 @@ rule total: amount + tax
     let effective = DateTimeValue::from_str("2024-06-15").unwrap();
     let data_map: HashMap<String, String> = [("amount".to_string(), "1000".to_string())].into();
     let resp = engine
-        .run(None, "invoice_calc", Some(&effective), data_map, true)
+        .run(
+            None,
+            "invoice_calc",
+            Some(&effective),
+            data_map,
+            false,
+            None,
+        )
         .unwrap();
     let tax = rule_display(&resp, "tax");
     assert_eq!(tax, "210", "after 2024-01-01, VAT is 21% → 1000*21% = 210");
@@ -641,7 +650,14 @@ rule total: amount + tax
     let effective_old = DateTimeValue::from_str("2023-06-15").unwrap();
     let data_map2: HashMap<String, String> = [("amount".to_string(), "1000".to_string())].into();
     let resp2 = engine
-        .run(None, "invoice_calc", Some(&effective_old), data_map2, true)
+        .run(
+            None,
+            "invoice_calc",
+            Some(&effective_old),
+            data_map2,
+            false,
+            None,
+        )
         .unwrap();
     let tax2 = rule_display(&resp2, "tax");
     assert_eq!(

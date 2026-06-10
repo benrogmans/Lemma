@@ -175,7 +175,7 @@ fn test_runtime_error_division_by_zero() {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false, None)
         .expect("Division by zero should return Veto, not Error");
 
     let result_rule = response
@@ -365,7 +365,7 @@ fn test_division_by_zero_returns_veto_with_message() {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false, None)
         .expect("Should return Veto, not Error");
 
     let result_rule = response

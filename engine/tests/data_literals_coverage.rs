@@ -68,14 +68,14 @@ fn rule_quantity_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> 
 fn run(engine: &Engine, spec: &str) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(None, spec, Some(&now), HashMap::new(), false)
+        .run(None, spec, Some(&now), HashMap::new(), true, None)
         .expect("run")
 }
 
 fn run_explain(engine: &Engine, spec: &str) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(None, spec, Some(&now), HashMap::new(), true)
+        .run(None, spec, Some(&now), HashMap::new(), true, None)
         .expect("run")
 }
 
@@ -520,7 +520,7 @@ fn rule_ratio(
         rr.veto_reason.as_deref().unwrap_or("Vetoed")
     );
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -528,7 +528,9 @@ fn rule_ratio(
         .expect("value");
     match &lit.value {
         ValueKind::Ratio(n, u) => (
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             u.clone(),
         ),
         other => panic!("rule '{}' produced non-Ratio value {:?}", rule_name, other),
@@ -628,7 +630,7 @@ rule out: r
     let rr = resp.results.get("out").expect("rule 'out' not found");
     assert!(!rr.vetoed, "rule 'out' produced veto: {:?}", rr.veto_reason);
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -638,13 +640,17 @@ rule out: r
     match &lit.value {
         ValueKind::Number(n) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 rust_decimal::Decimal::new(25, 2)
             );
         }
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 rust_decimal::Decimal::new(25, 2)
             );
             assert_eq!(u.as_deref(), None);

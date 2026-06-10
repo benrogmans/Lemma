@@ -3,7 +3,7 @@
 //! `get_plan` returns identical plan pointers. Parser needs `repo @benrogmans/test` + `spec constants` (not
 //! `repo @benrogmans/test constants`); `uses b: @benrogmans/tess x` needs tess `spec x`.
 
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -75,6 +75,8 @@ rule sentinel: false
         second: 0,
         microsecond: 0,
         timezone: None,
+
+        granularity: DateGranularity::Full,
     };
 
     let plan_x_repo = engine

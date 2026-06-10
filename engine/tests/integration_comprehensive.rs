@@ -50,7 +50,14 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "employment_terms", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "employment_terms",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .unwrap();
 
     let total_comp = response
@@ -61,7 +68,7 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 
     assert!(!total_comp.vetoed);
     let lit = total_comp
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -69,7 +76,9 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             decimal_lit("82500")
         ),
         other => panic!("Expected Number for total_compensation, got {:?}", other),
@@ -118,7 +127,14 @@ rule effective_rate: (tax_amount / income) * 100%
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "tax_calculation", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "tax_calculation",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .unwrap();
 
     let taxable = response
@@ -128,7 +144,7 @@ rule effective_rate: (tax_amount / income) * 100%
         .unwrap();
     assert!(!taxable.vetoed);
     let lit = taxable
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -136,7 +152,9 @@ rule effective_rate: (tax_amount / income) * 100%
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             decimal_lit("70000")
         ),
         other => panic!("Expected Number for taxable_income, got {:?}", other),
@@ -156,7 +174,7 @@ rule effective_rate: (tax_amount / income) * 100%
         .unwrap();
     assert!(!tax_rate.vetoed);
     let lit = tax_rate
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -165,7 +183,9 @@ rule effective_rate: (tax_amount / income) * 100%
     match &lit.value {
         lemma::ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.2")
             );
             assert_eq!(u.as_deref(), Some("percent"));
@@ -202,7 +222,7 @@ rule status: "LOW"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "dynamic_config", Some(&now), data, false)
+        .run(None, "dynamic_config", Some(&now), data, true, None)
         .unwrap();
 
     let calculated = response
@@ -222,9 +242,8 @@ rule status: "LOW"
     let mut data2 = std::collections::HashMap::new();
     data2.insert("threshold".to_string(), "150".to_string());
     data2.insert("multiplier".to_string(), "2".to_string());
-
     let response2 = engine
-        .run(None, "dynamic_config", Some(&now), data2, false)
+        .run(None, "dynamic_config", Some(&now), data2, true, None)
         .unwrap();
 
     let status2 = response2
@@ -269,7 +288,14 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "project_timeline", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "project_timeline",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .unwrap();
 
     let phase1_complete = response
@@ -318,7 +344,7 @@ rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.ma
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "child", Some(&now), HashMap::new(), false)
+        .run(None, "child", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let is_valid = response
@@ -355,7 +381,7 @@ rule probation_end: base_contract.project_start + base_contract.probation_period
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "child", Some(&now), HashMap::new(), false)
+        .run(None, "child", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let probation_end = response

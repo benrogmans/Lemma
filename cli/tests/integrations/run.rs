@@ -34,7 +34,7 @@ rule product: x * y
 }
 
 #[test]
-fn test_cli_run_set_data_values() {
+fn test_cli_run_data_values() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
@@ -309,6 +309,47 @@ also invalid lemma syntax
 }
 
 #[test]
+fn test_cli_explain_renders_data_section() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec data_section
+data base_value: 100
+rule doubled: base_value * 2
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("data_section")
+        .arg("--rules=doubled")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+
+    assert!(
+        stdout.contains("Data"),
+        "explain output should render the Data section, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("base_value") && stdout.contains("100"),
+        "the Data section should list base_value with its effective value, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn test_cli_explain_shows_all_operands_in_nested_arithmetic() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
@@ -396,8 +437,8 @@ rule out: true
     );
 
     assert!(
-        stdout.contains(">="),
-        "explain should show negated comparison (e.g. 5 >= 3), got:\n{}",
+        stdout.contains("5 < 3 is false"),
+        "explain should show unless condition evaluation, got:\n{}",
         stdout
     );
 }
@@ -597,7 +638,7 @@ rule product: price * quantity
         stdout
     );
     assert!(
-        stdout.contains("price is") && stdout.contains("quantity is"),
+        stdout.contains("price:") && stdout.contains("quantity:"),
         "explain should show both data operands, got:\n{}",
         stdout
     );
@@ -636,8 +677,63 @@ rule product: price * quantity
         stdout
     );
     assert!(
-        stdout.contains("price is") && stdout.contains("quantity is"),
+        stdout.contains("price:") && stdout.contains("quantity:"),
         "explain with --as should still show multiply data operands, got:\n{}",
         stdout
+    );
+}
+
+#[test]
+fn test_cli_run_calc_explain_json_includes_total_explanation() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("calc.lemma"),
+        r#"
+spec calc
+
+data money: quantity
+  -> decimals 2
+  -> unit eur 1
+
+data hourly_rate: 85.00 eur
+data hours_worked: 37.5
+data is_rush: boolean
+data is_super_rush: boolean
+
+rule labor: hourly_rate * hours_worked
+rule rush_surcharge: 0 eur
+  unless is_rush then labor * 25%
+  unless is_super_rush then labor * 50%
+rule subtotal: labor + rush_surcharge
+rule vat: subtotal * 21%
+rule total: subtotal + vat
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("calc")
+        .arg("is_rush=true")
+        .arg("is_super_rush=false")
+        .arg("--rules=total")
+        .arg("--explain")
+        .arg("--json");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run calc --explain --json should succeed: {}",
+        stdout
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is valid JSON");
+    assert_eq!(json["results"]["total"]["explanation"]["rule"], "total");
+    assert_eq!(
+        json["results"]["total"]["explanation"]["result"],
+        "4821.09 eur"
     );
 }

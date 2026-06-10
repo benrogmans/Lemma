@@ -1,0 +1,9 @@
+Copyright 2014-2024 The Rust Project Developers
+Copyright 2024 Lemma contributors
+
+Licensed under the Apache License, Version 2.0 or MIT license at your option.
+
+Algorithms in biguint.rs and bigint.rs are derived from num-bigint v0.4.6:
+https://github.com/rust-num/num-bigint/tree/v0.4.6
+
+Upstream is dual-licensed under MIT OR Apache-2.0.

@@ -287,7 +287,7 @@ rule days_diff: start_date...end_date as seconds as number
     if let lemma::ValueKind::Number(seconds) = &lit.value {
         // 366 days = 31,622,400 seconds
         assert_eq!(
-            lemma::ValueKind::Number(*seconds)
+            lemma::ValueKind::Number(seconds.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             rust_decimal::Decimal::from(31_622_400)
@@ -316,7 +316,7 @@ rule days_diff: start_date...end_date as seconds as number
     if let lemma::ValueKind::Number(seconds) = &lit.value {
         // 365 days = 31,536,000 seconds
         assert_eq!(
-            lemma::ValueKind::Number(*seconds)
+            lemma::ValueKind::Number(seconds.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             rust_decimal::Decimal::from(31_536_000)

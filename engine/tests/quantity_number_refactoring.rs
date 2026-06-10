@@ -46,14 +46,14 @@ rule quotient: price1 / price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, true)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     for name in ["total", "difference"] {
         let r = response.results.get(name).expect(name);
         assert!(!r.vetoed, "{name} must not veto for valid quantity inputs");
         let v = r
-            .trace
+            .explanation
             .as_ref()
             .expect("explanation")
             .result
@@ -69,7 +69,7 @@ rule quotient: price1 / price2"#;
         let r = response.results.get(name).expect(name);
         assert!(!r.vetoed, "{name} must not veto for valid quantity inputs");
         let v = r
-            .trace
+            .explanation
             .as_ref()
             .expect("explanation")
             .result
@@ -139,7 +139,7 @@ rule divided: price / multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -178,7 +178,7 @@ rule divided: multiplier / price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let scaled = rule_value_str(&response, "scaled");
@@ -213,7 +213,7 @@ rule result: ratio_value * multiplier"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -243,7 +243,7 @@ rule result: ratio_value * price"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -276,7 +276,7 @@ rule result: price * ratio_value"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");
@@ -310,7 +310,7 @@ rule is_equal: price1 is price2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "is_greater"), "true");
@@ -348,7 +348,7 @@ rule power: a ^ 2"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let add = rule_value_str(&response, "add");
@@ -416,7 +416,7 @@ rule power: a ^ b"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     assert_eq!(rule_value_str(&response, "add"), "13");
@@ -460,7 +460,7 @@ rule total: with_tax * quantity"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let disc = rule_value_str(&response, "discounted");
@@ -505,7 +505,7 @@ rule result: quantity_value * number_value"#;
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), data, false)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("Should evaluate");
 
     let s = rule_value_str(&response, "result");

@@ -21,7 +21,7 @@ rule to_hours: duration as hours
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+        .run(None, "test", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule_result = response
         .results
@@ -29,9 +29,9 @@ rule to_hours: duration as hours
         .find(|r| r.rule.name == "to_hours")
         .unwrap();
     let val = rule_result
-        .trace
+        .explanation
         .as_ref()
-        .expect("trace")
+        .expect("explanation")
         .result
         .value()
         .expect("value")

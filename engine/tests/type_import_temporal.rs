@@ -6,7 +6,7 @@
 //! produce separate temporal slices — one per version of A that falls within
 //! B's effective range.
 
-use lemma::{DateTimeValue, Engine};
+use lemma::{DateGranularity, DateTimeValue, Engine};
 use std::collections::HashMap;
 
 fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
@@ -19,6 +19,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
@@ -33,7 +34,7 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec_name, Some(effective), map, false)
+        .run(None, spec_name, Some(effective), map, false, None)
         .unwrap()
 }
 
@@ -178,15 +179,20 @@ rule doubled: price * 2
     );
 
     // usd must fail: pin locks to finance v1 which only has eur
+    let effective = date(2025, 9, 1);
+    let plan = engine
+        .get_plan(None, "shop", Some(&effective))
+        .expect("plan");
     let response = engine
-        .run(
-            None,
-            "shop",
-            Some(&date(2025, 9, 1)),
+        .run_plan(
+            plan,
+            Some(&effective),
             vec![("price".to_string(), "10.00 usd".to_string())]
                 .into_iter()
+                .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
                 .collect(),
             false,
+            None,
         )
         .expect("usd override must complete with veto, not Error");
     let doubled = response.results.get("doubled").expect("doubled");
@@ -493,14 +499,19 @@ rule doubled: price * 2
         .unwrap();
 
     // Evaluate after boundary with usd — must error because pin locks to v1 (no usd).
-    let result = engine.run(
-        None,
-        "shop",
-        Some(&date(2025, 9, 1)),
+    let effective = date(2025, 9, 1);
+    let plan = engine
+        .get_plan(None, "shop", Some(&effective))
+        .expect("plan");
+    let result = engine.run_plan(
+        plan,
+        Some(&effective),
         [("price".to_string(), "10.00 usd".to_string())]
             .into_iter()
+            .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
             .collect(),
         false,
+        None,
     );
     match &result {
         Err(e) => {

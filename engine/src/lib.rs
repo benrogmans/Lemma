@@ -22,7 +22,7 @@
 //!
 //! // Evaluate the spec (all rules, no data values)
 //! let now = lemma::DateTimeValue::now();
-//! let response = engine.run(None, "example", Some(&now), std::collections::HashMap::new(), false).unwrap();
+//! let response = engine.run(None, "example", Some(&now), std::collections::HashMap::new(), false, None).unwrap();
 //! ```
 //!
 //! ## Core Concepts
@@ -51,7 +51,6 @@ pub(crate) mod engine;
 pub(crate) mod error;
 pub(crate) mod evaluation;
 pub(crate) mod formatting;
-pub(crate) mod inversion;
 pub(crate) mod limits;
 pub(crate) mod literals;
 pub(crate) mod parsing;
@@ -84,8 +83,8 @@ pub use limits::{
 
 // === Source + parsing ===
 pub use parsing::ast::{
-    DataValue, DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, Span, SpecRef,
-    TimezoneValue,
+    DataValue, DateGranularity, DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, Span,
+    SpecRef, TimezoneValue,
 };
 pub use parsing::source::{Source, SourceType};
 // Planning [`semantics::DataValue`] (bindings) vs parse [`ast::DataValue`]; only the parse enum is `DataValue` at the root.
@@ -98,7 +97,9 @@ pub use planning::data_input::DataValueInput;
 
 // === Execution plan + schema ===
 pub use planning::execution_plan::{
-    type_detail_lines, DataEntry, ExecutionPlan, ExecutionPlanSerialized, SpecSchema,
+    type_detail_lines, validate_instruction_jumps, validate_instructions, DataEntry, DataOverlay,
+    ExecutionPlan, ExecutionPlanSerialized, Instruction, Instructions, SpecSchema,
+    INSTRUCTIONS_VERSION,
 };
 pub use planning::plan;
 pub use planning::semantics::{
@@ -108,15 +109,12 @@ pub use planning::semantics::{
 pub use planning::spec_set::LemmaSpecSet;
 
 // === Evaluation output ===
-pub use evaluation::evaluation_trace::{
-    trace_expression, ConversionTraceRole, ConversionTraceStep, EvaluationTrace, TraceBranch,
-    TraceNode, TraceNonMatchedBranch, TraceValueSource,
+pub use evaluation::explanations::{
+    format_explanation, format_expression, Cause, ConversionTraceRole, ConversionTraceStep,
+    Explanation, ExplanationNode,
 };
 pub use evaluation::operations::{ComputationKind, OperationResult, VetoType};
 pub use evaluation::response::{DataGroup, Response, RuleResult};
-
-// === Inversion ===
-pub use inversion::{Bound, Domain, InversionResponse, Target, TargetOp};
 
 // === Formatting ===
 pub use formatting::{format_parse_result, format_source, format_specs};

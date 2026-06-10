@@ -149,11 +149,6 @@ impl Graph {
                         },
                     );
                 }
-                DataDefinition::Violated { .. } => {
-                    unreachable!(
-                        "BUG: Violated data must not exist during graph build from parsed specs"
-                    )
-                }
             }
         }
 
@@ -269,6 +264,29 @@ impl Graph {
                     lit.value, lit.lemma_type.specifications
                 );
             }
+            if let ValueKind::Quantity(_, signature) = &lit.value {
+                let unit_name = signature
+                    .first()
+                    .map(|(name, _)| name.as_str())
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        format!(
+                            "value {} cannot be used as type {}: quantity literal has empty unit name",
+                            lit,
+                            schema_ref.name()
+                        )
+                    })?;
+                if let TypeSpecification::Quantity { units, .. } = &schema_ref.specifications {
+                    if !units.iter().any(|u| u.name == unit_name) {
+                        return Err(format!(
+                            "value {} cannot be used as type {}: unknown unit '{}'",
+                            lit,
+                            schema_ref.name(),
+                            unit_name
+                        ));
+                    }
+                }
+            }
             let mut out = lit.clone();
             out.lemma_type = Arc::clone(schema_type);
             return Ok(out);
@@ -284,7 +302,17 @@ impl Graph {
                 Ok(out)
             }
             (TypeSpecification::Quantity { units, .. }, ValueKind::Quantity(_, signature)) => {
-                let unit_name = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
+                let unit_name = signature
+                    .first()
+                    .map(|(name, _)| name.as_str())
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        format!(
+                            "value {} cannot be used as type {}: quantity literal has empty unit name",
+                            lit,
+                            schema_ref.name()
+                        )
+                    })?;
                 if !units.iter().any(|u| u.name == unit_name) {
                     return Err(format!(
                         "value {} cannot be used as type {}: unknown unit '{}'",
@@ -334,7 +362,7 @@ impl Graph {
                 })
             }
             (TypeSpecification::Ratio { .. }, ValueKind::Number(n)) => Ok(
-                LiteralValue::ratio_with_type(*n, None, Arc::clone(schema_type)),
+                LiteralValue::ratio_with_type(n.clone(), None, Arc::clone(schema_type)),
             ),
             _ => Err(format!(
                 "value {} cannot be used as type {}",
@@ -352,34 +380,45 @@ impl Graph {
     ///      possible in a binding whose bound data has its own type
     ///      declaration in the nested spec).
     ///
-    /// Rule-target references are skipped here — they are resolved later in
-    /// [`Self::resolve_rule_reference_types`] using the inferred rule
+    /// `ordered_reference_paths` is the dependency order from
+    /// [`Self::compute_reference_evaluation_order`] (targets before
+    /// dependents). Each resolution is applied immediately so a reference
+    /// whose target is itself a reference reads the target's final resolved
+    /// type — batched application would leave chains `Undetermined`.
+    ///
+    /// Rule-target references are not in the order — they are resolved later
+    /// in [`Self::resolve_rule_reference_types`] using the inferred rule
     /// type, which is only available after [`infer_rule_types`] has run.
-    fn resolve_data_reference_types(&mut self) -> Result<(), Vec<Error>> {
+    fn resolve_data_reference_types(
+        &mut self,
+        ordered_reference_paths: &[DataPath],
+    ) -> Result<(), Vec<Error>> {
         let mut errors: Vec<Error> = Vec::new();
-        let mut updates: Vec<(DataPath, Arc<LemmaType>, Option<ValueKind>)> = Vec::new();
 
-        for (reference_path, entry) in &self.data {
-            let DataDefinition::Reference {
-                target,
-                resolved_type: provisional,
-                local_constraints,
-                source,
-                ..
-            } = entry
-            else {
-                continue;
-            };
+        for reference_path in ordered_reference_paths {
+            let (target_data_path, provisional, local_constraints, source) =
+                match self.data.get(reference_path) {
+                    Some(DataDefinition::Reference {
+                        target: ReferenceTarget::Data(path),
+                        resolved_type,
+                        local_constraints,
+                        source,
+                        ..
+                    }) => (
+                        path.clone(),
+                        Arc::clone(resolved_type),
+                        local_constraints.clone(),
+                        source.clone(),
+                    ),
+                    _ => unreachable!(
+                        "BUG: reference evaluation order must contain only data-target references"
+                    ),
+                };
 
-            let target_data_path = match target {
-                ReferenceTarget::Data(path) => path,
-                ReferenceTarget::Rule(_) => continue,
-            };
-
-            let Some(target_entry) = self.data.get(target_data_path) else {
+            let Some(target_entry) = self.data.get(&target_data_path) else {
                 errors.push(reference_error(
                     &self.main_spec,
-                    source,
+                    &source,
                     format!(
                         "Data reference '{}' target '{}' does not exist",
                         reference_path, target_data_path
@@ -395,18 +434,13 @@ impl Graph {
                 DataDefinition::Import { .. } => {
                     errors.push(reference_error(
                         &self.main_spec,
-                        source,
+                        &source,
                         format!(
                             "Data reference '{}' target '{}' is a spec reference and cannot carry a value",
                             reference_path, target_data_path
                         ),
                     ));
                     continue;
-                }
-                DataDefinition::Violated { .. } => {
-                    unreachable!(
-                        "BUG: Violated data must not exist during reference type resolution in graph build"
-                    )
                 }
             };
 
@@ -421,10 +455,10 @@ impl Graph {
                     lhs,
                     target_type_arc.as_ref(),
                     reference_path,
-                    target_data_path,
+                    &target_data_path,
                     "target",
                 ) {
-                    errors.push(reference_error(&self.main_spec, source, msg));
+                    errors.push(reference_error(&self.main_spec, &source, msg));
                     continue;
                 }
             }
@@ -438,14 +472,14 @@ impl Graph {
                 None => target_type_arc.as_ref().clone(),
             };
             let mut raw_default: Option<RawDefault> = None;
-            if let Some(constraints) = local_constraints {
+            if let Some(constraints) = &local_constraints {
                 let constraint_type_name = merged.name();
                 match apply_constraints_to_spec(
                     &self.main_spec,
                     &constraint_type_name,
                     merged.specifications.clone(),
                     constraints,
-                    source,
+                    &source,
                     &mut raw_default,
                 ) {
                     Ok(specs) => merged.specifications = specs,
@@ -461,29 +495,27 @@ impl Graph {
                     match materialize_raw_default(raw, &merged.specifications, &merged.name()) {
                         Ok(vk) => Some(vk),
                         Err(message) => {
-                            errors.push(reference_error(&self.main_spec, source, message));
+                            errors.push(reference_error(&self.main_spec, &source, message));
                             continue;
                         }
                     }
                 }
             };
 
-            updates.push((reference_path.clone(), Arc::new(merged), captured_default));
-        }
-
-        for (path, new_type, new_default) in updates {
+            // Apply immediately: later references in the order may target
+            // this one and must read the final merged type.
             if let Some(DataDefinition::Reference {
                 resolved_type,
                 local_default,
                 ..
-            }) = self.data.get_mut(&path)
+            }) = self.data.get_mut(reference_path)
             {
-                *resolved_type = new_type;
-                if new_default.is_some() {
-                    *local_default = new_default;
+                *resolved_type = Arc::new(merged);
+                if captured_default.is_some() {
+                    *local_default = captured_default;
                 }
             } else {
-                unreachable!("BUG: reference path disappeared between collect and update phases");
+                unreachable!("BUG: reference path disappeared during type resolution");
             }
         }
 
@@ -938,8 +970,6 @@ pub(crate) struct RuleNode {
 }
 
 type ResolvedTypesMap = Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)>;
-type ResolvedTypeInternal = (Arc<LemmaType>, Option<RawDefault>);
-type ResolveTypeInternalResult = Result<Option<ResolvedTypeInternal>, Vec<Error>>;
 
 struct GraphBuilder<'a> {
     data: IndexMap<DataPath, DataDefinition>,
@@ -949,6 +979,10 @@ struct GraphBuilder<'a> {
     errors: Vec<Error>,
     main_spec: Arc<LemmaSpec>,
     main_repository: Arc<ast::LemmaRepository>,
+    /// Degraded planning: dependency discovery failed and the DAG was
+    /// reduced to the root spec, so unregistered nested specs are expected
+    /// (their discovery errors were already reported).
+    dependency_discovery_failed: bool,
 }
 
 struct RuleExpressionConversion<'a> {
@@ -1122,12 +1156,19 @@ fn apply_constraints_to_spec(
 
 impl Graph {
     /// Build the dependency graph for a single spec within a pre-resolved DAG slice.
+    ///
+    /// `dependency_discovery_failed` marks degraded planning: discovery
+    /// already reported errors and the DAG was reduced to the root spec, so
+    /// nested specs are expected to be unregistered and their subtrees are
+    /// skipped quietly. Outside degraded planning, reaching an unregistered
+    /// spec is an engine bug and crashes.
     pub(crate) fn build(
         context: &Context,
         repository: &Arc<LemmaRepository>,
         main_spec: &Arc<LemmaSpec>,
         dag: &[(Arc<LemmaRepository>, Arc<LemmaSpec>)],
         effective: &EffectiveDate,
+        dependency_discovery_failed: bool,
     ) -> Result<(Graph, ResolvedTypesMap), Vec<Error>> {
         let mut type_resolver = TypeResolver::new(context);
 
@@ -1145,6 +1186,7 @@ impl Graph {
                 errors: Vec::new(),
                 main_spec: Arc::clone(main_spec),
                 main_repository: Arc::clone(repository),
+                dependency_discovery_failed,
             };
 
             builder.build_spec(
@@ -1153,7 +1195,7 @@ impl Graph {
                 Vec::new(),
                 HashMap::new(),
                 effective,
-                &mut type_resolver,
+                &type_resolver,
             )?;
 
             (
@@ -1199,16 +1241,11 @@ impl Graph {
             errors.extend(collision_errors);
         }
 
-        // Phase 1: Resolve data-target reference types now that all data
-        // definitions (across all specs) are populated. Rule-target references
-        // are resolved in Phase 4 once the target rule's type is inferred.
-        if let Err(reference_errors) = self.resolve_data_reference_types() {
-            errors.extend(reference_errors);
-        }
-
-        // Compute the data-target reference evaluation (copy) order. Rule-target
-        // references are resolved lazily at evaluation time — they do not
-        // participate in the prepop copy loop.
+        // Compute the data-target reference evaluation (copy) order first: it
+        // is both the type-resolution order for Phase 1 (targets before
+        // dependents, so reference→reference chains resolve) and the runtime
+        // prepop copy order. Rule-target references are resolved lazily at
+        // evaluation time — they do not participate in either.
         let reference_order = match self.compute_reference_evaluation_order() {
             Ok(order) => order,
             Err(circular_errors) => {
@@ -1216,6 +1253,13 @@ impl Graph {
                 return Err(errors);
             }
         };
+
+        // Phase 1: Resolve data-target reference types now that all data
+        // definitions (across all specs) are populated. Rule-target references
+        // are resolved in Phase 4 once the target rule's type is inferred.
+        if let Err(reference_errors) = self.resolve_data_reference_types(&reference_order) {
+            errors.extend(reference_errors);
+        }
 
         // Phase 2: Inject rule-rule dependency edges for rule-target references.
         // A rule R that reads a data path D where D is `Reference(target: rule T)`
@@ -2228,6 +2272,101 @@ impl<'a> GraphBuilder<'a> {
         Some((path_segments, final_arc))
     }
 
+    /// Ensure `spec` and every qualified-import target spec (transitively) are resolved into
+    /// [`Self::local_types`] before the consumer reads cross-spec parent types.
+    fn ensure_spec_types_resolved(
+        &mut self,
+        spec_arc: &Arc<LemmaSpec>,
+        spec_repository: &Arc<LemmaRepository>,
+        effective: &EffectiveDate,
+        type_resolver: &TypeResolver<'a>,
+    ) -> bool {
+        if self
+            .local_types
+            .iter()
+            .any(|(_, spec, _)| Arc::ptr_eq(spec, spec_arc))
+        {
+            return true;
+        }
+        if !type_resolver.is_registered(spec_arc) {
+            if self.dependency_discovery_failed {
+                // Degraded planning: discovery already reported why this
+                // spec's dependencies could not be resolved, and the DAG was
+                // reduced to the root spec. Skip the unregistered subtree
+                // quietly — the planning result already carries the errors.
+                return false;
+            }
+            panic!(
+                "BUG: spec '{}' reachable from spec '{}' was not registered during dependency discovery",
+                spec_arc.name, self.main_spec.name
+            );
+        }
+        if type_resolver.registration_failed(spec_arc) {
+            // The registration errors were already collected by
+            // `register_all`; the spec cannot be built without its types.
+            return false;
+        }
+        for data in &spec_arc.data {
+            match &data.value {
+                ParsedDataValue::Import(spec_ref) => {
+                    let import_effective = spec_ref.at(effective);
+                    match self.resolve_spec_ref(
+                        spec_ref,
+                        &import_effective,
+                        spec_arc,
+                        spec_repository,
+                    ) {
+                        Ok((source_repo, source_arc)) => {
+                            self.ensure_spec_types_resolved(
+                                &source_arc,
+                                &source_repo,
+                                &import_effective,
+                                type_resolver,
+                            );
+                        }
+                        Err(error) => self.errors.push(error),
+                    }
+                }
+                ParsedDataValue::Definition {
+                    base: Some(ParentType::Qualified { spec_alias, .. }),
+                    ..
+                } => {
+                    match self.resolve_spec_ref(
+                        &ast::SpecRef::same_repository(spec_alias.clone()),
+                        effective,
+                        spec_arc,
+                        spec_repository,
+                    ) {
+                        Ok((source_repo, source_arc)) => {
+                            self.ensure_spec_types_resolved(
+                                &source_arc,
+                                &source_repo,
+                                effective,
+                                type_resolver,
+                            );
+                        }
+                        Err(error) => self.errors.push(error),
+                    }
+                }
+                _ => {}
+            }
+        }
+        match type_resolver.resolve_and_validate(spec_arc, effective, &self.local_types) {
+            Ok(resolved_types) => {
+                self.local_types.push((
+                    Arc::clone(spec_repository),
+                    Arc::clone(spec_arc),
+                    resolved_types,
+                ));
+                true
+            }
+            Err(errors) => {
+                self.errors.extend(errors);
+                false
+            }
+        }
+    }
+
     fn build_spec(
         &mut self,
         spec_arc: &Arc<LemmaSpec>,
@@ -2235,7 +2374,7 @@ impl<'a> GraphBuilder<'a> {
         current_segments: Vec<PathSegment>,
         data_bindings: DataBindings,
         effective: &EffectiveDate,
-        type_resolver: &mut TypeResolver<'a>,
+        type_resolver: &TypeResolver<'a>,
     ) -> Result<(), Vec<Error>> {
         let spec = spec_arc.as_ref();
 
@@ -2267,57 +2406,9 @@ impl<'a> GraphBuilder<'a> {
             .local_types
             .iter()
             .any(|(_, s, _)| Arc::ptr_eq(s, spec_arc))
+            && !self.ensure_spec_types_resolved(spec_arc, spec_repository, effective, type_resolver)
         {
-            // Spec wasn't in the DAG (e.g. a sibling import failed during
-            // DAG construction). The real error is already collected; skip
-            // this spec to avoid resolving against unregistered types.
-            if !type_resolver.is_registered(spec_arc) {
-                return Ok(());
-            }
-            match type_resolver.resolve_and_validate(spec_arc, effective) {
-                Ok(resolved_types) => {
-                    self.local_types.push((
-                        Arc::clone(spec_repository),
-                        Arc::clone(spec_arc),
-                        resolved_types,
-                    ));
-                }
-                Err(es) => {
-                    self.errors.extend(es);
-                    return Ok(());
-                }
-            }
-        }
-
-        for data in &spec.data {
-            if let ParsedDataValue::Definition {
-                base: Some(ParentType::Qualified { spec_alias, .. }),
-                ..
-            } = &data.value
-            {
-                let from_ref = ast::SpecRef::same_repository(spec_alias.clone());
-                match self.resolve_spec_ref(&from_ref, effective, spec_arc, spec_repository) {
-                    Ok((source_repo, source_arc)) => {
-                        if !self
-                            .local_types
-                            .iter()
-                            .any(|(_, s, _)| Arc::ptr_eq(s, &source_arc))
-                        {
-                            match type_resolver.resolve_and_validate(&source_arc, effective) {
-                                Ok(resolved_types) => {
-                                    self.local_types.push((
-                                        source_repo,
-                                        source_arc,
-                                        resolved_types,
-                                    ));
-                                }
-                                Err(es) => self.errors.extend(es),
-                            }
-                        }
-                    }
-                    Err(e) => self.errors.push(e),
-                }
-            }
+            return Ok(());
         }
 
         let mut effective_bindings = data_bindings.clone();
@@ -3713,6 +3804,41 @@ fn infer_expression_type(
         }
 
         ExpressionKind::PastFutureRange(..) => primitive_date_range_arc().clone(),
+
+        ExpressionKind::Piecewise(arms) => {
+            let mut result_type: Option<Arc<LemmaType>> = None;
+            for (condition, result) in arms {
+                let condition_type = infer_expression_type(
+                    condition,
+                    graph,
+                    computed_rule_types,
+                    resolved_types,
+                    spec_arc,
+                );
+                if !condition_type.is_boolean() && !condition_type.is_undetermined() {
+                    return Arc::new(LemmaType::undetermined_type());
+                }
+                let arm_result_type = infer_expression_type(
+                    result,
+                    graph,
+                    computed_rule_types,
+                    resolved_types,
+                    spec_arc,
+                );
+                match &result_type {
+                    None => result_type = Some(arm_result_type),
+                    Some(existing) if *existing == arm_result_type => {}
+                    Some(_)
+                        if arm_result_type.is_undetermined()
+                            || result_type.as_ref().is_some_and(|t| t.is_undetermined()) =>
+                    {
+                        result_type = Some(Arc::new(LemmaType::undetermined_type()));
+                    }
+                    Some(_) => return Arc::new(LemmaType::undetermined_type()),
+                }
+            }
+            result_type.unwrap_or_else(|| Arc::new(LemmaType::undetermined_type()))
+        }
     }
 }
 
@@ -3752,9 +3878,6 @@ fn infer_data_type(
         }
         DataDefinition::Reference { resolved_type, .. } => Arc::clone(resolved_type),
         DataDefinition::Import { .. } => Arc::new(LemmaType::undetermined_type()),
-        DataDefinition::Violated { .. } => {
-            unreachable!("BUG: Violated data must not exist during graph type resolution")
-        }
     }
 }
 
@@ -4056,7 +4179,7 @@ fn arithmetic_power_exponent_planning_errors(
     if left_type.is_quantity() || left_type.is_duration_like() {
         let is_integer_literal = if let ExpressionKind::Literal(lit) = &right.kind {
             if let crate::planning::semantics::ValueKind::Number(n) = &lit.value {
-                *n.denom() == 1
+                n.denom() == &crate::computation::bigint::BigInt::one()
             } else {
                 false
             }
@@ -4879,9 +5002,6 @@ fn check_data_reference(
                 data_path
             ),
         )]),
-        DataDefinition::Violated { .. } => {
-            unreachable!("BUG: Violated data must not exist during graph type validation")
-        }
     }
 }
 
@@ -5452,6 +5572,40 @@ fn check_expression(
                 }
             }
         }
+
+        ExpressionKind::Piecewise(arms) => {
+            for (condition, result) in arms {
+                collect(
+                    check_expression(condition, graph, inferred_types, resolved_types, spec_arc),
+                    &mut errors,
+                );
+                collect(
+                    check_expression(result, graph, inferred_types, resolved_types, spec_arc),
+                    &mut errors,
+                );
+                let condition_type = infer_expression_type(
+                    condition,
+                    graph,
+                    inferred_types,
+                    resolved_types,
+                    spec_arc,
+                );
+                if !condition_type.is_boolean() {
+                    let expr_source = condition
+                        .source_location
+                        .as_ref()
+                        .expect("BUG: expression missing source in check_expression");
+                    errors.push(engine_error_at_graph(
+                        graph,
+                        expr_source,
+                        format!(
+                            "Piecewise condition must be boolean, got type '{}'",
+                            condition_type.name()
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     if errors.is_empty() {
@@ -5830,7 +5984,7 @@ fn simple_quantity_repair_decomposition(lemma_type: &LemmaType) -> Option<BaseQu
     if decomposition.is_some() {
         return None;
     }
-    if units.is_empty() || units.iter().any(|u| !u.derived_quantity_factors.is_empty()) {
+    if units.is_empty() || units.iter().any(|u| !quantity_unit_is_simple(u)) {
         return None;
     }
     let type_name = lemma_type.name.as_deref()?;
@@ -5994,26 +6148,6 @@ pub(crate) fn build_signature_index(
                     None::<String>,
                 ));
             }
-            Some((existing_unit_name, _)) if existing_unit_name != unit_name => {
-                // Same owning type, different unit name with same signature shape: keep the
-                // canonical (factor=1) unit so arithmetic results land on the natural unit.
-                let existing_factor = units
-                    .get(existing_unit_name)
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "BUG: existing_unit_name '{}' from signature_index must be in its \
-                             owning type's units: {e}",
-                            existing_unit_name
-                        )
-                    })
-                    .factor;
-                let new_is_canonical = unit.factor == crate::computation::rational::rational_one();
-                let existing_is_canonical =
-                    existing_factor == crate::computation::rational::rational_one();
-                if new_is_canonical && !existing_is_canonical {
-                    signature_index.insert(signature, (unit_name.clone(), Arc::clone(lemma_type)));
-                }
-            }
             _ => {
                 signature_index.insert(signature, (unit_name.clone(), Arc::clone(lemma_type)));
             }
@@ -6029,7 +6163,8 @@ fn refresh_named_range_specs(
     data_defs: &HashMap<String, DataTypeDef>,
     resolved: &mut TypeMap,
     declared_defaults: &mut HashMap<String, ValueKind>,
-) {
+) -> Vec<Error> {
+    let mut errors = Vec::new();
     for (type_name, def) in data_defs {
         let ParentType::Ranged { inner } = &def.parent else {
             continue;
@@ -6058,6 +6193,29 @@ fn refresh_named_range_specs(
             }
         };
         let Some(element_type) = element_type else {
+            let missing_name = match element {
+                ParentType::Custom { name } => name.clone(),
+                ParentType::Qualified {
+                    spec_alias,
+                    inner: qualified_inner,
+                } => {
+                    let ParentType::Custom { name } = qualified_inner.as_ref() else {
+                        continue;
+                    };
+                    format!("{spec_alias}.{name}")
+                }
+                _ => continue,
+            };
+            errors.push(Error::validation_with_context(
+                format!(
+                    "In spec '{}': ranged type '{}' references missing element type '{}'",
+                    spec.name, type_name, missing_name
+                ),
+                Some(def.source.clone()),
+                None::<String>,
+                Some(Arc::clone(spec)),
+                None,
+            ));
             continue;
         };
         let endpoint_type = Arc::clone(element_type);
@@ -6096,6 +6254,7 @@ fn refresh_named_range_specs(
         let _ = inner;
         let _ = spec;
     }
+    errors
 }
 
 type TypeMap = HashMap<String, Arc<LemmaType>>;
@@ -6114,7 +6273,7 @@ fn resolve_quantity_decompositions(
         .iter()
         .filter_map(|(name, lt)| {
             if let TypeSpecification::Quantity { units, .. } = &lt.specifications {
-                if units.iter().all(|u| u.derived_quantity_factors.is_empty()) {
+                if units.iter().all(quantity_unit_is_simple) {
                     return Some(name.clone());
                 }
             }
@@ -6172,7 +6331,8 @@ fn resolve_quantity_decompositions(
                         unit_name
                     )
                 })
-                .factor;
+                .factor
+                .clone();
             lookup.insert(
                 unit_name.clone(),
                 (quantity_name, decomposition.clone(), factor),
@@ -6197,7 +6357,11 @@ fn resolve_quantity_decompositions(
             for unit in units.iter() {
                 lookup.insert(
                     unit.name.clone(),
-                    (type_name.clone(), decomposition.clone(), unit.factor),
+                    (
+                        type_name.clone(),
+                        decomposition.clone(),
+                        unit.factor.clone(),
+                    ),
                 );
             }
         }
@@ -6207,10 +6371,7 @@ fn resolve_quantity_decompositions(
         .iter()
         .filter_map(|(name, lemma_type)| {
             if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
-                if units
-                    .iter()
-                    .any(|unit| !unit.derived_quantity_factors.is_empty())
-                {
+                if units.iter().any(|unit| !quantity_unit_is_simple(unit)) {
                     return Some(name.clone());
                 }
             }
@@ -6260,7 +6421,7 @@ fn resolve_quantity_decompositions(
                 ));
                 continue;
             }
-            if unit.derived_quantity_factors.is_empty() {
+            if quantity_unit_is_simple(unit) {
                 let simple_decomp =
                     declared_quantity_decomposition(type_name, &resolved[type_name]);
 
@@ -6281,7 +6442,7 @@ fn resolve_quantity_decompositions(
                     resolved_type_decomp = Some(simple_decomp);
                 }
 
-                resolved_unit_factors[unit_idx] = Some(unit.factor);
+                resolved_unit_factors[unit_idx] = Some(unit.factor.clone());
                 continue;
             }
 
@@ -6289,7 +6450,7 @@ fn resolve_quantity_decompositions(
                 spec_name,
                 type_name,
                 &unit.name,
-                unit.factor,
+                unit.factor.clone(),
                 &unit.derived_quantity_factors,
                 &lookup,
                 type_source.as_ref(),
@@ -6343,8 +6504,8 @@ fn resolve_quantity_decompositions(
                     .enumerate()
                     .map(|(idx, u)| {
                         let u = u.with_decomposition(type_decomp.clone());
-                        match resolved_unit_factors[idx] {
-                            Some(factor) => u.with_factor(factor),
+                        match resolved_unit_factors[idx].clone() {
+                            Some(factor) => u.with_factor(factor.clone()),
                             None => u,
                         }
                     })
@@ -6357,7 +6518,7 @@ fn resolve_quantity_decompositions(
             for unit in units.iter() {
                 lookup.insert(
                     unit.name.clone(),
-                    (type_name.clone(), type_decomp.clone(), unit.factor),
+                    (type_name.clone(), type_decomp.clone(), unit.factor.clone()),
                 );
             }
         }
@@ -6544,8 +6705,15 @@ fn reserved_calendar_units_in_quantity(lemma_type: &LemmaType) -> Vec<String> {
         .collect()
 }
 
+fn quantity_unit_is_simple(unit: &QuantityUnit) -> bool {
+    unit.derived_quantity_factors.is_empty()
+        || (unit.derived_quantity_factors.len() == 1
+            && unit.derived_quantity_factors[0].0 == unit.name
+            && unit.derived_quantity_factors[0].1 == 1)
+}
+
 fn canonicalize_unit_for_quantity(unit: QuantityUnit) -> QuantityUnit {
-    let factors = if unit.derived_quantity_factors.is_empty() {
+    let factors = if quantity_unit_is_simple(&unit) {
         vec![(unit.name.clone(), 1)]
     } else {
         canonicalize_signature(&unit.derived_quantity_factors)
@@ -6697,7 +6865,7 @@ mod tests {
                     discovery::DagError::Cycle(es) | discovery::DagError::Other(es) => es,
                 },
             )?;
-        match Graph::build(&ctx, &repository, &main_spec_arc, &dag, &effective) {
+        match Graph::build(&ctx, &repository, &main_spec_arc, &dag, &effective, false) {
             Ok((graph, _types)) => Ok(graph),
             Err(errors) => Err(errors),
         }
@@ -6975,6 +7143,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(rule2_node.depends_on_rules.len(), 1);
+        // Source branches preserve RulePath; normalized_expression must inline deps and must not.
         assert!(matches!(
             rule2_node.branches[0].1.kind,
             ExpressionKind::RulePath(_)
@@ -7271,6 +7440,9 @@ pub struct ResolvedSpecTypes {
     /// Defaults captured during type resolution, before quantity unit factors are final.
     pub(crate) raw_defaults: Vec<(String, RawDefault)>,
 
+    /// Raw defaults retained after materialization for cross-spec parent lookup during later specs.
+    pub(crate) source_defaults: HashMap<String, RawDefault>,
+
     /// Unit index: unit_name -> resolved type.
     /// Built during resolution — if unit appears in multiple types, resolution fails.
     pub unit_index: HashMap<String, Arc<LemmaType>>,
@@ -7295,6 +7467,11 @@ pub(crate) struct TypeResolver<'a> {
     data_types: Vec<(Arc<LemmaSpec>, HashMap<String, DataTypeDef>)>,
     context: &'a Context,
     all_registered_specs: Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>)>,
+    /// Specs for which [`TypeResolver::register_all`] could not register every
+    /// type-declaring data row. Planning must skip building these specs:
+    /// downstream code (`add_data`) relies on every type-resolving data row
+    /// being present in the resolved type map.
+    specs_with_failed_registration: Vec<Arc<LemmaSpec>>,
 }
 
 /// Parent type used for quantity-family lookup, unwrapping [`ParentType::Ranged`].
@@ -7319,9 +7496,30 @@ fn time_range_endpoints_share_timezone(
     }
 }
 
-/// Infer primitive [`ParentType`] from a literal RHS (`data x: 3.14`).
-fn inferred_parent_type_from_literal(value: &ast::Value) -> ParentType {
+/// Display name for a parser literal's base type, matching the names produced
+/// by [`LemmaType::name`] for the corresponding semantic literal. Used in
+/// range endpoint validation error messages.
+fn parser_value_base_type_display_name(value: &ast::Value) -> &'static str {
     match value {
+        ast::Value::Number(_) => "number",
+        ast::Value::Text(_) => "text",
+        ast::Value::Boolean(_) => "boolean",
+        ast::Value::Date(_) => "date",
+        ast::Value::Time(_) => "time",
+        ast::Value::NumberWithUnit(_, unit) => match unit.as_str() {
+            "percent" | "permille" => "ratio",
+            _ => "quantity",
+        },
+        ast::Value::Range(_, _) => "range",
+    }
+}
+
+/// Infer primitive [`ParentType`] from a literal RHS (`data x: 3.14`).
+///
+/// Returns an error for range literals whose endpoint types are not a
+/// supported range element combination (e.g. `1 ... yes`, `"a" ... "b"`).
+fn inferred_parent_type_from_literal(value: &ast::Value) -> Result<ParentType, String> {
+    let parent_type = match value {
         ast::Value::Number(_) => ParentType::Primitive {
             primitive: PrimitiveKind::Number,
         },
@@ -7345,22 +7543,26 @@ fn inferred_parent_type_from_literal(value: &ast::Value) -> ParentType {
                 (ast::Value::Number(_), ast::Value::Number(_)) => PrimitiveKind::NumberRange,
                 (ast::Value::Date(_), ast::Value::Date(_)) => PrimitiveKind::DateRange,
                 (ast::Value::Time(_), ast::Value::Time(_)) => PrimitiveKind::TimeRange,
-                (
-                    ast::Value::NumberWithUnit(_, u1),
-                    ast::Value::NumberWithUnit(_, u2),
-                ) if u1 == u2 && matches!(u1.as_str(), "percent" | "permille") => {
+                (ast::Value::NumberWithUnit(_, u1), ast::Value::NumberWithUnit(_, u2))
+                    if u1 == u2 && matches!(u1.as_str(), "percent" | "permille") =>
+                {
                     PrimitiveKind::RatioRange
                 }
                 (ast::Value::NumberWithUnit(_, _), ast::Value::NumberWithUnit(_, _)) => {
                     PrimitiveKind::QuantityRange
                 }
-                _ => unreachable!(
-                    "BUG: inferred_parent_type_from_literal called on invalid range literal; planning must validate range endpoint types first"
-                ),
+                (left_value, right_value) => {
+                    return Err(format!(
+                        "range endpoints must have the same supported base type, got {} and {}",
+                        parser_value_base_type_display_name(left_value),
+                        parser_value_base_type_display_name(right_value)
+                    ));
+                }
             };
             ParentType::Primitive { primitive }
         }
-    }
+    };
+    Ok(parent_type)
 }
 
 impl<'a> TypeResolver<'a> {
@@ -7369,6 +7571,7 @@ impl<'a> TypeResolver<'a> {
             data_types: Vec::new(),
             context,
             all_registered_specs: Vec::new(),
+            specs_with_failed_registration: Vec::new(),
         }
     }
 
@@ -7376,6 +7579,27 @@ impl<'a> TypeResolver<'a> {
         self.all_registered_specs
             .iter()
             .any(|(_, s)| Arc::ptr_eq(s, spec))
+    }
+
+    /// Record that a type-declaring data row of `spec` could not be registered.
+    fn mark_registration_failure(&mut self, spec: &Arc<LemmaSpec>) {
+        if !self
+            .specs_with_failed_registration
+            .iter()
+            .any(|s| Arc::ptr_eq(s, spec))
+        {
+            self.specs_with_failed_registration.push(Arc::clone(spec));
+        }
+    }
+
+    /// Whether [`TypeResolver::register_all`] failed to register a
+    /// type-declaring data row of `spec`. The corresponding errors were
+    /// returned by `register_all`; specs with failed registrations must not
+    /// be built.
+    pub fn registration_failed(&self, spec: &Arc<LemmaSpec>) -> bool {
+        self.specs_with_failed_registration
+            .iter()
+            .any(|s| Arc::ptr_eq(s, spec))
     }
 
     /// Register all type-declaring data from a spec.
@@ -7410,7 +7634,20 @@ impl<'a> TypeResolver<'a> {
                     let name = &data.reference.name;
                     let parent = match (base.as_ref(), value.as_ref()) {
                         (Some(b), _) => b.clone(),
-                        (None, Some(v)) => inferred_parent_type_from_literal(v),
+                        (None, Some(v)) => match inferred_parent_type_from_literal(v) {
+                            Ok(parent) => parent,
+                            Err(message) => {
+                                errors.push(Error::validation_with_context(
+                                    message,
+                                    Some(data.source_location.clone()),
+                                    None::<String>,
+                                    Some(Arc::clone(spec)),
+                                    None,
+                                ));
+                                self.mark_registration_failure(spec);
+                                continue;
+                            }
+                        },
                         (None, None) => {
                             errors.push(Error::validation_with_context(
                                 format!(
@@ -7422,6 +7659,7 @@ impl<'a> TypeResolver<'a> {
                                 Some(Arc::clone(spec)),
                                 None,
                             ));
+                            self.mark_registration_failure(spec);
                             continue;
                         }
                     };
@@ -7477,8 +7715,14 @@ impl<'a> TypeResolver<'a> {
         &self,
         spec: &Arc<LemmaSpec>,
         at: &EffectiveDate,
+        already_resolved: &ResolvedTypesMap,
     ) -> Result<ResolvedSpecTypes, Vec<Error>> {
-        let mut resolved_types = self.resolve_types_internal(spec, at)?;
+        let mut resolved_types = self.resolve_types_internal(spec, at, already_resolved)?;
+        resolved_types.source_defaults = resolved_types
+            .raw_defaults
+            .iter()
+            .map(|(name, raw)| (name.clone(), raw.clone()))
+            .collect();
         let mut errors = Vec::new();
 
         // Build the type-name → source map for precise error reporting.
@@ -7534,12 +7778,12 @@ impl<'a> TypeResolver<'a> {
         }
 
         if let Some((_, data_defs)) = self.data_types.iter().find(|(s, _)| Arc::ptr_eq(s, spec)) {
-            refresh_named_range_specs(
+            errors.extend(refresh_named_range_specs(
                 spec,
                 data_defs,
                 &mut resolved_types.resolved,
                 &mut resolved_types.declared_defaults,
-            );
+            ));
         }
 
         if let Err(error) = build_signature_index(&spec.name, &resolved_types.unit_index) {
@@ -7638,59 +7882,378 @@ impl<'a> TypeResolver<'a> {
         &self,
         spec: &Arc<LemmaSpec>,
         at: &EffectiveDate,
+        already_resolved: &ResolvedTypesMap,
     ) -> Result<ResolvedSpecTypes, Vec<Error>> {
-        let mut resolved: HashMap<String, Arc<LemmaType>> = HashMap::new();
-        let mut raw_defaults: Vec<(String, RawDefault)> = Vec::new();
-        let mut visited: Vec<(Arc<LemmaSpec>, String)> = Vec::new();
+        let data_defs = self
+            .data_types
+            .iter()
+            .find(|(s, _)| Arc::ptr_eq(s, spec))
+            .map(|(_, defs)| defs)
+            .cloned()
+            .unwrap_or_default();
 
-        if let Some((_, spec_types)) = self.data_types.iter().find(|(s, _)| Arc::ptr_eq(s, spec)) {
-            for type_name in spec_types.keys() {
-                match self.resolve_type_internal(spec, type_name, &mut visited, at) {
-                    Ok(Some((resolved_type, raw_default))) => {
-                        resolved.insert(type_name.clone(), resolved_type);
-                        if let Some(rd) = raw_default {
-                            raw_defaults.push((type_name.clone(), rd));
-                        }
-                    }
-                    Ok(None) => {
-                        unreachable!(
-                            "BUG: registered type '{}' could not be resolved (spec='{}')",
-                            type_name, spec.name
-                        );
-                    }
-                    Err(es) => return Err(es),
+        let type_names: Vec<String> = data_defs.keys().cloned().collect();
+        let sorted_type_names = if type_names.is_empty() {
+            type_names
+        } else {
+            let type_index: HashMap<&str, usize> = type_names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| (name.as_str(), index))
+                .collect();
+            let type_count = type_names.len();
+            let mut in_degree = vec![0usize; type_count];
+            let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); type_count];
+            for (child_index, type_name) in type_names.iter().enumerate() {
+                let custom_parent = match &data_defs[type_name].parent {
+                    ParentType::Ranged { inner } => match element_parent_type(inner) {
+                        ParentType::Custom { name } => Some(name.as_str()),
+                        _ => None,
+                    },
+                    ParentType::Custom { name } => Some(name.as_str()),
+                    _ => None,
+                };
+                let Some(parent_name) = custom_parent else {
+                    continue;
+                };
+                let Some(&parent_index) = type_index.get(parent_name) else {
+                    continue;
+                };
+                if parent_index == child_index {
+                    continue;
                 }
-                visited.clear();
+                in_degree[child_index] += 1;
+                dependents[parent_index].push(child_index);
+            }
+            let mut queue: std::collections::VecDeque<usize> = (0..type_count)
+                .filter(|&index| in_degree[index] == 0)
+                .collect();
+            let mut sorted = Vec::with_capacity(type_count);
+            while let Some(index) = queue.pop_front() {
+                sorted.push(type_names[index].clone());
+                for &dependent_index in &dependents[index] {
+                    in_degree[dependent_index] -= 1;
+                    if in_degree[dependent_index] == 0 {
+                        queue.push_back(dependent_index);
+                    }
+                }
+            }
+            if sorted.len() != type_count {
+                let cycle_type_name = type_names
+                    .iter()
+                    .find(|name| in_degree[type_index[name.as_str()]] > 0)
+                    .expect("BUG: incomplete topo sort without cycle participant");
+                return Err(vec![Error::validation_with_context(
+                    format!(
+                        "Circular dependency detected in type resolution: {}::{}",
+                        spec.name, cycle_type_name
+                    ),
+                    Some(data_defs[cycle_type_name].source.clone()),
+                    None::<String>,
+                    Some(Arc::clone(spec)),
+                    None,
+                )]);
+            }
+            sorted
+        };
+
+        let mut resolved: HashMap<String, (Arc<LemmaType>, Option<RawDefault>)> = HashMap::new();
+
+        fn lookup_parent_type(
+            resolver: &TypeResolver<'_>,
+            spec: &Arc<LemmaSpec>,
+            parent: &ParentType,
+            source: &Source,
+            at: &EffectiveDate,
+            already_resolved: &ResolvedTypesMap,
+            resolved: &HashMap<String, (Arc<LemmaType>, Option<RawDefault>)>,
+        ) -> Result<(TypeSpecification, Option<RawDefault>, Arc<LemmaType>), Vec<Error>> {
+            match parent {
+                ParentType::Ranged { inner } => {
+                    let (element_specs, element_default, element_type) = lookup_parent_type(
+                        resolver,
+                        spec,
+                        inner,
+                        source,
+                        at,
+                        already_resolved,
+                        resolved,
+                    )?;
+                    let range_spec = element_specs.range_from_element().ok_or_else(|| {
+                        vec![Error::validation_with_context(
+                            format!(
+                                "'{inner}' is not rangeable: only quantity, number, ratio, date, and time types support ranges"
+                            ),
+                            Some(source.clone()),
+                            None::<String>,
+                            Some(Arc::clone(spec)),
+                            None,
+                        )]
+                    })?;
+                    Ok((range_spec, element_default, element_type))
+                }
+                ParentType::Primitive { primitive: kind } => {
+                    let lemma_type = Arc::new(LemmaType::primitive(
+                        semantics::type_spec_for_primitive(*kind),
+                    ));
+                    Ok((lemma_type.as_ref().specifications.clone(), None, lemma_type))
+                }
+                ParentType::Custom { name } => {
+                    if let Some((parent_type, parent_default)) = resolved.get(name.as_str()) {
+                        return Ok((
+                            parent_type.as_ref().specifications.clone(),
+                            parent_default.clone(),
+                            Arc::clone(parent_type),
+                        ));
+                    }
+                    let type_exists = resolver
+                        .data_types
+                        .iter()
+                        .find(|(s, _)| Arc::ptr_eq(s, spec))
+                        .map(|(_, type_map)| type_map.contains_key(name.as_str()))
+                        .unwrap_or(false);
+                    if !type_exists {
+                        if spec.data.iter().any(|data| {
+                            data.reference.is_local()
+                                && data.reference.name == name.as_str()
+                                && matches!(&data.value, ParsedDataValue::Import(_))
+                        }) {
+                            return Err(vec![Error::validation_with_context(
+                                format!(
+                                    "'{name}' names a spec import alias, not a type: use `data x: {name}.TypeName` after `uses`"
+                                ),
+                                Some(source.clone()),
+                                None::<String>,
+                                Some(Arc::clone(spec)),
+                                None,
+                            )]);
+                        }
+                        return Err(vec![Error::validation_with_context(
+                            format!(
+                                "Unknown parent '{parent}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, quantity, number, ratio, text, date, time, duration, percent"
+                            ),
+                            Some(source.clone()),
+                            None::<String>,
+                            Some(Arc::clone(spec)),
+                            None,
+                        )]);
+                    }
+                    Err(vec![Error::validation_with_context(
+                        format!(
+                            "Circular dependency detected in type resolution: {}::{}",
+                            spec.name, name
+                        ),
+                        Some(source.clone()),
+                        None::<String>,
+                        Some(Arc::clone(spec)),
+                        None,
+                    )])
+                }
+                ParentType::Qualified { spec_alias, inner } => {
+                    let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
+                    let (_, target_spec) =
+                        match resolver.resolve_spec_for_import(spec, &spec_ref, source, at) {
+                            Ok(import_pair) => import_pair,
+                            Err(error) => return Err(vec![error]),
+                        };
+                    match inner.as_ref() {
+                        ParentType::Primitive { primitive: kind } => {
+                            let lemma_type = Arc::new(LemmaType::primitive(
+                                semantics::type_spec_for_primitive(*kind),
+                            ));
+                            Ok((lemma_type.as_ref().specifications.clone(), None, lemma_type))
+                        }
+                        ParentType::Custom { name } => {
+                            let Some(resolved_spec_types) = already_resolved
+                                .iter()
+                                .find(|(_, imported, _)| Arc::ptr_eq(imported, &target_spec))
+                                .map(|(_, _, resolved_spec_types)| resolved_spec_types)
+                            else {
+                                // The import target exists but failed its own type
+                                // resolution (its errors were already collected), so
+                                // the consumer cannot resolve this qualified type.
+                                return Err(vec![Error::validation_with_context(
+                                    format!(
+                                        "Cannot resolve type '{name}' from spec '{}' (via import '{spec_alias}'): spec '{}' failed type resolution",
+                                        target_spec.name, target_spec.name
+                                    ),
+                                    Some(source.clone()),
+                                    None::<String>,
+                                    Some(Arc::clone(spec)),
+                                    None,
+                                )]);
+                            };
+                            let Some(parent_type) = resolved_spec_types.resolved.get(name.as_str())
+                            else {
+                                let type_exists = resolver
+                                    .data_types
+                                    .iter()
+                                    .find(|(s, _)| Arc::ptr_eq(s, &target_spec))
+                                    .map(|(_, type_map)| type_map.contains_key(name.as_str()))
+                                    .unwrap_or(false);
+                                if !type_exists {
+                                    return Err(vec![Error::validation_with_context(
+                                        format!(
+                                            "Type '{name}' is not defined in spec '{}' (via import '{spec_alias}')",
+                                            target_spec.name
+                                        ),
+                                        Some(source.clone()),
+                                        None::<String>,
+                                        Some(Arc::clone(spec)),
+                                        None,
+                                    )]);
+                                }
+                                return Err(vec![Error::validation_with_context(
+                                    format!(
+                                        "Circular dependency detected in type resolution: {}::{}",
+                                        target_spec.name, name
+                                    ),
+                                    Some(source.clone()),
+                                    None::<String>,
+                                    Some(Arc::clone(spec)),
+                                    None,
+                                )]);
+                            };
+                            Ok((
+                                parent_type.as_ref().specifications.clone(),
+                                resolved_spec_types
+                                    .source_defaults
+                                    .get(name.as_str())
+                                    .cloned(),
+                                Arc::clone(parent_type),
+                            ))
+                        }
+                        ParentType::Qualified { .. } => Err(vec![Error::validation_with_context(
+                            "Nested qualified parent types are invalid",
+                            Some(source.clone()),
+                            None::<String>,
+                            Some(Arc::clone(spec)),
+                            None,
+                        )]),
+                        ParentType::Ranged { .. } => Err(vec![Error::validation_with_context(
+                            "Nested ranged parent types are invalid",
+                            Some(source.clone()),
+                            None::<String>,
+                            Some(Arc::clone(spec)),
+                            None,
+                        )]),
+                    }
+                }
             }
         }
 
-        // Build unit_index with DataTypeDef for conflict detection.
+        for type_name in &sorted_type_names {
+            let ftd = data_defs
+                .get(type_name.as_str())
+                .expect("BUG: topo-sorted type missing from registry");
+            let parent = ftd.parent.clone();
+            let constraints = ftd.constraints.clone();
+
+            let (parent_specs, parent_default, parent_type) = lookup_parent_type(
+                self,
+                spec,
+                &parent,
+                &ftd.source,
+                at,
+                already_resolved,
+                &resolved,
+            )?;
+
+            let mut declared_default = parent_default;
+            let final_specs = if let Some(constraints) = &constraints {
+                apply_constraints_to_spec(
+                    spec,
+                    &constraint_application_type_name(&parent, type_name),
+                    parent_specs,
+                    constraints,
+                    &ftd.source,
+                    &mut declared_default,
+                )?
+            } else {
+                parent_specs
+            };
+
+            let import_target =
+                if let ParentType::Qualified { spec_alias, .. } = element_parent_type(&parent) {
+                    let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
+                    Some(
+                        self.resolve_spec_for_import(spec, &spec_ref, &ftd.source, at)
+                            .map_err(|error| vec![error])?
+                            .1,
+                    )
+                } else {
+                    None
+                };
+
+            let family = match element_parent_type(&parent) {
+                ParentType::Primitive { .. } => type_name.clone(),
+                _ => parent_type
+                    .quantity_family_name()
+                    .map(String::from)
+                    .unwrap_or_else(|| type_name.clone()),
+            };
+
+            let extends = TypeExtends::Custom {
+                parent: parent.to_string(),
+                family,
+                defining_spec: if let Some(import_spec) = import_target {
+                    TypeDefiningSpec::Import { spec: import_spec }
+                } else {
+                    TypeDefiningSpec::Local
+                },
+            };
+
+            let declared_default = match &ftd.bound_literal {
+                Some(literal) => match semantics::parser_value_to_value_kind(literal, &final_specs)
+                {
+                    Ok(value_kind) => Some(RawDefault::Value(value_kind)),
+                    Err(message) => {
+                        return Err(vec![Error::validation_with_context(
+                            message,
+                            Some(ftd.source.clone()),
+                            None::<String>,
+                            Some(Arc::clone(spec)),
+                            None,
+                        )]);
+                    }
+                },
+                None => declared_default,
+            };
+
+            let lemma_type = Arc::new(LemmaType {
+                name: Some(type_name.clone()),
+                specifications: final_specs,
+                extends,
+            });
+            resolved.insert(type_name.clone(), (lemma_type, declared_default));
+        }
+
         let mut unit_index_tmp: HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)> =
             HashMap::new();
         let mut errors = Vec::new();
-
         let prim_ratio = semantics::primitive_ratio_arc().clone();
         for unit in Self::extract_units_from_type(&prim_ratio.as_ref().specifications) {
             unit_index_tmp.insert(unit, (Arc::clone(&prim_ratio), None));
         }
 
-        for (type_name, type_arc) in &resolved {
-            let data_type_def = self
-                .data_types
-                .iter()
-                .find(|(s, _)| Arc::ptr_eq(s, spec))
-                .and_then(|(_, defs)| defs.get(type_name.as_str()))
+        for (type_name, (type_arc, _)) in &resolved {
+            let data_type_def = data_defs
+                .get(type_name.as_str())
                 .expect("BUG: type was resolved but not in registry");
-            let shared = Arc::clone(type_arc);
-            let e: Result<(), Error> = if type_arc.is_quantity() {
-                Self::add_quantity_units_to_index(spec, &mut unit_index_tmp, &shared, data_type_def)
+            let merge_result = if type_arc.is_quantity() {
+                Self::add_quantity_units_to_index(
+                    spec,
+                    &mut unit_index_tmp,
+                    type_arc,
+                    data_type_def,
+                )
             } else if type_arc.is_ratio() {
-                Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, &shared, data_type_def)
+                Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, data_type_def)
             } else {
                 Ok(())
             };
-            if let Err(e) = e {
-                errors.push(e);
+            if let Err(error) = merge_result {
+                errors.push(error);
             }
         }
 
@@ -7700,62 +8263,42 @@ impl<'a> TypeResolver<'a> {
             };
             let (_, imported_spec) =
                 match self.resolve_spec_for_import(spec, spec_ref, &data_row.source_location, at) {
-                    Ok(x) => x,
-                    Err(_) => {
-                        // Import validation runs again when the graph resolves `uses`; do not fail
-                        // `resolve_and_validate` here so other planning errors (bindings, fills, etc.)
-                        // are still collected in the same load.
-                        continue;
-                    }
+                    Ok(import_pair) => import_pair,
+                    Err(_) => continue,
                 };
-            let Some((_, imported_type_map)) = self
-                .data_types
+            let Some(imported_resolved) = already_resolved
                 .iter()
-                .find(|(s, _)| Arc::ptr_eq(s, &imported_spec))
+                .find(|(_, imported, _)| Arc::ptr_eq(imported, &imported_spec))
+                .map(|(_, _, resolved_spec_types)| resolved_spec_types)
             else {
                 continue;
             };
-
-            let mut import_visited: Vec<(Arc<LemmaSpec>, String)> = Vec::new();
-            for (type_name, def) in imported_type_map.iter() {
+            let Some(imported_defs) = self
+                .data_types
+                .iter()
+                .find(|(s, _)| Arc::ptr_eq(s, &imported_spec))
+                .map(|(_, defs)| defs)
+            else {
+                continue;
+            };
+            for (imported_type_name, def) in imported_defs {
                 if matches!(def.parent, ParentType::Qualified { .. }) {
                     continue;
                 }
-                match self.resolve_type_internal(
-                    &imported_spec,
-                    type_name.as_str(),
-                    &mut import_visited,
-                    at,
-                ) {
-                    Ok(Some((type_arc, _))) => {
-                        let shared = Arc::clone(&type_arc);
-                        if type_arc.is_quantity() {
-                            if let Err(e) = Self::add_quantity_units_to_index(
-                                spec,
-                                &mut unit_index_tmp,
-                                &shared,
-                                def,
-                            ) {
-                                errors.push(e);
-                            }
-                        } else if type_arc.is_ratio() {
-                            if let Err(e) = Self::add_ratio_units_to_index(
-                                spec,
-                                &mut unit_index_tmp,
-                                &shared,
-                                def,
-                            ) {
-                                errors.push(e);
-                            }
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(_) => {
-                        // Skip merging units for this imported row; type resolution for the
-                        // exported spec is validated when that spec is planned.
-                    }
+                let Some(type_arc) = imported_resolved.resolved.get(imported_type_name.as_str())
+                else {
+                    continue;
+                };
+                let merge_result = if type_arc.is_quantity() {
+                    Self::add_quantity_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                } else if type_arc.is_ratio() {
+                    Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                } else {
+                    Ok(())
+                };
+                if let Err(error) = merge_result {
+                    errors.push(error);
                 }
-                import_visited.clear();
             }
         }
 
@@ -7765,379 +8308,25 @@ impl<'a> TypeResolver<'a> {
 
         let unit_index: HashMap<String, Arc<LemmaType>> = unit_index_tmp
             .into_iter()
-            .map(|(k, (lt, _))| (k, lt))
+            .map(|(unit_name, (lemma_type, _))| (unit_name, lemma_type))
             .collect();
 
+        let mut raw_defaults = Vec::new();
+        let mut resolved_types = HashMap::new();
+        for (type_name, (lemma_type, default)) in resolved {
+            if let Some(raw_default) = default {
+                raw_defaults.push((type_name.clone(), raw_default));
+            }
+            resolved_types.insert(type_name, lemma_type);
+        }
+
         Ok(ResolvedSpecTypes {
-            resolved,
+            resolved: resolved_types,
             declared_defaults: HashMap::new(),
             raw_defaults,
+            source_defaults: HashMap::new(),
             unit_index,
         })
-    }
-
-    fn resolve_type_internal(
-        &self,
-        spec: &Arc<LemmaSpec>,
-        name: &str,
-        visited: &mut Vec<(Arc<LemmaSpec>, String)>,
-        at: &EffectiveDate,
-    ) -> ResolveTypeInternalResult {
-        if visited
-            .iter()
-            .any(|(s, n)| Arc::ptr_eq(s, spec) && n == name)
-        {
-            let source_location = self
-                .data_types
-                .iter()
-                .find(|(s, _)| Arc::ptr_eq(s, spec))
-                .and_then(|(_, dt)| dt.get(name))
-                .map(|ftd| ftd.source.clone())
-                .unwrap_or_else(|| {
-                    unreachable!(
-                        "BUG: circular dependency detected for type '{}::{}' but type definition not found in registry",
-                        spec.name, name
-                    )
-                });
-            return Err(vec![Error::validation_with_context(
-                format!(
-                    "Circular dependency detected in type resolution: {}::{}",
-                    spec.name, name
-                ),
-                Some(source_location),
-                None::<String>,
-                Some(Arc::clone(spec)),
-                None,
-            )]);
-        }
-        visited.push((Arc::clone(spec), name.to_string()));
-
-        let ftd = match self
-            .data_types
-            .iter()
-            .find(|(s, _)| Arc::ptr_eq(s, spec))
-            .and_then(|(_, dt)| dt.get(name))
-        {
-            Some(def) => def.clone(),
-            None => {
-                if let Some(pos) = visited
-                    .iter()
-                    .position(|(s, n)| Arc::ptr_eq(s, spec) && n == name)
-                {
-                    visited.remove(pos);
-                }
-                return Ok(None);
-            }
-        };
-
-        let parent = ftd.parent.clone();
-        let constraints = ftd.constraints.clone();
-
-        let (parent_specs, parent_declared_default) = match self.resolve_parent(
-            spec,
-            &parent,
-            visited,
-            &ftd.source,
-            at,
-        ) {
-            Ok(Some(pair)) => pair,
-            Ok(None) => {
-                if let Some(pos) = visited
-                    .iter()
-                    .position(|(s, n)| Arc::ptr_eq(s, spec) && n == name)
-                {
-                    visited.remove(pos);
-                }
-                return Err(vec![Error::validation_with_context(
-                        format!("Unknown parent '{}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, quantity, number, ratio, text, date, time, duration, percent", parent),
-                        Some(ftd.source.clone()),
-                        None::<String>,
-                        Some(Arc::clone(spec)),
-                        None,
-                    )]);
-            }
-            Err(es) => {
-                if let Some(pos) = visited
-                    .iter()
-                    .position(|(s, n)| Arc::ptr_eq(s, spec) && n == name)
-                {
-                    visited.remove(pos);
-                }
-                return Err(es);
-            }
-        };
-
-        let mut declared_default = parent_declared_default;
-        let final_specs = if let Some(constraints) = &constraints {
-            let constraint_type_name = constraint_application_type_name(&parent, name);
-            match apply_constraints_to_spec(
-                spec,
-                &constraint_type_name,
-                parent_specs,
-                constraints,
-                &ftd.source,
-                &mut declared_default,
-            ) {
-                Ok(specs) => specs,
-                Err(errors) => {
-                    if let Some(pos) = visited
-                        .iter()
-                        .position(|(s, n)| Arc::ptr_eq(s, spec) && n == name)
-                    {
-                        visited.remove(pos);
-                    }
-                    return Err(errors);
-                }
-            }
-        } else {
-            parent_specs
-        };
-
-        if let Some(pos) = visited
-            .iter()
-            .position(|(s, n)| Arc::ptr_eq(s, spec) && n == name)
-        {
-            visited.remove(pos);
-        }
-
-        let extends = {
-            let parent_display = parent.to_string();
-            let import_target: Option<Arc<LemmaSpec>> =
-                if let ParentType::Qualified { spec_alias, .. } = element_parent_type(&parent) {
-                    let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
-                    match self.resolve_spec_for_import(spec, &spec_ref, &ftd.source, at) {
-                        Ok((_, arc)) => Some(arc),
-                        Err(e) => return Err(vec![e]),
-                    }
-                } else {
-                    None
-                };
-
-            let lookup_for_family: Option<(Arc<LemmaSpec>, String)> =
-                match element_parent_type(&parent) {
-                    ParentType::Primitive { .. } => None,
-                    ParentType::Custom { name } => Some((Arc::clone(spec), name.clone())),
-                    ParentType::Qualified { inner, .. } => {
-                        let target = import_target.as_ref().expect(
-                        "BUG: qualified parent missing resolved import target for family lookup",
-                    );
-                        match inner.as_ref() {
-                            ParentType::Custom { name } => Some((Arc::clone(target), name.clone())),
-                            ParentType::Primitive { .. } => None,
-                            ParentType::Qualified { .. } => {
-                                return Err(vec![Error::validation_with_context(
-                                    "Nested qualified parent types are invalid",
-                                    Some(ftd.source.clone()),
-                                    None::<String>,
-                                    Some(Arc::clone(spec)),
-                                    None,
-                                )]);
-                            }
-                            ParentType::Ranged { .. } => {
-                                unreachable!(
-                                "BUG: element_parent_type must unwrap Ranged before family lookup"
-                            )
-                            }
-                        }
-                    }
-                    ParentType::Ranged { .. } => {
-                        unreachable!(
-                            "BUG: element_parent_type must unwrap Ranged before family lookup"
-                        )
-                    }
-                };
-
-            let family = match &lookup_for_family {
-                None => name.to_string(),
-                Some((r, pn)) => match self.resolve_type_internal(r, pn.as_str(), visited, at) {
-                    Ok(Some((parent_type, _))) => parent_type
-                        .as_ref()
-                        .quantity_family_name()
-                        .map(String::from)
-                        .unwrap_or_else(|| name.to_string()),
-                    Ok(None) => name.to_string(),
-                    Err(es) => return Err(es),
-                },
-            };
-
-            let defining_spec = if let Some(ref arc) = import_target {
-                TypeDefiningSpec::Import {
-                    spec: Arc::clone(arc),
-                }
-            } else {
-                TypeDefiningSpec::Local
-            };
-
-            TypeExtends::Custom {
-                parent: parent_display,
-                family,
-                defining_spec,
-            }
-        };
-
-        let declared_default = match &ftd.bound_literal {
-            Some(lit) => match semantics::parser_value_to_value_kind(lit, &final_specs) {
-                Ok(vk) => Some(RawDefault::Value(vk)),
-                Err(message) => {
-                    return Err(vec![Error::validation_with_context(
-                        message,
-                        Some(ftd.source.clone()),
-                        None::<String>,
-                        Some(Arc::clone(spec)),
-                        None,
-                    )]);
-                }
-            },
-            None => declared_default,
-        };
-
-        Ok(Some((
-            Arc::new(LemmaType {
-                name: Some(name.to_string()),
-                specifications: final_specs,
-                extends,
-            }),
-            declared_default,
-        )))
-    }
-
-    fn resolve_parent(
-        &self,
-        spec: &Arc<LemmaSpec>,
-        parent: &ParentType,
-        visited: &mut Vec<(Arc<LemmaSpec>, String)>,
-        source: &crate::parsing::source::Source,
-        at: &EffectiveDate,
-    ) -> Result<Option<(TypeSpecification, Option<RawDefault>)>, Vec<Error>> {
-        match parent {
-            ParentType::Ranged { inner } => {
-                let Some((element_spec, declared_default)) =
-                    self.resolve_parent(spec, inner, visited, source, at)?
-                else {
-                    return Ok(None);
-                };
-                let range_spec = element_spec.range_from_element().ok_or_else(|| {
-                    vec![Error::validation_with_context(
-                        format!(
-                            "'{inner}' is not rangeable: only quantity, number, ratio, date, and time types support ranges"
-                        ),
-                        Some(source.clone()),
-                        None::<String>,
-                        Some(Arc::clone(spec)),
-                        None,
-                    )]
-                })?;
-                Ok(Some((range_spec, declared_default)))
-            }
-            ParentType::Primitive { primitive: kind } => {
-                Ok(Some((semantics::type_spec_for_primitive(*kind), None)))
-            }
-            ParentType::Custom { name } => {
-                let parent_name = name.as_str();
-                let result = self.resolve_type_internal(spec, parent_name, visited, at);
-                match result {
-                    Ok(Some((t, declared_default))) => {
-                        Ok(Some((t.as_ref().specifications.clone(), declared_default)))
-                    }
-                    Ok(None) => {
-                        let type_exists = self
-                            .data_types
-                            .iter()
-                            .find(|(s, _)| Arc::ptr_eq(s, spec))
-                            .map(|(_, m)| m.contains_key(parent_name))
-                            .unwrap_or(false);
-
-                        if !type_exists {
-                            if spec.data.iter().any(|d| {
-                                d.reference.is_local()
-                                    && d.reference.name == parent_name
-                                    && matches!(&d.value, ParsedDataValue::Import(_))
-                            }) {
-                                return Err(vec![Error::validation_with_context(
-                                    format!(
-                                        "'{}' names a spec import alias, not a type: use `data x: {}.TypeName` after `uses`",
-                                        parent_name, parent_name
-                                    ),
-                                    Some(source.clone()),
-                                    None::<String>,
-                                    Some(Arc::clone(spec)),
-                                    None,
-                                )]);
-                            }
-                            Err(vec![Error::validation_with_context(
-                                format!("Unknown parent '{}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, quantity, number, ratio, text, date, time, duration, percent", parent),
-                                Some(source.clone()),
-                                None::<String>,
-                                Some(Arc::clone(spec)),
-                                None,
-                            )])
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                    Err(es) => Err(es),
-                }
-            }
-            ParentType::Qualified { spec_alias, inner } => {
-                let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
-                let (_, target_arc) =
-                    match self.resolve_spec_for_import(spec, &spec_ref, source, at) {
-                        Ok(x) => x,
-                        Err(e) => return Err(vec![e]),
-                    };
-                match inner.as_ref() {
-                    ParentType::Primitive { primitive } => {
-                        Ok(Some((semantics::type_spec_for_primitive(*primitive), None)))
-                    }
-                    ParentType::Custom { name } => {
-                        let result =
-                            self.resolve_type_internal(&target_arc, name.as_str(), visited, at);
-                        match result {
-                            Ok(Some((t, declared_default))) => {
-                                Ok(Some((t.as_ref().specifications.clone(), declared_default)))
-                            }
-                            Ok(None) => {
-                                let type_exists = self
-                                    .data_types
-                                    .iter()
-                                    .find(|(s, _)| Arc::ptr_eq(s, &target_arc))
-                                    .map(|(_, m)| m.contains_key(name.as_str()))
-                                    .unwrap_or(false);
-                                if !type_exists {
-                                    Err(vec![Error::validation_with_context(
-                                        format!(
-                                            "Type '{}' is not defined in spec '{}' (via import '{}')",
-                                            name, target_arc.name, spec_alias
-                                        ),
-                                        Some(source.clone()),
-                                        None::<String>,
-                                        Some(Arc::clone(spec)),
-                                        None,
-                                    )])
-                                } else {
-                                    Ok(None)
-                                }
-                            }
-                            Err(es) => Err(es),
-                        }
-                    }
-                    ParentType::Qualified { .. } => Err(vec![Error::validation_with_context(
-                        "Nested qualified parent types are invalid",
-                        Some(source.clone()),
-                        None::<String>,
-                        Some(Arc::clone(spec)),
-                        None,
-                    )]),
-                    ParentType::Ranged { .. } => Err(vec![Error::validation_with_context(
-                        "Nested ranged parent types are invalid",
-                        Some(source.clone()),
-                        None::<String>,
-                        Some(Arc::clone(spec)),
-                        None,
-                    )]),
-                }
-            }
-        }
     }
 
     fn resolve_spec_for_import(
@@ -8328,7 +8517,7 @@ impl<'a> TypeResolver<'a> {
 #[cfg(test)]
 mod type_resolution_tests {
     use super::*;
-    use crate::computation::rational::RationalInteger;
+    use crate::computation::rational::rational_new;
     use crate::parse;
     use crate::parsing::ast::{
         CommandArg, LemmaSpec, ParentType, PrimitiveKind, TypeConstraintCommand,
@@ -8454,7 +8643,7 @@ mod type_resolution_tests {
         let result = resolver.register_type(&spec_arc, ftd);
         assert!(result.is_ok());
         let resolved = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         assert!(resolved.resolved.contains_key("age"));
     }
@@ -8511,7 +8700,7 @@ mod type_resolution_tests {
 
         resolver.register_type(&spec_arc, ftd).unwrap();
         let resolved = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
 
         assert!(resolved.resolved.contains_key("money"));
@@ -8530,7 +8719,7 @@ data road_length: length
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
 
         let road_length_type = resolved_types.resolved.get("road_length").unwrap();
@@ -8555,7 +8744,7 @@ data dice: number -> minimum 0 -> maximum 6"#,
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let dice_type = resolved_types.resolved.get("dice").unwrap();
 
@@ -8563,8 +8752,8 @@ data dice: number -> minimum 0 -> maximum 6"#,
             TypeSpecification::Number {
                 minimum, maximum, ..
             } => {
-                assert_eq!(*minimum, Some(RationalInteger::new(0, 1)));
-                assert_eq!(*maximum, Some(RationalInteger::new(6, 1)));
+                assert_eq!(minimum, &Some(rational_new(0, 1)));
+                assert_eq!(maximum, &Some(rational_new(6, 1)));
             }
             _ => panic!("Expected Number type specifications"),
         }
@@ -8578,7 +8767,7 @@ data money: quantity -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let money_type = resolved_types.resolved.get("money").unwrap();
 
@@ -8603,7 +8792,7 @@ data price: number -> decimals 2 -> minimum 0"#,
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let price_type = resolved_types.resolved.get("price").unwrap();
 
@@ -8612,7 +8801,7 @@ data price: number -> decimals 2 -> minimum 0"#,
                 decimals, minimum, ..
             } => {
                 assert_eq!(*decimals, Some(2));
-                assert_eq!(*minimum, Some(RationalInteger::new(0, 1)));
+                assert_eq!(minimum, &Some(rational_new(0, 1)));
             }
             _ => panic!("Expected Number type specifications with decimals"),
         }
@@ -8626,7 +8815,7 @@ data precise_number: number -> decimals 4"#,
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let precise_type = resolved_types.resolved.get("precise_number").unwrap();
 
@@ -8646,7 +8835,7 @@ data weight: quantity -> unit kg 1 -> decimals 3"#,
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let weight_type = resolved_types.resolved.get("weight").unwrap();
 
@@ -8666,7 +8855,7 @@ data ratio_type: ratio -> decimals 2"#,
         );
 
         let resolved_types = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let ratio_type = resolved_types.resolved.get("ratio_type").unwrap();
 
@@ -8683,6 +8872,29 @@ data ratio_type: ratio -> decimals 2"#,
     }
 
     #[test]
+    fn typedef_default_inherits_through_extension_chain() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data money: quantity -> unit eur 1 -> default 4 eur
+data price: money
+data final_price: price"#,
+        );
+
+        let resolved = resolver
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .expect("extension chain must resolve");
+
+        assert!(
+            resolved.declared_defaults.contains_key("money"),
+            "base typedef default must materialize"
+        );
+        assert!(
+            resolved.declared_defaults.contains_key("final_price"),
+            "default must inherit through extension chain (money → price → final_price)"
+        );
+    }
+
+    #[test]
     fn test_ratio_type_with_default_command() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
@@ -8690,7 +8902,7 @@ data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let percentage_type = resolved_types.resolved.get("percentage").unwrap();
 
@@ -8700,12 +8912,12 @@ data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
             } => {
                 assert_eq!(
                     *minimum,
-                    Some(RationalInteger::new(0, 1)),
+                    Some(rational_new(0, 1)),
                     "ratio type should have minimum 0"
                 );
                 assert_eq!(
                     *maximum,
-                    Some(RationalInteger::new(1, 1)),
+                    Some(rational_new(1, 1)),
                     "ratio type should have maximum 1"
                 );
             }
@@ -8718,7 +8930,7 @@ data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
             .expect("declared default must be tracked for percentage");
         match declared {
             ValueKind::Ratio(v, unit) => {
-                assert_eq!(*v, RationalInteger::new(1, 2));
+                assert_eq!(v, &rational_new(1, 2));
                 assert_eq!(unit.as_deref(), Some("percent"));
             }
             other => panic!("expected Ratio declared default, got {:?}", other),
@@ -8733,7 +8945,7 @@ data money: quantity -> unit eur 1
 data money2: money -> unit usd 1.24"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_ok(),
             "Quantity extension chain should resolve: {:?}",
@@ -8770,7 +8982,7 @@ data money2: money -> unit usd 1.24"#,
 data invalid: nonexistent_type -> minimum 0"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "Should reject invalid parent type");
 
         let errs = result.unwrap_err();
@@ -8790,7 +9002,7 @@ data invalid: nonexistent_type -> minimum 0"#,
 data invalid: choice -> option "a""#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "Should reject invalid type base 'choice'");
 
         let errs = result.unwrap_err();
@@ -8818,7 +9030,7 @@ data money2: money
         );
 
         let resolved = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let money2 = resolved.resolved.get("money2").unwrap();
         match &money2.specifications {
@@ -8863,7 +9075,7 @@ data length_b: quantity
   -> unit meter 1.0"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "Expected ambiguous unit definitions to error"
@@ -8894,7 +9106,7 @@ data r: ratio
   -> unit foo 100"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "quantity and ratio must not share a unit name"
@@ -8924,7 +9136,7 @@ data spread_b: ratio
         );
 
         resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .expect("same unit name and factor across ratio types must be allowed");
     }
 
@@ -8939,7 +9151,7 @@ data spread_b: ratio
   -> unit basis_points 5000"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "unrelated ratio types with different factors for the same unit must error"
@@ -8970,7 +9182,7 @@ data default_credit_insurance_pct: ratio
         );
 
         resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .expect("multiple ratio types with built-in percent must not conflict");
     }
 
@@ -8985,7 +9197,7 @@ data tax: ratio -> default 1%"#,
         );
 
         resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .expect("builtin percent/permille plus custom tenths on second type must load");
     }
 
@@ -8998,7 +9210,7 @@ data second_ratio: ratio -> default 10%"#,
         );
 
         let resolved = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .expect("two ratio types with only builtin units");
 
         assert!(
@@ -9019,7 +9231,7 @@ data price: number
   -> unit eur 1.00"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "Number types must reject unit commands");
 
         let errs = result.unwrap_err();
@@ -9045,7 +9257,7 @@ data my_money: money
         );
 
         let resolved = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let my_money_type = resolved.resolved.get("my_money").unwrap();
 
@@ -9072,7 +9284,7 @@ data z: source_quantity
         );
 
         let resolved = resolver
-            .resolve_types_internal(&spec_arc, &EffectiveDate::Origin)
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let z = resolved.resolved.get("z").unwrap();
         match &z.specifications {
@@ -9097,7 +9309,7 @@ data money: quantity
   -> unit eur 1.19"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "duplicate unit name must be rejected");
         let errs = result.unwrap_err();
         assert!(!errs.is_empty());
@@ -9124,7 +9336,7 @@ data run_rate: quantity
   -> unit arr eur/year"#,
         );
 
-        let result = resolver.resolve_types_internal(&spec_arc, &EffectiveDate::Origin);
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "duplicate compound unit name must be rejected"
@@ -9142,6 +9354,28 @@ data run_rate: quantity
 // ============================================================================
 // Validation (formerly validation.rs)
 // ============================================================================
+
+fn push_uncommittable_bound_error(
+    errors: &mut Vec<Error>,
+    type_name: &str,
+    bound: &crate::computation::rational::RationalInteger,
+    label: &str,
+    source: &Source,
+    spec_context: Option<Arc<LemmaSpec>>,
+) {
+    if crate::computation::rational::commit_rational_to_decimal(bound).is_err() {
+        errors.push(Error::validation_with_context(
+            format!(
+                "Type '{}' has {} bound {} that cannot be represented as a decimal",
+                type_name, label, bound
+            ),
+            Some(source.clone()),
+            None::<String>,
+            spec_context,
+            None,
+        ));
+    }
+}
 
 /// Validate that TypeSpecification constraints are internally consistent.
 ///
@@ -9167,7 +9401,6 @@ pub fn validate_type_specifications(
             maximum,
             decimals,
             units,
-            traits,
             ..
         } => {
             // Validate range consistency
@@ -9209,54 +9442,56 @@ pub fn validate_type_specifications(
                 }
             }
 
-            if minimum.is_some() {
-                for unit in units.iter() {
-                    if unit.minimum.is_none() {
-                        errors.push(Error::validation_with_context(
-                            format!(
-                                "Type '{}' has minimum bound but unit '{}' is missing per-unit minimum after planning",
-                                type_name, unit.name
-                            ),
-                            Some(source.clone()),
-                            None::<String>,
-                            spec_context.clone(),
-                            None,
-                        ));
-                    }
-                }
+            if let Some((bound, unit_name)) = minimum {
+                push_uncommittable_bound_error(
+                    &mut errors,
+                    type_name,
+                    bound,
+                    &format!("minimum {unit_name}"),
+                    source,
+                    spec_context.clone(),
+                );
             }
-            if maximum.is_some() {
-                for unit in units.iter() {
-                    if unit.maximum.is_none() {
-                        errors.push(Error::validation_with_context(
-                            format!(
-                                "Type '{}' has maximum bound but unit '{}' is missing per-unit maximum after planning",
-                                type_name, unit.name
-                            ),
-                            Some(source.clone()),
-                            None::<String>,
-                            spec_context.clone(),
-                            None,
-                        ));
-                    }
-                }
+            if let Some((bound, unit_name)) = maximum {
+                push_uncommittable_bound_error(
+                    &mut errors,
+                    type_name,
+                    bound,
+                    &format!("maximum {unit_name}"),
+                    source,
+                    spec_context.clone(),
+                );
             }
-            let calendar_range_default = traits.contains(&semantics::QuantityTrait::Calendar)
-                && matches!(declared_default, Some(ValueKind::Range(_, _)));
-            if declared_default.is_some() && !calendar_range_default {
-                for unit in units.iter() {
-                    if unit.default_magnitude.is_none() {
-                        errors.push(Error::validation_with_context(
-                            format!(
-                                "Type '{}' has default but unit '{}' is missing per-unit default after planning",
-                                type_name, unit.name
-                            ),
-                            Some(source.clone()),
-                            None::<String>,
-                            spec_context.clone(),
-                            None,
-                        ));
-                    }
+            for unit in units.iter() {
+                if let Some(bound) = &unit.minimum {
+                    push_uncommittable_bound_error(
+                        &mut errors,
+                        type_name,
+                        bound,
+                        &format!("unit '{}' minimum", unit.name),
+                        source,
+                        spec_context.clone(),
+                    );
+                }
+                if let Some(bound) = &unit.maximum {
+                    push_uncommittable_bound_error(
+                        &mut errors,
+                        type_name,
+                        bound,
+                        &format!("unit '{}' maximum", unit.name),
+                        source,
+                        spec_context.clone(),
+                    );
+                }
+                if let Some(bound) = &unit.default_magnitude {
+                    push_uncommittable_bound_error(
+                        &mut errors,
+                        type_name,
+                        bound,
+                        &format!("unit '{}' default", unit.name),
+                        source,
+                        spec_context.clone(),
+                    );
                 }
             }
 
@@ -9347,9 +9582,8 @@ pub fn validate_type_specifications(
                     }
 
                     if !unit.is_positive_factor() {
-                        let factor = unit.factor.reduced();
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, factor.numer(), factor.denom()),
+                            format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.factor.numer(), unit.factor.denom()),
                             Some(source.clone()),
                             None::<String>,
                             spec_context.clone(),
@@ -9379,6 +9613,27 @@ pub fn validate_type_specifications(
                         None,
                     ));
                 }
+            }
+
+            if let Some(bound) = minimum {
+                push_uncommittable_bound_error(
+                    &mut errors,
+                    type_name,
+                    bound,
+                    "minimum",
+                    source,
+                    spec_context.clone(),
+                );
+            }
+            if let Some(bound) = maximum {
+                push_uncommittable_bound_error(
+                    &mut errors,
+                    type_name,
+                    bound,
+                    "maximum",
+                    source,
+                    spec_context.clone(),
+                );
             }
 
             // Validate decimals range (0-28 is rust_decimal limit)
@@ -9469,6 +9724,59 @@ pub fn validate_type_specifications(
                 }
             }
 
+            if let Some(bound) = minimum {
+                push_uncommittable_bound_error(
+                    &mut errors,
+                    type_name,
+                    bound,
+                    "minimum",
+                    source,
+                    spec_context.clone(),
+                );
+            }
+            if let Some(bound) = maximum {
+                push_uncommittable_bound_error(
+                    &mut errors,
+                    type_name,
+                    bound,
+                    "maximum",
+                    source,
+                    spec_context.clone(),
+                );
+            }
+            for unit in units.iter() {
+                if let Some(bound) = &unit.minimum {
+                    push_uncommittable_bound_error(
+                        &mut errors,
+                        type_name,
+                        bound,
+                        &format!("unit '{}' minimum", unit.name),
+                        source,
+                        spec_context.clone(),
+                    );
+                }
+                if let Some(bound) = &unit.maximum {
+                    push_uncommittable_bound_error(
+                        &mut errors,
+                        type_name,
+                        bound,
+                        &format!("unit '{}' maximum", unit.name),
+                        source,
+                        spec_context.clone(),
+                    );
+                }
+                if let Some(bound) = &unit.default_magnitude {
+                    push_uncommittable_bound_error(
+                        &mut errors,
+                        type_name,
+                        bound,
+                        &format!("unit '{}' default", unit.name),
+                        source,
+                        spec_context.clone(),
+                    );
+                }
+            }
+
             if let Some(ValueKind::Ratio(def, _)) = declared_default {
                 if let Some(min) = minimum {
                     if *def < *min {
@@ -9533,10 +9841,9 @@ pub fn validate_type_specifications(
                         seen_names.push(unit.name.clone());
                     }
 
-                    if *unit.value.numer() <= 0 {
-                        let factor = unit.value.reduced();
+                    if unit.value.numer() <= &crate::computation::bigint::BigInt::from_i64(0) {
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, factor.numer(), factor.denom()),
+                            format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value.numer(), unit.value.denom()),
                             Some(source.clone()),
                             None::<String>,
                             spec_context.clone(),
@@ -9716,7 +10023,7 @@ pub fn validate_type_specifications(
 #[cfg(test)]
 mod validation_tests {
     use super::*;
-    use crate::computation::rational::RationalInteger;
+    use crate::computation::rational::rational_new;
     use crate::parsing::ast::{CommandArg, TypeConstraintCommand};
     use crate::planning::semantics::TypeSpecification;
     use rust_decimal::Decimal;
@@ -9775,12 +10082,12 @@ mod validation_tests {
     #[test]
     fn validate_number_default_below_minimum() {
         let specs = TypeSpecification::Number {
-            minimum: Some(RationalInteger::new(10, 1)),
+            minimum: Some(rational_new(10, 1)),
             maximum: None,
             decimals: None,
             help: String::new(),
         };
-        let default = ValueKind::Number(RationalInteger::new(5, 1));
+        let default = ValueKind::Number(rational_new(5, 1));
 
         let src = test_source();
         let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
@@ -9794,11 +10101,11 @@ mod validation_tests {
     fn validate_number_default_above_maximum() {
         let specs = TypeSpecification::Number {
             minimum: None,
-            maximum: Some(RationalInteger::new(100, 1)),
+            maximum: Some(rational_new(100, 1)),
             decimals: None,
             help: String::new(),
         };
-        let default = ValueKind::Number(RationalInteger::new(150, 1));
+        let default = ValueKind::Number(rational_new(150, 1));
 
         let src = test_source();
         let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
@@ -9811,12 +10118,12 @@ mod validation_tests {
     #[test]
     fn validate_number_default_valid() {
         let specs = TypeSpecification::Number {
-            minimum: Some(RationalInteger::new(0, 1)),
-            maximum: Some(RationalInteger::new(100, 1)),
+            minimum: Some(rational_new(0, 1)),
+            maximum: Some(rational_new(100, 1)),
             decimals: None,
             help: String::new(),
         };
-        let default = ValueKind::Number(RationalInteger::new(50, 1));
+        let default = ValueKind::Number(rational_new(50, 1));
 
         let src = test_source();
         let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
@@ -9873,8 +10180,8 @@ mod validation_tests {
     #[test]
     fn validate_ratio_minimum_greater_than_maximum() {
         let specs = TypeSpecification::Ratio {
-            minimum: Some(RationalInteger::new(2, 1)),
-            maximum: Some(RationalInteger::new(1, 1)),
+            minimum: Some(rational_new(2, 1)),
+            maximum: Some(rational_new(1, 1)),
             decimals: None,
             units: crate::planning::semantics::RatioUnits::new(),
             help: String::new(),
@@ -9950,6 +10257,256 @@ mod validation_tests {
         assert!(
             errors[0].to_string().contains("minimum")
                 && errors[0].to_string().contains("is after maximum")
+        );
+    }
+
+    #[test]
+    fn uncommittable_minimum_rejected_at_planning() {
+        use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
+        use crate::literals::QuantityUnits;
+        use crate::planning::semantics::TypeSpecification;
+
+        let too_large = uncommittable_out_of_decimal_commit_range();
+        assert!(
+            commit_rational_to_decimal(&too_large).is_err(),
+            "test setup: bound must be valid in Q but not committable to decimal"
+        );
+
+        let spec = TypeSpecification::Quantity {
+            minimum: Some((too_large, "eur".to_string())),
+            maximum: None,
+            decimals: None,
+            units: QuantityUnits(vec![crate::literals::QuantityUnit {
+                name: "eur".to_string(),
+                factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
+                derived_quantity_factors: Default::default(),
+                decomposition: Default::default(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: None,
+            }]),
+            traits: vec![],
+            decomposition: None,
+            help: String::new(),
+        };
+
+        let TypeSpecification::Quantity { minimum, .. } = &spec else {
+            panic!("BUG: test constructs Quantity spec");
+        };
+        assert!(
+            minimum.is_some(),
+            "internal spec retains declared minimum in Q"
+        );
+        let src = test_source();
+        let errors = validate_type_specifications(&spec, None, "money", &src, None);
+        assert_eq!(
+            errors.len(),
+            1,
+            "got: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            errors[0]
+                .to_string()
+                .contains("cannot be represented as a decimal"),
+            "got: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn uncommittable_maximum_rejected_at_planning() {
+        use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
+        use crate::literals::QuantityUnits;
+        use crate::planning::semantics::TypeSpecification;
+
+        let too_large = uncommittable_out_of_decimal_commit_range();
+        assert!(commit_rational_to_decimal(&too_large).is_err());
+
+        let spec = TypeSpecification::Quantity {
+            minimum: None,
+            maximum: Some((too_large, "eur".to_string())),
+            decimals: None,
+            units: QuantityUnits(vec![crate::literals::QuantityUnit {
+                name: "eur".to_string(),
+                factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
+                derived_quantity_factors: Default::default(),
+                decomposition: Default::default(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: None,
+            }]),
+            traits: vec![],
+            decomposition: None,
+            help: String::new(),
+        };
+
+        let src = test_source();
+        let errors = validate_type_specifications(&spec, None, "money", &src, None);
+        assert_eq!(
+            errors.len(),
+            1,
+            "got: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+        assert!(
+            errors[0]
+                .to_string()
+                .contains("cannot be represented as a decimal"),
+            "got: {}",
+            errors[0]
+        );
+    }
+
+    #[test]
+    fn uncommittable_default_magnitude_rejected_at_planning() {
+        use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
+        use crate::literals::QuantityUnits;
+        use crate::planning::semantics::TypeSpecification;
+
+        let too_large = uncommittable_out_of_decimal_commit_range();
+        assert!(commit_rational_to_decimal(&too_large).is_err());
+
+        let spec = TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: QuantityUnits(vec![crate::literals::QuantityUnit {
+                name: "eur".to_string(),
+                factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
+                derived_quantity_factors: Default::default(),
+                decomposition: Default::default(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: Some(too_large),
+            }]),
+            traits: vec![],
+            decomposition: None,
+            help: String::new(),
+        };
+
+        let src = test_source();
+        let errors = validate_type_specifications(&spec, None, "money", &src, None);
+        assert_eq!(errors.len(), 1);
+        assert!(
+            errors[0]
+                .to_string()
+                .contains("cannot be represented as a decimal"),
+            "got: {}",
+            errors[0]
+        );
+        assert!(
+            errors[0].to_string().contains("unit 'eur' default"),
+            "got: {}",
+            errors[0]
+        );
+    }
+
+    /// Rational in Q that exceeds `rust_decimal` commit range (OUT boundary), e.g. per-unit sync product.
+    fn uncommittable_out_of_decimal_commit_range() -> crate::computation::rational::RationalInteger
+    {
+        use crate::computation::rational::{try_rational_new, BigInt};
+        try_rational_new(
+            BigInt::try_from_str_radix("10000000000000000000000000000000", 10).unwrap(),
+            BigInt::one(),
+        )
+        .expect("BUG: test rational must construct")
+    }
+
+    #[test]
+    fn empty_quantity_signature_unit_must_not_coerce_as_unknown_empty_string() {
+        use crate::computation::rational::rational_new;
+        use crate::literals::QuantityUnits;
+        use crate::planning::semantics::{LemmaType, LiteralValue, TypeSpecification, ValueKind};
+
+        let schema_type = Arc::new(LemmaType {
+            name: Some("money".to_string()),
+            extends: TypeExtends::Primitive,
+            specifications: TypeSpecification::Quantity {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: QuantityUnits(vec![crate::literals::QuantityUnit {
+                    name: "eur".to_string(),
+                    factor: rational_new(1, 1),
+                    derived_quantity_factors: Default::default(),
+                    decomposition: Default::default(),
+                    minimum: None,
+                    maximum: None,
+                    default_magnitude: None,
+                }]),
+                traits: vec![],
+                decomposition: Default::default(),
+                help: String::new(),
+            },
+        });
+
+        let literal = LiteralValue {
+            value: ValueKind::Quantity(rational_new(1, 1), vec![("".to_string(), 1)]),
+            lemma_type: Arc::clone(&schema_type),
+        };
+
+        let result = Graph::coerce_literal_to_schema_type(&literal, &schema_type);
+
+        assert!(
+            result.is_err(),
+            "empty unit name in quantity signature must not coerce successfully"
+        );
+        if let Err(message) = result {
+            assert!(
+                !message.contains("unknown unit ''"),
+                "must not treat missing unit as empty-string validation error, got: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn refresh_named_range_specs_missing_element_must_not_leave_unconverted_quantity() {
+        use crate::parsing::ast::{LemmaSpec, ParentType, Span};
+        use crate::parsing::source::{Source, SourceType};
+        use crate::planning::semantics::primitive_quantity_arc;
+
+        let spec = Arc::new(LemmaSpec::new("t".to_string()));
+        let source = Source::new(
+            SourceType::Volatile,
+            Span {
+                start: 0,
+                end: 0,
+                line: 1,
+                col: 0,
+            },
+        );
+        let mut data_defs = HashMap::new();
+        data_defs.insert(
+            "band".to_string(),
+            DataTypeDef {
+                parent: ParentType::Ranged {
+                    inner: Box::new(ParentType::Custom {
+                        name: "ghost".to_string(),
+                    }),
+                },
+                constraints: None,
+                source: source.clone(),
+                name: "band".to_string(),
+                bound_literal: None,
+            },
+        );
+        let mut resolved = HashMap::new();
+        resolved.insert("band".to_string(), primitive_quantity_arc().clone());
+        let mut defaults = HashMap::new();
+
+        let errors = refresh_named_range_specs(&spec, &data_defs, &mut resolved, &mut defaults);
+
+        assert!(
+            !errors.is_empty(),
+            "planning must error when ranged inner type is missing"
+        );
+        assert!(
+            errors[0]
+                .to_string()
+                .contains("references missing element type 'ghost'"),
+            "got: {}",
+            errors[0]
         );
     }
 }

@@ -1,12 +1,13 @@
-//! Defaults on the stored plan are suggestions until [`lemma::ExecutionPlan::with_defaults`] runs.
+//! Spec-declared defaults stay on [`DataDefinition::TypeDeclaration`] in the plan;
+//! the evaluator applies them when the caller does not supply a value.
 
 use lemma::DateTimeValue;
 use lemma::Engine;
-use lemma::{DataDefinition, DataPath};
+use lemma::{DataDefinition, DataOverlay, DataPath};
 use std::collections::HashMap;
 
 #[test]
-fn typedecl_default_stays_typedecl_until_with_defaults() {
+fn typedecl_default_stays_typedecl_on_immutable_plan() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -29,16 +30,10 @@ fn typedecl_default_stays_typedecl_until_with_defaults() {
         } => {}
         other => panic!("expected TypeDeclaration with default, got {other:?}"),
     }
-
-    let matured = plan.clone().with_defaults();
-    match matured.data.get(&path).expect("n") {
-        DataDefinition::Value { .. } => {}
-        other => panic!("expected Value after with_defaults, got {other:?}"),
-    }
 }
 
 #[test]
-fn run_plan_without_defaults_surfaces_missing_data_for_typedecl_default() {
+fn run_plan_applies_typedecl_default_when_not_supplied() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -54,15 +49,52 @@ fn run_plan_without_defaults_surfaces_missing_data_for_typedecl_default() {
     let now = DateTimeValue::now();
     let plan = engine.get_plan(None, "s", Some(&now)).expect("plan");
     let response = engine
-        .run_plan(plan, Some(&now), HashMap::new(), false, false)
+        .run_plan(plan, Some(&now), HashMap::new(), false, None)
         .expect("response");
 
     assert!(
-        response
+        !response
             .missing_data_ordered()
             .iter()
             .any(|p| p.input_key() == "n"),
-        "expected missing n without with_defaults, got {:?}",
+        "evaluator must apply default for n, got missing {:?}",
         response.missing_data_ordered()
+    );
+
+    let rule = response.results.get("r").expect("rule r");
+    assert!(!rule.vetoed, "rule r must succeed with default n=42");
+    assert_eq!(rule.display.as_deref(), Some("42"));
+}
+
+#[test]
+fn schema_shows_default_not_bound_without_overlay() {
+    let mut engine = Engine::new();
+    engine
+        .load(
+            r#"
+        spec s
+        data n: number -> default 42
+        rule r: n
+    "#,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("s.lemma"))),
+        )
+        .expect("load");
+
+    let now = DateTimeValue::now();
+    let plan = engine.get_plan(None, "s", Some(&now)).expect("plan");
+    let entry = plan
+        .schema(&DataOverlay::default())
+        .data
+        .get("n")
+        .expect("n in schema")
+        .clone();
+
+    assert!(
+        entry.bound_value.is_none(),
+        "default is not bound until caller supplies"
+    );
+    assert!(
+        entry.default.is_some(),
+        "schema must expose default suggestion"
     );
 }

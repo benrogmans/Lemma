@@ -260,7 +260,7 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 | `repo_keyword.rs` | Signals until `repo` semantics complete |
 | `resource_limits_test.rs` | `#[ignore]` on `performance_test_10k_rules`, `bench_deep_chains` (manual benches) |
 
-No integration file uses `#[should_panic]`. `proptest` is not used in `engine/tests/` (dev-dependency exists on the crate for future use).
+No integration file uses `#[should_panic]`.
 
 ### Gaps and recommendations
 

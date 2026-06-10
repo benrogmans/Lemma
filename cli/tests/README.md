@@ -8,12 +8,19 @@ Run:
 cargo nextest run -p lemma --tests
 ```
 
+Run LSP tests only:
+
+```bash
+cargo nextest run -p lemma --test integration integrations::lsp
+```
+
 ## Modules
 
 | File | Focus | Mechanism |
 |------|--------|-----------|
 | [integrations/run.rs](integrations/run.rs) | `lemma run`, formatter flags, temp specs | `assert_cmd` + `tempfile` |
 | [integrations/mcp.rs](integrations/mcp.rs) | MCP tools (`list_specs`, `run`, `add_spec`, …) | JSON-RPC over stdio |
+| [integrations/lsp.rs](integrations/lsp.rs) | `lemma lsp` over stdio (initialize, diagnostics, formatting, semantic tokens) | Content-Length framed JSON-RPC via [lsp_session.rs](integrations/lsp_session.rs) |
 | [integrations/server.rs](integrations/server.rs) | HTTP evaluate/list endpoints | `reqwest` against local server |
 | [integrations/examples.rs](integrations/examples.rs) | Fixture `.lemma` under `integrations/examples/` | Same as run; golden paths |
 
@@ -30,4 +37,4 @@ CLI tests assert process boundaries (binary exit codes, JSON shapes, HTTP). Engi
 
 ## Ignored / bench
 
-Criterion benches: `cli/benches/http_evaluate.rs`, `engine_profile.rs` (run via `cargo nextest run --run-ignored all` in CI).
+Criterion benches: `cli/benches/http_evaluate.rs`, `engine_profile.rs`. Regenerate numbers with `cargo benchmarks cli` (writes `documentation/benchmarks/cli.md`). CI also runs them via `cargo nextest run --run-ignored all`.

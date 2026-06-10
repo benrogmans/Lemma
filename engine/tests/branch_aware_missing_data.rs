@@ -1,9 +1,10 @@
-//! Missing-data propagation when rules reference other rules (normalized decision table).
+//! Missing-data propagation when rules reference other rules (normalized expression).
 //!
-//! These tests encode **intended** behavior for normalized branch evaluation and
-//! needs_data derived from the decision table.
+//! These tests encode **intended** behavior for normalized expression evaluation and
+//! needs_data derived from live Piecewise arms.
 
 use lemma::DataPath;
+use lemma::DateGranularity;
 use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
@@ -17,7 +18,7 @@ fn coffee_example_path() -> PathBuf {
 
 fn net_salary_example_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../documentation/examples/06_dutch_net_salary.lemma")
+        .join("../documentation/examples/nl/tax/net_salary.lemma")
 }
 
 fn effective_2026() -> DateTimeValue {
@@ -30,6 +31,7 @@ fn effective_2026() -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -91,7 +93,7 @@ fn missing_data_ordered_empty_when_all_datas_provided() {
                 .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
                 .collect(),
             false,
-            true,
+            None,
         )
         .expect("run");
     assert!(
@@ -118,7 +120,7 @@ fn missing_data_ordered_includes_product_when_no_inputs() {
         .expect("plan");
 
     let response = engine
-        .run_plan(plan, Some(&now), HashMap::new(), false, true)
+        .run_plan(plan, Some(&now), HashMap::new(), false, None)
         .expect("run");
 
     let ordered = response.missing_data_ordered();
@@ -151,7 +153,7 @@ rule total: base_price * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), false)
+        .run(None, "pricing", Some(&now), HashMap::new(), false, None)
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "base_price"), "Missing data");
@@ -171,7 +173,14 @@ fn coffee_order_dependent_rules_propagate_missing_product_not_default_veto() {
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "coffee_order", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "coffee_order",
+            Some(&now),
+            HashMap::new(),
+            false,
+            None,
+        )
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "base_price"), "product");
@@ -207,9 +216,8 @@ rule gross_annual: gross * periods_per_year
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
     data.insert("gross".to_string(), "5000".to_string());
-
     let response = engine
-        .run(None, "payroll", Some(&now), data, false)
+        .run(None, "payroll", Some(&now), data, false, None)
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "periods_per_year"), "pay_period");
@@ -232,16 +240,15 @@ fn net_salary_per_period_outputs_veto_when_pay_period_missing() {
     engine
         .load(
             &code,
-            lemma::SourceType::Path(Arc::new(PathBuf::from("06_dutch_net_salary.lemma"))),
+            lemma::SourceType::Path(Arc::new(PathBuf::from("nl/tax/net_salary.lemma"))),
         )
         .expect("load");
 
     let effective = effective_2026();
     let mut data = HashMap::new();
     data.insert("gross_salary".to_string(), "5000 eur".to_string());
-
     let response = engine
-        .run(None, "net_salary", Some(&effective), data, false)
+        .run(None, "net_salary", Some(&effective), data, false, None)
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "periods_per_year"), "pay_period");

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 fn assert_rule_number(rule: &lemma::RuleResult, expected: rust_decimal::Decimal) {
     assert!(!rule.vetoed, "unexpected veto: {:?}", rule.veto_reason);
     let lit = rule
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -13,7 +13,9 @@ fn assert_rule_number(rule: &lemma::RuleResult, expected: rust_decimal::Decimal)
         .expect("value");
     if let lemma::ValueKind::Number(n) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             expected
         );
     } else {
@@ -36,9 +38,8 @@ rule remainder: a % b
         )
         .unwrap();
     let now = DateTimeValue::now();
-
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+        .run(None, "test", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response.results.get("remainder").unwrap();
     assert_rule_number(result, rust_decimal::Decimal::ONE);
@@ -59,9 +60,8 @@ rule result: base ^ exponent
         )
         .unwrap();
     let now = DateTimeValue::now();
-
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+        .run(None, "test", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response.results.get("result").unwrap();
     assert_rule_number(result, rust_decimal::Decimal::from(8));
@@ -82,9 +82,8 @@ rule is_odd: (value % 2) is 1
         )
         .unwrap();
     let now = DateTimeValue::now();
-
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+        .run(None, "test", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let is_even = response.results.get("is_even").unwrap();
@@ -108,9 +107,8 @@ rule square_root: base ^ 0.5
         )
         .unwrap();
     let now = DateTimeValue::now();
-
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+        .run(None, "test", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response.results.get("square_root").unwrap();
     assert_rule_number(result, rust_decimal::Decimal::from(2));
@@ -131,9 +129,8 @@ rule calculation: (x % y) + (2 ^ 3)
         )
         .unwrap();
     let now = DateTimeValue::now();
-
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+        .run(None, "test", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response.results.get("calculation").unwrap();
     assert_rule_number(result, rust_decimal::Decimal::from(9));

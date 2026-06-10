@@ -16,7 +16,9 @@ fn run_spec(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Respon
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.run(None, spec, Some(&now), data_map, true).unwrap()
+    engine
+        .run(None, spec, Some(&now), data_map, false, None)
+        .unwrap()
 }
 
 fn rule_display(response: &lemma::Response, rule_name: &str) -> String {
@@ -398,7 +400,7 @@ rule result: amount * r.rate
     let effective = DateTimeValue::from_str("2024-06-01").unwrap();
     let data: HashMap<String, String> = [("amount".to_string(), "1000".to_string())].into();
     let resp = engine
-        .run(None, "calculator", Some(&effective), data, true)
+        .run(None, "calculator", Some(&effective), data, false, None)
         .unwrap();
     let display = rule_display(&resp, "result");
     assert_eq!(display, "50", "2024: 1000 * 5% = 50");
@@ -407,7 +409,7 @@ rule result: amount * r.rate
     let effective = DateTimeValue::from_str("2025-06-01").unwrap();
     let data: HashMap<String, String> = [("amount".to_string(), "1000".to_string())].into();
     let resp = engine
-        .run(None, "calculator", Some(&effective), data, true)
+        .run(None, "calculator", Some(&effective), data, false, None)
         .unwrap();
     let display = rule_display(&resp, "result");
     assert_eq!(display, "70", "2025: 1000 * 7% = 70");

@@ -2,6 +2,7 @@
 
 use crate::computation::rational::RationalInteger;
 use crate::computation::UnitResolutionContext;
+use crate::evaluation::operations::VetoType;
 use crate::evaluation::OperationResult;
 use crate::planning::semantics::{
     primitive_boolean_arc, ComparisonComputation, LiteralValue, ValueKind,
@@ -59,24 +60,27 @@ pub fn comparison_operation(
         }
 
         (ValueKind::Range(range_left, range_right), _) => {
-            let measure =
-                super::range::compute_quantity(range_left.as_ref(), range_right.as_ref(), Some(right));
+            let measure = super::range::compute_quantity(
+                range_left.as_ref(),
+                range_right.as_ref(),
+                Some(right),
+            );
             compare_with_operation_result(measure, op, right)
         }
 
-        (ValueKind::Number(l), ValueKind::Number(r)) => OperationResult::Value(Box::new(
-            LiteralValue::from_bool(compare_stored_rationals(l, op, r)),
-        )),
+        (ValueKind::Number(l), ValueKind::Number(r)) => {
+            compare_stored_rationals(l, op, r)
+        }
 
         (ValueKind::Boolean(l), ValueKind::Boolean(r)) => match op {
             ComparisonComputation::Is => {
-                OperationResult::Value(Box::new(LiteralValue::from_bool(l == r)))
+                OperationResult::Value(LiteralValue::from_bool(l == r))
             }
             ComparisonComputation::IsNot => {
-                OperationResult::Value(Box::new(LiteralValue {
+                OperationResult::Value(LiteralValue {
                     value: ValueKind::Boolean(l != r),
                     lemma_type: primitive_boolean_arc().clone(),
-                }))
+                })
             }
             _ => unreachable!(
                 "BUG: invalid boolean comparison operator {}; this should be rejected during planning",
@@ -86,13 +90,13 @@ pub fn comparison_operation(
 
         (ValueKind::Text(l), ValueKind::Text(r)) => match op {
             ComparisonComputation::Is => {
-                OperationResult::Value(Box::new(LiteralValue::from_bool(l == r)))
+                OperationResult::Value(LiteralValue::from_bool(l == r))
             }
             ComparisonComputation::IsNot => {
-                OperationResult::Value(Box::new(LiteralValue {
+                OperationResult::Value(LiteralValue {
                     value: ValueKind::Boolean(l != r),
                     lemma_type: primitive_boolean_arc().clone(),
-                }))
+                })
             }
             _ => unreachable!(
                 "BUG: invalid text comparison operator {}; this should be rejected during planning",
@@ -100,15 +104,13 @@ pub fn comparison_operation(
             ),
         },
 
-        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => OperationResult::Value(Box::new(
-            LiteralValue::from_bool(compare_stored_rationals(l, op, r)),
-        )),
+        (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => {
+            compare_stored_rationals(l, op, r)
+        }
         (ValueKind::Quantity(left_value, _), ValueKind::Quantity(right_value, _))
             if left.lemma_type.is_calendar_like() && right.lemma_type.is_calendar_like() =>
         {
-            OperationResult::Value(Box::new(LiteralValue::from_bool(
-                compare_stored_rationals(left_value, op, right_value),
-            )))
+            compare_stored_rationals(left_value, op, right_value)
         }
 
         (ValueKind::Quantity(l, _), ValueKind::Quantity(r, _)) => {
@@ -131,9 +133,7 @@ pub fn comparison_operation(
                     right.lemma_type.name()
                 );
             }
-            OperationResult::Value(Box::new(LiteralValue::from_bool(
-                compare_stored_rationals(l, op, r),
-            )))
+            compare_stored_rationals(l, op, r)
         }
 
         (ValueKind::Date(_), ValueKind::Date(_)) => super::datetime::datetime_comparison(left, op, right),
@@ -142,30 +142,22 @@ pub fn comparison_operation(
         (ValueKind::Quantity(value, _), ValueKind::Number(n))
             if left.lemma_type.is_duration_like_quantity() =>
         {
-            OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
-                value, op, n,
-            ))))
+            compare_stored_rationals(value, op, n)
         }
         (ValueKind::Number(n), ValueKind::Quantity(value, _))
             if right.lemma_type.is_duration_like_quantity() =>
         {
-            OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
-                n, op, value,
-            ))))
+            compare_stored_rationals(n, op, value)
         }
         (ValueKind::Quantity(value, _), ValueKind::Number(n))
             if left.lemma_type.is_calendar_like() =>
         {
-            OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
-                value, op, n,
-            ))))
+            compare_stored_rationals(value, op, n)
         }
         (ValueKind::Number(n), ValueKind::Quantity(value, _))
             if right.lemma_type.is_calendar_like() =>
         {
-            OperationResult::Value(Box::new(LiteralValue::from_bool(compare_stored_rationals(
-                n, op, value,
-            ))))
+            compare_stored_rationals(n, op, value)
         }
 
         _ => unreachable!(
@@ -181,16 +173,22 @@ fn compare_stored_rationals(
     left: &RationalInteger,
     op: &ComparisonComputation,
     right: &RationalInteger,
-) -> bool {
-    let ordering = left.cmp(right);
-    match op {
+) -> OperationResult {
+    let ordering = match left.try_cmp(right) {
+        Ok(ordering) => ordering,
+        Err(failure) => {
+            return OperationResult::Veto(VetoType::computation(failure.to_string()));
+        }
+    };
+    let result = match op {
         ComparisonComputation::GreaterThan => ordering == std::cmp::Ordering::Greater,
         ComparisonComputation::LessThan => ordering == std::cmp::Ordering::Less,
         ComparisonComputation::GreaterThanOrEqual => ordering != std::cmp::Ordering::Less,
         ComparisonComputation::LessThanOrEqual => ordering != std::cmp::Ordering::Greater,
         ComparisonComputation::Is => ordering == std::cmp::Ordering::Equal,
         ComparisonComputation::IsNot => ordering != std::cmp::Ordering::Equal,
-    }
+    };
+    OperationResult::Value(LiteralValue::from_bool(result))
 }
 
 fn compare_with_operation_result(
@@ -203,7 +201,7 @@ fn compare_with_operation_result(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
     comparison_operation(
-        left_value.as_ref(),
+        &left_value,
         op,
         right,
         UnitResolutionContext::NamedQuantityOnly,
@@ -222,7 +220,7 @@ fn compare_with_right_result(
     comparison_operation(
         left,
         op,
-        right_value.as_ref(),
+        &right_value,
         UnitResolutionContext::NamedQuantityOnly,
     )
 }
@@ -234,7 +232,7 @@ fn type_name(value: &LiteralValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computation::rational::RationalInteger;
+    use crate::computation::rational::rational_new;
     use crate::evaluation::operations::OperationResult;
     use crate::planning::semantics::{ComparisonComputation, LiteralValue, ValueKind};
 
@@ -252,8 +250,8 @@ mod tests {
 
     #[test]
     fn number_less_than_uses_exact_rational_ordering() {
-        let small = LiteralValue::number(RationalInteger::new(1, 10));
-        let large = LiteralValue::number(RationalInteger::new(2, 1));
+        let small = LiteralValue::number(rational_new(1, 10));
+        let large = LiteralValue::number(rational_new(2, 1));
         assert!(eval_bool(&small, &ComparisonComputation::LessThan, &large));
         assert!(!eval_bool(&large, &ComparisonComputation::LessThan, &small));
     }

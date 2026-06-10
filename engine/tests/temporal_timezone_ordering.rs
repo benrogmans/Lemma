@@ -3,7 +3,7 @@
 //! `effective_from` keys differ only in offset.
 
 use lemma::TimezoneValue;
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 fn utc_noon() -> DateTimeValue {
@@ -19,6 +19,7 @@ fn utc_noon() -> DateTimeValue {
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -49,7 +50,7 @@ rule out: v
         .expect("parse specs with offset on effective_from");
 
     let r = engine
-        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
+        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false, None)
         .expect("run");
     assert_rule_value(&r, "out", "1");
 }
@@ -71,7 +72,7 @@ rule out: 20
         .unwrap();
 
     let r = engine
-        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false)
+        .run(None, "rate", Some(&utc_noon()), HashMap::new(), false, None)
         .unwrap();
     assert_rule_value(&r, "out", "10");
 }

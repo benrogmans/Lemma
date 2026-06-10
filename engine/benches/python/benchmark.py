@@ -1,6 +1,7 @@
 """Benchmark the Python ports of the Lemma bench specs.
 
-Per-call measured boundary: JSON input bytes -> Outputs in memory.
+Per-call measured boundary: typed inputs -> Outputs in memory. Fixture
+JSON is parsed once per spec before warmup.
 
 Emits one JSON document to stdout:
 
@@ -24,13 +25,14 @@ import json
 import statistics
 import sys
 import time
-from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from business_rules import order_pipeline, pricing, shipping
+from business_rules.rational import rational_to_decimal_string
 
 SPECS_DIR = Path(__file__).resolve().parent.parent / "specs"
 
@@ -48,8 +50,8 @@ SPECS = [
 def render_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, Decimal):
-        return str(value)
+    if isinstance(value, Fraction):
+        return rational_to_decimal_string(value)
     if isinstance(value, str):
         return value
     raise TypeError(
@@ -85,13 +87,12 @@ def render_outputs(outputs: Any) -> dict[str, str]:
 
 
 def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
-    raw_bytes = (SPECS_DIR / inputs_file).read_bytes()
+    raw_dict = json.loads((SPECS_DIR / inputs_file).read_bytes())
     build_inputs = module.build_inputs
     compute = module.compute
-    loads = json.loads
 
     for _ in range(WARMUP_ITERATIONS):
-        compute(build_inputs(loads(raw_bytes)))
+        compute(build_inputs(raw_dict))
 
     samples: list[int] = [0] * LATENCY_ITERATIONS
     perf_counter_ns = time.perf_counter_ns
@@ -100,7 +101,7 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     try:
         for i in range(LATENCY_ITERATIONS):
             start = perf_counter_ns()
-            compute(build_inputs(loads(raw_bytes)))
+            compute(build_inputs(raw_dict))
             samples[i] = perf_counter_ns() - start
     finally:
         gc.enable()
@@ -108,7 +109,7 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     median_ns = statistics.median(samples)
     std_dev_ns = statistics.pstdev(samples)
 
-    outputs = compute(build_inputs(loads(raw_bytes)))
+    outputs = compute(build_inputs(raw_dict))
     rendered = render_outputs(outputs)
 
     return {

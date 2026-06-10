@@ -533,6 +533,12 @@ pub(crate) fn build_dag_for_spec(
     // edges: (from_index, to_index) into nodes — "from depends on to".
     let mut edges: Vec<(usize, usize)> = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
+    // visited: (spec pointer, effective instant) pairs already walked. Keyed
+    // on the instant as well as the spec: the same spec slice reached at two
+    // different instants (for example once through an explicit pin and once
+    // unpinned) can resolve different dependency slices, which must all be
+    // discovered.
+    let mut visited: Vec<(*const LemmaSpec, EffectiveDate)> = Vec::new();
 
     let root_repository =
         lookup_owning_repository(context, root).unwrap_or_else(|| context.workspace());
@@ -544,6 +550,7 @@ pub(crate) fn build_dag_for_spec(
         &mut nodes,
         &mut edges,
         &mut errors,
+        &mut visited,
     );
 
     if errors.is_empty() {
@@ -573,6 +580,7 @@ pub(crate) fn lookup_owning_repository(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dfs_discover(
     context: &Context,
     spec: Arc<LemmaSpec>,
@@ -581,13 +589,29 @@ fn dfs_discover(
     nodes: &mut Vec<DagSpec>,
     edges: &mut Vec<(usize, usize)>,
     errors: &mut Vec<Error>,
+    visited: &mut Vec<(*const LemmaSpec, EffectiveDate)>,
 ) {
-    // Membership is pointer identity — no Eq/Ord on LemmaSpec needed.
-    if nodes.iter().any(|(_, s)| Arc::ptr_eq(s, &spec)) {
+    // Walk membership is keyed on (spec pointer, effective instant): the
+    // same spec reached at a different instant can resolve different
+    // dependency slices and must be walked again. Node membership stays
+    // keyed on the spec pointer alone — each slice is one DAG node.
+    let spec_pointer: *const LemmaSpec = Arc::as_ptr(&spec);
+    if visited
+        .iter()
+        .any(|(pointer, instant)| *pointer == spec_pointer && instant == effective)
+    {
         return;
     }
-    let spec_index = nodes.len();
-    nodes.push((Arc::clone(consumer_repository), Arc::clone(&spec)));
+    visited.push((spec_pointer, effective.clone()));
+
+    let spec_index = match nodes.iter().position(|(_, s)| Arc::ptr_eq(s, &spec)) {
+        Some(existing_index) => existing_index,
+        None => {
+            let new_index = nodes.len();
+            nodes.push((Arc::clone(consumer_repository), Arc::clone(&spec)));
+            new_index
+        }
+    };
 
     let edges_for_spec = match dependency_edges(&spec, consumer_repository, context) {
         Ok(edges) => edges,
@@ -626,6 +650,7 @@ fn dfs_discover(
             nodes,
             edges,
             errors,
+            visited,
         );
         let dep_index = nodes
             .iter()
@@ -705,6 +730,8 @@ mod tests {
         }
     }
 
+    use crate::literals::DateGranularity;
+
     fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         DateTimeValue {
             year,
@@ -715,6 +742,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: DateGranularity::Full,
         }
     }
 

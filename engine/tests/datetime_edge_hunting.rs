@@ -1,5 +1,4 @@
-use lemma::{DateTimeValue, TimezoneValue};
-use lemma::{Engine, ValueKind};
+use lemma::{DateGranularity, DateTimeValue, Engine, TimezoneValue, ValueKind};
 use std::collections::HashMap;
 
 fn effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTimeValue {
@@ -15,6 +14,7 @@ fn effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTimeValue 
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -31,6 +31,7 @@ fn effective_us(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, us: u32) -> Da
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -45,7 +46,9 @@ fn eval_bool_with_datas(
     eff: &DateTimeValue,
     data: HashMap<String, String>,
 ) -> bool {
-    let response = engine.run(None, spec_name, Some(eff), data, true).unwrap();
+    let response = engine
+        .run(None, spec_name, Some(eff), data, true, None)
+        .unwrap();
     let rr = response
         .results
         .values()
@@ -61,14 +64,14 @@ fn eval_value(
     eff: &DateTimeValue,
 ) -> lemma::LiteralValue {
     let response = engine
-        .run(None, spec_name, Some(eff), HashMap::new(), true)
+        .run(None, spec_name, Some(eff), HashMap::new(), true, None)
         .unwrap();
     response
         .results
         .values()
         .find(|r| r.rule.name == rule)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -492,7 +495,9 @@ rule discount: 0
     let lit = eval_value(&engine, "test", "discount", &eff);
     if let ValueKind::Number(n) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             rust_decimal::Decimal::from(20)
         );
     } else {
@@ -515,7 +520,7 @@ rule window_size: sixty_days_ago...thirty_days_ago as seconds as number
     let lit = eval_value(&engine, "test", "window_size", &eff);
     if let ValueKind::Number(seconds) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*seconds)
+            lemma::ValueKind::Number(seconds.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             rust_decimal::Decimal::from(2_592_000)

@@ -8,7 +8,7 @@
 
 > **A language that means business.**
 
-Lemma is a declarative language for business rules. It flows like natural language and encodes pricing rules, tax calculations, eligibility criteria, contracts, policies and law. Stakeholders can read them, systems can evaluate them.
+Lemma is a pure, declarative language for business rules. It flows like natural language and encodes pricing rules, tax calculations, eligibility criteria, contracts, policies and law. Stakeholders can read them, systems can evaluate them.
 
 Rules in Lemma are transparent, deterministic, logically consistent, temporally bound and explainable. So with the same data for the same spec and the same effective point in time, you will get the same result. Lemma can also tell you why you got that result. Audits and tracing become trivial, even as time passes and rules change.
 

@@ -112,9 +112,8 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         ("number_of_cups".to_string(), "2".to_string()),
         ("has_loyalty_card".to_string(), "false".to_string()),
     ]);
-
     let response = engine
-        .run(None, "coffee_order", Some(&now), data_values, true)
+        .run(None, "coffee_order", Some(&now), data_values, true, None)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -125,7 +124,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("base_price rule not found");
 
     let base_price_value = base_price
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -142,7 +141,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
             );
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("2.50"),
                 "base_price should be exactly 2.50 (2.50 eur), got: {}",
                 n
@@ -162,7 +163,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("size_multiplier rule not found");
 
     let multiplier_value = size_multiplier
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -172,7 +173,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     match &multiplier_value.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.80"),
                 "size_multiplier should be 0.80, got: {}",
                 n
@@ -192,7 +195,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("price_per_cup rule not found");
 
     let cup_price = price_per_cup
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -210,7 +213,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
             // base_price = 2.50, size_multiplier = 0.80
             // price_per_cup = 2.50 * 0.80 = 2.00
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("2.00"),
                 "price_per_cup should be exactly 2.00 (2.50 * 0.80), got: {}",
                 n
@@ -230,7 +235,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("subtotal rule not found");
 
     let subtotal_value = subtotal
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -245,7 +250,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
                 "subtotal should have unit 'eur', got: {:?}",
                 unit
             );
-            *n
+            n.clone()
         }
         _ => panic!(
             "subtotal should be Quantity type, got: {:?}",
@@ -270,7 +275,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("loyalty_discount rule not found");
 
     let discount = loyalty_discount
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -280,7 +285,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
     match &discount.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.00"),
                 "loyalty_discount should be 0.00, got: {}",
                 n
@@ -330,9 +337,8 @@ fn test_coffee_order_latte_large_with_loyalty() {
         ("number_of_cups".to_string(), "3".to_string()),
         ("has_loyalty_card".to_string(), "true".to_string()),
     ]);
-
     let response = engine
-        .run(None, "coffee_order", Some(&now), data_values, true)
+        .run(None, "coffee_order", Some(&now), data_values, true, None)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -343,7 +349,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("base_price rule not found");
 
     let base_price_value = base_price
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -360,7 +366,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
             );
             // base_price preserves the numeric value as written for the unit.
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("3.50"),
                 "base_price should be exactly 3.50 (3.50 eur), got: {}",
                 n
@@ -380,7 +388,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("size_multiplier rule not found");
 
     let multiplier_value = size_multiplier
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -390,7 +398,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
     match &multiplier_value.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("1.20"),
                 "size_multiplier should be 1.20, got: {}",
                 n
@@ -411,7 +421,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("loyalty_discount rule not found");
 
     let discount = loyalty_discount
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -421,7 +431,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
     match &discount.value {
         lemma::ValueKind::Number(n) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.10"),
                 "loyalty_discount should be exactly 0.10, got: {}",
                 n
@@ -447,14 +459,14 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .expect("total rule not found");
 
     let subtotal_value = subtotal
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("subtotal should have value");
     total
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -470,7 +482,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
                 "subtotal should have unit 'eur', got: {:?}",
                 unit
             );
-            *n
+            n.clone()
         }
         _ => panic!(
             "subtotal should be Quantity type, got: {:?}",
@@ -511,9 +523,8 @@ fn test_coffee_order_ordered_priority() {
 
     for (priority, expected) in priorities.iter().zip(expected_values.iter()) {
         let data_values = HashMap::from([("priority".to_string(), priority.to_string())]);
-
         let response = engine
-            .run(None, "coffee_order", Some(&now), data_values, false)
+            .run(None, "coffee_order", Some(&now), data_values, true, None)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -545,9 +556,8 @@ fn test_coffee_order_invalid_size_veto() {
         ("size".to_string(), "extra large".to_string()),
         ("number_of_cups".to_string(), "1".to_string()),
     ]);
-
     let response = engine
-        .run(None, "coffee_order", Some(&now), data_values, false)
+        .run(None, "coffee_order", Some(&now), data_values, true, None)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response

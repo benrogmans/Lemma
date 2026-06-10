@@ -54,7 +54,7 @@ fn expect_load_error(code: &str, file: &str, fragments: &[&str]) {
 fn run_spec(engine: &Engine, spec: &str, data: HashMap<String, String>) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(None, spec, Some(&now), data, true)
+        .run(None, spec, Some(&now), data, true, None)
         .unwrap_or_else(|e| panic!("run({spec}) failed: {e}"))
 }
 
@@ -69,7 +69,7 @@ fn rule_value<'a>(response: &'a lemma::Response, rule: &str) -> &'a LiteralValue
             rr.veto_reason.as_deref().unwrap_or("Vetoed")
         );
     }
-    rr.trace
+    rr.explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -86,7 +86,9 @@ fn assert_ratio_exact(
     match &lit.value {
         ValueKind::Ratio(r, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(r.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit(expected_canonical),
                 "{ctx}: canonical magnitude"
             );
@@ -100,7 +102,9 @@ fn assert_number_exact(lit: &LiteralValue, ctx: &str, expected: &str) {
     match &lit.value {
         ValueKind::Number(n) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit(expected),
                 "{ctx}"
             );

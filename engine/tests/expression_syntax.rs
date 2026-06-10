@@ -23,7 +23,7 @@ rule with_spaces: not  (  x  )
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false)
+        .run(None, "test", Some(&now), HashMap::new(), false, None)
         .unwrap();
 
     let not_x_rule = response.results.get("not_x").unwrap();

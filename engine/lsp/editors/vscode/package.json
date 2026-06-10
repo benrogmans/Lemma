@@ -2,9 +2,10 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.16",
+  "version": "0.8.17",
   "publisher": "lemma",
   "license": "Apache-2.0",
+  "icon": "lemma_128.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/lemma/lemma"
@@ -89,8 +90,8 @@
       "properties": {
         "lemma.lspServerPath": {
           "type": "string",
-          "default": "lsp",
-          "description": "Path to the lsp binary. If not absolute, the binary is looked up on $PATH."
+          "default": "lemma",
+          "description": "Path to the lemma binary. If not absolute, the binary is looked up on $PATH."
         }
       }
     },

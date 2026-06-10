@@ -29,6 +29,7 @@ rule equal_false: a is c
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 
@@ -59,7 +60,14 @@ rule different_greeting: greeting is other
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_equal_text", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "test_equal_text",
+            Some(&now),
+            HashMap::new(),
+            false,
+            None,
+        )
         .unwrap();
 
     let same = response.results.get("same_greeting").unwrap();
@@ -96,6 +104,7 @@ rule mixed: flag_a is flag_c
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 
@@ -133,6 +142,7 @@ rule message: "inactive"
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 

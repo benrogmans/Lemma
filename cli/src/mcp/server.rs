@@ -81,15 +81,9 @@ mod imp {
     }
 
     fn resolve_effective(args: &serde_json::Value) -> Result<DateTimeValue, McpError> {
-        match args.get("effective").and_then(|v| v.as_str()) {
-            Some(s) if !s.trim().is_empty() => s.trim().parse::<DateTimeValue>().ok().ok_or_else(|| {
-                McpError::invalid_params(format!(
-                    "Invalid effective value '{}'. Expected: YYYY, YYYY-MM, YYYY-MM-DD, or ISO 8601 datetime",
-                    s
-                ))
-            }),
-            _ => Ok(DateTimeValue::now()),
-        }
+        let raw = args.get("effective").and_then(|v| v.as_str());
+        lemma::Engine::resolve_effective(raw)
+            .map_err(|e| McpError::invalid_params(e.message().to_string()))
     }
 
     /// Configuration for the MCP server.
@@ -272,10 +266,10 @@ mod imp {
                             },
                             "source_id": {
                                 "type": "string",
-                                "description": "Optional identifier for this source fragment"
+                                "description": "Identifier for this source fragment (used as load path)"
                             }
                         },
-                        "required": ["code"]
+                        "required": ["code", "source_id"]
                     }
                 }));
                 tools.push(serde_json::json!({
@@ -356,8 +350,10 @@ mod imp {
 
             let source_id = args["source_id"]
                 .as_str()
-                .map(String::from)
-                .unwrap_or_else(|| format!("spec_{}", chrono::Utc::now().timestamp_millis()));
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| McpError::invalid_params("Missing 'source_id' field".to_string()))?
+                .to_string();
 
             let names_before: std::collections::HashSet<String> = self
                 .engine
@@ -396,7 +392,7 @@ mod imp {
             let now = DateTimeValue::now();
             for spec_name in &new_spec_names {
                 if let Ok(plan) = self.engine.get_plan(None, spec_name, Some(&now)) {
-                    output.push_str(&plan.schema().to_string());
+                    output.push_str(&plan.schema(&lemma::DataOverlay::default()).to_string());
                     output.push('\n');
                 }
             }
@@ -503,16 +499,29 @@ mod imp {
 
             let now = resolve_effective(args)?;
 
-            let mut response = self
+            let plan = self
                 .engine
-                .run(None, &spec_name, Some(&now), data_values, true)
+                .get_plan(None, &spec_name, Some(&now))
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
                 })?;
-            if !rule_names.is_empty() {
-                response.filter_rules(&rule_names);
-            }
+            let rules = if rule_names.is_empty() {
+                None
+            } else {
+                Some(rule_names.as_slice())
+            };
+            let data_input: std::collections::HashMap<String, lemma::DataValueInput> = data_values
+                .into_iter()
+                .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
+                .collect();
+            let response = self
+                .engine
+                .run_plan(plan, Some(&now), data_input, true, rules)
+                .map_err(|e| {
+                    error!("Evaluation failed: {}", e);
+                    McpError::internal_error(format!("Evaluation failed: {e}"))
+                })?;
 
             let mut output = String::new();
             output.push_str(&format!("spec: {}\n", spec_set_id.trim()));
@@ -522,14 +531,22 @@ mod imp {
             for result in response.results.values() {
                 output.push_str(&format!("{}: ", result.rule.name));
                 if result.vetoed {
-                    output.push_str(result.veto_reason.as_deref().unwrap_or("Vetoed"));
+                    if let Some(reason) = result.veto_reason.as_deref() {
+                        output.push_str(reason);
+                    }
                 } else {
-                    output.push_str(result.display.as_deref().unwrap_or(""));
+                    let display = result.display.as_deref().ok_or_else(|| {
+                        McpError::internal_error(format!(
+                            "Rule '{}' evaluated without display after evaluation",
+                            result.rule.name
+                        ))
+                    })?;
+                    output.push_str(display);
                 }
                 output.push('\n');
 
-                if let Some(trace) = &result.trace {
-                    let steps = format_explanation_steps(trace);
+                if let Some(explanation) = &result.explanation {
+                    let steps = lemma::format_explanation(explanation);
                     if !steps.is_empty() {
                         output.push_str("\nReasoning:\n");
                         output.push_str(&steps);
@@ -643,12 +660,13 @@ mod imp {
             };
 
             let schema = if rule_names.is_empty() {
-                plan.schema()
+                plan.schema(&lemma::DataOverlay::default())
             } else {
-                plan.schema_for_rules(&rule_names).map_err(|e| {
-                    error!("schema_for_rules failed: {}", e);
-                    McpError::internal_error(format!("Failed to get schema for rules: {e}"))
-                })?
+                plan.schema_for_rules(&rule_names, &lemma::DataOverlay::default())
+                    .map_err(|e| {
+                        error!("schema_for_rules failed: {}", e);
+                        McpError::internal_error(format!("Failed to get schema for rules: {e}"))
+                    })?
             };
 
             let scope = if rule_names.is_empty() {
@@ -672,203 +690,6 @@ mod imp {
                     "text": output
                 }]
             }))
-        }
-    }
-
-    // ── Explanation formatting ─────────────────────────────────────────────
-
-    /// Linearise an explanation tree into plain-English reasoning steps.
-    fn format_explanation_steps(explanation: &lemma::EvaluationTrace) -> String {
-        let mut steps = Vec::new();
-        let mut seen_data = std::collections::HashSet::new();
-        let mut seen_rules = std::collections::HashSet::new();
-        walk_explanation_node(
-            &explanation.tree,
-            &mut steps,
-            &mut seen_data,
-            &mut seen_rules,
-        );
-        steps.join("\n")
-    }
-
-    fn walk_explanation_node(
-        node: &lemma::TraceNode,
-        steps: &mut Vec<String>,
-        seen_data: &mut std::collections::HashSet<String>,
-        seen_rules: &mut std::collections::HashSet<String>,
-    ) {
-        use lemma::{TraceNode, TraceValueSource};
-
-        match node {
-            TraceNode::Value {
-                value,
-                source: TraceValueSource::Data { data_ref },
-                ..
-            } => {
-                let key = data_ref.to_string();
-                if seen_data.insert(key.clone()) {
-                    steps.push(format!("{}: {}", key, value));
-                }
-            }
-
-            TraceNode::Value { .. } => {}
-
-            TraceNode::RuleReference {
-                rule_path,
-                result,
-                expansion,
-                ..
-            } => {
-                let key = rule_path.to_string();
-                if !seen_rules.insert(key) {
-                    return;
-                }
-                walk_explanation_node(expansion, steps, seen_data, seen_rules);
-                match result {
-                    lemma::OperationResult::Value(v) => {
-                        steps.push(format!("{}: {}", rule_path.rule, v));
-                    }
-                    lemma::OperationResult::Veto(reason) => {
-                        steps.push(format!("{}: veto ({})", rule_path.rule, reason));
-                    }
-                }
-            }
-
-            TraceNode::Computation {
-                kind,
-                conversion_steps,
-                expression,
-                result,
-                operands,
-                ..
-            } => match kind {
-                lemma::ComputationKind::UnitConversion { .. } => {
-                    assert!(
-                        !conversion_steps.is_empty(),
-                        "BUG: UnitConversion computation must have conversion_steps"
-                    );
-                    for step in conversion_steps {
-                        steps.push(step.text.clone());
-                    }
-                    for operand in operands {
-                        walk_explanation_node(operand, steps, seen_data, seen_rules);
-                    }
-                }
-                _ => {
-                    for operand in operands {
-                        walk_explanation_node(operand, steps, seen_data, seen_rules);
-                    }
-                    steps.push(format!("{}: {}", expression, result));
-                }
-            },
-
-            TraceNode::Branches {
-                matched,
-                non_matched,
-                ..
-            } => {
-                // Collect data from all branch conditions first
-                for branch in non_matched {
-                    collect_branch_data(&branch.condition, steps, seen_data);
-                }
-                if let Some(cond) = &matched.condition {
-                    collect_branch_data(cond, steps, seen_data);
-                }
-
-                // Emit non-matched branch decisions
-                for branch in non_matched {
-                    let cond_text = node_expression(&branch.condition);
-                    let clause = match branch.clause_index {
-                        Some(i) => format!("unless clause {}", i + 1),
-                        None => "default".to_string(),
-                    };
-                    steps.push(format!("{}: {} is false, skipped", clause, cond_text));
-                }
-
-                // Emit matched branch decision
-                if let Some(cond) = &matched.condition {
-                    let cond_text = node_expression(cond);
-                    let clause = match matched.clause_index {
-                        Some(i) => format!("unless clause {}", i + 1),
-                        None => "clause".to_string(),
-                    };
-                    steps.push(format!("{}: {} is true, matched", clause, cond_text));
-                } else {
-                    steps.push("default value applies".to_string());
-                }
-
-                // Walk the matched result
-                walk_explanation_node(&matched.result, steps, seen_data, seen_rules);
-            }
-
-            TraceNode::Veto { message, .. } => match message {
-                Some(msg) => steps.push(format!("veto: {}", msg)),
-                None => steps.push("veto".to_string()),
-            },
-        }
-    }
-
-    /// Walk an explanation node collecting only data values (no reasoning steps).
-    /// Used to gather data from branch conditions before emitting branch decisions.
-    fn collect_branch_data(
-        node: &lemma::TraceNode,
-        steps: &mut Vec<String>,
-        seen_data: &mut std::collections::HashSet<String>,
-    ) {
-        use lemma::{TraceNode, TraceValueSource};
-
-        match node {
-            TraceNode::Value {
-                value,
-                source: TraceValueSource::Data { data_ref },
-                ..
-            } => {
-                let key = data_ref.to_string();
-                if seen_data.insert(key.clone()) {
-                    steps.push(format!("{}: {}", key, value));
-                }
-            }
-            TraceNode::Computation { operands, .. } => {
-                for op in operands {
-                    collect_branch_data(op, steps, seen_data);
-                }
-            }
-            TraceNode::RuleReference { expansion, .. } => {
-                collect_branch_data(expansion, steps, seen_data);
-            }
-            TraceNode::Branches {
-                matched,
-                non_matched,
-                ..
-            } => {
-                for b in non_matched {
-                    collect_branch_data(&b.condition, steps, seen_data);
-                }
-                if let Some(c) = &matched.condition {
-                    collect_branch_data(c, steps, seen_data);
-                }
-                collect_branch_data(&matched.result, steps, seen_data);
-            }
-            _ => {}
-        }
-    }
-
-    /// Extract the human-readable expression from any explanation node.
-    fn node_expression(node: &lemma::TraceNode) -> String {
-        use lemma::{TraceNode, TraceValueSource};
-
-        match node {
-            TraceNode::Computation { expression, .. } => expression.clone(),
-            TraceNode::RuleReference { rule_path, .. } => rule_path.rule.to_string(),
-            TraceNode::Value {
-                source: TraceValueSource::Data { data_ref },
-                ..
-            } => data_ref.to_string(),
-            TraceNode::Value { value, .. } => value.to_string(),
-            TraceNode::Branches { .. } => "branch".to_string(),
-            TraceNode::Veto { message, .. } => {
-                message.clone().unwrap_or_else(|| "veto".to_string())
-            }
         }
     }
 

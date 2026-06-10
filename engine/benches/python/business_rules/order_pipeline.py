@@ -1,7 +1,8 @@
 """Port of engine/benches/specs/order_pipeline.lemma."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+
+from business_rules.rational import Rational, parse_rational
 
 
 @dataclass(frozen=True, slots=True)
@@ -9,12 +10,12 @@ class Inputs:
     customer_tier: str
     payment_method: str
     shipping_zone: str
-    quantity: Decimal
-    unit_price: Decimal
-    package_weight: Decimal
-    delivery_distance: Decimal
-    loyalty_points: Decimal
-    coupon_percent: Decimal
+    quantity: Rational
+    unit_price: Rational
+    package_weight: Rational
+    delivery_distance: Rational
+    loyalty_points: Rational
+    coupon_percent: Rational
     is_fragile: bool
     is_express: bool
     is_hazardous: bool
@@ -28,39 +29,39 @@ class Outputs:
     is_silver: bool
     is_gold: bool
     is_platinum: bool
-    subtotal: Decimal
-    volume_discount_rate: Decimal
-    tier_discount_rate: Decimal
-    coupon_rate: Decimal
-    first_time_rate: Decimal
-    loyalty_rate: Decimal
-    combined_discount_rate: Decimal
-    discount_amount: Decimal
-    net_price: Decimal
-    base_shipping: Decimal
-    distance_fee: Decimal
-    zone_multiplier: Decimal
-    fragile_fee: Decimal
-    express_multiplier: Decimal
-    hazardous_fee: Decimal
-    gift_wrap_fee: Decimal
-    total_shipping: Decimal
+    subtotal: Rational
+    volume_discount_rate: Rational
+    tier_discount_rate: Rational
+    coupon_rate: Rational
+    first_time_rate: Rational
+    loyalty_rate: Rational
+    combined_discount_rate: Rational
+    discount_amount: Rational
+    net_price: Rational
+    base_shipping: Rational
+    distance_fee: Rational
+    zone_multiplier: Rational
+    fragile_fee: Rational
+    express_multiplier: Rational
+    hazardous_fee: Rational
+    gift_wrap_fee: Rational
+    total_shipping: Rational
     pays_credit: bool
     pays_debit: bool
     pays_cash: bool
     pays_transfer: bool
-    processing_fee: Decimal
-    pre_tax_total: Decimal
-    tax_rate: Decimal
-    tax_amount: Decimal
-    loyalty_credit_rate: Decimal
-    loyalty_credit_earned: Decimal
-    grand_total: Decimal
+    processing_fee: Rational
+    pre_tax_total: Rational
+    tax_rate: Rational
+    tax_amount: Rational
+    loyalty_credit_rate: Rational
+    loyalty_credit_earned: Rational
+    grand_total: Rational
     meets_minimum: bool
     order_valid: bool
     order_valid_veto: str | None
-    savings_total: Decimal
-    savings_percent: Decimal
+    savings_total: Rational
+    savings_percent: Rational
     is_high_value: bool
     is_express_eligible: bool
     order_summary: str
@@ -71,12 +72,12 @@ def build_inputs(raw: dict[str, str]) -> Inputs:
         customer_tier=raw["customer_tier"],
         payment_method=raw["payment_method"],
         shipping_zone=raw["shipping_zone"],
-        quantity=Decimal(raw["quantity"]),
-        unit_price=Decimal(raw["unit_price"]),
-        package_weight=Decimal(raw["package_weight"]),
-        delivery_distance=Decimal(raw["delivery_distance"]),
-        loyalty_points=Decimal(raw["loyalty_points"]),
-        coupon_percent=Decimal(raw["coupon_percent"]),
+        quantity=parse_rational(raw["quantity"]),
+        unit_price=parse_rational(raw["unit_price"]),
+        package_weight=parse_rational(raw["package_weight"]),
+        delivery_distance=parse_rational(raw["delivery_distance"]),
+        loyalty_points=parse_rational(raw["loyalty_points"]),
+        coupon_percent=parse_rational(raw["coupon_percent"]),
         is_fragile=raw["is_fragile"] == "true",
         is_express=raw["is_express"] == "true",
         is_hazardous=raw["is_hazardous"] == "true",
@@ -93,37 +94,37 @@ def compute(inputs: Inputs) -> Outputs:
 
     subtotal = inputs.unit_price * inputs.quantity
 
-    volume_discount_rate = Decimal(0)
+    volume_discount_rate = Rational(0)
     if inputs.quantity >= 5:
-        volume_discount_rate = Decimal("0.03")
+        volume_discount_rate = Rational("0.03")
     if inputs.quantity >= 25:
-        volume_discount_rate = Decimal("0.07")
+        volume_discount_rate = Rational("0.07")
     if inputs.quantity >= 100:
-        volume_discount_rate = Decimal("0.12")
+        volume_discount_rate = Rational("0.12")
     if inputs.quantity >= 500:
-        volume_discount_rate = Decimal("0.18")
+        volume_discount_rate = Rational("0.18")
 
-    tier_discount_rate = Decimal(0)
+    tier_discount_rate = Rational(0)
     if is_silver:
-        tier_discount_rate = Decimal("0.05")
+        tier_discount_rate = Rational("0.05")
     if is_gold:
-        tier_discount_rate = Decimal("0.10")
+        tier_discount_rate = Rational("0.10")
     if is_platinum:
-        tier_discount_rate = Decimal("0.15")
+        tier_discount_rate = Rational("0.15")
 
     coupon_rate = inputs.coupon_percent / 100
 
-    first_time_rate = Decimal(0)
+    first_time_rate = Rational(0)
     if inputs.is_first_time:
-        first_time_rate = Decimal("0.08")
+        first_time_rate = Rational("0.08")
 
-    loyalty_rate = Decimal(0)
+    loyalty_rate = Rational(0)
     if inputs.loyalty_points >= 1_000:
-        loyalty_rate = Decimal("0.02")
+        loyalty_rate = Rational("0.02")
     if inputs.loyalty_points >= 5_000:
-        loyalty_rate = Decimal("0.05")
+        loyalty_rate = Rational("0.05")
     if inputs.loyalty_points >= 25_000:
-        loyalty_rate = Decimal("0.10")
+        loyalty_rate = Rational("0.10")
 
     combined_discount_rate = (
         volume_discount_rate
@@ -136,41 +137,41 @@ def compute(inputs: Inputs) -> Outputs:
     discount_amount = subtotal * combined_discount_rate
     net_price = subtotal - discount_amount
 
-    base_shipping = Decimal(5)
+    base_shipping = Rational(5)
     if inputs.package_weight > 1:
-        base_shipping = Decimal(8)
+        base_shipping = Rational(8)
     if inputs.package_weight > 5:
-        base_shipping = Decimal(14)
+        base_shipping = Rational(14)
     if inputs.package_weight > 20:
-        base_shipping = Decimal(25)
+        base_shipping = Rational(25)
     if inputs.package_weight > 50:
-        base_shipping = Decimal(45)
+        base_shipping = Rational(45)
 
-    distance_fee = inputs.delivery_distance * Decimal("0.04")
+    distance_fee = inputs.delivery_distance * Rational("0.04")
 
-    zone_multiplier = Decimal(1)
+    zone_multiplier = Rational(1)
     if inputs.shipping_zone == "regional":
-        zone_multiplier = Decimal("1.2")
+        zone_multiplier = Rational("1.2")
     if inputs.shipping_zone == "national":
-        zone_multiplier = Decimal("1.5")
+        zone_multiplier = Rational("1.5")
     if inputs.shipping_zone == "intl":
-        zone_multiplier = Decimal("2.5")
+        zone_multiplier = Rational("2.5")
 
-    fragile_fee = Decimal(0)
+    fragile_fee = Rational(0)
     if inputs.is_fragile:
-        fragile_fee = Decimal(8)
+        fragile_fee = Rational(8)
 
-    express_multiplier = Decimal(1)
+    express_multiplier = Rational(1)
     if inputs.is_express:
-        express_multiplier = Decimal(2)
+        express_multiplier = Rational(2)
 
-    hazardous_fee = Decimal(0)
+    hazardous_fee = Rational(0)
     if inputs.is_hazardous:
-        hazardous_fee = Decimal(20)
+        hazardous_fee = Rational(20)
 
-    gift_wrap_fee = Decimal(0)
+    gift_wrap_fee = Rational(0)
     if inputs.is_gift:
-        gift_wrap_fee = Decimal(5)
+        gift_wrap_fee = Rational(5)
 
     total_shipping = (
         (
@@ -189,29 +190,29 @@ def compute(inputs: Inputs) -> Outputs:
     pays_cash = inputs.payment_method == "cash"
     pays_transfer = inputs.payment_method == "transfer"
 
-    processing_fee = Decimal(0)
+    processing_fee = Rational(0)
     if pays_credit:
-        processing_fee = net_price * Decimal("0.025")
+        processing_fee = net_price * Rational("0.025")
     if pays_cash:
-        processing_fee = Decimal(2)
+        processing_fee = Rational(2)
     if pays_transfer:
-        processing_fee = Decimal(1)
+        processing_fee = Rational(1)
 
     pre_tax_total = net_price + total_shipping + processing_fee
 
-    tax_rate = Decimal("0.08")
+    tax_rate = Rational("0.08")
     if inputs.shipping_zone == "intl":
-        tax_rate = Decimal(0)
+        tax_rate = Rational(0)
 
     tax_amount = pre_tax_total * tax_rate
 
-    loyalty_credit_rate = Decimal("0.01")
+    loyalty_credit_rate = Rational("0.01")
     if is_silver:
-        loyalty_credit_rate = Decimal("0.02")
+        loyalty_credit_rate = Rational("0.02")
     if is_gold:
-        loyalty_credit_rate = Decimal("0.03")
+        loyalty_credit_rate = Rational("0.03")
     if is_platinum:
-        loyalty_credit_rate = Decimal("0.05")
+        loyalty_credit_rate = Rational("0.05")
 
     loyalty_credit_earned = pre_tax_total * loyalty_credit_rate
     grand_total = pre_tax_total + tax_amount

@@ -172,7 +172,12 @@ fn select_rules(
 ) -> Result<Option<Vec<String>>> {
     let plan = get_plan_for_interactive(engine, repo, spec_name, now)
         .context(format!("Spec '{}' not found", spec_name))?;
-    let rule_names: Vec<String> = plan.schema().rules.keys().cloned().collect();
+    let rule_names: Vec<String> = plan
+        .schema(&lemma::DataOverlay::default())
+        .rules
+        .keys()
+        .cloned()
+        .collect();
 
     if rule_names.is_empty() {
         return Ok(None);
@@ -198,24 +203,44 @@ fn prompt_data(
     provided_data: &HashMap<String, String>,
     now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
-    let plan = get_plan_for_interactive(engine, repo, spec_name, now)
+    let base_plan = get_plan_for_interactive(engine, repo, spec_name, now)
         .context(format!("Spec '{}' not found", spec_name))?;
 
-    let full_schema = match rule_names {
-        Some(names) if !names.is_empty() => plan
-            .schema_for_rules(names)
-            .map_err(|e| anyhow::anyhow!("{}", e))
-            .context("Failed to build schema for selected rules")?,
-        _ => plan.schema(),
-    };
-
-    let mut collected = HashMap::new();
+    let mut collected: HashMap<String, String> = HashMap::new();
     let mut header_printed = false;
 
-    for (name, entry) in &full_schema.data {
-        if entry.bound_value.is_some() || provided_data.contains_key(name) {
-            continue;
-        }
+    loop {
+        let trial_values: HashMap<String, lemma::DataValueInput> = provided_data
+            .iter()
+            .chain(collected.iter())
+            .map(|(k, v)| (k.clone(), lemma::DataValueInput::convenience(v.clone())))
+            .collect();
+
+        let overlay = lemma::DataOverlay::resolve(base_plan, trial_values, engine.limits())
+            .map_err(|e| anyhow::anyhow!("{}", e))
+            .context("Failed to apply collected values to plan")?;
+
+        let schema = match rule_names {
+            Some(names) if !names.is_empty() => base_plan
+                .schema_for_rules(names, &overlay)
+                .map_err(|e| anyhow::anyhow!("{}", e))
+                .context("Failed to build schema for selected rules")?,
+            _ => base_plan.schema(&overlay),
+        };
+
+        // Find the next data field that still needs a value from the user.
+        // Fields that are bound (provided_data or collected) appear as bound_value.is_some().
+        let next = schema
+            .data
+            .iter()
+            .find(|(_, entry)| entry.bound_value.is_none());
+
+        let (name, entry) = match next {
+            Some(pair) => pair,
+            None => break,
+        };
+        let name = name.clone();
+        let entry = entry.clone();
 
         if !header_printed {
             println!("\nEnter values for data (press Enter to accept defaults):");
@@ -224,21 +249,20 @@ fn prompt_data(
 
         loop {
             let input_value =
-                prompt_value_for_type(name, &entry.lemma_type, entry.default.as_ref())?;
+                prompt_value_for_type(&name, &entry.lemma_type, entry.default.as_ref())?;
 
-            let mut trial = provided_data.clone();
-            trial.extend(collected.clone());
-            trial.insert(name.clone(), input_value.clone());
-
+            let mut validation_trial = provided_data.clone();
+            validation_trial.extend(collected.clone());
+            validation_trial.insert(name.clone(), input_value.clone());
             match engine.run_plan(
-                plan,
+                base_plan,
                 Some(now),
-                trial
+                validation_trial
                     .into_iter()
                     .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
                     .collect(),
                 false,
-                false,
+                rule_names.as_deref(),
             ) {
                 Ok(_) => {
                     collected.insert(name.clone(), input_value);
@@ -335,8 +359,8 @@ fn prompt_value_for_type(
             ..
         } => {
             let number_spec = TypeSpecification::Number {
-                minimum: *minimum,
-                maximum: *maximum,
+                minimum: minimum.clone(),
+                maximum: maximum.clone(),
                 decimals: *decimals,
                 help: help.clone(),
             };
@@ -357,8 +381,8 @@ fn prompt_value_for_type(
             ..
         } => {
             let ratio_spec = TypeSpecification::Ratio {
-                minimum: *minimum,
-                maximum: *maximum,
+                minimum: minimum.clone(),
+                maximum: maximum.clone(),
                 decimals: *decimals,
                 units: units.clone(),
                 help: help.clone(),
@@ -587,9 +611,10 @@ fn prompt_quantity_data(
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let parsed = schema_default.and_then(|lit| match &lit.value {
-        ValueKind::Quantity(n, signature) => {
-            Some((*n, signature.first().map(|(n, _)| n.as_str()).unwrap_or("")))
-        }
+        ValueKind::Quantity(n, signature) => Some((
+            n.clone(),
+            signature.first().map(|(n, _)| n.as_str()).unwrap_or(""),
+        )),
         _ => None,
     });
 

@@ -1,3 +1,4 @@
+// Criterion cases synced with xtask/src/benchmarks/cli.rs PROFILE_BENCH_CASES.
 use criterion::{criterion_group, criterion_main, Criterion};
 use lemma::{collect_lemma_sources as engine_collect_sources, *};
 use std::collections::HashMap;
@@ -9,11 +10,16 @@ fn load_engine() -> Engine {
         .join("documentation/examples");
 
     let mut paths = Vec::new();
-    for entry in std::fs::read_dir(&examples_dir).expect("read examples dir") {
-        let entry = entry.expect("dir entry");
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("lemma") {
-            paths.push(path);
+    let mut dirs = vec![examples_dir.clone()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read examples dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("lemma") {
+                paths.push(path);
+            }
         }
     }
 
@@ -47,7 +53,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     group.bench_function("engine_evaluate", |b| {
         b.iter(|| {
             let resp = engine
-                .run(None, spec, Some(&now), data.clone(), false)
+                .run(None, spec, Some(&now), data.clone(), false, None)
                 .expect("run");
             std::hint::black_box(resp);
         });
@@ -58,43 +64,38 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
             .get_plan(None, spec, Some(&now))
             .expect("plan exists");
         b.iter(|| {
-            let plan = base_plan
-                .clone()
-                .set_data_values(
-                    data.clone()
-                        .into_iter()
-                        .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-                        .collect(),
-                    &ResourceLimits::default(),
-                )
-                .expect("set_data_values");
-            std::hint::black_box(plan);
-        });
-    });
-
-    group.bench_function("plan_clone", |b| {
-        let base_plan = engine
-            .get_plan(None, spec, Some(&now))
-            .expect("plan exists");
-        b.iter(|| {
-            let plan = base_plan.clone();
-            std::hint::black_box(plan);
+            let overlay = lemma::DataOverlay::resolve(
+                base_plan,
+                data.clone()
+                    .into_iter()
+                    .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
+                    .collect(),
+                &ResourceLimits::default(),
+            )
+            .expect("DataOverlay::resolve");
+            std::hint::black_box(overlay);
         });
     });
 
     group.bench_function("single_rule", |b| {
         b.iter(|| {
-            let mut resp = engine
-                .run(None, spec, Some(&now), data.clone(), false)
+            let resp = engine
+                .run(
+                    None,
+                    spec,
+                    Some(&now),
+                    data.clone(),
+                    false,
+                    Some(&[String::from("periods_per_year")]),
+                )
                 .expect("run");
-            resp.filter_rules(&[String::from("periods_per_year")]);
             std::hint::black_box(resp);
         });
     });
 
     group.bench_function("json_envelope", |b| {
         let response = engine
-            .run(None, spec, Some(&now), data.clone(), false)
+            .run(None, spec, Some(&now), data.clone(), false, None)
             .expect("run");
         b.iter(|| {
             let envelope = build_envelope(&response, spec, &now);
@@ -105,7 +106,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_raw_response", |b| {
         let response = engine
-            .run(None, spec, Some(&now), data.clone(), false)
+            .run(None, spec, Some(&now), data.clone(), false, None)
             .expect("run");
         b.iter(|| {
             let json = serde_json::to_vec(&response).expect("serialize");
@@ -134,8 +135,8 @@ fn build_envelope(
                 serde_json::Value::String(veto_reason.clone()),
             );
         }
-        if let Some(trace) = &rule_result.trace {
-            if let OperationResult::Value(v) = &trace.result {
+        if let Some(explanation) = &rule_result.explanation {
+            if let OperationResult::Value(v) = &explanation.result {
                 let val = serde_json::to_value(&v.value).expect("ValueKind serializes");
                 entry.insert("value".into(), val);
             }

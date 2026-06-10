@@ -364,7 +364,7 @@ Self-contained specs demonstrating core features:
 - **[03_recipe_scaling](examples/03_recipe_scaling.lemma)** -- calculations, stdlib duration units
 - **[04_membership_benefits](examples/04_membership_benefits.lemma)** -- spec composition with `uses`
 - **[05_weather_clothing](examples/05_weather_clothing.lemma)** -- temporal versioning, text rules
-- **[06_dutch_net_salary](examples/06_dutch_net_salary.lemma)** -- progressive tax brackets, multi-rule pipeline
+- **[nl/tax/net_salary](examples/nl/tax/net_salary.lemma)** -- progressive tax brackets, multi-rule pipeline
 
 ### CLI integration examples (`cli/tests/integrations/examples/`)
 

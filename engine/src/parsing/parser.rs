@@ -1423,8 +1423,8 @@ impl Parser {
 
             // Apply denominator mode: negate the exponent (or its default) when in denominator.
             let final_exp = match (explicit_exp, denominator_mode) {
-                (Some(e), true) => -e,
-                (Some(e), false) => e,
+                (Some(exponent), true) => -exponent,
+                (Some(exponent), false) => exponent,
                 (None, true) => -1,
                 (None, false) => 1,
             };

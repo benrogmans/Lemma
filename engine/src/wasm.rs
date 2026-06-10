@@ -1,5 +1,4 @@
 use crate::error::ErrorKind;
-use crate::parsing::ast::DateTimeValue;
 use crate::parsing::source::Source;
 use crate::planning::DataValueInput;
 use crate::{Engine, Error, SourceType};
@@ -154,14 +153,11 @@ impl WasmEngine {
         rule_names: JsValue,
         data_values: JsValue,
         effective: Option<String>,
+        explain: Option<bool>,
     ) -> Result<JsValue, JsValue> {
-        let effective_dt = effective
-            .as_ref()
-            .filter(|s| !s.trim().is_empty())
-            .and_then(|s| s.parse::<DateTimeValue>().ok())
-            .unwrap_or_else(DateTimeValue::now);
+        let effective_dt =
+            Engine::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
 
-        let rule_names = parse_rule_names(&rule_names).map_err(js_err)?;
         let data = parse_data_values(&data_values).map_err(js_err)?;
 
         let repo = repository
@@ -174,14 +170,18 @@ impl WasmEngine {
             .get_plan(repo, spec, Some(&effective_dt))
             .map_err(|e| error_to_js(&e))?;
 
-        let mut response = self
-            .engine
-            .run_plan(plan, Some(&effective_dt), data, false, true)
-            .map_err(|e| error_to_js(&e))?;
+        let response_rules = resolve_wasm_response_rules(&rule_names).map_err(js_err)?;
 
-        if !rule_names.is_empty() {
-            response.filter_rules(&rule_names);
-        }
+        let response = self
+            .engine
+            .run_plan(
+                plan,
+                Some(&effective_dt),
+                data,
+                explain.unwrap_or(true),
+                response_rules.as_deref(),
+            )
+            .map_err(|e| error_to_js(&e))?;
 
         serialize_engine_json(&response)
     }
@@ -210,11 +210,8 @@ impl WasmEngine {
         spec: &str,
         effective: Option<String>,
     ) -> Result<JsValue, JsValue> {
-        let effective_dt = effective
-            .as_ref()
-            .filter(|s| !s.trim().is_empty())
-            .and_then(|s| s.parse::<DateTimeValue>().ok())
-            .unwrap_or_else(DateTimeValue::now);
+        let effective_dt =
+            Engine::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
 
         let repo = repository
             .as_deref()
@@ -225,7 +222,7 @@ impl WasmEngine {
             .engine
             .get_plan(repo, spec, Some(&effective_dt))
             .map_err(|e| error_to_js(&e))?;
-        let schema = plan.schema();
+        let schema = plan.schema(&crate::planning::DataOverlay::default());
 
         serialize_engine_json(&schema)
     }
@@ -421,6 +418,17 @@ fn error_to_js(e: &Error) -> JsValue {
     let err = JsError::from(e);
     err.serialize(&js_error_serializer())
         .expect("BUG: serialize JsError")
+}
+
+fn resolve_wasm_response_rules(rule_names: &JsValue) -> Result<Option<Vec<String>>, String> {
+    if rule_names.is_undefined() || rule_names.is_null() {
+        return Ok(None);
+    }
+    let parsed = parse_rule_names(rule_names)?;
+    if parsed.is_empty() {
+        return Err("rule_names must not be empty".to_string());
+    }
+    Ok(Some(parsed))
 }
 
 fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {

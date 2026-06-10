@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lemma.dev/schemas/explanation.v1.json",
+  "title": "Lemma rule explanation",
+  "description": "Structural explanation tree for one evaluated rule. Present at results.<rule>.explanation only when evaluation was requested with explain: true (Engine::run / Engine::run_plan), CLI --explain, or HTTP x-explanations with server explanations enabled.",
+  "$defs": {
+    "Cause": {
+      "type": "object",
+      "required": ["condition", "value"],
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "type": "string",
+          "description": "Unless condition name from the source rule."
+        },
+        "value": {
+          "type": "string",
+          "description": "Display value of the unless condition subject for this run."
+        }
+      }
+    },
+    "ConversionStep": {
+      "type": "object",
+      "required": ["role", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["outcome", "rule", "source"]
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "ExplanationNode": {
+      "oneOf": [
+        { "$ref": "#/$defs/RuleNode" },
+        { "$ref": "#/$defs/ComposeNode" },
+        { "$ref": "#/$defs/DataInputNode" },
+        { "$ref": "#/$defs/ConversionNode" },
+        { "$ref": "#/$defs/VetoNode" }
+      ]
+    },
+    "RuleNode": {
+      "type": "object",
+      "required": ["type", "rule", "body", "children"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "rule" },
+        "rule": { "type": "string" },
+        "body": { "type": "string" },
+        "causes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Cause" }
+        },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ExplanationNode" }
+        }
+      }
+    },
+    "ComposeNode": {
+      "type": "object",
+      "required": ["type", "expression", "operands"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "compose" },
+        "expression": { "type": "string" },
+        "operands": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ExplanationNode" }
+        }
+      }
+    },
+    "DataInputNode": {
+      "type": "object",
+      "required": ["type", "data", "display"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "data_input" },
+        "data": { "type": "string" },
+        "display": { "type": "string" }
+      }
+    },
+    "ConversionNode": {
+      "type": "object",
+      "required": ["type", "expression", "steps", "operands"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "conversion" },
+        "expression": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ConversionStep" }
+        },
+        "operands": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ExplanationNode" }
+        }
+      }
+    },
+    "VetoNode": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "veto" },
+        "message": { "type": "string" }
+      }
+    }
+  },
+  "type": "object",
+  "required": ["rule", "result", "body", "children"],
+  "additionalProperties": false,
+  "properties": {
+    "rule": {
+      "type": "string",
+      "description": "Name of the explained rule."
+    },
+    "result": {
+      "type": "string",
+      "description": "Display string for the rule outcome (value display or veto text)."
+    },
+    "body": {
+      "type": "string",
+      "description": "Taken branch expression from the source rule."
+    },
+    "causes": {
+      "type": "array",
+      "description": "Input facts from unless conditions that determined this run. Omitted when the rule has no unless clauses.",
+      "items": { "$ref": "#/$defs/Cause" }
+    },
+    "children": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ExplanationNode" }
+    }
+  },
+  "examples": [
+    {
+      "rule": "total",
+      "result": "4821.09 eur",
+      "body": "subtotal + vat",
+      "children": [
+        {
+          "type": "rule",
+          "rule": "subtotal",
+          "body": "labor + rush_surcharge",
+          "children": [
+            {
+              "type": "rule",
+              "rule": "labor",
+              "body": "hourly_rate * hours_worked",
+              "children": [
+                {
+                  "type": "data_input",
+                  "data": "hourly_rate",
+                  "display": "85.00 eur"
+                },
+                {
+                  "type": "data_input",
+                  "data": "hours_worked",
+                  "display": "37.5"
+                }
+              ]
+            },
+            {
+              "type": "rule",
+              "rule": "rush_surcharge",
+              "body": "labor * 25%",
+              "causes": [
+                { "condition": "is_rush", "value": "true" },
+                { "condition": "is_super_rush", "value": "false" }
+              ],
+              "children": [
+                {
+                  "type": "compose",
+                  "expression": "labor * 25%",
+                  "operands": [
+                    {
+                      "type": "rule",
+                      "rule": "labor",
+                      "body": "hourly_rate * hours_worked",
+                      "children": [
+                        {
+                          "type": "data_input",
+                          "data": "hourly_rate",
+                          "display": "85.00 eur"
+                        },
+                        {
+                          "type": "data_input",
+                          "data": "hours_worked",
+                          "display": "37.5"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "data_input",
+                      "data": "",
+                      "display": "25%"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "rule",
+          "rule": "vat",
+          "body": "subtotal * 21%",
+          "children": [
+            {
+              "type": "compose",
+              "expression": "subtotal * 21%",
+              "operands": [
+                {
+                  "type": "rule",
+                  "rule": "subtotal",
+                  "body": "labor + rush_surcharge",
+                  "children": [
+                    {
+                      "type": "rule",
+                      "rule": "labor",
+                      "body": "hourly_rate * hours_worked",
+                      "children": [
+                        {
+                          "type": "data_input",
+                          "data": "hourly_rate",
+                          "display": "85.00 eur"
+                        },
+                        {
+                          "type": "data_input",
+                          "data": "hours_worked",
+                          "display": "37.5"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "rule",
+                      "rule": "rush_surcharge",
+                      "body": "labor * 25%",
+                      "causes": [
+                        { "condition": "is_rush", "value": "true" },
+                        { "condition": "is_super_rush", "value": "false" }
+                      ],
+                      "children": [
+                        {
+                          "type": "compose",
+                          "expression": "labor * 25%",
+                          "operands": [
+                            {
+                              "type": "rule",
+                              "rule": "labor",
+                              "body": "hourly_rate * hours_worked",
+                              "children": [
+                                {
+                                  "type": "data_input",
+                                  "data": "hourly_rate",
+                                  "display": "85.00 eur"
+                                },
+                                {
+                                  "type": "data_input",
+                                  "data": "hours_worked",
+                                  "display": "37.5"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "data_input",
+                              "data": "",
+                              "display": "25%"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "data_input",
+                  "data": "",
+                  "display": "21%"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

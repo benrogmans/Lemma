@@ -13,13 +13,13 @@ fn eval_quantity_rule(code: &str, spec_name: &str, rule_name: &str) -> LiteralVa
     let mut engine = Engine::new();
     engine.load(code, source()).expect("spec must load");
     let response = engine
-        .run(None, spec_name, None, HashMap::new(), true)
+        .run(None, spec_name, None, HashMap::new(), true, None)
         .expect("spec must evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -58,7 +58,7 @@ fn runtime_data_zero_divisor_still_evaluates_to_veto() {
         .load(code, source())
         .expect("runtime zero divisor must load");
     let response = engine
-        .run(None, "exactness", None, HashMap::new(), true)
+        .run(None, "exactness", None, HashMap::new(), true, None)
         .expect("evaluation must complete");
     let rule_result = response
         .results
@@ -87,14 +87,14 @@ fn runtime_data_ten_divide_three_returns_value_not_veto() {
         .load(code, source())
         .expect("runtime division must load");
     let response = engine
-        .run(None, "exactness", None, HashMap::new(), true)
+        .run(None, "exactness", None, HashMap::new(), true, None)
         .expect("evaluation must complete");
     let rule_result = response
         .results
         .get("quotient")
         .expect("quotient rule missing");
     let value = rule_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -103,9 +103,13 @@ fn runtime_data_ten_divide_three_returns_value_not_veto() {
     match &value.value {
         ValueKind::Number(n) => {
             assert!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap()
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap()
                     > rust_decimal::Decimal::from(3)
-                    && lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap()
+                    && lemma::ValueKind::Number(n.clone())
+                        .as_decimal_magnitude()
+                        .unwrap()
                         < rust_decimal::Decimal::from(4),
                 "expected 10/3 decimal, got {n}"
             );

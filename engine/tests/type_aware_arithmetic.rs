@@ -32,6 +32,7 @@ rule test_passes: price_after_discount is expected
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 
@@ -75,6 +76,7 @@ rule test_passes: price_with_markup is expected
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 
@@ -115,6 +117,7 @@ rule test_passes: result is expected
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 
@@ -156,6 +159,7 @@ rule test_passes: final_price is expected
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 
@@ -199,6 +203,7 @@ rule test_passes: after_second is expected
             Some(&now),
             HashMap::new(),
             false,
+            None,
         )
         .unwrap();
 

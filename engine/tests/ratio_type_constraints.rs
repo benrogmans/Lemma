@@ -177,7 +177,9 @@ rule out: r
     match &default.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.015")
             );
             assert_eq!(u.as_deref(), Some("percent"));
@@ -215,7 +217,7 @@ fn ratio_minimum_custom_unit_override_enforced() {
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true)
+        .run(None, "s", Some(&now), data, true, None)
         .expect("400 bps < 500 bps minimum must complete with veto");
     let rr = resp.results.get("out").expect("rule out");
     assert!(rr.vetoed, "400 bps < 500 bps minimum must veto");
@@ -257,7 +259,9 @@ rule out: r
     match &default.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.05")
             );
             assert_eq!(u.as_deref(), Some("basis_points"));
@@ -276,7 +280,7 @@ fn ratio_minimum_custom_unit_override_accepts_at_bound() {
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true)
+        .run(None, "s", Some(&now), data, true, None)
         .expect("500 bps meets minimum");
     let rr = resp.results.get("out").expect("rule out");
     if rr.vetoed {
@@ -286,7 +290,7 @@ fn ratio_minimum_custom_unit_override_accepts_at_bound() {
         );
     }
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -295,7 +299,9 @@ fn ratio_minimum_custom_unit_override_accepts_at_bound() {
     match &lit.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.05")
             );
             assert_eq!(u.as_deref(), Some("basis_points"));

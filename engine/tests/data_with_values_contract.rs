@@ -1,4 +1,4 @@
-//! QA coverage for the `set_data_values` contract on every
+//! QA coverage for the `DataOverlay::resolve` contract on every
 //! `DataDefinition` variant.
 //!
 //! Matrix:
@@ -73,7 +73,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false, None)
         .expect_err("unknown key must fail");
     let s = err.to_string();
     assert!(
@@ -106,7 +106,7 @@ rule r: i.x
 
     let now = DateTimeValue::now();
     let err = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false, None)
         .expect_err("spec-ref override must fail");
     let s = err.to_string();
     assert!(
@@ -135,7 +135,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -160,7 +160,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }
@@ -185,7 +185,7 @@ rule r: age
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "r",
         "number",
     );
@@ -211,7 +211,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "r",
         "minimum",
     );
@@ -237,7 +237,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "r",
         "maximum",
     );
@@ -263,7 +263,7 @@ rule r: msg
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "r",
         "length",
     );
@@ -300,7 +300,7 @@ rule r: color
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "r",
         "option",
     );
@@ -323,7 +323,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false)
+        .run(None, "s", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -352,7 +352,7 @@ rule r: i.v
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false)
+        .run(None, "outer", Some(&now), data, false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "500");
 }
@@ -384,7 +384,7 @@ rule r: i.n
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "outer", Some(&now), data, false),
+        engine.run(None, "outer", Some(&now), data, false, None),
         "r",
         "maximum",
     );
