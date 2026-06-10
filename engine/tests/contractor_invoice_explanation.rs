@@ -46,40 +46,90 @@ fn run_calc(data: HashMap<String, String>) -> lemma::Explanation {
 const NEITHER_UNLESS_MATCHES: &str = "\
 total: 3856.88 eur
 └─ subtotal + vat
-   ├─ subtotal
+   ├─ subtotal: 3187.50 eur
    │  └─ labor + rush_surcharge
-   │     ├─ labor: hourly_rate * hours_worked
-   │     │  ├─ hourly_rate: 85.00 eur
-   │     │  └─ hours_worked: 37.5
+   │     ├─ labor: 3187.50 eur
+   │     │  └─ hourly_rate * hours_worked
+   │     │     ├─ hourly_rate: 85.00 eur
+   │     │     └─ hours_worked: 37.5
    │     └─ rush_surcharge: 0.00 eur
    │        ├─ is_rush is false
    │        └─ is_super_rush is false
-   └─ vat: subtotal * 21%";
+   └─ vat: 669.38 eur
+      └─ subtotal * 21%
+         └─ subtotal: 3187.50 eur
+            └─ labor + rush_surcharge
+               ├─ labor: 3187.50 eur
+               │  └─ hourly_rate * hours_worked
+               │     ├─ hourly_rate: 85.00 eur
+               │     └─ hours_worked: 37.5
+               └─ rush_surcharge: 0.00 eur
+                  ├─ is_rush is false
+                  └─ is_super_rush is false";
 
 const IS_RUSH_ONLY: &str = "\
 total: 4821.09 eur
 └─ subtotal + vat
-   ├─ subtotal
+   ├─ subtotal: 3984.38 eur
    │  └─ labor + rush_surcharge
-   │     ├─ labor: hourly_rate * hours_worked
-   │     │  ├─ hourly_rate: 85.00 eur
-   │     │  └─ hours_worked: 37.5
-   │     └─ rush_surcharge: labor * 25%
+   │     ├─ labor: 3187.50 eur
+   │     │  └─ hourly_rate * hours_worked
+   │     │     ├─ hourly_rate: 85.00 eur
+   │     │     └─ hours_worked: 37.5
+   │     └─ rush_surcharge: 796.88 eur
    │        ├─ is_rush is true
-   │        └─ is_super_rush is false
-   └─ vat: subtotal * 21%";
+   │        └─ labor * 25%
+   │           └─ labor: 3187.50 eur
+   │              └─ hourly_rate * hours_worked
+   │                 ├─ hourly_rate: 85.00 eur
+   │                 └─ hours_worked: 37.5
+   └─ vat: 836.72 eur
+      └─ subtotal * 21%
+         └─ subtotal: 3984.38 eur
+            └─ labor + rush_surcharge
+               ├─ labor: 3187.50 eur
+               │  └─ hourly_rate * hours_worked
+               │     ├─ hourly_rate: 85.00 eur
+               │     └─ hours_worked: 37.5
+               └─ rush_surcharge: 796.88 eur
+                  ├─ is_rush is true
+                  └─ labor * 25%
+                     └─ labor: 3187.50 eur
+                        └─ hourly_rate * hours_worked
+                           ├─ hourly_rate: 85.00 eur
+                           └─ hours_worked: 37.5";
 
 const IS_SUPER_RUSH: &str = "\
 total: 5785.31 eur
 └─ subtotal + vat
-   ├─ subtotal
+   ├─ subtotal: 4781.25 eur
    │  └─ labor + rush_surcharge
-   │     ├─ labor: hourly_rate * hours_worked
-   │     │  ├─ hourly_rate: 85.00 eur
-   │     │  └─ hours_worked: 37.5
-   │     └─ rush_surcharge: labor * 50%
-   │        └─ is_super_rush is true
-   └─ vat: subtotal * 21%";
+   │     ├─ labor: 3187.50 eur
+   │     │  └─ hourly_rate * hours_worked
+   │     │     ├─ hourly_rate: 85.00 eur
+   │     │     └─ hours_worked: 37.5
+   │     └─ rush_surcharge: 1593.75 eur
+   │        ├─ is_super_rush is true
+   │        └─ labor * 50%
+   │           └─ labor: 3187.50 eur
+   │              └─ hourly_rate * hours_worked
+   │                 ├─ hourly_rate: 85.00 eur
+   │                 └─ hours_worked: 37.5
+   └─ vat: 1004.06 eur
+      └─ subtotal * 21%
+         └─ subtotal: 4781.25 eur
+            └─ labor + rush_surcharge
+               ├─ labor: 3187.50 eur
+               │  └─ hourly_rate * hours_worked
+               │     ├─ hourly_rate: 85.00 eur
+               │     └─ hours_worked: 37.5
+               └─ rush_surcharge: 1593.75 eur
+                  ├─ is_super_rush is true
+                  └─ labor * 50%
+                     └─ labor: 3187.50 eur
+                        └─ hourly_rate * hours_worked
+                           ├─ hourly_rate: 85.00 eur
+                           └─ hours_worked: 37.5";
 
 #[test]
 fn contractor_invoice_neither_unless_matches() {

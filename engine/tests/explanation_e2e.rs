@@ -79,11 +79,13 @@ rule quadruple: doubled * 2
     assert!(text.contains("doubled * 2"));
 
     let json: serde_json::Value = serde_json::to_value(explanation).expect("serialize");
-    let compose = json["children"][0]["operands"][0]["type"]
+    // The multiplication's literal operand is shown in the body line itself;
+    // the embedded rule is the only child.
+    let child_type = json["children"][0]["type"]
         .as_str()
-        .expect("embedded rule operand type");
-    assert_eq!(compose, "rule");
-    assert_eq!(json["children"][0]["operands"][0]["rule"], "doubled");
+        .expect("embedded rule child type");
+    assert_eq!(child_type, "rule");
+    assert_eq!(json["children"][0]["rule"], "doubled");
 }
 
 #[test]
@@ -112,8 +114,9 @@ rule out: 1 unless flag then 2
         .as_ref()
         .expect("explanation");
     assert_eq!(explanation.causes.len(), 1);
-    assert_eq!(explanation.causes[0].condition, "flag");
-    assert_eq!(explanation.causes[0].value, "false");
+    // The condition `flag` was false; the cause states the fact that held.
+    assert_eq!(explanation.causes[0].condition, "flag is false");
+    assert_eq!(explanation.causes[0].value, "true");
 }
 
 #[test]

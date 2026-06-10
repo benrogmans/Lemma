@@ -2,6 +2,7 @@ mod data_json;
 mod error_formatter;
 mod formatter;
 mod interactive;
+mod lsp;
 mod mcp;
 pub(crate) mod server;
 
@@ -661,7 +662,7 @@ fn server_command(
 }
 
 fn lsp_command() -> Result<()> {
-    lsp::stdio::run_stdio().map_err(|e| anyhow::anyhow!(e))
+    lsp::stdio::run_stdio().map_err(anyhow::Error::from)
 }
 
 fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {

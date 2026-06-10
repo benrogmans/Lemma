@@ -31,8 +31,11 @@ rule out: 1 unless x is "b" then 2
     assert_eq!(explanation["body"], "1");
     let causes = explanation["causes"].as_array().unwrap();
     assert_eq!(causes.len(), 1);
-    assert_eq!(causes[0]["condition"], "x");
-    assert_eq!(causes[0]["value"], "a");
+    assert_eq!(causes[0]["condition"], "x is not b");
+    assert_eq!(causes[0]["value"], "true");
+    let cause_children = causes[0]["children"].as_array().unwrap();
+    assert_eq!(cause_children[0]["data"], "x");
+    assert_eq!(cause_children[0]["display"], "a");
 }
 
 #[test]
@@ -199,9 +202,12 @@ fn explanation_json_compact_for_net_salary() {
         .expect("explanation");
     let json_string = serde_json::to_string_pretty(explanation).unwrap();
     let line_count = json_string.lines().count();
+    // Rule references embed their full explanation tree wherever they appear
+    // (no dedup/collapse heuristics), so the JSON grows with the dependency
+    // tree. This bound guards against accidental unbounded regressions.
     assert!(
-        line_count < 600,
-        "Single-rule explanation JSON should stay bounded with embed-always rule subtrees, got {line_count} lines"
+        line_count < 6000,
+        "Single-rule explanation JSON should stay bounded with full embedded rule subtrees, got {line_count} lines"
     );
 }
 

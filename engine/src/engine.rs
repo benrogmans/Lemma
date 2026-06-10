@@ -862,11 +862,11 @@ impl Engine {
             value: crate::planning::semantics::ValueKind::Date(now_semantic),
             lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
-        let (mut response, mut context) =
+        let (mut response, context) =
             self.evaluator
                 .evaluate(plan, &overlay, now_literal, explain, &response_rules);
         if explain {
-            self.evaluator.explain(&mut response, plan, &mut context);
+            self.evaluator.explain(&mut response, plan, &context);
         }
         Ok(response)
     }

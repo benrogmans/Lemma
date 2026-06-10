@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
-    lsp::stdio::run_stdio().expect("failed to run Lemma LSP server");
+    lemma_lsp::stdio::run_stdio().expect("failed to run Lemma LSP server");
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -18,15 +18,16 @@ Both the VM path and the explanation path consume the artifacts planning
 produces (transitively normalized rules compiled to instructions), so
 normalization soundness and path parity are part of the same contract.
 
-**Design intent (explanations):** explanations exist to show users which
-rules were followed *in source terms*, even when normalized evaluation
-logically skipped parts (short-circuits, folds). The two paths are therefore
-intentionally different in nature: the VM is authoritative for outcomes; the
-explanation walker narrates the full source reasoning. "Parity" in this plan
-means **agreement on outcomes** (results, winning branches, veto reasons) —
-never reducing the explanation to a replay of the VM's execution trace.
-Finding 1 is the keystone of this intent: source-level explanations are only
-truthful if normalization preserves observable semantics.
+**Design intent (explanations) — superseded:** this plan originally declared
+the dual-path design intentional ("the VM is authoritative for outcomes; the
+explanation walker narrates the full source reasoning"). That intent is
+replaced by
+[`explanations_from_recorded_execution.md`](explanations_from_recorded_execution.md):
+explanations now render source structure over a *recorded execution* of a
+source-shaped instruction stream and never re-evaluate expressions, making
+divergence impossible by construction rather than by discipline. Finding 1
+(normalization preserves observable semantics) remains the keystone and is
+now enforced by a differential test suite.
 
 ## Prerequisite: settle veto semantics for absorbing folds
 

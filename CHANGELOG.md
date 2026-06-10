@@ -2,6 +2,36 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.18] - 2026-06-10
+
+0.8.18 completes the recorded-execution explanation architecture: explanations now read all runtime facts (register values, branch decisions, winning arm) from a recorded execution of the rule's source-shaped instruction stream — they never re-evaluate expressions. The language server is unified into the `lemma` CLI binary, eliminating the standalone `lsp` crate.
+
+### Added
+
+- **Explanations from recorded execution**: each rule now carries a second instruction stream (`source_instructions`) compiled from the unoptimized source expression graph. When explanations are requested the VM executes this stream, records a `RuleRecording` (register values, `BranchDecision` per `JumpIfFalse`, winning `Return` pc), and the explanation builder reads that recording — it never calls back into the evaluator. This makes it structurally impossible for an explanation to disagree with its result.
+- **Arm and conversion tags on instructions**: `Instructions` now carries `arm_tags` (mapping each `JumpIfFalse`/`Return` to a source branch index and `ArmRole`) and `conversion_tags` (mapping `UnitConversion` instructions to their source context). These let the explanation builder correlate recorded execution with source structure without re-parsing.
+- **`UnitEquivalence` explanation node**: implicit unit conversions inside arithmetic now emit an equivalence fact (`1 mile is 1.60934 kilometer`) as a child node, so cross-unit math is auditable without external lookup tables.
+- **`result` field on `Rule` explanation node**: every rule explanation now includes the computed result as a formatted string alongside the body and causes.
+- **Cause `children`**: `Cause` nodes now carry child `ExplanationNode`s showing the data values and embedded rule explanations that drove the condition.
+- **Negated-condition causes as true facts**: a failed comparison is flipped to its complement (`distance < 5 mile` that failed → `distance >= 5 mile`) so the explanation states what held rather than what was tested.
+- **Differential optimization test suite** (`engine/tests/differential_optimize.rs`): pins the optimized and source instruction streams to identical results across the test corpus, catching optimizer divergence automatically.
+- **LSP built into the CLI**: the language server now compiles directly into the `lemma` binary (`cli/src/lsp/`) using `tower-lsp` instead of depending on the separate `lsp` crate. `lemma lsp` works as before — editors need no configuration changes.
+
+### Changed
+
+- **Explanation builder reads recordings, not the evaluator**: `winning_source_branch_and_causes` and the body walker receive an `ExplainCtx` containing the immutable `EvaluationContext` and `RuleRecording`, removing the `&mut` evaluator dependency that allowed re-evaluation divergence.
+- **`branch_semantics` functions `and_conjunct_outcome` / `or_disjunct_outcome` are now `#[cfg(test)]`**: the explanation walker no longer calls them at runtime — they remain as executable specifications verified by unit tests.
+- **Instruction stream version bumped to 2**: `INSTRUCTIONS_VERSION` incremented for the new `arm_tags`, `conversion_tags`, and `source_instructions` fields; stale serialized plans are rejected at load.
+- **Identity conversions omitted from explanations**: when an operand is already in the target unit, the redundant source step is suppressed.
+- **Conversion multipliers prefer decimal display**: unit factors that round-trip exactly through decimal render as `1.60934` rather than a rational fraction.
+- **Release workflow**: increased crates.io index propagation wait (30 s → 60 s) to reduce transient publish failures in CI.
+
+### Removed
+
+- **`lsp` crate dependency from CLI**: `cli/Cargo.toml` no longer depends on the workspace `lsp` crate; `tower-lsp` is used directly.
+- **`unique_data_value_by_name`**: the fallback data-path lookup used by the old re-evaluating explanation walker is removed.
+- **Source expression re-evaluation in explanations**: `resolve_source_expression_values` is no longer called by the explanation builder (the function remains for other internal uses).
+
 ## [0.8.17] - 2026-06-10
 
 0.8.17 replaces tree-walking evaluation with a compiled virtual machine, makes exact math hold at any magnitude and gives every result a machine-readable explanation. Planning now compiles each rule into a validated instruction stream that a register-based VM executes, so evaluation costs only what the requested rules cost: the engine skips unrequested rules and builds explanations only on demand. Execution plans are no longer cloned per request. Larger calculations whose intermediate values exceed machine-integer range stay exact instead of switching to approximation. Current measured performance is published in [`documentation/benchmarks/`](documentation/benchmarks/).
@@ -9,6 +39,8 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 ### Added
 
 - **Explanations fit for audit trails**: every rule result carries a flat explanation object holding the rule's body, its operand values, the branch that applied, and the condition that vetoed. The format is specified in a JSON schema ([`documentation/schemas/explanation.v1.json`](documentation/schemas/explanation.v1.json)); the previous trace format was undocumented and is replaced.
+- **Explanations read recorded execution, never re-evaluate**: when explanations are requested, the engine executes a source-shaped instruction stream (compiled from the same inlined rule equation with the optimizer's rewrite passes skipped) and records what happened — branch decisions, the winning arm, register values. The explanation is rendered purely from source structure plus that recording, and the recorded run's result is the response result, so an explanation can never disagree with the answer it explains. The previous implementation re-evaluated source expressions in a parallel interpreter, which could silently diverge from the VM. A differential test suite pins both instruction streams to identical results across the test corpus and documentation examples.
+- **Explanations state causes as facts**: evaluated unless conditions appear as true statements — a failed `distance < 5 mile` is stated as `distance >= 5 mile` — with the data values that drove them as children. Causes render at the rule level (they explain branch selection, not the body computation), literal operands are no longer repeated below expressions that already display them, embedded rule references show `name: result` and carry their full explanation tree wherever they appear. Implicit unit reconciliation inside arithmetic and comparisons is stated as an equivalence fact (`1 mile is 1.60934 kilometer`, decimal when exact) so cross-unit math is followable without external lookup tables; identity conversions and steps that would restate an already-visible value are omitted. JSON consumers: `causes[].condition` now holds the true-form condition expression instead of a datum name, `causes[].children`, rule-node `result`, and the `unit_equivalence` node are new, and the wrapping `compose` node duplicating the rule body is gone (operands are direct children).
 - **One-binary editor setup**: installing the `lemma` CLI is now the only requirement for editor support — the new `lemma lsp` subcommand starts the language server over stdio. This removes the separate language-server binary and the version skew it allowed.
 - **A shared server survives bad specs**: a service evaluating specs it did not author can no longer be hung or crashed by them. Self-doubling rule chains are rejected at planning with a resource-limit error (`ResourceLimits::max_normalized_expression_nodes`, default 30,000) instead of exhausting memory; tampered or stale serialized execution plans are rejected at load by full instruction validation instead of crashing the virtual machine; a step budget halts instruction streams that loop.
 - **Reproducible performance reports**: `cargo benchmarks <engine|cli|all>` regenerates the engine and CLI benchmark reports in [`documentation/benchmarks/`](documentation/benchmarks/), so the published numbers can be independently re-measured from the repository.
