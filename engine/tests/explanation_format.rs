@@ -1,10 +1,13 @@
-use lemma::Engine;
-use lemma::SourceType;
+use lemma::{Engine, SourceType};
 use serde_json::Value;
 use std::collections::HashMap;
 
+fn explanation_json(response: &lemma::Response, rule: &str) -> Value {
+    serde_json::to_value(response).unwrap()["results"][rule]["explanation"].clone()
+}
+
 #[test]
-fn explanation_branches_default_matched() {
+fn explanation_unless_default_matched() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -18,27 +21,22 @@ rule out: 1 unless x is "b" then 2
         .unwrap();
     let mut data = HashMap::new();
     data.insert("x".into(), "a".into());
-    let response = engine.run(None, "t", None, data, true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let explanation = &json["results"]["out"]["explanation"];
+    let response = engine
+        .run(None, "t", None, data, true, Some(&["out".to_string()]))
+        .unwrap();
+    let explanation = explanation_json(&response, "out");
 
     assert_eq!(explanation["rule"], "out");
     assert_eq!(explanation["result"], "1");
-
-    let tree = &explanation["tree"];
-    assert_eq!(tree["type"], "branches");
-    assert_eq!(tree["matched"]["tree"]["type"], "value");
-    assert_eq!(tree["matched"]["tree"]["display"], "1");
-    assert!(tree["matched"]["condition"].is_null());
-    let condition = tree["non_matched"][0]["condition"].as_str().unwrap();
-    assert!(
-        condition.contains('b'),
-        "expected unless condition to reference b, got: {condition}"
-    );
+    assert_eq!(explanation["body"], "1");
+    let causes = explanation["causes"].as_array().unwrap();
+    assert_eq!(causes.len(), 1);
+    assert_eq!(causes[0]["condition"], "x");
+    assert_eq!(causes[0]["value"], "a");
 }
 
 #[test]
-fn explanation_computation_with_operands() {
+fn explanation_compose_with_data_operands() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -53,23 +51,30 @@ rule total: price * q
             SourceType::Volatile,
         )
         .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let tree = &json["results"]["total"]["explanation"]["tree"];
+    let response = engine
+        .run(
+            None,
+            "t",
+            None,
+            HashMap::new(),
+            true,
+            Some(&["total".to_string()]),
+        )
+        .unwrap();
+    let explanation = explanation_json(&response, "total");
 
-    assert_eq!(tree["type"], "computation");
-    assert_eq!(tree["result"], "300.00 eur");
-    assert_eq!(tree["expression"], "100.00 eur * 3");
-    // Operands are data references
-    assert_eq!(tree["operands"][0]["type"], "value");
-    assert_eq!(tree["operands"][0]["data"], "price");
-    assert_eq!(tree["operands"][0]["display"], "100.00 eur");
-    assert_eq!(tree["operands"][1]["data"], "q");
-    assert_eq!(tree["operands"][1]["display"], "3");
+    assert_eq!(explanation["body"], "price * q");
+    let children = explanation["children"].as_array().unwrap();
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0]["type"], "data_input");
+    assert_eq!(children[0]["data"], "price");
+    assert_eq!(children[0]["display"], "100.00 eur");
+    assert_eq!(children[1]["data"], "q");
+    assert_eq!(children[1]["display"], "3");
 }
 
 #[test]
-fn explanation_rule_reference_deduplicated() {
+fn explanation_rule_addition_expands_both_rules() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -84,32 +89,25 @@ rule b: a + base
             SourceType::Volatile,
         )
         .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-
-    // In rule 'b', 'base' is referenced. It was already expanded in 'a'.
-    // But each rule's explanation is self-contained — deduplication is within a single rule's tree.
-    let b_tree = &json["results"]["b"]["explanation"]["tree"];
-    assert_eq!(b_tree["type"], "computation");
-
-    // 'a' reference should have a tree (first occurrence in b's explanation)
-    let a_operand = &b_tree["operands"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|op| op["rule"] == "a")
+    let response = engine
+        .run(
+            None,
+            "t",
+            None,
+            HashMap::new(),
+            true,
+            Some(&["b".to_string()]),
+        )
         .unwrap();
-    assert!(a_operand["tree"].is_object());
+    let explanation = explanation_json(&response, "b");
 
-    // Within a's expansion, 'base' is expanded
-    // Then 'base' direct operand on b should NOT have tree (already seen within a's expansion)
-    let base_operand = &b_tree["operands"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|op| op["rule"] == "base")
-        .unwrap();
-    assert!(base_operand.get("tree").is_none());
+    assert_eq!(explanation["body"], "a + base");
+    let children = explanation["children"].as_array().unwrap();
+    assert_eq!(children.len(), 2);
+    assert_eq!(children[0]["type"], "rule");
+    assert_eq!(children[0]["rule"], "a");
+    assert_eq!(children[1]["type"], "rule");
+    assert_eq!(children[1]["rule"], "base");
 }
 
 #[test]
@@ -125,22 +123,29 @@ rule out: n * 2
             SourceType::Volatile,
         )
         .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let explanation = &json["results"]["out"]["explanation"];
+    let response = engine
+        .run(
+            None,
+            "t",
+            None,
+            HashMap::new(),
+            true,
+            Some(&["out".to_string()]),
+        )
+        .unwrap();
+    let explanation = explanation_json(&response, "out");
 
     assert_eq!(explanation["result"], "Missing data: n");
-    let tree = &explanation["tree"];
-    assert_eq!(tree["type"], "veto");
-    assert!(
-        tree["message"].as_str().unwrap().contains("n"),
-        "expected veto message to contain 'n', got: {:?}",
-        tree["message"]
-    );
+    let children = explanation["children"].as_array().unwrap();
+    assert_eq!(children[0]["type"], "veto");
+    assert!(children[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Missing data: n"));
 }
 
 #[test]
-fn no_explanation_when_not_requested() {
+fn explanation_always_built_by_engine() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -153,42 +158,55 @@ rule out: x + 1
             SourceType::Volatile,
         )
         .unwrap();
-    // explain = false — no consumer-facing explanation generated
-    let response = engine.run(None, "t", None, HashMap::new(), false).unwrap();
+    let response = engine
+        .run(
+            None,
+            "t",
+            None,
+            HashMap::new(),
+            true,
+            Some(&["out".to_string()]),
+        )
+        .unwrap();
     let json: Value = serde_json::to_value(&response).unwrap();
-    // "explanation" key must be absent (Option::None, skipped by serde)
-    assert!(!json["results"]["out"]
-        .as_object()
-        .unwrap()
-        .contains_key("explanation"));
+    assert!(json["results"]["out"]["explanation"].is_object());
 }
 
 #[test]
 fn explanation_json_compact_for_net_salary() {
     let source =
-        std::fs::read_to_string("../documentation/examples/06_dutch_net_salary.lemma").unwrap();
+        std::fs::read_to_string("../documentation/examples/nl/tax/net_salary.lemma").unwrap();
     let mut engine = Engine::new();
     engine.load(&source, SourceType::Volatile).unwrap();
     let mut data = HashMap::new();
     data.insert("gross_salary".into(), "5000 eur".into());
     data.insert("pay_period".into(), "month".into());
-    let response = engine.run(None, "net_salary", None, data, true).unwrap();
+    let response = engine
+        .run(
+            None,
+            "net_salary",
+            None,
+            data,
+            true,
+            Some(&["net_salary".to_string()]),
+        )
+        .unwrap();
     let explanation = response
-        .results
-        .values()
-        .find_map(|r| r.trace.as_ref())
-        .expect("at least one rule should have explanation");
+        .get("net_salary")
+        .expect("net_salary evaluated")
+        .explanation
+        .as_ref()
+        .expect("explanation");
     let json_string = serde_json::to_string_pretty(explanation).unwrap();
     let line_count = json_string.lines().count();
     assert!(
-        line_count < 500,
-        "Single-rule explanation JSON should be compact, got {} lines",
-        line_count
+        line_count < 600,
+        "Single-rule explanation JSON should stay bounded with embed-always rule subtrees, got {line_count} lines"
     );
 }
 
 #[test]
-fn explanation_logical_and_shows_operation_with_operands() {
+fn explanation_logical_and_in_body() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -202,102 +220,24 @@ rule active: current_date >= contract_start and current_date <= contract_end
             SourceType::Volatile,
         )
         .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let tree = &json["results"]["active"]["explanation"]["tree"];
-
-    assert_eq!(tree["type"], "computation");
-    assert!(
-        tree["expression"].as_str().unwrap().contains(" and "),
-        "expected and operation in expression, got: {}",
-        tree["expression"]
-    );
-    assert_eq!(tree["result"], "true");
-    let operands = tree["operands"].as_array().unwrap();
-    assert_eq!(
-        operands.len(),
-        2,
-        "expected both and operands in explanation, got: {operands:?}"
-    );
-}
-
-#[test]
-fn explanation_sqrt_shows_computation_with_operand() {
-    let mut engine = Engine::new();
-    engine
-        .load(
-            r#"
-spec t
-rule root: sqrt 9
-"#,
-            SourceType::Volatile,
+    let response = engine
+        .run(
+            None,
+            "t",
+            None,
+            HashMap::new(),
+            true,
+            Some(&["active".to_string()]),
         )
         .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let tree = &json["results"]["root"]["explanation"]["tree"];
+    let explanation = explanation_json(&response, "active");
 
-    assert_eq!(tree["type"], "computation");
-    assert_eq!(tree["expression"], "sqrt 9");
-    assert_eq!(tree["result"], "3");
-    let operands = tree["operands"].as_array().unwrap();
-    assert_eq!(operands.len(), 1);
-    assert_eq!(operands[0]["type"], "value");
-    assert_eq!(operands[0]["display"], "9");
-}
-
-#[test]
-fn explanation_is_veto_positive_phrasing_when_operand_vetoed() {
-    let mut engine = Engine::new();
-    engine
-        .load(
-            r#"
-spec t
-data price: -5
-rule validated_price: price unless price < 0 then veto "negative"
-rule flag: validated_price is veto
-"#,
-            SourceType::Volatile,
-        )
-        .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let tree = &json["results"]["flag"]["explanation"]["tree"];
-
-    assert_eq!(tree["type"], "computation");
-    assert_eq!(tree["result"], "true");
     assert!(
-        tree["expression"].as_str().unwrap().contains("is veto"),
-        "expected positive phrasing for vetoed operand, got: {}",
-        tree["expression"]
+        explanation["body"].as_str().unwrap().contains(" and "),
+        "expected and in body, got: {}",
+        explanation["body"]
     );
-}
-
-#[test]
-fn explanation_is_veto_positive_phrasing_when_operand_not_vetoed() {
-    let mut engine = Engine::new();
-    engine
-        .load(
-            r#"
-spec t
-data price: 10
-rule validated_price: price unless price < 0 then veto "negative"
-rule flag: validated_price is veto
-"#,
-            SourceType::Volatile,
-        )
-        .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let tree = &json["results"]["flag"]["explanation"]["tree"];
-
-    assert_eq!(tree["type"], "computation");
-    assert_eq!(tree["result"], "true");
-    assert!(
-        tree["expression"].as_str().unwrap().contains("is not veto"),
-        "expected positive phrasing for non-vetoed operand, got: {}",
-        tree["expression"]
-    );
+    assert_eq!(explanation["result"], "true");
 }
 
 #[test]
@@ -314,16 +254,49 @@ rule in_grams: w as gram
             SourceType::Volatile,
         )
         .unwrap();
-    let response = engine.run(None, "t", None, HashMap::new(), true).unwrap();
-    let json: Value = serde_json::to_value(&response).unwrap();
-    let tree = &json["results"]["in_grams"]["explanation"]["tree"];
+    let response = engine
+        .run(
+            None,
+            "t",
+            None,
+            HashMap::new(),
+            true,
+            Some(&["in_grams".to_string()]),
+        )
+        .unwrap();
+    let explanation = explanation_json(&response, "in_grams");
 
-    assert_eq!(tree["type"], "conversion");
-    let steps = tree["steps"].as_array().unwrap();
+    let children = explanation["children"].as_array().unwrap();
+    assert_eq!(children[0]["type"], "conversion");
+    let steps = children[0]["steps"].as_array().unwrap();
     assert!(steps.iter().any(|s| s["role"] == "outcome"));
     assert!(steps.iter().any(|s| s["role"] == "source"));
-    // Rule step present because kg != gram
     assert!(steps
         .iter()
         .any(|s| s["role"] == "rule" && s["text"].as_str().unwrap().contains("1000")));
+}
+
+#[test]
+fn explain_parameter_gates_explanation_build() {
+    let mut engine = Engine::new();
+    engine
+        .load(
+            r#"
+spec t
+data x: text -> option "a" -> option "b"
+rule out: 1 unless x is "b" then 2
+"#,
+            SourceType::Volatile,
+        )
+        .unwrap();
+    let mut data = HashMap::new();
+    data.insert("x".into(), "a".into());
+    let without = engine
+        .run(None, "t", None, data.clone(), false, None)
+        .unwrap();
+    assert!(without.results["out"].explanation.is_none());
+    let with = engine
+        .run(None, "t", None, data, true, Some(&["out".to_string()]))
+        .unwrap();
+    assert!(with.results["out"].explanation.is_some());
 }

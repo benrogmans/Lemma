@@ -1,5 +1,4 @@
-use lemma::{DateTimeValue, TimezoneValue};
-use lemma::{Engine, LiteralValue, ValueKind};
+use lemma::{DateGranularity, DateTimeValue, Engine, LiteralValue, TimezoneValue, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,26 +20,31 @@ fn default_effective() -> DateTimeValue {
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
 fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
+    let effective = default_effective();
+    let plan = engine
+        .get_plan(None, spec_name, Some(&effective))
+        .expect("plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&default_effective()),
+        .run_plan(
+            plan,
+            Some(&effective),
             HashMap::new(),
             true,
+            Some(&[rule_name.to_string()]),
         )
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -56,13 +60,17 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> String {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
+    let effective = default_effective();
+    let plan = engine
+        .get_plan(None, spec_name, Some(&effective))
+        .expect("plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&default_effective()),
+        .run_plan(
+            plan,
+            Some(&effective),
             HashMap::new(),
             true,
+            Some(&[rule_name.to_string()]),
         )
         .expect("Should evaluate");
     response

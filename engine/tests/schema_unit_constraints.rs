@@ -1,4 +1,5 @@
 //! Per-unit minimum/maximum/default magnitudes on quantity and ratio schema units.
+//! Same-type alias units (e.g. eur/euro) are allowed; cross-type unit clashes are covered in graph unit tests.
 
 use lemma::DateTimeValue;
 use lemma::Engine;
@@ -135,6 +136,7 @@ rule out: price
             Some(&now),
             std::collections::HashMap::new(),
             false,
+            None,
         )
         .expect("eval");
     let result = response
@@ -274,13 +276,26 @@ rule r: mass
     let schema = engine
         .get_plan(None, "s", Some(&now))
         .expect("plan")
-        .schema();
+        .schema(&lemma::DataOverlay::default());
     let json = serde_json::to_string(&schema).expect("serialize");
     let round_tripped: lemma::SpecSchema = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(schema, round_tripped);
     let entry = round_tripped.data.get("mass").expect("mass");
     let gram = qty_unit(&entry.lemma_type.specifications, "gram");
     assert_eq!(gram.minimum_decimal(), Some(decimal_lit("1000")));
+}
+
+#[test]
+fn same_type_alias_units_with_same_factor_must_plan() {
+    let code = r#"
+spec s
+data money: quantity
+  -> unit eur 1
+  -> unit euro 1
+rule r: 1 eur
+"#;
+    let mut engine = Engine::new();
+    load(&mut engine, code, "qty_alias.lemma");
 }
 
 const COMPOUND_COST_PER_UNIT_SPEC: &str = r#"

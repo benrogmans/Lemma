@@ -62,17 +62,14 @@ fn absolute_span(span: OperationResult) -> OperationResult {
     let OperationResult::Value(literal) = span else {
         return span;
     };
-    if span_magnitude_is_non_negative(literal.as_ref()) {
+    if span_magnitude_is_non_negative(&literal) {
         return OperationResult::Value(literal);
     }
-    let negated = match negate_stored_magnitude(literal.as_ref()) {
+    let negated = match negate_stored_magnitude(&literal) {
         Ok(magnitude) => magnitude,
         Err(failure) => return OperationResult::Veto(VetoType::computation(failure.message())),
     };
-    OperationResult::Value(Box::new(rebuild_literal_with_magnitude(
-        literal.as_ref(),
-        negated,
-    )))
+    OperationResult::Value(rebuild_literal_with_magnitude(&literal, negated))
 }
 
 fn span_magnitude_is_non_negative(literal: &LiteralValue) -> bool {
@@ -81,10 +78,10 @@ fn span_magnitude_is_non_negative(literal: &LiteralValue) -> bool {
 
 fn stored_magnitude(literal: &LiteralValue) -> RationalInteger {
     match &literal.value {
-        ValueKind::Number(n) => *n,
-        ValueKind::Quantity(value, _) if literal.lemma_type.is_calendar_like() => *value,
-        ValueKind::Quantity(magnitude, _) => *magnitude,
-        ValueKind::Ratio(magnitude, _) => *magnitude,
+        ValueKind::Number(n) => n.clone(),
+        ValueKind::Quantity(value, _) if literal.lemma_type.is_calendar_like() => value.clone(),
+        ValueKind::Quantity(magnitude, _) => magnitude.clone(),
+        ValueKind::Ratio(magnitude, _) => magnitude.clone(),
         other => unreachable!(
             "BUG: range span must be number, quantity, ratio, or calendar quantity, got {other:?}"
         ),
@@ -136,15 +133,18 @@ fn compute_elapsed_duration_span(
         Ok(s) => s,
         Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
     };
-    let seconds = rational_abs(&seconds);
-    OperationResult::Value(Box::new(LiteralValue {
+    let seconds = match rational_abs(&seconds) {
+        Ok(s) => s,
+        Err(failure) => return OperationResult::Veto(VetoType::computation(failure.to_string())),
+    };
+    OperationResult::Value(LiteralValue {
         value: ValueKind::Quantity(seconds, vec![("second".to_string(), 1)]),
         lemma_type: std::sync::Arc::new(
             crate::planning::semantics::LemmaType::anonymous_for_decomposition(
                 crate::planning::semantics::duration_decomposition(),
             ),
         ),
-    }))
+    })
 }
 
 fn comparison_boolean_result(result: OperationResult, context: &str) -> bool {
@@ -203,28 +203,28 @@ pub fn check_containment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computation::rational::RationalInteger;
+    use crate::computation::rational::rational_new;
     use crate::planning::semantics::LiteralValue;
 
     #[test]
     fn compute_span_is_absolute_for_reversed_number_range() {
-        let five = LiteralValue::number(RationalInteger::new(5, 1));
-        let three = LiteralValue::number(RationalInteger::new(3, 1));
+        let five = LiteralValue::number(rational_new(5, 1));
+        let three = LiteralValue::number(rational_new(3, 1));
         let OperationResult::Value(span) = compute_span(&five, &three) else {
             panic!("expected span value");
         };
         match &span.value {
-            ValueKind::Number(n) => assert_eq!(*n, RationalInteger::new(2, 1)),
+            ValueKind::Number(n) => assert_eq!(n, &rational_new(2, 1)),
             other => panic!("expected number span, got {other:?}"),
         }
     }
 
     #[test]
     fn check_containment_half_open_and_reversed_number_range() {
-        let three = LiteralValue::number(RationalInteger::new(3, 1));
-        let four = LiteralValue::number(RationalInteger::new(4, 1));
-        let five = LiteralValue::number(RationalInteger::new(5, 1));
-        let two = LiteralValue::number(RationalInteger::new(2, 1));
+        let three = LiteralValue::number(rational_new(3, 1));
+        let four = LiteralValue::number(rational_new(4, 1));
+        let five = LiteralValue::number(rational_new(5, 1));
+        let two = LiteralValue::number(rational_new(2, 1));
 
         assert!(check_containment(&three, &three, &five));
         assert!(!check_containment(&five, &three, &five));
@@ -249,13 +249,13 @@ mod tests {
         decomp.insert("money".to_string(), 1);
         let signature: Vec<(String, i32)> = vec![("eur".to_string(), 1)];
         let original = LiteralValue {
-            value: ValueKind::Quantity(RationalInteger::new(10, 1), signature.clone()),
+            value: ValueKind::Quantity(rational_new(10, 1), signature.clone()),
             lemma_type: std::sync::Arc::new(LemmaType::anonymous_for_decomposition(decomp)),
         };
-        let rebuilt = rebuild_literal_with_magnitude(&original, RationalInteger::new(99, 1));
+        let rebuilt = rebuild_literal_with_magnitude(&original, rational_new(99, 1));
         match &rebuilt.value {
             ValueKind::Quantity(n, _) => {
-                assert_eq!(*n, RationalInteger::new(99, 1));
+                assert_eq!(n, &rational_new(99, 1));
             }
             other => panic!("expected Quantity, got {:?}", other),
         }

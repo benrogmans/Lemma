@@ -59,7 +59,7 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     data.insert("x".to_string(), "40000000000000000460903669760".to_string());
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "fuzz_test", Some(&now), data, false)
+        .run(None, "fuzz_test", Some(&now), data, false, None)
         .expect("run must complete with veto, not Error");
     let doubled = response.results.get("doubled").expect("doubled");
     assert!(

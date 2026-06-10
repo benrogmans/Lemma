@@ -8,7 +8,7 @@ Workspace automation from the repo root.
 | `cargo run -p xtask -- versions-verify` | `cargo verify` | Ensure release version matches everywhere (see below) |
 | `cargo run -p xtask -- versions-bump <semver>` | `cargo bump <semver>` | Bump `[workspace.package] version` and all mirrored copies, then `cargo generate-lockfile`, `mix deps.get` (hex), `npm install --package-lock-only` (vscode) |
 | `cargo run -p xtask -- versions-diff [semver]` | `cargo changelog [semver]` | `git fetch --tags`, then `git diff --stat`, `git log`, then `git diff`. **No arg:** latest `cli-v*` tag → **working tree** (includes uncommitted changes); log is `tag..HEAD`. **`versions-diff <semver>`:** previous tag → `cli-v{semver}` on history only. |
-| `cargo run -p xtask -- bench-report` | — | Run engine evaluation benchmarks (`cargo bench -p lemma-engine`) and write `engine/benches/RESULTS.md`. Latency from Criterion `estimates.json`; allocations from `engine/benches/memory.rs`. Keep `FIXTURES` in `xtask/src/bench_report.rs` in sync with `engine/benches/common/mod.rs`. |
+| `cargo benchmarks <engine\|cli\|all>` | `cargo run -p xtask -- benchmarks <suite>` | Run benchmark suites and write `documentation/benchmarks/engine.md` and/or `documentation/benchmarks/cli.md`. `engine`: Criterion evaluate/outputs + Python harness. `cli`: `http_evaluate` + `engine_profile`. Keep engine `FIXTURES` in `xtask/src/benchmarks/engine.rs` synced with `engine/benches/common/mod.rs`; CLI cases in `xtask/src/benchmarks/cli.rs` synced with `cli/benches/*.rs`. |
 
 Aliases are in [`.cargo/config.toml`](../.cargo/config.toml) (`-q` on bump/verify/changelog reduces Cargo noise).
 

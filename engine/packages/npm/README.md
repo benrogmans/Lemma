@@ -30,7 +30,7 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 await engine.load(pricing, 'pricing.lemma');
 
-const response = engine.run(null, 'pricing', [], { quantity: 50, is_vip: false }, null);
+const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null);
 // response.results.unit_price → 16 eur
 // response.results.total      → 800 eur
 ```
@@ -117,7 +117,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Always includes embedded `lemma` / `spec units`. |
 | `format_repository(repo)` | Canonical Lemma source for a loaded repository, formatted from the in-engine AST. Use `"lemma"` for the embedded units stdlib. |
 | `schema(repo, name, effective?)` | `SpecSchema`; `repo` null for workspace. |
-| `run(repo, name, ruleNames, data, effective?)` | Evaluate. `rules: []` runs everything; pass an array to filter. Returns a `Response`. |
+| `run(repo, name, ruleNames, data, effective?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled - see `lemma.d.ts`.

@@ -28,7 +28,7 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
 }
 
 // Internal-only parsing imports (used only within this module for value/type resolution).
-use crate::computation::rational::{checked_div, checked_mul, RationalInteger};
+use crate::computation::rational::{checked_div, checked_mul, rational_new, RationalInteger};
 use crate::parsing::ast::Constraint;
 use crate::parsing::ast::{
     BooleanValue, CalendarPeriodUnit, CommandArg, ConversionTarget, DateCalendarKind,
@@ -144,10 +144,10 @@ pub fn format_signature_operator_style(signature: &[(String, i32)]) -> String {
 ///
 /// Returns `None` for names that are not calendar units.
 pub fn calendar_unit_factor(name: &str) -> Option<crate::computation::rational::RationalInteger> {
-    use crate::computation::rational::{rational_one, RationalInteger};
+    use crate::computation::rational::rational_one;
     match name {
         "month" | "months" => Some(rational_one()),
-        "year" | "years" => Some(RationalInteger::new(12, 1)),
+        "year" | "years" => Some(rational_new(12, 1)),
         _ => None,
     }
 }
@@ -176,9 +176,9 @@ pub fn signature_factor(
     for (name, exponent) in signature {
         let factor =
             if let Some(owner) = owner.filter(|owner| owner_declares_quantity_unit(owner, name)) {
-                *owner.quantity_unit_factor(name)
+                owner.quantity_unit_factor(name).clone()
             } else if let Some(lemma_type) = expression_units.get(name) {
-                *lemma_type.quantity_unit_factor(name)
+                lemma_type.quantity_unit_factor(name).clone()
             } else {
                 panic!(
                     "BUG: signature_factor called with unresolved unit name '{}'",
@@ -269,8 +269,8 @@ mod stored_quantity_declared_bound_serde {
             match value {
                 None => serializer.serialize_none(),
                 Some((magnitude, unit_name)) => {
-                    let decimal =
-                        commit_rational_to_decimal(magnitude).map_err(serde::ser::Error::custom)?;
+                    let decimal = commit_rational_to_decimal(magnitude)
+                        .expect("BUG: planned quantity declared bound must commit to decimal");
                     (decimal, unit_name.as_str()).serialize(serializer)
                 }
             }
@@ -748,24 +748,30 @@ fn literal_value_from_parser_value(
 
 /// Cast a [`RationalInteger`] to `u8`, requiring it to be a non-negative whole number that fits.
 fn decimal_to_u8(d: RationalInteger, ctx: &str) -> Result<u8, String> {
-    if *d.denom() != 1 {
+    use crate::computation::bigint::BigInt;
+    if d.denom() != &BigInt::one() {
         return Err(format!(
             "{} requires a whole number, got fractional value",
             ctx
         ));
     }
-    u8::try_from(*d.numer()).map_err(|_| format!("{} value out of range for u8", ctx))
+    d.numer()
+        .to_u8()
+        .ok_or_else(|| format!("{} value out of range for u8", ctx))
 }
 
 /// Cast a [`RationalInteger`] to `usize`, requiring it to be a non-negative whole number that fits.
 fn decimal_to_usize(d: RationalInteger, ctx: &str) -> Result<usize, String> {
-    if *d.denom() != 1 {
+    use crate::computation::bigint::BigInt;
+    if d.denom() != &BigInt::one() {
         return Err(format!(
             "{} requires a whole number, got fractional value",
             ctx
         ));
     }
-    usize::try_from(*d.numer()).map_err(|_| format!("{} value out of range for usize", ctx))
+    d.numer()
+        .to_usize()
+        .ok_or_else(|| format!("{} value out of range for usize", ctx))
 }
 
 /// Extract a number literal from a [`Value::Number`] arg and lift it to [`RationalInteger`].
@@ -930,6 +936,7 @@ pub(crate) fn finalize_quantity_unit_constraint_magnitudes(
         minimum,
         maximum,
         units,
+        traits,
         ..
     } = specification
     else {
@@ -951,6 +958,37 @@ pub(crate) fn finalize_quantity_unit_constraint_magnitudes(
     if let Some(default) = declared_default {
         sync_quantity_default_units(units, default, type_name)?;
     }
+
+    if minimum.is_some() {
+        for unit in units.iter() {
+            assert!(
+                unit.minimum.is_some(),
+                "BUG: type '{type_name}' has minimum but unit '{}' missing per-unit minimum after finalize",
+                unit.name
+            );
+        }
+    }
+    if maximum.is_some() {
+        for unit in units.iter() {
+            assert!(
+                unit.maximum.is_some(),
+                "BUG: type '{type_name}' has maximum but unit '{}' missing per-unit maximum after finalize",
+                unit.name
+            );
+        }
+    }
+    let calendar_range_default = traits.contains(&QuantityTrait::Calendar)
+        && matches!(declared_default, Some(ValueKind::Range(_, _)));
+    if declared_default.is_some() && !calendar_range_default {
+        for unit in units.iter() {
+            assert!(
+                unit.default_magnitude.is_some(),
+                "BUG: type '{type_name}' has default but unit '{}' missing per-unit default after finalize",
+                unit.name
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -1139,14 +1177,14 @@ impl TypeSpecification {
             units: RatioUnits(vec![
                 RatioUnit {
                     name: "percent".to_string(),
-                    value: crate::computation::rational::RationalInteger::new(100, 1),
+                    value: crate::computation::rational::rational_new(100, 1),
                     minimum: None,
                     maximum: None,
                     default_magnitude: None,
                 },
                 RatioUnit {
                     name: "permille".to_string(),
-                    value: crate::computation::rational::RationalInteger::new(1000, 1),
+                    value: crate::computation::rational::rational_new(1000, 1),
                     minimum: None,
                     maximum: None,
                     default_magnitude: None,
@@ -1264,12 +1302,16 @@ impl TypeSpecification {
         use crate::computation::rational::commit_rational_to_decimal;
         match self {
             TypeSpecification::Number { minimum, .. }
-            | TypeSpecification::Ratio { minimum, .. } => minimum
-                .as_ref()
-                .and_then(|bound| commit_rational_to_decimal(bound).ok()),
-            TypeSpecification::Quantity { minimum, .. } => minimum
-                .as_ref()
-                .and_then(|(bound, _unit)| commit_rational_to_decimal(bound).ok()),
+            | TypeSpecification::Ratio { minimum, .. } => minimum.as_ref().map(|bound| {
+                commit_rational_to_decimal(bound)
+                    .expect("BUG: planned minimum must commit to decimal")
+            }),
+            TypeSpecification::Quantity { minimum, .. } => {
+                minimum.as_ref().map(|(bound, _unit)| {
+                    commit_rational_to_decimal(bound)
+                        .expect("BUG: planned minimum must commit to decimal")
+                })
+            }
             _ => None,
         }
     }
@@ -1280,12 +1322,16 @@ impl TypeSpecification {
         use crate::computation::rational::commit_rational_to_decimal;
         match self {
             TypeSpecification::Number { maximum, .. }
-            | TypeSpecification::Ratio { maximum, .. } => maximum
-                .as_ref()
-                .and_then(|bound| commit_rational_to_decimal(bound).ok()),
-            TypeSpecification::Quantity { maximum, .. } => maximum
-                .as_ref()
-                .and_then(|(bound, _unit)| commit_rational_to_decimal(bound).ok()),
+            | TypeSpecification::Ratio { maximum, .. } => maximum.as_ref().map(|bound| {
+                commit_rational_to_decimal(bound)
+                    .expect("BUG: planned maximum must commit to decimal")
+            }),
+            TypeSpecification::Quantity { maximum, .. } => {
+                maximum.as_ref().map(|(bound, _unit)| {
+                    commit_rational_to_decimal(bound)
+                        .expect("BUG: planned maximum must commit to decimal")
+                })
+            }
             _ => None,
         }
     }
@@ -1625,8 +1671,8 @@ impl TypeSpecification {
                         crate::literals::Value::NumberWithUnit(_, _) => {
                             let element_spec = TypeSpecification::Ratio {
                                 decimals: *decimals,
-                                minimum: *minimum,
-                                maximum: *maximum,
+                                minimum: minimum.clone(),
+                                maximum: maximum.clone(),
                                 units: units.clone(),
                                 help: help.clone(),
                             };
@@ -1649,72 +1695,74 @@ impl TypeSpecification {
                     ));
                 }
             },
-            TypeSpecification::RatioRange { units, help } => {
-                match command {
-                    TypeConstraintCommand::Unit => {
-                        let (unit_name, value_dec) = match args {
-                            [CommandArg::Label(name), CommandArg::UnitExpr(crate::parsing::ast::UnitArg::Factor(v))] => {
-                                (name.clone(), *v)
-                            }
-                            _ => {
-                                return Err(
+            TypeSpecification::RatioRange { units, help } => match command {
+                TypeConstraintCommand::Unit => {
+                    let (unit_name, value_dec) = match args {
+                        [CommandArg::Label(name), CommandArg::UnitExpr(crate::parsing::ast::UnitArg::Factor(v))] => {
+                            (name.clone(), *v)
+                        }
+                        _ => {
+                            return Err(
                                 "unit requires a unit name followed by a numeric conversion factor (e.g., 'unit percent 100'). Compound unit expressions are not supported for ratio range types."
                                     .to_string(),
                             );
-                            }
-                        };
-                        let value = crate::computation::rational::decimal_to_rational(value_dec)
-                        .map_err(|e| format!("ratio unit value is not exactly representable as a rational: {e}"))?;
-                        if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
-                            u.value = value;
-                        } else {
-                            units.0.push(RatioUnit {
-                                name: unit_name,
-                                value,
-                                minimum: None,
-                                maximum: None,
-                                default_magnitude: None,
-                            });
                         }
-                    }
-                    TypeConstraintCommand::Help => {
-                        apply_type_help_command(help, args)?;
-                    }
-                    TypeConstraintCommand::Default => {
-                        let (left, right) = require_default_range_endpoints(
-                            args,
-                            type_name,
-                            DefaultExpectation::RatioRange,
-                            None,
-                        )?;
-                        let element_spec = TypeSpecification::Ratio {
-                            decimals: None,
+                    };
+                    let value = crate::computation::rational::decimal_to_rational(value_dec)
+                        .map_err(|e| {
+                            format!(
+                                "ratio unit value is not exactly representable as a rational: {e}"
+                            )
+                        })?;
+                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
+                        u.value = value;
+                    } else {
+                        units.0.push(RatioUnit {
+                            name: unit_name,
+                            value,
                             minimum: None,
                             maximum: None,
-                            units: units.clone(),
-                            help: String::new(),
-                        };
-                        let left = lift_range_endpoint(left, &element_spec)?;
-                        let right = lift_range_endpoint(right, &element_spec)?;
-                        if !left.lemma_type.is_ratio() || !right.lemma_type.is_ratio() {
-                            return Err(
-                                "Please provide a ratio range, for example `-> default 10%...50%`."
-                                    .to_string(),
-                            );
-                        }
-                        *declared_default = Some(RawDefault::Value(ValueKind::Range(
-                            Box::new(left),
-                            Box::new(right),
-                        )));
+                            default_magnitude: None,
+                        });
                     }
-                    _ => {
-                        return Err(format!(
+                }
+                TypeConstraintCommand::Help => {
+                    apply_type_help_command(help, args)?;
+                }
+                TypeConstraintCommand::Default => {
+                    let (left, right) = require_default_range_endpoints(
+                        args,
+                        type_name,
+                        DefaultExpectation::RatioRange,
+                        None,
+                    )?;
+                    let element_spec = TypeSpecification::Ratio {
+                        decimals: None,
+                        minimum: None,
+                        maximum: None,
+                        units: units.clone(),
+                        help: String::new(),
+                    };
+                    let left = lift_range_endpoint(left, &element_spec)?;
+                    let right = lift_range_endpoint(right, &element_spec)?;
+                    if !left.lemma_type.is_ratio() || !right.lemma_type.is_ratio() {
+                        return Err(
+                            "Please provide a ratio range, for example `-> default 10%...50%`."
+                                .to_string(),
+                        );
+                    }
+                    *declared_default = Some(RawDefault::Value(ValueKind::Range(
+                        Box::new(left),
+                        Box::new(right),
+                    )));
+                }
+                _ => {
+                    return Err(format!(
                         "Invalid command '{}' for ratio range type. Valid commands: unit, help, default",
                         command
                     ));
-                    }
                 }
-            }
+            },
             TypeSpecification::Text {
                 length,
                 options,
@@ -2391,14 +2439,14 @@ impl fmt::Display for ValueKind {
             ValueKind::Text(s) => write!(f, "{}", crate::parsing::ast::Value::Text(s.clone())),
             ValueKind::Ratio(rational, unit) => match unit.as_deref() {
                 Some("percent") => {
-                    let display = match checked_mul(rational, &RationalInteger::new(100, 1)) {
+                    let display = match checked_mul(rational, &rational_new(100, 1)) {
                         Ok(scaled) => format_number_with_unit_for_display(&scaled, "percent"),
                         Err(_) => format!("{} percent", rational_to_display_str(rational)),
                     };
                     write!(f, "{}", display)
                 }
                 Some("permille") => {
-                    let display = match checked_mul(rational, &RationalInteger::new(1000, 1)) {
+                    let display = match checked_mul(rational, &rational_new(1000, 1)) {
                         Ok(scaled) => format_number_with_unit_for_display(&scaled, "permille"),
                         Err(_) => format!("{} permille", rational_to_display_str(rational)),
                     };
@@ -2731,6 +2779,11 @@ impl Expression {
     pub fn collect_data_paths(&self, data: &mut std::collections::HashSet<DataPath>) {
         self.kind.collect_data_paths(data);
     }
+
+    /// Collect all RulePath references from this resolved expression tree
+    pub fn collect_rule_paths(&self, rules: &mut std::collections::HashSet<RulePath>) {
+        self.kind.collect_rule_paths(rules);
+    }
 }
 
 /// Resolved expression kind (only resolved variants, no unresolved references)
@@ -2762,6 +2815,9 @@ pub enum ExpressionKind {
     RangeContainment(Arc<Expression>, Arc<Expression>),
     /// Whether evaluating the operand produced a veto (no value). Parses as `is veto` syntax.
     ResultIsVeto(Arc<Expression>),
+    /// Unless structure: (condition, result) pairs in source order; last true condition wins.
+    /// First arm is the default (condition is always-true literal).
+    Piecewise(Vec<(Arc<Expression>, Arc<Expression>)>),
 }
 
 impl ExpressionKind {
@@ -2800,6 +2856,57 @@ impl ExpressionKind {
             | ExpressionKind::Now => {}
             ExpressionKind::ResultIsVeto(operand) => {
                 operand.collect_data_paths(data);
+            }
+            ExpressionKind::Piecewise(arms) => {
+                for (condition, result) in arms {
+                    condition.collect_data_paths(data);
+                    result.collect_data_paths(data);
+                }
+            }
+        }
+    }
+
+    /// Collect all RulePath references from this expression kind
+    pub(crate) fn collect_rule_paths(&self, rules: &mut std::collections::HashSet<RulePath>) {
+        match self {
+            ExpressionKind::RulePath(rule_path) => {
+                rules.insert(rule_path.clone());
+            }
+            ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
+                left.collect_rule_paths(rules);
+                right.collect_rule_paths(rules);
+            }
+            ExpressionKind::Arithmetic(left, _, right)
+            | ExpressionKind::Comparison(left, _, right)
+            | ExpressionKind::RangeLiteral(left, right)
+            | ExpressionKind::RangeContainment(left, right) => {
+                left.collect_rule_paths(rules);
+                right.collect_rule_paths(rules);
+            }
+            ExpressionKind::UnitConversion(inner, _)
+            | ExpressionKind::LogicalNegation(inner, _)
+            | ExpressionKind::MathematicalComputation(_, inner)
+            | ExpressionKind::PastFutureRange(_, inner) => {
+                inner.collect_rule_paths(rules);
+            }
+            ExpressionKind::DateRelative(_, date_expr) => {
+                date_expr.collect_rule_paths(rules);
+            }
+            ExpressionKind::DateCalendar(_, _, date_expr) => {
+                date_expr.collect_rule_paths(rules);
+            }
+            ExpressionKind::Literal(_)
+            | ExpressionKind::DataPath(_)
+            | ExpressionKind::Veto(_)
+            | ExpressionKind::Now => {}
+            ExpressionKind::ResultIsVeto(operand) => {
+                operand.collect_rule_paths(rules);
+            }
+            ExpressionKind::Piecewise(arms) => {
+                for (condition, result) in arms {
+                    condition.collect_rule_paths(rules);
+                    result.collect_rule_paths(rules);
+                }
             }
         }
     }
@@ -3530,19 +3637,19 @@ impl LiteralValue {
     /// Magnitude string for decimal input prompts (number, single-unit quantity, ratio with percent/permille scaling).
     #[must_use]
     pub fn magnitude_default_for_decimal_prompt(&self) -> Option<String> {
-        use crate::computation::rational::{checked_mul, rational_to_display_str, RationalInteger};
+        use crate::computation::rational::{checked_mul, rational_to_display_str};
         match &self.value {
             ValueKind::Number(n) => Some(rational_to_display_str(n)),
             ValueKind::Quantity(n, signature) if signature.len() == 1 && signature[0].1 == 1 => {
                 Some(rational_to_display_str(n))
             }
             ValueKind::Ratio(n, Some(unit)) if unit == "percent" => {
-                checked_mul(n, &RationalInteger::new(100, 1))
+                checked_mul(n, &rational_new(100, 1))
                     .ok()
                     .map(|scaled| rational_to_display_str(&scaled))
             }
             ValueKind::Ratio(n, Some(unit)) if unit == "permille" => {
-                checked_mul(n, &RationalInteger::new(1000, 1))
+                checked_mul(n, &rational_new(1000, 1))
                     .ok()
                     .map(|scaled| rational_to_display_str(&scaled))
             }
@@ -3778,13 +3885,11 @@ pub enum DataDefinition {
     /// `local_default` carries any `default <value>` constraint from the
     /// reference's `-> ...` tail. The reference-merge pass extracts it from the
     /// constraint list during type resolution. It is materialized into a
-    /// concrete value by [`crate::planning::ExecutionPlan::with_defaults`]
-    /// before evaluation (or remains a schema suggestion when callers use
-    /// [`Engine::run_plan`] with `apply_defaults: false`).
+    /// concrete value by the evaluator when the caller does not supply a value.
     ///
     /// The reference itself is evaluated by copying the target's value (data path)
-    /// or the target rule's result in topological order; `set_data_values`
-    /// entries for a referenced path override the reference with a literal.
+    /// or the target rule's result in topological order; caller values in
+    /// [`crate::planning::execution_plan::DataOverlay`] override the reference.
     Reference {
         target: ReferenceTarget,
         resolved_type: Arc<LemmaType>,
@@ -3792,8 +3897,6 @@ pub enum DataDefinition {
         local_default: Option<ValueKind>,
         source: Source,
     },
-    /// Runtime data override failed parse or constraint validation.
-    Violated { reason: String, source: Source },
 }
 
 impl DataDefinition {
@@ -3803,7 +3906,7 @@ impl DataDefinition {
             DataDefinition::Value { value, .. } => Some(value.lemma_type.as_ref()),
             DataDefinition::TypeDeclaration { resolved_type, .. } => Some(resolved_type.as_ref()),
             DataDefinition::Reference { resolved_type, .. } => Some(resolved_type.as_ref()),
-            DataDefinition::Import { .. } | DataDefinition::Violated { .. } => None,
+            DataDefinition::Import { .. } => None,
         }
     }
 
@@ -3815,13 +3918,12 @@ impl DataDefinition {
             DataDefinition::Value { value, .. } => Some(value),
             DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Import { .. }
-            | DataDefinition::Reference { .. }
-            | DataDefinition::Violated { .. } => None,
+            | DataDefinition::Reference { .. } => None,
         }
     }
 
-    /// Literal explicitly bound in the spec (`data x: literal`) or substituted
-    /// by the caller via `set_data_values` as [`DataDefinition::Value`].
+    /// Literal explicitly bound in the spec (`data x: literal`) or supplied
+    /// by the caller via [`crate::planning::execution_plan::DataOverlay`].
     /// Not a suggestion; see [`Self::default_suggestion`].
     #[inline]
     pub fn bound_value(&self) -> Option<&LiteralValue> {
@@ -3830,8 +3932,7 @@ impl DataDefinition {
 
     /// Suggestion from `-> default ...` on a type declaration or reference.
     /// Surfaces in [`crate::planning::execution_plan::DataEntry::default`] for
-    /// prefill/UI; omitted from [`Self::bound_value`] until applied via
-    /// [`crate::planning::ExecutionPlan::with_defaults`].
+    /// prefill/UI; the evaluator applies it when the caller does not supply a value.
     pub fn default_suggestion(&self) -> Option<LiteralValue> {
         match self {
             DataDefinition::TypeDeclaration {
@@ -3851,10 +3952,15 @@ impl DataDefinition {
                 lemma_type: Arc::clone(resolved_type),
             }),
             DataDefinition::Value { .. }
-            | DataDefinition::TypeDeclaration { .. }
-            | DataDefinition::Reference { .. }
-            | DataDefinition::Import { .. }
-            | DataDefinition::Violated { .. } => None,
+            | DataDefinition::TypeDeclaration {
+                declared_default: None,
+                ..
+            }
+            | DataDefinition::Reference {
+                local_default: None,
+                ..
+            }
+            | DataDefinition::Import { .. } => None,
         }
     }
 
@@ -3865,7 +3971,6 @@ impl DataDefinition {
             DataDefinition::TypeDeclaration { source, .. } => source,
             DataDefinition::Import { source, .. } => source,
             DataDefinition::Reference { source, .. } => source,
-            DataDefinition::Violated { source, .. } => source,
         }
     }
 
@@ -4114,10 +4219,7 @@ pub fn value_to_semantic(value: &crate::parsing::ast::Value) -> Result<ValueKind
                 "number_with_unit literal requires type context (quantity or ratio)".to_string(),
             );
         }
-        Value::Range(left, right) => ValueKind::Range(
-            Box::new(literal_value_from_parser_value(left)?),
-            Box::new(literal_value_from_parser_value(right)?),
-        ),
+        Value::Range(_, _) => literal_value_from_parser_value(value)?.value,
     })
 }
 
@@ -4389,6 +4491,18 @@ fn format_quantity_canonical_for_display(
 
     if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
         if !units.is_empty() {
+            if let [(sig_unit, 1)] = signature {
+                if let Some(unit) = units.iter().find(|u| u.name == *sig_unit) {
+                    let in_unit = checked_div(canonical, &unit.factor)
+                        .expect("BUG: de-canonicalization for quantity display must not fail");
+                    let formatted = match commit_rational_to_decimal(&in_unit) {
+                        Ok(decimal) => format_decimal_for_quantity_display(decimal, decimals),
+                        Err(_) => rational_to_display_str(&in_unit),
+                    };
+                    return format!("{} {}", formatted, unit.name);
+                }
+            }
+
             struct UnitDisplayCandidate {
                 unit_name: String,
                 decimal_places: u32,
@@ -4483,7 +4597,8 @@ impl fmt::Display for LiteralValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computation::rational::{decimal_to_rational, RationalInteger};
+    use crate::computation::rational::decimal_to_rational;
+    use crate::literals::DateGranularity;
     use crate::literals::Value;
     use crate::parsing::ast::{BooleanValue, DateTimeValue, LemmaSpec, PrimitiveKind, TimeValue};
     use rust_decimal::Decimal;
@@ -4563,7 +4678,7 @@ mod tests {
     #[test]
     fn value_to_semantic_number_is_decimal() {
         let kind = value_to_semantic(&Value::Number(Decimal::from(42))).unwrap();
-        assert!(matches!(kind, ValueKind::Number(d) if d == RationalInteger::new(42, 1)));
+        assert!(matches!(kind, ValueKind::Number(d) if d == rational_new(42, 1)));
     }
 
     #[test]
@@ -4622,10 +4737,13 @@ mod tests {
 
     #[test]
     fn test_literal_value_to_primitive_type() {
-        let one = RationalInteger::new(1, 1);
+        let one = rational_new(1, 1);
 
         assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
-        assert_eq!(LiteralValue::number(one).lemma_type.name(), "number");
+        assert_eq!(
+            LiteralValue::number(one.clone()).lemma_type.name(),
+            "number"
+        );
         assert_eq!(
             LiteralValue::from_bool(bool::from(BooleanValue::True))
                 .lemma_type
@@ -4642,6 +4760,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         assert_eq!(
             LiteralValue::date(date_time_to_semantic(&dt))
@@ -4677,7 +4797,7 @@ mod tests {
             TypeExtends::Primitive,
         );
         assert_eq!(
-            LiteralValue::quantity_with_type(one, "second".to_string(), Arc::new(dur_type))
+            LiteralValue::quantity_with_type(one.clone(), "second".to_string(), Arc::new(dur_type))
                 .lemma_type
                 .name(),
             "duration"
@@ -4702,7 +4822,7 @@ mod tests {
 
     #[test]
     fn test_literal_value_display_value() {
-        let ten = RationalInteger::new(10, 1);
+        let ten = rational_new(10, 1);
 
         assert_eq!(
             LiteralValue::text("hello".to_string()).display_value(),
@@ -5330,7 +5450,6 @@ mod tests {
 
     #[test]
     fn signature_factor_with_calendar_units() {
-        use crate::computation::rational::RationalInteger;
         use std::collections::HashMap;
         let calendar = test_calendar_type_for_signature_factor();
         let unit_index: HashMap<String, Arc<LemmaType>> = HashMap::new();
@@ -5338,7 +5457,7 @@ mod tests {
         // [(month,1),(year,-1)] = 1/12
         let sig_month_per_year = sig(&[("month", 1), ("year", -1)]);
         let factor = signature_factor(&sig_month_per_year, &unit_index, Some(&calendar));
-        let expected = RationalInteger::new(1, 12);
+        let expected = rational_new(1, 12);
         assert_eq!(factor, expected, "month/year factor must be 1/12");
     }
 
@@ -5391,13 +5510,12 @@ mod tests {
 
     #[test]
     fn signature_factor_uses_owner_when_expression_index_empty() {
-        use crate::computation::rational::RationalInteger;
         use std::collections::HashMap;
         let money = test_money_type_for_signature_factor();
         let expression_units: HashMap<String, Arc<LemmaType>> = HashMap::new();
         let sig_usd = sig(&[("usd", 1)]);
         let factor = signature_factor(&sig_usd, &expression_units, Some(&money));
-        assert_eq!(factor, RationalInteger::new(91, 100));
+        assert_eq!(factor, rational_new(91, 100));
     }
 
     fn test_money_type_for_signature_factor() -> LemmaType {
@@ -5491,8 +5609,7 @@ mod tests {
 
     #[test]
     fn value_kind_matches_spec_rejects_number_for_quantity() {
-        use crate::computation::rational::RationalInteger;
-        let n = ValueKind::Number(RationalInteger::new(10, 1));
+        let n = ValueKind::Number(rational_new(10, 1));
         assert!(!value_kind_matches_spec(&n, &quantity_type_with_kilogram()));
     }
 }

@@ -16,12 +16,14 @@ pub mod graph;
 pub mod normalize;
 pub mod semantics;
 pub mod spec_set;
+#[cfg(test)]
+mod transitive_normalization;
 use crate::engine::Context;
 use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::Error;
 pub use data_input::DataValueInput;
 pub use execution_plan::ExecutionPlanSet;
-pub use execution_plan::{ExecutableRule, ExecutionPlan, SpecSchema};
+pub use execution_plan::{DataOverlay, ExecutionPlan, SpecSchema};
 use indexmap::IndexMap;
 pub use spec_set::LemmaSpecSet;
 use std::sync::Arc;
@@ -62,9 +64,12 @@ impl SpecSetPlanningResult {
     }
 
     /// The interface this set exposes over `[from, to)`, or `None` if any two
-    /// overlapping LemmaSpec slices disagree on the type of a name they both
-    /// expose. The returned schema is one of the in-range slices' full-surface
-    /// schemas; all of them are type-compatible when `Some` is returned.
+    /// LemmaSpec slices in range disagree on the type of a name they both
+    /// expose. All in-range slices are folded into one unified surface
+    /// (name → type): a name must have the same type in every slice that
+    /// exposes it, even when intermediate slices do not expose the name —
+    /// pairwise adjacent comparison would not be transitive. The returned
+    /// schema is the first in-range slice's full-surface schema.
     pub fn schema_over(
         &self,
         from: &Option<DateTimeValue>,
@@ -77,15 +82,42 @@ impl SpecSetPlanningResult {
                 let (slice_from, slice_to) = self.lemma_spec_set.effective_range(&sr.spec);
                 ranges_overlap(from, to, &slice_from, &slice_to)
             })
-            .filter_map(|sr| sr.plans.first().map(|p| p.interface_schema()))
+            .filter_map(|sr| {
+                sr.plans
+                    .first()
+                    .map(|p| p.interface_schema(&DataOverlay::default()))
+            })
             .collect();
 
         let first = schemas.first()?;
-        for pair in schemas.windows(2) {
-            if !pair[0].is_type_compatible(&pair[1]) {
-                return None;
+
+        let mut data_types: std::collections::HashMap<
+            &str,
+            &crate::planning::semantics::LemmaType,
+        > = std::collections::HashMap::new();
+        let mut rule_types: std::collections::HashMap<
+            &str,
+            &crate::planning::semantics::LemmaType,
+        > = std::collections::HashMap::new();
+        for schema in &schemas {
+            for (name, entry) in &schema.data {
+                match data_types.get(name.as_str()) {
+                    Some(existing) if **existing != entry.lemma_type => return None,
+                    _ => {
+                        data_types.insert(name.as_str(), &entry.lemma_type);
+                    }
+                }
+            }
+            for (name, lemma_type) in &schema.rules {
+                match rule_types.get(name.as_str()) {
+                    Some(existing) if *existing != lemma_type => return None,
+                    _ => {
+                        rule_types.insert(name.as_str(), lemma_type);
+                    }
+                }
             }
         }
+
         Some(first.clone())
     }
 }
@@ -120,14 +152,21 @@ pub struct PlanningResult {
 ///
 /// Iterates every spec, filters effective dates to its validity range,
 /// builds a per-spec DAG and ExecutionPlan for each slice.
-pub fn plan(context: &Context) -> PlanningResult {
+pub fn plan(context: &Context, limits: &crate::limits::ResourceLimits) -> PlanningResult {
     let mut results: IndexMap<Arc<LemmaRepository>, IndexMap<String, SpecSetPlanningResult>> =
         IndexMap::new();
 
     for (repository, inner) in context.repositories().iter() {
         for (_name, lemma_spec_set) in inner.iter() {
             for spec in lemma_spec_set.iter_specs() {
-                plan_spec(context, repository, lemma_spec_set, &spec, &mut results);
+                plan_spec(
+                    context,
+                    repository,
+                    lemma_spec_set,
+                    &spec,
+                    limits,
+                    &mut results,
+                );
             }
         }
     }
@@ -167,6 +206,7 @@ fn plan_spec(
     repository: &Arc<LemmaRepository>,
     lemma_spec_set: &LemmaSpecSet,
     spec: &Arc<LemmaSpec>,
+    limits: &crate::limits::ResourceLimits,
     results: &mut IndexMap<Arc<LemmaRepository>, IndexMap<String, SpecSetPlanningResult>>,
 ) {
     let spec_name = &spec.name;
@@ -178,21 +218,34 @@ fn plan_spec(
     };
 
     for effective in lemma_spec_set.effective_dates(spec, context) {
-        let dag = match discovery::build_dag_for_spec(context, spec, &effective) {
-            Ok(dag) => dag,
-            Err(discovery::DagError::Cycle(errors)) => {
-                spec_result.errors.extend(errors);
-                continue;
-            }
-            Err(discovery::DagError::Other(errors)) => {
-                spec_result.errors.extend(errors);
-                vec![(Arc::clone(repository), Arc::clone(spec))]
-            }
-        };
+        let (dag, dependency_discovery_failed) =
+            match discovery::build_dag_for_spec(context, spec, &effective) {
+                Ok(dag) => (dag, false),
+                Err(discovery::DagError::Cycle(errors)) => {
+                    spec_result.errors.extend(errors);
+                    continue;
+                }
+                Err(discovery::DagError::Other(errors)) => {
+                    spec_result.errors.extend(errors);
+                    (vec![(Arc::clone(repository), Arc::clone(spec))], true)
+                }
+            };
 
-        match graph::Graph::build(context, repository, spec, &dag, &effective) {
+        match graph::Graph::build(
+            context,
+            repository,
+            spec,
+            &dag,
+            &effective,
+            dependency_discovery_failed,
+        ) {
             Ok((graph, mut slice_types)) => {
-                match execution_plan::build_execution_plan(&graph, &mut slice_types, &effective) {
+                match execution_plan::build_execution_plan(
+                    &graph,
+                    &mut slice_types,
+                    &effective,
+                    limits,
+                ) {
                     Ok(execution_plan) => {
                         let value_errors =
                             execution_plan::validate_literal_data_against_types(&execution_plan);
@@ -251,13 +304,15 @@ fn dedup_errors(errors: &mut Vec<Error>) {
 mod internal_tests {
     use super::plan;
     use crate::engine::Context;
+    use crate::limits::ResourceLimits;
+    use crate::literals::DateGranularity;
     use crate::parsing::ast::{
         DataValue, LemmaData, LemmaRepository, LemmaSpec, ParentType, Reference, Span,
     };
     use crate::parsing::source::Source;
     use crate::planning::execution_plan::ExecutionPlan;
     use crate::planning::semantics::{DataPath, PathSegment, TypeDefiningSpec, TypeExtends};
-    use crate::{parse, Error, ResourceLimits};
+    use crate::{parse, Error};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -277,7 +332,7 @@ mod internal_tests {
             .spec_set(&repository, main_spec.name.as_str())
             .and_then(|ss| ss.get_exact(main_spec.effective_from()).cloned())
             .expect("main_spec must be in all_specs");
-        let result = plan(&ctx);
+        let result = plan(&ctx, &ResourceLimits::default());
         let all_errors: Vec<Error> = result
             .results
             .iter()
@@ -397,6 +452,109 @@ data name: "Jane""#;
             error_string
         );
         assert!(error_string.contains("name"));
+    }
+
+    #[test]
+    fn mixed_type_range_literal_is_planning_error_not_panic() {
+        let input = r#"spec demo
+data x: 1 ... yes"#;
+
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+
+        let result = plan_single(&specs[0], &specs);
+
+        let errors = result.expect_err("mixed-type range literal must be a planning error");
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly one planning error, got: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+        let error_string = errors[0].to_string();
+        assert!(
+            error_string.contains(
+                "range endpoints must have the same supported base type, got number and boolean"
+            ),
+            "unexpected error message: {}",
+            error_string
+        );
+    }
+
+    #[test]
+    fn text_range_literal_is_planning_error_not_panic() {
+        let input = r#"spec demo
+data x: "a" ... "b""#;
+
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+
+        let result = plan_single(&specs[0], &specs);
+
+        let errors = result.expect_err("text range literal must be a planning error");
+        assert_eq!(
+            errors.len(),
+            1,
+            "expected exactly one planning error, got: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+        let error_string = errors[0].to_string();
+        assert!(
+            error_string.contains(
+                "range endpoints must have the same supported base type, got text and text"
+            ),
+            "unexpected error message: {}",
+            error_string
+        );
+    }
+
+    #[test]
+    fn qualified_type_from_spec_with_type_errors_is_planning_error_not_panic() {
+        let input = r#"spec b
+data money: number -> minimum 10 -> maximum 5
+
+spec a
+uses b
+data x: b.money"#;
+
+        let specs: Vec<_> = parse(
+            input,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+
+        let result = plan_single(&specs[0], &specs);
+
+        let errors = result.expect_err("failing import target must be a planning error");
+        let error_string = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        assert!(
+            error_string.contains("minimum"),
+            "expected the import target's own type error to be reported: {}",
+            error_string
+        );
+        assert!(
+            error_string.contains(
+                "Cannot resolve type 'money' from spec 'b' (via import 'b'): spec 'b' failed type resolution"
+            ),
+            "expected the consumer's qualified type resolution error to be reported: {}",
+            error_string
+        );
     }
 
     #[test]
@@ -710,7 +868,7 @@ data imported_price: examples.money
             code.to_string(),
         );
 
-        let result = plan(&ctx);
+        let result = plan(&ctx, &ResourceLimits::default());
 
         let checkout_result = result
             .results
@@ -798,7 +956,7 @@ rule total_quantity: inventory.quantity"#;
                 .expect("insert spec");
         }
 
-        let result = plan(&ctx);
+        let result = plan(&ctx, &ResourceLimits::default());
         let example_result = result
             .results
             .iter()
@@ -970,6 +1128,7 @@ rule passthrough: imported_amount"#;
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: DateGranularity::Full,
         };
         let effective = crate::parsing::ast::EffectiveDate::DateTimeValue(dt);
         let consumer_arc = ctx
@@ -1019,7 +1178,7 @@ data imported_value: src_a.amount
                 .expect("insert spec");
         }
 
-        let result = plan(&ctx);
+        let result = plan(&ctx, &ResourceLimits::default());
 
         let spec_errors: Vec<String> = result
             .results

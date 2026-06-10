@@ -543,7 +543,8 @@ fn format_expr_wrapped(
 mod tests {
     use super::*;
     use crate::parsing::ast::{
-        AsLemmaSource, BooleanValue, DateTimeValue, TimeValue, TimezoneValue, Value,
+        AsLemmaSource, BooleanValue, DateGranularity, DateTimeValue, TimeValue, TimezoneValue,
+        Value,
     };
     use rust_decimal::prelude::FromStr;
     use rust_decimal::Decimal;
@@ -636,6 +637,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         });
         assert_eq!(fmt_value(&v), "2024-01-15");
     }
@@ -654,6 +657,8 @@ mod tests {
                 offset_hours: 0,
                 offset_minutes: 0,
             }),
+
+            granularity: DateGranularity::DateTime,
         });
         assert_eq!(fmt_value(&v), "2024-01-15T14:30:00Z");
     }
@@ -668,6 +673,58 @@ mod tests {
             timezone: None,
         });
         assert_eq!(fmt_value(&v), "14:30:45");
+    }
+
+    #[test]
+    fn test_format_source_preserves_date_granularity() {
+        let formatted = format_source(
+            "spec x 2026\n",
+            crate::parsing::source::SourceType::Volatile,
+        )
+        .expect("spec x 2026 should format");
+        assert!(
+            formatted.contains("spec x 2026\n"),
+            "year-only effective date must round-trip, got: {formatted}"
+        );
+        assert!(
+            !formatted.contains("2026-01-01"),
+            "year-only effective date must not expand, got: {formatted}"
+        );
+        let reformatted = format_source(&formatted, crate::parsing::source::SourceType::Volatile)
+            .expect("reformat");
+        assert_eq!(formatted, reformatted, "spec x 2026 must be idempotent");
+
+        let formatted = format_source(
+            "spec x 2026-03\n",
+            crate::parsing::source::SourceType::Volatile,
+        )
+        .expect("spec x 2026-03 should format");
+        assert!(
+            formatted.contains("spec x 2026-03\n"),
+            "year-month effective date must round-trip, got: {formatted}"
+        );
+
+        let formatted = format_source(
+            "spec x 2026-W34\n",
+            crate::parsing::source::SourceType::Volatile,
+        )
+        .expect("spec x 2026-W34 should format");
+        assert!(
+            formatted.contains("spec x 2026-W34\n"),
+            "iso week effective date must round-trip, got: {formatted}"
+        );
+
+        let source = "spec consumer\nuses finance 2026\n";
+        let formatted = format_source(source, crate::parsing::source::SourceType::Volatile)
+            .expect("uses with year should format");
+        assert!(
+            formatted.contains("uses finance 2026"),
+            "uses effective pin must preserve year-only date, got: {formatted}"
+        );
+        assert!(
+            !formatted.contains("2026-01-01"),
+            "uses effective pin must not expand year-only date, got: {formatted}"
+        );
     }
 
     #[test]

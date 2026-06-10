@@ -27,7 +27,7 @@ fn load_err(code: &str) -> String {
 fn eval(engine: &Engine, spec: &str, rule: &str, data: HashMap<String, String>) -> String {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec, Some(&now), data, false)
+        .run(None, spec, Some(&now), data, false, None)
         .expect("Should evaluate");
     response
         .results

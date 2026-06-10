@@ -9,17 +9,17 @@
 //!   IO compatibility is the consumer-facing guarantee.
 
 use crate::computation::UnitResolutionContext;
+use crate::parsing::ast::{CalendarPeriodUnit, DateCalendarKind, DateRelativeKind};
 use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, MetaValue};
 use crate::parsing::source::Source;
 use crate::planning::data_input::{parse_data_value, DataValueInput};
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
-use crate::planning::normalize::{
-    build_decision_table, is_literal_bool_expression, normalize_expression,
-};
+use crate::planning::normalize::build_normalized_rule_instructions;
 use crate::planning::semantics::{
-    value_kind_matches_spec, DataDefinition, DataPath, Expression, LemmaType, LiteralValue,
-    RulePath, TypeSpecification, ValueKind,
+    value_kind_matches_spec, ArithmeticComputation, ComparisonComputation, DataDefinition,
+    DataPath, Expression, LemmaType, LiteralValue, MathematicalComputation, ReferenceTarget,
+    RulePath, SemanticConversionTarget, TypeSpecification, ValueKind,
 };
 use crate::Error;
 use crate::ResourceLimits;
@@ -62,6 +62,9 @@ pub struct ExecutionPlan {
 
     /// Rules to execute in topological order (sorted by dependencies)
     pub rules: Vec<ExecutableRule>,
+
+    /// Maximum register file size across all rules; sizes [`EvaluationContext::register_values`].
+    pub max_register_count: u16,
 
     /// Order in which [`DataDefinition::Reference`] entries must be resolved
     /// at evaluation time so that chained references (reference → reference →
@@ -118,6 +121,351 @@ impl ExecutionPlanSet {
     }
 }
 
+pub const INSTRUCTIONS_VERSION: u32 = 1;
+
+/// How [`Instruction::JumpIfFalse`] treats a vetoed condition register.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum JumpVetoSemantics {
+    /// Expression unless condition: propagate [`VetoType::MissingData`]; other vetoes are non-match.
+    #[default]
+    UnlessExpression,
+    /// Rule-reference unless condition: any veto propagates to the rule result.
+    UnlessRuleReference,
+}
+
+/// Planning-time invariant: every jump is patched and lands on a real
+/// instruction. Panics on violation — compiled output failing this check is a
+/// compiler bug.
+pub fn validate_instruction_jumps(code: &[Instruction]) {
+    if let Err(message) = check_instruction_jumps(code) {
+        panic!("BUG: {message}");
+    }
+}
+
+/// Check that every jump is patched (non-zero target) and lands on a real
+/// instruction (`target < code.len()`).
+fn check_instruction_jumps(code: &[Instruction]) -> Result<(), String> {
+    let code_len = code.len();
+    for (index, instruction) in code.iter().enumerate() {
+        match instruction {
+            Instruction::JumpIfFalse {
+                target_instruction, ..
+            } => {
+                if *target_instruction == 0 {
+                    return Err(format!("unpatched JumpIfFalse at instruction {index}"));
+                }
+                if (*target_instruction as usize) >= code_len {
+                    return Err(format!(
+                        "JumpIfFalse at instruction {index} targets {target_instruction} past the last instruction (length {code_len})"
+                    ));
+                }
+            }
+            Instruction::Jump { target_instruction } => {
+                if *target_instruction == 0 {
+                    return Err(format!("unpatched Jump at instruction {index}"));
+                }
+                if (*target_instruction as usize) >= code_len {
+                    return Err(format!(
+                        "Jump at instruction {index} targets {target_instruction} past the last instruction (length {code_len})"
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Validate a compiled instruction stream against its operand pools: version,
+/// jump targets, register indices, constant/data/veto-message table indices,
+/// and the trailing [`Instruction::Return`].
+///
+/// Two call sites with different failure semantics:
+/// - the deserialization trust boundary ([`TryFrom<ExecutionPlanSerialized>`]),
+///   where a tampered or stale serialized plan must surface as an error;
+/// - the compiler (`CompileContext::finish`), where a violation is a compiler
+///   bug and crashes.
+pub fn validate_instructions(instructions: &Instructions) -> Result<(), String> {
+    if instructions.version != INSTRUCTIONS_VERSION {
+        return Err(format!(
+            "instructions version {} does not match supported version {}",
+            instructions.version, INSTRUCTIONS_VERSION
+        ));
+    }
+
+    check_instruction_jumps(&instructions.code)?;
+
+    let register_count = instructions.register_count;
+    let constant_count = instructions.constants.len();
+    let data_count = instructions.data_manifest.len();
+    let veto_message_count = instructions.veto_messages.len();
+
+    let check_register = |index: usize, name: &str, register: u16| -> Result<(), String> {
+        if register >= register_count {
+            return Err(format!(
+                "instruction {index} {name} register r{register} is out of bounds (register count {register_count})"
+            ));
+        }
+        Ok(())
+    };
+
+    for (index, instruction) in instructions.code.iter().enumerate() {
+        match instruction {
+            Instruction::LoadConstant {
+                destination_register,
+                constant_index,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+                if (*constant_index as usize) >= constant_count {
+                    return Err(format!(
+                        "instruction {index} constant index {constant_index} is out of bounds (constant count {constant_count})"
+                    ));
+                }
+            }
+            Instruction::LoadData {
+                destination_register,
+                data_index,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+                if (*data_index as usize) >= data_count {
+                    return Err(format!(
+                        "instruction {index} data index {data_index} is out of bounds (data manifest size {data_count})"
+                    ));
+                }
+            }
+            Instruction::LoadNow {
+                destination_register,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+            }
+            Instruction::Arithmetic {
+                destination_register,
+                operation: _,
+                left_register,
+                right_register,
+            }
+            | Instruction::Comparison {
+                destination_register,
+                operation: _,
+                left_register,
+                right_register,
+            }
+            | Instruction::RangeLiteral {
+                destination_register,
+                left_register,
+                right_register,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+                check_register(index, "left", *left_register)?;
+                check_register(index, "right", *right_register)?;
+            }
+            Instruction::UnitConversion {
+                destination_register,
+                source_register,
+                target: _,
+            }
+            | Instruction::Mathematical {
+                destination_register,
+                operation: _,
+                source_register,
+            }
+            | Instruction::DateRelative {
+                destination_register,
+                kind: _,
+                source_register,
+            }
+            | Instruction::DateCalendar {
+                destination_register,
+                kind: _,
+                unit: _,
+                source_register,
+            }
+            | Instruction::PastFutureRange {
+                destination_register,
+                kind: _,
+                source_register,
+            }
+            | Instruction::ResultIsVeto {
+                destination_register,
+                source_register,
+            }
+            | Instruction::MoveRegister {
+                destination_register,
+                source_register,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+                check_register(index, "source", *source_register)?;
+            }
+            Instruction::RangeContainment {
+                destination_register,
+                value_register,
+                range_register,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+                check_register(index, "value", *value_register)?;
+                check_register(index, "range", *range_register)?;
+            }
+            Instruction::UserVeto {
+                destination_register,
+                message_index,
+            } => {
+                check_register(index, "destination", *destination_register)?;
+                if (*message_index as usize) >= veto_message_count {
+                    return Err(format!(
+                        "instruction {index} veto message index {message_index} is out of bounds (veto message count {veto_message_count})"
+                    ));
+                }
+            }
+            Instruction::JumpIfFalse {
+                condition_register,
+                target_instruction: _,
+                veto_semantics: _,
+            } => {
+                check_register(index, "condition", *condition_register)?;
+            }
+            Instruction::Jump {
+                target_instruction: _,
+            } => {}
+            Instruction::Return { source_register } => {
+                check_register(index, "source", *source_register)?;
+            }
+        }
+    }
+
+    match instructions.code.last() {
+        Some(Instruction::Return { .. }) => Ok(()),
+        Some(other) => Err(format!(
+            "instruction stream must end with Return, found {other:?}"
+        )),
+        None => Err("instruction stream is empty".to_string()),
+    }
+}
+
+/// Compiled normalized equation for authoritative evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Instructions {
+    pub version: u32,
+    pub register_count: u16,
+    #[serde(with = "register_types_serde")]
+    pub register_types: Vec<Arc<LemmaType>>,
+    pub constants: Vec<LiteralValue>,
+    pub data_manifest: Vec<DataPath>,
+    pub veto_messages: Vec<String>,
+    pub code: Vec<Instruction>,
+}
+
+mod register_types_serde {
+    use super::LemmaType;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(values: &[Arc<LemmaType>], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let refs: Vec<&LemmaType> = values.iter().map(|v| v.as_ref()).collect();
+        refs.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Arc<LemmaType>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values: Vec<LemmaType> = Vec::deserialize(deserializer)?;
+        Ok(values.into_iter().map(Arc::new).collect())
+    }
+}
+
+/// One compiled operation in a rule's instruction stream.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Instruction {
+    LoadConstant {
+        destination_register: u16,
+        constant_index: u16,
+    },
+    LoadData {
+        destination_register: u16,
+        data_index: u16,
+    },
+    LoadNow {
+        destination_register: u16,
+    },
+    Arithmetic {
+        destination_register: u16,
+        operation: ArithmeticComputation,
+        left_register: u16,
+        right_register: u16,
+    },
+    Comparison {
+        destination_register: u16,
+        operation: ComparisonComputation,
+        left_register: u16,
+        right_register: u16,
+    },
+    UnitConversion {
+        destination_register: u16,
+        source_register: u16,
+        target: SemanticConversionTarget,
+    },
+    Mathematical {
+        destination_register: u16,
+        operation: MathematicalComputation,
+        source_register: u16,
+    },
+    DateRelative {
+        destination_register: u16,
+        kind: DateRelativeKind,
+        source_register: u16,
+    },
+    DateCalendar {
+        destination_register: u16,
+        kind: DateCalendarKind,
+        unit: CalendarPeriodUnit,
+        source_register: u16,
+    },
+    RangeLiteral {
+        destination_register: u16,
+        left_register: u16,
+        right_register: u16,
+    },
+    PastFutureRange {
+        destination_register: u16,
+        kind: DateRelativeKind,
+        source_register: u16,
+    },
+    RangeContainment {
+        destination_register: u16,
+        value_register: u16,
+        range_register: u16,
+    },
+    ResultIsVeto {
+        destination_register: u16,
+        source_register: u16,
+    },
+    MoveRegister {
+        destination_register: u16,
+        source_register: u16,
+    },
+    UserVeto {
+        destination_register: u16,
+        message_index: u16,
+    },
+    JumpIfFalse {
+        condition_register: u16,
+        target_instruction: u32,
+        #[serde(default)]
+        veto_semantics: JumpVetoSemantics,
+    },
+    Jump {
+        target_instruction: u32,
+    },
+    Return {
+        source_register: u16,
+    },
+}
+
 /// An executable rule with flattened branches
 ///
 /// Contains all information needed to evaluate a rule without spec lookups.
@@ -129,16 +477,11 @@ pub struct ExecutableRule {
     /// Rule name
     pub name: String,
 
-    /// Branches as written in source (evaluated only when `explain` is enabled)
-    /// First branch has condition=None (default expression)
-    /// Subsequent branches have condition=Some(...) (unless clauses)
+    /// Source branches (unless cause lines only); used for explanations
     pub branches: Vec<Branch>,
 
-    /// Normalized decision table (self-contained conditions); authoritative for evaluation
-    pub normalized_branches: Vec<NormalizedBranch>,
-
-    /// All data this rule needs (direct + inherited from rule dependencies)
-    pub needs_data: BTreeSet<DataPath>,
+    /// Fully inlined, once-normalized compiled equation; authoritative for evaluation
+    pub instructions: Instructions,
 
     /// Source location for error messages (always present for rules from parsed specs)
     pub source: Source,
@@ -160,16 +503,6 @@ pub struct Branch {
 
     /// Source location for error messages (always present for branches from parsed specs)
     pub source: Source,
-}
-
-/// One entry in the normalized decision table
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NormalizedBranch {
-    /// Self-contained condition (always present)
-    pub condition: Expression,
-
-    /// Normalized result expression
-    pub result: Expression,
 }
 
 mod arc_lemma_type {
@@ -198,6 +531,7 @@ pub(crate) fn build_execution_plan(
     graph: &Graph,
     resolved_types: &mut Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)>,
     effective: &EffectiveDate,
+    limits: &crate::limits::ResourceLimits,
 ) -> Result<ExecutionPlan, Vec<Error>> {
     let execution_order = graph.execution_order();
 
@@ -227,6 +561,49 @@ pub(crate) fn build_execution_plan(
         .unwrap_or_default();
     let data = graph.build_data(&main_resolved_types.resolved);
 
+    // Planning gate: every data-target reference and plain data declaration
+    // must carry a fully resolved type. Rule-target references are exempt:
+    // they deliberately ship `Undetermined` so runtime veto propagation
+    // surfaces the target rule's veto reason directly. A residual
+    // `Undetermined` anywhere else would violate the invariant evaluation
+    // and schema consumers rely on — report it instead of shipping the plan.
+    let undetermined_errors: Vec<Error> = data
+        .iter()
+        .filter_map(|(path, definition)| {
+            let (resolved_type, source) = match definition {
+                DataDefinition::TypeDeclaration {
+                    resolved_type,
+                    source,
+                    ..
+                } => (resolved_type, source),
+                DataDefinition::Reference {
+                    target: ReferenceTarget::Data(_),
+                    resolved_type,
+                    source,
+                    ..
+                } => (resolved_type, source),
+                DataDefinition::Reference {
+                    target: ReferenceTarget::Rule(_),
+                    ..
+                }
+                | DataDefinition::Value { .. }
+                | DataDefinition::Import { .. } => return None,
+            };
+            if resolved_type.is_undetermined() {
+                Some(Error::validation(
+                    format!("could not determine the type of '{path}'"),
+                    Some(source.clone()),
+                    None::<String>,
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !undetermined_errors.is_empty() {
+        return Err(undetermined_errors);
+    }
+
     let signature_index = crate::planning::graph::build_signature_index(
         &main_spec.name,
         &main_resolved_types.unit_index,
@@ -234,7 +611,9 @@ pub(crate) fn build_execution_plan(
     .expect("BUG: signature_index build already validated during resolve_and_validate");
 
     let mut executable_rules: Vec<ExecutableRule> = Vec::new();
-    let mut path_to_index: HashMap<RulePath, usize> = HashMap::new();
+    let mut max_register_count: u16 = 0;
+    let plan_rule_paths: HashSet<RulePath> = graph.rules().keys().cloned().collect();
+    let mut completed_rules: HashMap<RulePath, Arc<Expression>> = HashMap::new();
 
     for rule_path in execution_order {
         let rule_node = graph.rules().get(rule_path).expect(
@@ -251,53 +630,29 @@ pub(crate) fn build_execution_plan(
         }
 
         let unit_ctx = UnitResolutionContext::WithIndex(&main_resolved_types.unit_index);
-        let decision_table = build_decision_table(&rule_node.branches);
-        let mut normalized_branches = Vec::new();
-        let mut direct_data = HashSet::new();
-        for (condition, result) in decision_table {
-            let normalized_condition =
-                normalize_expression(&condition, Some(&unit_ctx)).map_err(|error| {
-                    vec![Error::validation(
-                        format!("failed to normalize decision table condition: {error}"),
-                        Some(rule_node.source.clone()),
-                        None::<String>,
-                    )]
-                })?;
-            if is_literal_bool_expression(&normalized_condition, false) {
-                continue;
-            }
-            let normalized_result =
-                normalize_expression(&result, Some(&unit_ctx)).map_err(|error| {
-                    vec![Error::validation(
-                        format!("failed to normalize decision table result: {error}"),
-                        Some(rule_node.source.clone()),
-                        None::<String>,
-                    )]
-                })?;
-            normalized_condition.collect_data_paths(&mut direct_data);
-            normalized_result.collect_data_paths(&mut direct_data);
-            normalized_branches.push(NormalizedBranch {
-                condition: normalized_condition,
-                result: normalized_result,
-            });
-        }
+        let (instructions, inlined_expression) = build_normalized_rule_instructions(
+            &rule_node.branches,
+            &completed_rules,
+            &plan_rule_paths,
+            &data,
+            &unit_ctx,
+            Some(rule_node.source.clone()),
+            &rule_node.rule_type,
+            limits.max_normalized_expression_nodes,
+        )
+        // Pass the error through unchanged: it is already a user-facing
+        // planning error (resource limit or constant-fold failure) carrying
+        // its own kind and source location.
+        .map_err(|error| vec![error])?;
+        max_register_count = max_register_count.max(instructions.register_count);
+        completed_rules.insert(rule_path.clone(), inlined_expression);
 
-        let mut needs_data: BTreeSet<DataPath> = direct_data.into_iter().collect();
-
-        for dep in &rule_node.depends_on_rules {
-            if let Some(&dep_idx) = path_to_index.get(dep) {
-                needs_data.extend(executable_rules[dep_idx].needs_data.iter().cloned());
-            }
-        }
-
-        path_to_index.insert(rule_path.clone(), executable_rules.len());
         executable_rules.push(ExecutableRule {
             path: rule_path.clone(),
             name: rule_path.rule.clone(),
             branches: executable_branches,
-            normalized_branches,
+            instructions,
             source: rule_node.source.clone(),
-            needs_data,
             rule_type: Arc::clone(&rule_node.rule_type),
         });
     }
@@ -307,6 +662,7 @@ pub(crate) fn build_execution_plan(
         commentary: main_spec.commentary.clone(),
         data,
         rules: executable_rules,
+        max_register_count,
         reference_evaluation_order: graph.reference_evaluation_order().to_vec(),
         meta: main_spec
             .meta_fields
@@ -351,6 +707,153 @@ pub struct DataEntry {
     pub bound_value: Option<LiteralValue>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default: Option<LiteralValue>,
+}
+
+/// User-provided data values resolved against a plan's type declarations.
+///
+/// Lightweight and cheap to construct — no plan cloning required. The
+/// [`ExecutionPlan`] stays immutable; callers pass `(&ExecutionPlan, &DataOverlay)`
+/// to evaluation and schema methods.
+#[derive(Debug, Clone, Default)]
+pub struct DataOverlay {
+    /// Successfully parsed and validated values supplied by the caller.
+    pub values: HashMap<DataPath, LiteralValue>,
+    /// Values that failed parse or constraint validation. Rules that read
+    /// these paths produce [`crate::evaluation::VetoType::Computation`] vetoes.
+    pub violated: HashMap<DataPath, String>,
+}
+
+impl DataOverlay {
+    /// Parse and validate caller-supplied values against the plan's data declarations.
+    ///
+    /// Unknown data keys and resource-limit violations return [`Err`]. Per-field
+    /// parse or constraint failures are recorded in [`Self::violated`] and the
+    /// overlay is still returned as `Ok`.
+    pub fn resolve(
+        plan: &ExecutionPlan,
+        raw_values: HashMap<String, DataValueInput>,
+        limits: &ResourceLimits,
+    ) -> Result<Self, Error> {
+        let mut overlay = Self::default();
+
+        for (name, raw_value) in raw_values {
+            let data_path = plan.get_data_path_by_str(&name).ok_or_else(|| {
+                let available: Vec<String> = plan.data.keys().map(|p| p.input_key()).collect();
+                Error::request(
+                    format!(
+                        "Data '{}' not found. Available data: {}",
+                        name,
+                        available.join(", ")
+                    ),
+                    None::<String>,
+                )
+            })?;
+            let data_path = data_path.clone();
+
+            let data_definition = plan
+                .data
+                .get(&data_path)
+                .expect("BUG: data_path was just resolved from plan.data, must exist");
+
+            let data_source = data_definition.source().clone();
+            let type_arc = match data_definition {
+                DataDefinition::TypeDeclaration { resolved_type, .. }
+                | DataDefinition::Reference { resolved_type, .. } => Arc::clone(resolved_type),
+                DataDefinition::Value { value, .. } => Arc::clone(&value.lemma_type),
+                DataDefinition::Import { .. } => {
+                    return Err(Error::request(
+                        format!(
+                            "Data '{}' is a spec reference; cannot provide a value.",
+                            name
+                        ),
+                        None::<String>,
+                    ));
+                }
+            };
+
+            let literal_value = match parse_data_value(&raw_value, &type_arc, &data_source) {
+                Ok(value) => value,
+                Err(error) => {
+                    overlay
+                        .violated
+                        .insert(data_path, error.message().to_string());
+                    continue;
+                }
+            };
+
+            let size = literal_value.byte_size();
+            if size > limits.max_data_value_bytes {
+                return Err(Error::resource_limit_exceeded(
+                    "max_data_value_bytes",
+                    limits.max_data_value_bytes.to_string(),
+                    size.to_string(),
+                    format!(
+                        "Reduce the size of data values to {} bytes or less",
+                        limits.max_data_value_bytes
+                    ),
+                    Some(data_source.clone()),
+                    None,
+                    None,
+                )
+                .with_related_data(&name));
+            }
+
+            if let Err(message) = validate_value_against_type(type_arc.as_ref(), &literal_value) {
+                overlay.violated.insert(data_path, message);
+                continue;
+            }
+
+            overlay.values.insert(data_path, literal_value);
+        }
+
+        Ok(overlay)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.violated.is_empty()
+    }
+}
+
+/// Values known for partial branch pruning and schema display.
+///
+/// Priority: spec literals, then overlay values, then declared defaults.
+/// Values definitively known from the spec and caller overlay.
+///
+/// Spec literals and overlay values only. Defaults are NOT included — the
+/// evaluator applies those natively in its own context.
+pub(crate) fn build_known_values(
+    plan: &ExecutionPlan,
+    overlay: &DataOverlay,
+) -> HashMap<DataPath, LiteralValue> {
+    let mut known_values: HashMap<DataPath, LiteralValue> = plan
+        .data
+        .iter()
+        .filter_map(|(path, definition)| {
+            if overlay.violated.contains_key(path) {
+                return None;
+            }
+            definition
+                .value()
+                .map(|value| (path.clone(), value.clone()))
+        })
+        .collect();
+
+    for (path, value) in &overlay.values {
+        known_values.insert(path.clone(), value.clone());
+    }
+
+    known_values
+}
+
+fn schema_bound_value(
+    path: &DataPath,
+    data: &DataDefinition,
+    overlay: &DataOverlay,
+) -> Option<LiteralValue> {
+    if let Some(value) = overlay.values.get(path) {
+        return Some(value.clone());
+    }
+    data.bound_value().cloned()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -425,30 +928,6 @@ impl std::fmt::Display for SpecSchema {
         }
 
         Ok(())
-    }
-}
-
-impl SpecSchema {
-    /// Type-structural compatibility: every data/rule present in BOTH schemas
-    /// must have the same `LemmaType`. New additions (present in one but not
-    /// the other) are allowed. Ignores literal default values on data,
-    /// spec name, and meta fields.
-    pub(crate) fn is_type_compatible(&self, other: &SpecSchema) -> bool {
-        for (name, entry) in &self.data {
-            if let Some(other_entry) = other.data.get(name) {
-                if entry.lemma_type != other_entry.lemma_type {
-                    return false;
-                }
-            }
-        }
-        for (name, lt) in &self.rules {
-            if let Some(other_lt) = other.rules.get(name) {
-                if lt != other_lt {
-                    return false;
-                }
-            }
-        }
-        true
     }
 }
 
@@ -590,36 +1069,49 @@ impl ExecutionPlan {
 
     /// Build a [`SpecSchema`] describing this plan's public IO contract.
     ///
-    /// Only data transitively reachable from at least one local rule (via
-    /// `needs_data`) are included. Spec-reference data (which have no schema
-    /// type) are also excluded. Only local rules (no cross-spec segments) are
-    /// included. Data and rules are sorted by source position (definition
-    /// order).
-    pub fn schema(&self) -> SpecSchema {
-        let all_local_rules: Vec<String> = self
-            .rules
+    /// Only data transitively reachable from live branches of at least one local
+    /// rule is included. Spec-reference data (which have no schema type) are also
+    /// excluded. Only local rules (no cross-spec segments) are included. Data are
+    /// sorted local-first, then by source position within each depth.
+    ///
+    /// If the caller supplies a [`DataOverlay`], branches whose conditions are
+    /// definitively false given those values are pruned, reducing the returned
+    /// data set to only what is still needed.
+    /// Names of local (main-spec) rules in plan topological order.
+    pub fn local_rule_names(&self) -> Vec<String> {
+        self.rules
             .iter()
             .filter(|r| r.path.segments.is_empty())
             .map(|r| r.name.clone())
-            .collect();
-        self.schema_for_rules(&all_local_rules)
+            .collect()
+    }
+
+    pub fn schema(&self, overlay: &DataOverlay) -> SpecSchema {
+        let all_local_rules = self.local_rule_names();
+        self.schema_for_rules(&all_local_rules, overlay)
             .expect("BUG: all_local_rules sourced from self.rules")
     }
 
     /// Every typed data input and local rule — the full spec surface.
-    pub fn interface_schema(&self) -> SpecSchema {
-        let mut data_entries: Vec<(usize, String, DataEntry)> = self
+    ///
+    /// Excludes [`DataDefinition::Reference`] (`with` bindings) and imports; those
+    /// are not caller inputs.
+    pub fn interface_schema(&self, overlay: &DataOverlay) -> SpecSchema {
+        let mut data_entries: Vec<(usize, usize, String, DataEntry)> = self
             .data
             .iter()
-            .filter(|(_, data)| data.schema_type().is_some())
+            .filter(|(_, data)| {
+                data.schema_type().is_some() && !matches!(data, DataDefinition::Reference { .. })
+            })
             .map(|(path, data)| {
                 let lemma_type = data
                     .schema_type()
                     .expect("BUG: filter above ensured schema_type is Some")
                     .clone();
-                let bound_value = data.bound_value().cloned();
+                let bound_value = schema_bound_value(path, data, overlay);
                 let default = data.default_suggestion();
                 (
+                    path.segments.len(),
                     data.source().span.start,
                     path.input_key(),
                     DataEntry {
@@ -630,7 +1122,7 @@ impl ExecutionPlan {
                 )
             })
             .collect();
-        data_entries.sort_by_key(|(pos, _, _)| *pos);
+        data_entries.sort_by_key(|(depth, pos, _, _)| (*depth, *pos));
 
         let rule_entries: Vec<(String, LemmaType)> = self
             .rules
@@ -646,7 +1138,7 @@ impl ExecutionPlan {
             versions: Vec::new(),
             data: data_entries
                 .into_iter()
-                .map(|(_, name, data)| (name, data))
+                .map(|(_, _, name, data)| (name, data))
                 .collect(),
             rules: rule_entries.into_iter().collect(),
             meta: self.meta.clone(),
@@ -656,15 +1148,24 @@ impl ExecutionPlan {
     /// Build a [`SpecSchema`] scoped to specific rules.
     ///
     /// The returned schema contains only the data **needed** by the given rules
-    /// (transitively, via `needs_data`) and only those rules. This is the
-    /// "what do I need to evaluate these rules?" view.
-    /// Data are sorted by source position (definition order).
+    /// (transitively, through live arms of normalized expressions)
+    /// and only those rules. This is the "what do I need to evaluate these rules?"
+    /// view. [`DataDefinition::Reference`] entries (`with` bindings) are omitted —
+    /// their values are fixed in the spec.
+    ///
+    /// When the caller supplies a [`DataOverlay`], branches whose conditions are
+    /// definitively false given those values are pruned, reducing the returned
+    /// data set to only what is still needed.
+    ///
+    /// Data are sorted local-first, then by source position within each depth.
     ///
     /// Returns `Err` if any rule name is not found in the plan.
-    pub fn schema_for_rules(&self, rule_names: &[String]) -> Result<SpecSchema, Error> {
-        let mut needed_data = HashSet::new();
+    pub fn schema_for_rules(
+        &self,
+        rule_names: &[String],
+        overlay: &DataOverlay,
+    ) -> Result<SpecSchema, Error> {
         let mut rule_entries: Vec<(String, LemmaType)> = Vec::new();
-
         for rule_name in rule_names {
             let rule = self.get_rule(rule_name).ok_or_else(|| {
                 Error::request(
@@ -675,19 +1176,22 @@ impl ExecutionPlan {
                     None::<String>,
                 )
             })?;
-            needed_data.extend(rule.needs_data.iter().cloned());
             rule_entries.push((rule.name.clone(), (*rule.rule_type).clone()));
         }
 
-        let mut data_entries: Vec<(usize, String, DataEntry)> = self
+        let needed_data = self.collect_needed_data_paths(rule_names, overlay)?;
+
+        let mut data_entries: Vec<(usize, usize, String, DataEntry)> = self
             .data
             .iter()
             .filter(|(path, _)| needed_data.contains(path))
+            .filter(|(_, data)| !matches!(data, DataDefinition::Reference { .. }))
             .filter_map(|(path, data)| {
                 let lemma_type = data.schema_type()?.clone();
-                let bound_value = data.bound_value().cloned();
+                let bound_value = schema_bound_value(path, data, overlay);
                 let default = data.default_suggestion();
                 Some((
+                    path.segments.len(),
                     data.source().span.start,
                     path.input_key(),
                     DataEntry {
@@ -698,10 +1202,10 @@ impl ExecutionPlan {
                 ))
             })
             .collect();
-        data_entries.sort_by_key(|(pos, _, _)| *pos);
+        data_entries.sort_by_key(|(depth, pos, _, _)| (*depth, *pos));
         let data_entries: Vec<(String, DataEntry)> = data_entries
             .into_iter()
-            .map(|(_, name, data)| (name, data))
+            .map(|(_, _, name, data)| (name, data))
             .collect();
 
         Ok(SpecSchema {
@@ -723,12 +1227,146 @@ impl ExecutionPlan {
             .find(|path| path.input_key() == canonical_name)
     }
 
+    /// Validate caller-requested rule names and return canonical local rule names.
+    ///
+    /// `None` means all local rules. `Some(&[])` is an error. Unknown names in `Some` slice error.
+    pub fn validated_response_rule_names(
+        &self,
+        rules: Option<&[String]>,
+    ) -> Result<std::collections::HashSet<String>, Error> {
+        let Some(rules) = rules else {
+            return Ok(self.local_rule_names().into_iter().collect());
+        };
+        if rules.is_empty() {
+            return Err(Error::request(
+                "at least one rule required".to_string(),
+                None::<String>,
+            ));
+        }
+        let mut names = std::collections::HashSet::new();
+        for rule_name in rules {
+            let rule = self.get_rule(rule_name).ok_or_else(|| {
+                Error::request(
+                    format!("Rule '{rule_name}' not found in spec '{}'", self.spec_name),
+                    None::<String>,
+                )
+            })?;
+            names.insert(rule.name.clone());
+        }
+        Ok(names)
+    }
+
     /// Look up a local rule by its name (rule in the main spec).
     pub fn get_rule(&self, name: &str) -> Option<&ExecutableRule> {
         let canonical_name = crate::parsing::ast::ascii_lowercase_logical_name(name.to_string());
         self.rules
             .iter()
             .find(|r| r.name == canonical_name && r.path.segments.is_empty())
+    }
+
+    /// Collect the data paths statically referenced by the named local rules.
+    ///
+    /// Walks the live branches of each named rule transitively: rule-target
+    /// data references extend the walk to the referenced rules. Branches whose
+    /// conditions are definitively decided by overlay-known values are pruned,
+    /// mirroring [`ExecutionPlan::schema_for_rules`].
+    ///
+    /// Returns `Err` if any rule name is not found in the plan.
+    pub fn collect_needed_data_paths(
+        &self,
+        rule_names: &[String],
+        overlay: &DataOverlay,
+    ) -> Result<HashSet<DataPath>, Error> {
+        let known_values = build_known_values(self, overlay);
+
+        let mut needed_data: HashSet<DataPath> = HashSet::new();
+        let mut visited_rules: HashSet<RulePath> = HashSet::new();
+        let mut rule_worklist: Vec<RulePath> = Vec::new();
+
+        // Validate and seed the worklist with the selected rules.
+        for rule_name in rule_names {
+            let rule = self.get_rule(rule_name).ok_or_else(|| {
+                Error::request(
+                    format!(
+                        "Rule '{}' not found in spec '{}'",
+                        rule_name, self.spec_name
+                    ),
+                    None::<String>,
+                )
+            })?;
+            rule_worklist.push(rule.path.clone());
+        }
+
+        // Walk the live branches of each reachable rule, collecting data paths.
+        // Rule-target references discovered via data paths extend the worklist.
+        while let Some(rule_path) = rule_worklist.pop() {
+            if !visited_rules.insert(rule_path.clone()) {
+                continue;
+            }
+
+            let rule = self.get_rule_by_path(&rule_path).unwrap_or_else(|| {
+                panic!(
+                    "BUG: rule path '{}' placed on worklist but not found in plan '{}'",
+                    rule_path.rule, self.spec_name
+                )
+            });
+
+            for (branch_index, branch) in rule.branches.iter().enumerate() {
+                if branch_index == 0 {
+                    let any_unless_definitely_true =
+                        rule.branches[1..].iter().any(|unless_branch| {
+                            let unless_condition = unless_branch
+                                .condition
+                                .as_ref()
+                                .expect("BUG: unless branch missing condition");
+                            crate::evaluation::partial::try_evaluate_condition(
+                                unless_condition,
+                                &known_values,
+                                self,
+                            ) == Some(true)
+                        });
+                    if any_unless_definitely_true {
+                        continue;
+                    }
+                } else if let Some(condition) = &branch.condition {
+                    if crate::evaluation::partial::try_evaluate_condition(
+                        condition,
+                        &known_values,
+                        self,
+                    ) == Some(false)
+                    {
+                        continue;
+                    }
+                }
+
+                let mut branch_data: HashSet<DataPath> = HashSet::new();
+                if let Some(condition) = &branch.condition {
+                    condition.collect_data_paths(&mut branch_data);
+                }
+                branch.result.collect_data_paths(&mut branch_data);
+
+                let mut branch_rules: HashSet<RulePath> = HashSet::new();
+                if let Some(condition) = &branch.condition {
+                    condition.collect_rule_paths(&mut branch_rules);
+                }
+                branch.result.collect_rule_paths(&mut branch_rules);
+
+                for data_path in &branch_data {
+                    if let Some(DataDefinition::Reference {
+                        target: ReferenceTarget::Rule(target_rule),
+                        ..
+                    }) = self.data.get(data_path)
+                    {
+                        branch_rules.insert(target_rule.clone());
+                    }
+                }
+
+                needed_data.extend(branch_data);
+                rule_worklist.extend(branch_rules);
+            }
+        }
+
+        Ok(needed_data)
     }
 
     /// Look up a rule by its full path.
@@ -739,146 +1377,6 @@ impl ExecutionPlan {
     /// Get the literal value for a data path, if it exists and has a literal value.
     pub fn get_data_value(&self, path: &DataPath) -> Option<&LiteralValue> {
         self.data.get(path).and_then(|d| d.value())
-    }
-
-    /// Provide typed data values from a client.
-    ///
-    /// Parses each value to its expected type, validates constraints, and applies to the plan.
-    pub fn set_data_values(
-        mut self,
-        values: std::collections::HashMap<String, DataValueInput>,
-        limits: &ResourceLimits,
-    ) -> Result<Self, Error> {
-        for (name, raw_value) in values {
-            let data_path = self.get_data_path_by_str(&name).ok_or_else(|| {
-                let available: Vec<String> = self.data.keys().map(|p| p.input_key()).collect();
-                Error::request(
-                    format!(
-                        "Data '{}' not found. Available data: {}",
-                        name,
-                        available.join(", ")
-                    ),
-                    None::<String>,
-                )
-            })?;
-            let data_path = data_path.clone();
-
-            let data_definition = self
-                .data
-                .get(&data_path)
-                .expect("BUG: data_path was just resolved from self.data, must exist");
-
-            let data_source = data_definition.source().clone();
-            let type_arc = match data_definition {
-                DataDefinition::TypeDeclaration { resolved_type, .. }
-                | DataDefinition::Reference { resolved_type, .. } => Arc::clone(resolved_type),
-                DataDefinition::Value { value, .. } => Arc::clone(&value.lemma_type),
-                DataDefinition::Import { .. } => {
-                    return Err(Error::request(
-                        format!(
-                            "Data '{}' is a spec reference; cannot provide a value.",
-                            name
-                        ),
-                        None::<String>,
-                    ));
-                }
-                DataDefinition::Violated { .. } => {
-                    unreachable!(
-                        "BUG: Violated data '{}' cannot appear before set_data_values on a fresh plan clone",
-                        name
-                    );
-                }
-            };
-
-            let literal_value = match parse_data_value(&raw_value, &type_arc, &data_source) {
-                Ok(value) => value,
-                Err(error) => {
-                    self.data.insert(
-                        data_path,
-                        DataDefinition::Violated {
-                            reason: error.message().to_string(),
-                            source: data_source,
-                        },
-                    );
-                    continue;
-                }
-            };
-
-            let size = literal_value.byte_size();
-            if size > limits.max_data_value_bytes {
-                return Err(Error::resource_limit_exceeded(
-                    "max_data_value_bytes",
-                    limits.max_data_value_bytes.to_string(),
-                    size.to_string(),
-                    format!(
-                        "Reduce the size of data values to {} bytes or less",
-                        limits.max_data_value_bytes
-                    ),
-                    Some(data_source.clone()),
-                    None,
-                    None,
-                )
-                .with_related_data(&name));
-            }
-
-            if let Err(msg) = validate_value_against_type(type_arc.as_ref(), &literal_value) {
-                self.data.insert(
-                    data_path,
-                    DataDefinition::Violated {
-                        reason: msg,
-                        source: data_source,
-                    },
-                );
-                continue;
-            }
-
-            self.data.insert(
-                data_path,
-                DataDefinition::Value {
-                    value: literal_value,
-                    source: data_source,
-                },
-            );
-        }
-
-        Ok(self)
-    }
-
-    /// Promote declared defaults on type declarations into concrete [`DataDefinition::Value`] entries.
-    /// Call BEFORE [`Self::set_data_values`] so user-provided values override defaults.
-    /// Reference resolution is handled by the evaluator at runtime.
-    #[must_use]
-    pub fn with_defaults(mut self) -> Self {
-        let promotions: Vec<(DataPath, DataDefinition)> = self
-            .data
-            .iter()
-            .filter_map(|(path, def)| {
-                if let DataDefinition::TypeDeclaration {
-                    declared_default: Some(dv),
-                    resolved_type,
-                    source,
-                } = def
-                {
-                    Some((
-                        path.clone(),
-                        DataDefinition::Value {
-                            value: LiteralValue {
-                                value: dv.clone(),
-                                lemma_type: Arc::clone(resolved_type),
-                            },
-                            source: source.clone(),
-                        },
-                    ))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for (path, def) in promotions {
-            self.data.insert(path, def);
-        }
-        self
     }
 }
 
@@ -1072,13 +1570,13 @@ pub(crate) fn validate_value_against_type(
                             let ratio_unit = units.get(unit)?;
                             let value_per_unit = checked_mul(r, &ratio_unit.value)
                                 .map_err(|failure| failure.to_string())?;
-                            let bound_per_unit = ratio_unit.minimum.expect(
+                            let bound_per_unit = ratio_unit.minimum.clone().expect(
                                 "BUG: RatioUnit.minimum missing after type minimum set by sync_ratio_units_from_canonical",
                             );
                             format!(
                                 "{} {unit} is below minimum {} {unit}",
                                 format_rational(&value_per_unit, *decimals),
-                                format_rational(&bound_per_unit, *decimals),
+                                format_rational(&bound_per_unit.clone(), *decimals),
                             )
                         }
                         None => format!(
@@ -1097,13 +1595,13 @@ pub(crate) fn validate_value_against_type(
                             let ratio_unit = units.get(unit)?;
                             let value_per_unit = checked_mul(r, &ratio_unit.value)
                                 .map_err(|failure| failure.to_string())?;
-                            let bound_per_unit = ratio_unit.maximum.expect(
+                            let bound_per_unit = ratio_unit.maximum.clone().expect(
                                 "BUG: RatioUnit.maximum missing after type maximum set by sync_ratio_units_from_canonical",
                             );
                             format!(
                                 "{} {unit} is above maximum {} {unit}",
                                 format_rational(&value_per_unit, *decimals),
-                                format_rational(&bound_per_unit, *decimals),
+                                format_rational(&bound_per_unit.clone(), *decimals),
                             )
                         }
                         None => format!(
@@ -1186,8 +1684,7 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
             DataDefinition::Value { value, .. } => (&value.lemma_type, value),
             DataDefinition::TypeDeclaration { .. }
             | DataDefinition::Import { .. }
-            | DataDefinition::Reference { .. }
-            | DataDefinition::Violated { .. } => continue,
+            | DataDefinition::Reference { .. } => continue,
         };
 
         if let Err(msg) = validate_value_against_type(expected_type, lit) {
@@ -1208,54 +1705,25 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
     errors
 }
 
-fn collect_unit_conversion_targets(expression: &Expression, units: &mut BTreeSet<String>) {
-    use crate::planning::semantics::{ExpressionKind, SemanticConversionTarget};
-    match &expression.kind {
-        ExpressionKind::UnitConversion(inner, SemanticConversionTarget::Unit { unit_name }) => {
+fn collect_unit_conversion_targets_from_instructions(
+    instructions: &Instructions,
+    units: &mut BTreeSet<String>,
+) {
+    for insn in &instructions.code {
+        if let Instruction::UnitConversion {
+            target: SemanticConversionTarget::Unit { unit_name },
+            ..
+        } = insn
+        {
             units.insert(unit_name.clone());
-            collect_unit_conversion_targets(inner, units);
         }
-        ExpressionKind::UnitConversion(inner, SemanticConversionTarget::Type(_))
-        | ExpressionKind::LogicalNegation(inner, _)
-        | ExpressionKind::MathematicalComputation(_, inner)
-        | ExpressionKind::PastFutureRange(_, inner) => {
-            collect_unit_conversion_targets(inner, units);
-        }
-        ExpressionKind::LogicalAnd(left, right) | ExpressionKind::LogicalOr(left, right) => {
-            collect_unit_conversion_targets(left, units);
-            collect_unit_conversion_targets(right, units);
-        }
-        ExpressionKind::Arithmetic(left, _, right)
-        | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::RangeLiteral(left, right)
-        | ExpressionKind::RangeContainment(left, right) => {
-            collect_unit_conversion_targets(left, units);
-            collect_unit_conversion_targets(right, units);
-        }
-        ExpressionKind::DateRelative(_, date_expr) => {
-            collect_unit_conversion_targets(date_expr, units);
-        }
-        ExpressionKind::DateCalendar(_, _, date_expr) => {
-            collect_unit_conversion_targets(date_expr, units);
-        }
-        ExpressionKind::ResultIsVeto(operand) => {
-            collect_unit_conversion_targets(operand, units);
-        }
-        ExpressionKind::Literal(_)
-        | ExpressionKind::DataPath(_)
-        | ExpressionKind::RulePath(_)
-        | ExpressionKind::Veto(_)
-        | ExpressionKind::Now => {}
     }
 }
 
 pub(crate) fn validate_unit_index_references(plan: &ExecutionPlan) -> Result<(), Error> {
     let mut required_units = BTreeSet::new();
     for rule in &plan.rules {
-        for branch in &rule.normalized_branches {
-            collect_unit_conversion_targets(&branch.result, &mut required_units);
-            collect_unit_conversion_targets(&branch.condition, &mut required_units);
-        }
+        collect_unit_conversion_targets_from_instructions(&rule.instructions, &mut required_units);
     }
     for unit_name in required_units {
         if plan.resolved_types.unit_index.contains_key(&unit_name) {
@@ -1329,11 +1797,32 @@ impl TryFrom<ExecutionPlanSerialized> for ExecutionPlan {
             &serialized.spec_name,
             &serialized.unit_index,
         )?;
+        // Serialized plans cross a trust boundary: a tampered or stale plan
+        // must surface as an error here, never as a hang or crash in the
+        // virtual machine.
+        for rule in &serialized.rules {
+            validate_instructions(&rule.instructions).map_err(|message| {
+                crate::Error::request(
+                    format!(
+                        "Serialized execution plan for spec '{}' contains invalid instructions for rule '{}': {message}",
+                        serialized.spec_name, rule.name
+                    ),
+                    None::<String>,
+                )
+            })?;
+        }
+        let max_register_count = serialized
+            .rules
+            .iter()
+            .map(|rule| rule.instructions.register_count)
+            .max()
+            .unwrap_or(0);
         Ok(Self {
             spec_name: serialized.spec_name,
             commentary: serialized.commentary,
             data: serialized.data,
             rules: serialized.rules,
+            max_register_count,
             reference_evaluation_order: serialized.reference_evaluation_order,
             meta: serialized.meta,
             resolved_types: ResolvedSpecTypes {
@@ -1371,7 +1860,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computation::rational::{rational_zero, RationalInteger};
+    use crate::computation::rational::{rational_new, rational_zero};
+    use crate::literals::DateGranularity;
     use crate::parsing::ast::DateTimeValue;
     use crate::planning::semantics::{
         primitive_boolean, primitive_text, DataPath, LiteralValue, PathSegment, RulePath,
@@ -1416,16 +1906,16 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
         let data_path = DataPath::new(vec![], "age".to_string());
 
         let values = input_data(&[("age", "30")]);
 
-        let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
-        let updated_value = updated_plan.get_data_value(&data_path).unwrap();
+        let overlay = DataOverlay::resolve(plan, values, &default_limits()).unwrap();
+        let updated_value = overlay.values.get(&data_path).unwrap();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
-                assert_eq!(*n, RationalInteger::new(30, 1));
+                assert_eq!(n, &rational_new(30, 1));
             }
             other => panic!("Expected number literal, got {:?}", other),
         }
@@ -1447,20 +1937,20 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
 
         let values = input_data(&[("age", "thirty")]);
 
-        let updated = plan.set_data_values(values, &default_limits()).unwrap();
+        let overlay = DataOverlay::resolve(plan, values, &default_limits()).unwrap();
         let data_path = DataPath::new(vec![], "age".to_string());
-        match updated.data.get(&data_path) {
-            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+        match overlay.violated.get(&data_path) {
+            Some(reason) => {
                 assert!(
                     reason.contains("number"),
                     "type mismatch must record violation reason, got: {reason}"
                 );
             }
-            other => panic!("expected Violated data for age=thirty, got: {other:?}"),
+            None => panic!("expected violated data for age=thirty"),
         }
     }
 
@@ -1480,11 +1970,11 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
 
         let values = input_data(&[("unknown", "30")]);
 
-        assert!(plan.set_data_values(values, &default_limits()).is_err());
+        assert!(DataOverlay::resolve(plan, values, &default_limits()).is_err());
     }
 
     #[test]
@@ -1506,11 +1996,11 @@ mod tests {
             .unwrap();
 
         let now = DateTimeValue::now();
-        let plan = engine.get_plan(None, "test", Some(&now)).unwrap().clone();
+        let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
 
         let values = input_data(&[("rules.base_price", "100")]);
 
-        let updated_plan = plan.set_data_values(values, &default_limits()).unwrap();
+        let overlay = DataOverlay::resolve(plan, values, &default_limits()).unwrap();
         let data_path = DataPath {
             segments: vec![PathSegment {
                 data: "rules".to_string(),
@@ -1518,10 +2008,10 @@ mod tests {
             }],
             data: "base_price".to_string(),
         };
-        let updated_value = updated_plan.get_data_value(&data_path).unwrap();
+        let updated_value = overlay.values.get(&data_path).unwrap();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
-                assert_eq!(*n, RationalInteger::new(100, 1));
+                assert_eq!(n, &rational_new(100, 1));
             }
             other => panic!("Expected number literal, got {:?}", other),
         }
@@ -1554,6 +2044,24 @@ mod tests {
         )
     }
 
+    fn constant_return_instructions(literal: LiteralValue) -> Instructions {
+        Instructions {
+            version: INSTRUCTIONS_VERSION,
+            register_count: 1,
+            register_types: vec![Arc::clone(&literal.lemma_type)],
+            constants: vec![literal],
+            data_manifest: Vec::new(),
+            veto_messages: Vec::new(),
+            code: vec![
+                Instruction::LoadConstant {
+                    destination_register: 0,
+                    constant_index: 0,
+                },
+                Instruction::Return { source_register: 0 },
+            ],
+        }
+    }
+
     fn create_number_literal(n: rust_decimal::Decimal) -> LiteralValue {
         LiteralValue::number_from_decimal(n)
     }
@@ -1575,7 +2083,7 @@ mod tests {
         let max10 = crate::planning::semantics::LemmaType::primitive(
             crate::planning::semantics::TypeSpecification::Number {
                 minimum: None,
-                maximum: Some(RationalInteger::new(10, 1)),
+                maximum: Some(rational_new(10, 1)),
                 decimals: None,
                 help: String::new(),
             },
@@ -1594,7 +2102,7 @@ mod tests {
             data_path.clone(),
             crate::planning::semantics::DataDefinition::Value {
                 value: crate::planning::semantics::LiteralValue::number_with_type(
-                    0.into(),
+                    rational_new(0, 1),
                     Arc::new(max10.clone()),
                 ),
                 source: source.clone(),
@@ -1606,6 +2114,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -1616,15 +2125,15 @@ mod tests {
 
         let values = input_data(&[("x", "11")]);
 
-        let updated = plan.set_data_values(values, &default_limits()).unwrap();
-        match updated.data.get(&data_path) {
-            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+        let overlay = DataOverlay::resolve(&plan, values, &default_limits()).unwrap();
+        match overlay.violated.get(&data_path) {
+            Some(reason) => {
                 assert!(
                     reason.contains("maximum") || reason.contains("10"),
                     "x=11 must violate maximum 10, got: {reason}"
                 );
             }
-            other => panic!("expected Violated data for x=11, got: {other:?}"),
+            None => panic!("expected violated data for x=11"),
         }
     }
 
@@ -1666,6 +2175,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -1676,15 +2186,15 @@ mod tests {
 
         let values = input_data(&[("tier", "platinum")]);
 
-        let updated = plan.set_data_values(values, &default_limits()).unwrap();
-        match updated.data.get(&data_path) {
-            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+        let overlay = DataOverlay::resolve(&plan, values, &default_limits()).unwrap();
+        match overlay.violated.get(&data_path) {
+            Some(reason) => {
                 assert!(
                     reason.contains("allowed options") || reason.contains("platinum"),
                     "invalid enum must record violation, got: {reason}"
                 );
             }
-            other => panic!("expected Violated data for tier=platinum, got: {other:?}"),
+            None => panic!("expected violated data for tier=platinum"),
         }
     }
 
@@ -1739,6 +2249,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -1749,15 +2260,15 @@ mod tests {
 
         let values = input_data(&[("price", "1.234 eur")]);
 
-        let updated = plan.set_data_values(values, &default_limits()).unwrap();
-        match updated.data.get(&data_path) {
-            Some(crate::planning::semantics::DataDefinition::Violated { reason, .. }) => {
+        let overlay = DataOverlay::resolve(&plan, values, &default_limits()).unwrap();
+        match overlay.violated.get(&data_path) {
+            Some(reason) => {
                 assert!(
                     reason.contains("decimals") || reason.contains("decimal"),
                     "1.234 eur must violate decimals=2, got: {reason}"
                 );
             }
-            other => panic!("expected Violated data for price=1.234 eur, got: {other:?}"),
+            None => panic!("expected violated data for price=1.234 eur"),
         }
     }
 
@@ -1780,6 +2291,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -1826,6 +2338,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -1873,6 +2386,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -1900,24 +2414,13 @@ mod tests {
                     source: test_source(),
                 }
             }],
-            normalized_branches: vec![{
-                let result = create_literal_expr(create_boolean_literal(true));
-                let condition = Expression::new(
-                    ExpressionKind::Comparison(
-                        Arc::new(create_data_path_expr(age_path.clone())),
-                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
-                    ),
-                    test_source(),
-                );
-                NormalizedBranch { condition, result }
-            }],
-            needs_data: BTreeSet::from([age_path]),
+            instructions: constant_return_instructions(create_boolean_literal(true)),
             source: test_source(),
             rule_type: Arc::new(primitive_boolean().clone()),
         };
 
         plan.rules.push(rule);
+        plan.max_register_count = plan.rules[0].instructions.register_count;
 
         let deserialized = roundtrip_execution_plan(&plan);
 
@@ -1926,7 +2429,6 @@ mod tests {
         assert_eq!(deserialized.rules.len(), plan.rules.len());
         assert_eq!(deserialized.rules[0].name, "can_drive");
         assert_eq!(deserialized.rules[0].branches.len(), 1);
-        assert_eq!(deserialized.rules[0].needs_data.len(), 1);
     }
 
     #[test]
@@ -1953,6 +2455,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2004,6 +2507,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2022,7 +2526,7 @@ mod tests {
         );
         assert_eq!(
             deserialized.get_data_value(&age_path).unwrap().value,
-            crate::planning::semantics::ValueKind::Number(30.into())
+            crate::planning::semantics::ValueKind::Number(rational_new(30, 1))
         );
         assert_eq!(
             deserialized.get_data_value(&active_path).unwrap().value,
@@ -2048,6 +2552,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2099,26 +2604,13 @@ mod tests {
                     }
                 },
             ],
-            normalized_branches: vec![
-                NormalizedBranch {
-                    condition: create_literal_expr(create_boolean_literal(true)),
-                    result: create_literal_expr(create_text_literal("bronze".to_string())),
-                },
-                NormalizedBranch {
-                    condition: create_literal_expr(create_boolean_literal(true)),
-                    result: create_literal_expr(create_text_literal("silver".to_string())),
-                },
-                NormalizedBranch {
-                    condition: create_literal_expr(create_boolean_literal(true)),
-                    result: create_literal_expr(create_text_literal("gold".to_string())),
-                },
-            ],
-            needs_data: BTreeSet::from([points_path]),
+            instructions: constant_return_instructions(create_text_literal("bronze".to_string())),
             source: test_source(),
             rule_type: Arc::new(primitive_text().clone()),
         };
 
         plan.rules.push(rule);
+        plan.max_register_count = plan.rules[0].instructions.register_count;
 
         let deserialized = roundtrip_execution_plan(&plan);
 
@@ -2136,6 +2628,7 @@ mod tests {
             commentary: None,
             data: IndexMap::new(),
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2169,6 +2662,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2195,26 +2689,13 @@ mod tests {
                     source: test_source(),
                 }
             }],
-            normalized_branches: vec![{
-                let result = Expression::new(
-                    ExpressionKind::Arithmetic(
-                        Arc::new(create_data_path_expr(x_path.clone())),
-                        crate::parsing::ast::ArithmeticComputation::Multiply,
-                        Arc::new(create_literal_expr(create_number_literal(2.into()))),
-                    ),
-                    test_source(),
-                );
-                NormalizedBranch {
-                    condition: create_literal_expr(create_boolean_literal(true)),
-                    result,
-                }
-            }],
-            needs_data: BTreeSet::from([x_path]),
+            instructions: constant_return_instructions(create_number_literal(0.into())),
             source: test_source(),
             rule_type: Arc::new(crate::planning::semantics::primitive_number().clone()),
         };
 
         plan.rules.push(rule);
+        plan.max_register_count = plan.rules[0].instructions.register_count;
 
         let deserialized = roundtrip_execution_plan(&plan);
 
@@ -2253,6 +2734,7 @@ mod tests {
             commentary: None,
             data,
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2280,24 +2762,13 @@ mod tests {
                     source: test_source(),
                 }
             }],
-            normalized_branches: vec![{
-                let result = create_literal_expr(create_boolean_literal(true));
-                let condition = Expression::new(
-                    ExpressionKind::Comparison(
-                        Arc::new(create_data_path_expr(age_path.clone())),
-                        crate::parsing::ast::ComparisonComputation::GreaterThanOrEqual,
-                        Arc::new(create_literal_expr(create_number_literal(18.into()))),
-                    ),
-                    test_source(),
-                );
-                NormalizedBranch { condition, result }
-            }],
-            needs_data: BTreeSet::from([age_path]),
+            instructions: constant_return_instructions(create_boolean_literal(true)),
             source: test_source(),
             rule_type: Arc::new(primitive_boolean().clone()),
         };
 
         plan.rules.push(rule);
+        plan.max_register_count = plan.rules[0].instructions.register_count;
 
         let deserialized = roundtrip_execution_plan(&plan);
         let deserialized2 = roundtrip_execution_plan(&deserialized);
@@ -2318,6 +2789,7 @@ mod tests {
             commentary: None,
             data: IndexMap::new(),
             rules: Vec::new(),
+            max_register_count: 0,
             reference_evaluation_order: Vec::new(),
             meta: HashMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
@@ -2340,6 +2812,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         let dec = DateTimeValue {
             year: 2025,
@@ -2350,6 +2824,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
 
         let set = ExecutionPlanSet {
@@ -2386,6 +2862,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         let may_end = DateTimeValue {
             year: 2025,
@@ -2396,6 +2874,8 @@ mod tests {
             second: 59,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::DateTime,
         };
 
         let set = ExecutionPlanSet {
@@ -2426,6 +2906,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         let set = ExecutionPlanSet {
             spec_name: "s".into(),
@@ -2438,6 +2920,8 @@ mod tests {
                 second: 0,
                 microsecond: 0,
                 timezone: None,
+
+                granularity: DateGranularity::Full,
             }))],
         };
         assert!(std::ptr::eq(
@@ -2471,7 +2955,7 @@ mod tests {
         let schema = engine
             .get_plan(None, "pricing", Some(&now))
             .unwrap()
-            .schema();
+            .schema(&DataOverlay::default());
 
         let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
 
@@ -2559,7 +3043,7 @@ mod tests {
         let schema = engine
             .get_plan(None, "units_contract", Some(&now))
             .unwrap()
-            .schema();
+            .schema(&DataOverlay::default());
         let value: serde_json::Value = serde_json::to_value(&schema).unwrap();
 
         let money_units = &value["data"]["money"]["type"]["units"];
@@ -2622,7 +3106,10 @@ mod tests {
             )
             .unwrap();
         let now = DateTimeValue::now();
-        let schema = engine.get_plan(None, "s", Some(&now)).unwrap().schema();
+        let schema = engine
+            .get_plan(None, "s", Some(&now))
+            .unwrap()
+            .schema(&DataOverlay::default());
 
         let json = serde_json::to_string(&schema).unwrap();
         let round_tripped: SpecSchema = serde_json::from_str(&json).unwrap();

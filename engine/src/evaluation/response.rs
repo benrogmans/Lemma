@@ -1,9 +1,9 @@
-use crate::evaluation::evaluation_trace::EvaluationTrace;
+use crate::evaluation::explanations::Explanation;
 use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::parsing::ast::DateTimeValue;
 use crate::planning::semantics::{
-    range_element_type_specification, DataPath, LemmaType, RulePath, SemanticDateTime,
-    SemanticTime, Source, TypeSpecification, ValueKind,
+    range_element_type_specification, DataPath, LemmaType, LiteralValue, RulePath,
+    SemanticDateTime, SemanticTime, Source, TypeSpecification, ValueKind,
 };
 use indexmap::IndexMap;
 use serde::Serialize;
@@ -75,7 +75,6 @@ pub struct Response {
     pub spec_effective_from: Option<DateTimeValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_effective_to: Option<DateTimeValue>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub data: Vec<DataGroup>,
     pub results: IndexMap<String, RuleResult>,
 }
@@ -113,14 +112,12 @@ pub struct RuleResult {
     pub calendar: Option<CalendarResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<RangeResult>,
-
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "explanation")]
-    pub trace: Option<EvaluationTrace>,
+    pub explanation: Option<Explanation>,
 }
 
 impl RuleResult {
-    /// Materialize a rule evaluation result for the wire/API.
+    /// Materialize a rule evaluation result for API output.
     ///
     /// `expression_units` is the plan's expression-scope index
     /// ([`crate::planning::ExecutionPlan::expression_unit_index`]).
@@ -130,7 +127,7 @@ impl RuleResult {
         operation_result: OperationResult,
         rule_type: &LemmaType,
         expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
-        trace: Option<EvaluationTrace>,
+        explanation: Option<Explanation>,
     ) -> Self {
         let rule_type_name = rule_type.name().to_string();
         match operation_result {
@@ -139,7 +136,10 @@ impl RuleResult {
                 veto_detail: Some(veto.clone()),
                 vetoed: true,
                 display: None,
-                veto_reason: Some(veto.to_string()),
+                veto_reason: match &veto {
+                    VetoType::UserDefined { message: None } => None,
+                    _ => Some(veto.to_string()),
+                },
                 rule_type: rule_type_name,
                 quantity: None,
                 ratio: None,
@@ -150,7 +150,7 @@ impl RuleResult {
                 time: None,
                 calendar: None,
                 range: None,
-                trace,
+                explanation,
             },
             OperationResult::Value(literal) => {
                 let mut result = Self {
@@ -169,7 +169,7 @@ impl RuleResult {
                     time: None,
                     calendar: None,
                     range: None,
-                    trace,
+                    explanation,
                 };
                 match &literal.value {
                     ValueKind::Range(from, to) => {
@@ -190,8 +190,7 @@ impl RuleResult {
                         result.display = Some(literal.to_string());
                     }
                     _ => {
-                        let payload =
-                            materialize_payload(literal.as_ref(), rule_type, expression_units);
+                        let payload = materialize_payload(&literal, rule_type, expression_units);
                         result.quantity = payload.quantity;
                         result.ratio = payload.ratio;
                         result.number = payload.number;
@@ -207,6 +206,203 @@ impl RuleResult {
             }
         }
     }
+
+    /// Reconstruct the evaluated [`LiteralValue`] from committed materialized fields.
+    ///
+    /// Panics if the rule is vetoed or materialized fields cannot be reconstructed.
+    pub fn materialized_literal(&self) -> LiteralValue {
+        assert!(
+            !self.vetoed,
+            "BUG: materialized_literal called on vetoed rule '{}'",
+            self.rule.name
+        );
+        let rule_type = Arc::new(self.rule.rule_type.clone());
+
+        if let Some(b) = self.boolean {
+            return LiteralValue {
+                value: ValueKind::Boolean(b),
+                lemma_type: rule_type,
+            };
+        }
+        if let Some(number) = &self.number {
+            return LiteralValue::number_with_type_from_decimal(
+                decimal_from_materialized_string(number),
+                rule_type,
+            );
+        }
+        if let Some(calendar) = &self.calendar {
+            use crate::literals::rational_from_parsed_decimal;
+            let rational =
+                rational_from_parsed_decimal(decimal_from_materialized_string(&calendar.value))
+                    .expect("BUG: calendar rule result value must lift to rational");
+            return LiteralValue::quantity_with_type(rational, calendar.unit.clone(), rule_type);
+        }
+        if let Some(quantity) = &self.quantity {
+            return literal_from_quantity_map(quantity, &rule_type);
+        }
+        if let Some(ratio) = &self.ratio {
+            return literal_from_ratio_map(ratio, &rule_type);
+        }
+        if let Some(date) = &self.date {
+            return LiteralValue {
+                value: ValueKind::Date(date.clone()),
+                lemma_type: rule_type,
+            };
+        }
+        if let Some(time) = &self.time {
+            return LiteralValue {
+                value: ValueKind::Time(time.clone()),
+                lemma_type: rule_type,
+            };
+        }
+        if let Some(text) = &self.text {
+            return LiteralValue {
+                value: ValueKind::Text(text.clone()),
+                lemma_type: rule_type,
+            };
+        }
+        if let Some(range) = &self.range {
+            let endpoint_type = element_type_from_range_rule(&rule_type)
+                .unwrap_or_else(|| rule_type.as_ref().clone());
+            let left = payload_to_literal(&range.from, &endpoint_type);
+            let right = payload_to_literal(&range.to, &endpoint_type);
+            return LiteralValue::range(left, right);
+        }
+        panic!(
+            "BUG: rule '{}' materialized fields cannot reconstruct literal",
+            self.rule.name
+        );
+    }
+}
+
+fn decimal_from_materialized_string(value: &str) -> rust_decimal::Decimal {
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+    Decimal::from_str(value)
+        .unwrap_or_else(|_| panic!("BUG: rule result materialized string must parse as decimal"))
+}
+
+fn literal_from_quantity_map(
+    quantity: &BTreeMap<String, String>,
+    rule_type: &LemmaType,
+) -> LiteralValue {
+    use crate::computation::rational::checked_mul;
+    use crate::literals::rational_from_parsed_decimal;
+
+    let unit_names = rule_type
+        .quantity_unit_names()
+        .expect("BUG: quantity rule result must have declared units");
+    let unit_name = unit_names
+        .first()
+        .expect("BUG: quantity rule result type must declare at least one unit");
+    let display = quantity
+        .get(*unit_name)
+        .unwrap_or_else(|| panic!("BUG: quantity map missing unit '{unit_name}'"));
+    let rational = rational_from_parsed_decimal(decimal_from_materialized_string(display))
+        .expect("BUG: quantity rule result value must lift to rational");
+    let factor = rule_type.quantity_unit_factor(unit_name);
+    let canonical = checked_mul(&rational, factor).unwrap_or_else(|failure| {
+        panic!("BUG: quantity canonicalization from materialized fields failed: {failure}")
+    });
+    LiteralValue::quantity_with_type(
+        canonical,
+        (*unit_name).to_string(),
+        Arc::new(rule_type.clone()),
+    )
+}
+
+fn literal_from_ratio_map(ratio: &BTreeMap<String, String>, rule_type: &LemmaType) -> LiteralValue {
+    use crate::computation::rational::checked_div;
+    use crate::literals::rational_from_parsed_decimal;
+
+    let units = match &rule_type.specifications {
+        TypeSpecification::Ratio { units, .. } => units,
+        TypeSpecification::RatioRange { .. } => {
+            let element = range_element_type_specification(&rule_type.specifications)
+                .expect("BUG: ratio range rule type must have ratio element specification");
+            let TypeSpecification::Ratio { units, .. } = element else {
+                panic!("BUG: ratio range element spec must be Ratio");
+            };
+            return literal_from_ratio_map(
+                ratio,
+                &LemmaType::primitive(TypeSpecification::Ratio {
+                    minimum: None,
+                    maximum: None,
+                    decimals: None,
+                    units,
+                    help: String::new(),
+                }),
+            );
+        }
+        _ => panic!(
+            "BUG: ratio rule result type must be Ratio, got {}",
+            rule_type.name()
+        ),
+    };
+    let unit = units
+        .iter()
+        .next()
+        .expect("BUG: ratio rule result type must declare at least one unit");
+    let display = ratio
+        .get(&unit.name)
+        .unwrap_or_else(|| panic!("BUG: ratio map missing unit '{}'", unit.name));
+    let display_rational = rational_from_parsed_decimal(decimal_from_materialized_string(display))
+        .expect("BUG: ratio rule result value must lift to rational");
+    let canonical = checked_div(&display_rational, &unit.value).unwrap_or_else(|failure| {
+        panic!("BUG: ratio canonicalization from materialized fields failed: {failure}")
+    });
+    LiteralValue::ratio_with_type(canonical, None, Arc::new(rule_type.clone()))
+}
+
+fn payload_to_literal(payload: &RuleResultPayload, rule_type: &LemmaType) -> LiteralValue {
+    if let Some(b) = payload.boolean {
+        return LiteralValue {
+            value: ValueKind::Boolean(b),
+            lemma_type: Arc::new(rule_type.clone()),
+        };
+    }
+    if let Some(number) = &payload.number {
+        return LiteralValue::number_with_type_from_decimal(
+            decimal_from_materialized_string(number),
+            Arc::new(rule_type.clone()),
+        );
+    }
+    if let Some(calendar) = &payload.calendar {
+        use crate::literals::rational_from_parsed_decimal;
+        let rational =
+            rational_from_parsed_decimal(decimal_from_materialized_string(&calendar.value))
+                .expect("BUG: calendar payload value must lift to rational");
+        return LiteralValue::quantity_with_type(
+            rational,
+            calendar.unit.clone(),
+            Arc::new(rule_type.clone()),
+        );
+    }
+    if let Some(quantity) = &payload.quantity {
+        return literal_from_quantity_map(quantity, rule_type);
+    }
+    if let Some(ratio) = &payload.ratio {
+        return literal_from_ratio_map(ratio, rule_type);
+    }
+    if let Some(date) = &payload.date {
+        return LiteralValue {
+            value: ValueKind::Date(date.clone()),
+            lemma_type: Arc::new(rule_type.clone()),
+        };
+    }
+    if let Some(time) = &payload.time {
+        return LiteralValue {
+            value: ValueKind::Time(time.clone()),
+            lemma_type: Arc::new(rule_type.clone()),
+        };
+    }
+    if let Some(text) = &payload.text {
+        return LiteralValue {
+            value: ValueKind::Text(text.clone()),
+            lemma_type: Arc::new(rule_type.clone()),
+        };
+    }
+    panic!("BUG: range endpoint payload cannot reconstruct literal");
 }
 
 fn element_type_from_range_rule(rule_type: &LemmaType) -> Option<LemmaType> {
@@ -235,7 +431,7 @@ fn materialize_payload(
                 crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
             RuleResultPayload {
                 calendar: Some(CalendarResult {
-                    value: rational_to_wire_string(rational),
+                    value: rational_to_decimal_string(rational),
                     unit: unit.to_string(),
                 }),
                 ..RuleResultPayload::default()
@@ -250,7 +446,7 @@ fn materialize_payload(
             ..RuleResultPayload::default()
         },
         ValueKind::Number(rational) => RuleResultPayload {
-            number: Some(rational_to_wire_string(rational)),
+            number: Some(rational_to_decimal_string(rational)),
             ..RuleResultPayload::default()
         },
         ValueKind::Boolean(b) => RuleResultPayload {
@@ -275,7 +471,7 @@ fn materialize_payload(
     }
 }
 
-fn rational_to_wire_string(rational: &crate::computation::rational::RationalInteger) -> String {
+fn rational_to_decimal_string(rational: &crate::computation::rational::RationalInteger) -> String {
     crate::literals::rational_to_serialized_str(rational)
         .expect("BUG: rule result magnitude must serialize to decimal string")
 }
@@ -301,7 +497,10 @@ fn quantity_to_unit_map(
                 unit_name, failure
             )
         });
-        map.insert(unit_name.to_string(), rational_to_wire_string(&converted));
+        map.insert(
+            unit_name.to_string(),
+            rational_to_decimal_string(&converted),
+        );
     }
     map
 }
@@ -355,7 +554,7 @@ fn ratio_to_unit_map(
                 unit.name, failure
             )
         });
-        map.insert(unit.name.clone(), rational_to_wire_string(&display));
+        map.insert(unit.name.clone(), rational_to_decimal_string(&display));
     }
     map
 }
@@ -372,10 +571,6 @@ impl Response {
 
     pub fn add_result(&mut self, result: RuleResult) {
         self.results.insert(result.rule.name.clone(), result);
-    }
-
-    pub fn filter_rules(&mut self, rule_names: &[String]) {
-        self.results.retain(|name, _| rule_names.contains(name));
     }
 
     /// All [`DataPath`]s reported as missing by any rule result (`VetoType::MissingData`).
@@ -404,10 +599,10 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::literals::DateGranularity;
     use crate::planning::semantics::{
-        primitive_boolean, primitive_number, BaseQuantityVector, LemmaType, LiteralValue,
-        QuantityUnit, QuantityUnits, RatioUnit, RatioUnits, RulePath, Span, TypeExtends,
-        TypeSpecification,
+        primitive_number, BaseQuantityVector, LemmaType, LiteralValue, QuantityUnit, QuantityUnits,
+        RatioUnit, RatioUnits, RulePath, Span, TypeExtends, TypeSpecification,
     };
     use rust_decimal::Decimal;
     use std::collections::HashMap;
@@ -425,12 +620,12 @@ mod tests {
         )
     }
 
-    fn dummy_evaluated_rule(name: &str) -> EvaluatedRule {
+    fn dummy_evaluated_rule(name: &str, rule_type: &LemmaType) -> EvaluatedRule {
         EvaluatedRule {
             name: name.to_string(),
             path: RulePath::new(vec![], name.to_string()),
             source_location: dummy_source(),
-            rule_type: primitive_number().clone(),
+            rule_type: rule_type.clone(),
         }
     }
 
@@ -441,10 +636,8 @@ mod tests {
         results.insert(
             "test_rule".to_string(),
             RuleResult::from_operation_result(
-                dummy_evaluated_rule("test_rule"),
-                OperationResult::Value(Box::new(LiteralValue::number_from_decimal(Decimal::from(
-                    42,
-                )))),
+                dummy_evaluated_rule("test_rule", primitive_number()),
+                OperationResult::Value(LiteralValue::number_from_decimal(Decimal::from(42))),
                 primitive_number(),
                 &expression_units,
                 None,
@@ -472,24 +665,24 @@ mod tests {
         use crate::computation::rational::{commit_rational_to_decimal, decimal_to_rational};
 
         let rational = decimal_to_rational(Decimal::new(1, 1) / Decimal::new(3, 1)).unwrap();
-        let wire_number = commit_rational_to_decimal(&rational).unwrap().to_string();
+        let decimal_string = commit_rational_to_decimal(&rational).unwrap().to_string();
         let mut results = IndexMap::new();
         results.insert(
             "third".to_string(),
             RuleResult::from_operation_result(
-                dummy_evaluated_rule("third"),
-                OperationResult::Value(Box::new(LiteralValue::number_from_decimal(
+                dummy_evaluated_rule("third", primitive_number()),
+                OperationResult::Value(LiteralValue::number_from_decimal(
                     commit_rational_to_decimal(&rational).unwrap(),
-                ))),
+                )),
                 primitive_number(),
                 &std::collections::HashMap::new(),
                 None,
             ),
         );
-        // Override wire number field to match serialization path under test
+        // Override committed decimal number field to match serialization path under test
         if let Some(rule) = results.get_mut("third") {
-            rule.number = Some(wire_number.clone());
-            rule.display = Some(wire_number);
+            rule.number = Some(decimal_string.clone());
+            rule.display = Some(decimal_string);
         }
 
         let response = Response {
@@ -509,55 +702,15 @@ mod tests {
             .expect("number must be a JSON string");
         assert!(
             !number.contains('/'),
-            "wire number must not use fraction notation, got {number}"
+            "API decimal string must not use fraction notation, got {number}"
         );
-    }
-
-    #[test]
-    fn test_response_filter_rules() {
-        let mut results = IndexMap::new();
-        let expression_units = std::collections::HashMap::new();
-        results.insert(
-            "rule1".to_string(),
-            RuleResult::from_operation_result(
-                dummy_evaluated_rule("rule1"),
-                OperationResult::Value(Box::new(LiteralValue::from_bool(true))),
-                primitive_boolean(),
-                &expression_units,
-                None,
-            ),
-        );
-        results.insert(
-            "rule2".to_string(),
-            RuleResult::from_operation_result(
-                dummy_evaluated_rule("rule2"),
-                OperationResult::Value(Box::new(LiteralValue::from_bool(false))),
-                primitive_boolean(),
-                &expression_units,
-                None,
-            ),
-        );
-        let mut response = Response {
-            spec_name: "test_spec".to_string(),
-            effective: "2026-01-01".to_string(),
-            spec_hash: None,
-            spec_effective_from: None,
-            spec_effective_to: None,
-            data: vec![],
-            results,
-        };
-
-        response.filter_rules(&["rule1".to_string()]);
-
-        assert_eq!(response.results.len(), 1);
-        assert_eq!(response.results.values().next().unwrap().rule.name, "rule1");
     }
 
     #[test]
     fn test_rule_result_veto() {
         let expression_units = std::collections::HashMap::new();
         let missing = RuleResult::from_operation_result(
-            dummy_evaluated_rule("rule3"),
+            dummy_evaluated_rule("rule3", &LemmaType::veto_type()),
             OperationResult::Veto(VetoType::MissingData {
                 data: DataPath::new(vec![], "data1".to_string()),
             }),
@@ -569,7 +722,7 @@ mod tests {
         assert!(missing.veto_reason.as_ref().unwrap().contains("data1"));
 
         let veto = RuleResult::from_operation_result(
-            dummy_evaluated_rule("rule4"),
+            dummy_evaluated_rule("rule4", &LemmaType::veto_type()),
             OperationResult::Veto(VetoType::UserDefined {
                 message: Some("Vetoed".to_string()),
             }),
@@ -636,8 +789,8 @@ mod tests {
         };
         let expression_units = HashMap::new();
         let result = RuleResult::from_operation_result(
-            dummy_evaluated_rule("total"),
-            OperationResult::Value(Box::new(ten_usd)),
+            dummy_evaluated_rule("total", &money),
+            OperationResult::Value(ten_usd),
             &money,
             &expression_units,
             None,
@@ -659,8 +812,8 @@ mod tests {
             lemma_type: Arc::new(money.clone()),
         };
         let result = RuleResult::from_operation_result(
-            dummy_evaluated_rule("total"),
-            OperationResult::Value(Box::new(ten_eur)),
+            dummy_evaluated_rule("total", &money),
+            OperationResult::Value(ten_eur),
             &money,
             &expression_units,
             None,
@@ -706,14 +859,14 @@ mod tests {
             TypeExtends::Primitive,
         );
         let expression_units = HashMap::new();
-        let half = crate::computation::rational::RationalInteger::new(1, 2);
+        let half = crate::computation::rational::rational_new(1, 2);
         let lit = LiteralValue {
             value: ValueKind::Ratio(half, Some("percent".to_string())),
             lemma_type: Arc::new(ratio_type.clone()),
         };
         let result = RuleResult::from_operation_result(
-            dummy_evaluated_rule("rate_out"),
-            OperationResult::Value(Box::new(lit)),
+            dummy_evaluated_rule("rate_out", &ratio_type),
+            OperationResult::Value(lit),
             &ratio_type,
             &expression_units,
             None,
@@ -765,6 +918,8 @@ data money: quantity
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         let response = engine
             .run(
@@ -773,6 +928,7 @@ data money: quantity
                 Some(&effective),
                 std::collections::HashMap::new(),
                 false,
+                None,
             )
             .expect("run");
         let out = response.results.get("out").expect("out rule");
@@ -780,5 +936,38 @@ data money: quantity
         let quantity = out.quantity.as_ref().expect("quantity map");
         assert!(quantity.contains_key("usd"));
         assert!(quantity.contains_key("eur"));
+    }
+
+    #[test]
+    fn materialized_literal_roundtrips_number() {
+        let expression_units = HashMap::new();
+        let literal = LiteralValue::number_from_decimal(Decimal::from(42));
+        let rule_result = RuleResult::from_operation_result(
+            dummy_evaluated_rule("answer", primitive_number()),
+            OperationResult::Value(literal.clone()),
+            primitive_number(),
+            &expression_units,
+            None,
+        );
+        assert_eq!(rule_result.materialized_literal(), literal);
+    }
+
+    #[test]
+    fn materialized_literal_roundtrips_quantity() {
+        let expression_units = HashMap::new();
+        let money = test_money_type();
+        let literal = LiteralValue::quantity_with_type(
+            crate::computation::rational::rational_new(60, 1),
+            "eur".into(),
+            Arc::new(money.clone()),
+        );
+        let rule_result = RuleResult::from_operation_result(
+            dummy_evaluated_rule("pay", &money),
+            OperationResult::Value(literal.clone()),
+            &money,
+            &expression_units,
+            None,
+        );
+        assert_eq!(rule_result.materialized_literal(), literal);
     }
 }

@@ -13,7 +13,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false)
+        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
         .expect("Should evaluate");
     response
         .results

@@ -1,8 +1,8 @@
 //! Type-aware arithmetic operations
 
 use crate::computation::rational::{
-    checked_add, checked_div, checked_mul, checked_sub, rational_operation_with_fallback,
-    NumericFailure, NumericOperation, RationalInteger,
+    checked_add, checked_div, checked_mul, checked_sub, rational_new,
+    rational_operation_with_fallback, NumericFailure, NumericOperation, RationalInteger,
 };
 use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::planning::semantics::{
@@ -15,6 +15,11 @@ use std::sync::Arc;
 /// Reverse index mapping a canonical-form unit signature `Vec<(unit_name, exponent)>`
 /// to the unit (by name) and its owning quantity type. Built during planning.
 pub type SignatureIndex = HashMap<Vec<(String, i32)>, (String, Arc<LemmaType>)>;
+
+struct CalendarRangeShiftIndexes<'a> {
+    unit_index: &'a HashMap<String, Arc<LemmaType>>,
+    signature_index: &'a SignatureIndex,
+}
 
 /// Promote an anonymous quantity result to a named type when its signature matches an
 /// entry in `signature_index`.
@@ -39,11 +44,11 @@ fn promote_anonymous_quantity_result(
     let Some((unit_name, owning_type)) = signature_index.get(&expanded) else {
         return OperationResult::Value(value);
     };
-    OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
-        *magnitude,
+    OperationResult::Value(LiteralValue::quantity_with_type(
+        magnitude.clone(),
         unit_name.clone(),
         owning_type.clone(),
-    )))
+    ))
 }
 
 /// Expand a raw signature (literal unit names) to derived base units, so that signature_index
@@ -148,9 +153,9 @@ fn number_op_on_stored_rationals(
     lemma_type: Arc<LemmaType>,
 ) -> OperationResult {
     match number_arithmetic(left, operator, right) {
-        Ok(rational) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
-            rational, lemma_type,
-        ))),
+        Ok(rational) => {
+            OperationResult::Value(LiteralValue::number_with_type(rational, lemma_type))
+        }
         Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
     }
 }
@@ -168,7 +173,7 @@ fn number_ratio_arithmetic(
     op: &ArithmeticComputation,
     r: RationalInteger,
 ) -> Result<RationalInteger, NumberArithmeticFailure> {
-    let one = RationalInteger::new(1, 1);
+    let one = rational_new(1, 1);
     match op {
         ArithmeticComputation::Add => {
             let factor = checked_add(&one, &r).map_err(map_numeric_failure)?;
@@ -219,11 +224,11 @@ fn calendar_from_months_arithmetic(
     };
 
     let result_unit = left_unit.clone();
-    OperationResult::Value(Box::new(LiteralValue::calendar_with_type(
+    OperationResult::Value(LiteralValue::calendar_with_type(
         result_months,
         result_unit,
         result_lemma_type,
-    )))
+    ))
 }
 
 /// Perform type-aware arithmetic operation, returning OperationResult (Veto for runtime errors).
@@ -252,11 +257,13 @@ pub fn arithmetic_operation(
             shift_calendar_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                *value,
+                value.clone(),
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
-                unit_index,
-                signature_index,
+                &CalendarRangeShiftIndexes {
+                    unit_index,
+                    signature_index,
+                },
             )
         }
 
@@ -273,11 +280,13 @@ pub fn arithmetic_operation(
             shift_calendar_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                *value,
+                value.clone(),
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
-                unit_index,
-                signature_index,
+                &CalendarRangeShiftIndexes {
+                    unit_index,
+                    signature_index,
+                },
             )
         }
 
@@ -294,7 +303,7 @@ pub fn arithmetic_operation(
             shift_date_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                *value,
+                value.clone(),
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
                 right.lemma_type.clone(),
@@ -314,7 +323,7 @@ pub fn arithmetic_operation(
             shift_date_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                *value,
+                value.clone(),
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
                 left.lemma_type.clone(),
@@ -377,7 +386,7 @@ pub fn arithmetic_operation(
         }
 
         (ValueKind::Number(l), ValueKind::Number(r)) => {
-            number_op_on_stored_rationals(*l, op, *r, left.lemma_type.clone())
+            number_op_on_stored_rationals(l.clone(), op, r.clone(), left.lemma_type.clone())
         }
 
         (ValueKind::Date(_), _) | (_, ValueKind::Date(_)) => promote_anonymous_quantity_result(
@@ -397,27 +406,27 @@ pub fn arithmetic_operation(
         (ValueKind::Ratio(_, _), ValueKind::Number(_))
         | (ValueKind::Number(_), ValueKind::Ratio(_, _)) => {
             let (n, r) = match (&left.value, &right.value) {
-                (ValueKind::Number(n), ValueKind::Ratio(r, _)) => (*n, *r),
-                (ValueKind::Ratio(r, _), ValueKind::Number(n)) => (*n, *r),
+                (ValueKind::Number(n), ValueKind::Ratio(r, _)) => (n.clone(), r.clone()),
+                (ValueKind::Ratio(r, _), ValueKind::Number(n)) => (n.clone(), r.clone()),
                 _ => unreachable!("BUG: matched number/ratio arm with other value kinds"),
             };
             match number_ratio_arithmetic(n, op, r) {
-                Ok(rational) => OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
                     rational,
                     primitive_number_arc().clone(),
-                ))),
+                )),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             }
         }
 
         // Ratio op Ratio → Ratio
         (ValueKind::Ratio(l, lu), ValueKind::Ratio(r, _ru)) => {
-            match number_arithmetic(*l, op, *r) {
-                Ok(rational) => OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+            match number_arithmetic(l.clone(), op, r.clone()) {
+                Ok(rational) => OperationResult::Value(LiteralValue::ratio_with_type(
                     rational,
                     lu.clone(),
                     left.lemma_type.clone(),
-                ))),
+                )),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             }
         }
@@ -435,9 +444,19 @@ pub fn arithmetic_operation(
                     );
                 }
                 let (l_val, l_sig, r_val, r_sig) = if is_quantity_left {
-                    (*l_val, l_signature.clone(), *r_val, r_signature.clone())
+                    (
+                        l_val.clone(),
+                        l_signature.clone(),
+                        r_val.clone(),
+                        r_signature.clone(),
+                    )
                 } else {
-                    (*r_val, r_signature.clone(), *l_val, l_signature.clone())
+                    (
+                        r_val.clone(),
+                        r_signature.clone(),
+                        l_val.clone(),
+                        l_signature.clone(),
+                    )
                 };
                 if is_divide && crate::computation::rational::rational_is_zero(&r_val) {
                     return OperationResult::Veto(VetoType::computation("Division by zero"));
@@ -472,23 +491,23 @@ pub fn arithmetic_operation(
                     is_multiply,
                 );
                 if combined.is_empty() {
-                    return OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                    return OperationResult::Value(LiteralValue::number_with_type(
                         raw_result,
                         primitive_number_arc().clone(),
-                    )));
+                    ));
                 }
                 let expanded_signature = expand_signature_to_base_units(&raw_signature, unit_index);
                 if let Some((unit_name, owning_type)) = signature_index.get(&expanded_signature) {
-                    return OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
+                    return OperationResult::Value(LiteralValue::quantity_with_type(
                         raw_result,
                         unit_name.clone(),
                         owning_type.clone(),
-                    )));
+                    ));
                 }
-                return OperationResult::Value(Box::new(LiteralValue {
+                return OperationResult::Value(LiteralValue {
                     value: ValueKind::Quantity(raw_result, raw_signature),
                     lemma_type: Arc::new(LemmaType::anonymous_for_decomposition(combined)),
-                }));
+                });
             }
             if left.lemma_type.is_calendar_like() && right.lemma_type.is_calendar_like() {
                 let lu = crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(
@@ -500,18 +519,18 @@ pub fn arithmetic_operation(
                 return match op {
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
                         calendar_from_months_arithmetic(
-                            *l_val,
+                            l_val.clone(),
                             &lu,
                             op,
-                            *r_val,
+                            r_val.clone(),
                             &ru,
                             left.lemma_type.clone(),
                         )
                     }
                     ArithmeticComputation::Divide => number_op_on_stored_rationals_primitive(
-                        *l_val,
+                        l_val.clone(),
                         &ArithmeticComputation::Divide,
-                        *r_val,
+                        r_val.clone(),
                     ),
                     _ => unreachable!(
                         "BUG: calendar * calendar with op {:?}; planning should have rejected this",
@@ -525,28 +544,24 @@ pub fn arithmetic_operation(
                         l_signature,
                     );
                 if let ValueKind::Number(n) = &right.value {
-                    return match number_arithmetic(*l_val, op, *n) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                left.lemma_type.clone(),
-                            )))
-                        }
+                    return match number_arithmetic(l_val.clone(), op, n.clone()) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
+                            rational,
+                            unit,
+                            left.lemma_type.clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
                 if let ValueKind::Ratio(r, _) = &right.value {
-                    return match number_ratio_arithmetic(*l_val, op, *r) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                left.lemma_type.clone(),
-                            )))
-                        }
+                    return match number_ratio_arithmetic(l_val.clone(), op, r.clone()) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
+                            rational,
+                            unit,
+                            left.lemma_type.clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -559,41 +574,35 @@ pub fn arithmetic_operation(
                         r_signature,
                     );
                 if let (ValueKind::Number(n), ArithmeticComputation::Multiply) = (&left.value, op) {
-                    return match number_arithmetic(*n, op, *r_val) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                right.lemma_type.clone(),
-                            )))
-                        }
+                    return match number_arithmetic(n.clone(), op, r_val.clone()) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
+                            rational,
+                            unit,
+                            right.lemma_type.clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
                 if let ValueKind::Number(n) = &left.value {
-                    return match number_arithmetic(*n, op, *r_val) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                                rational,
-                                primitive_number_arc().clone(),
-                            )))
-                        }
+                    return match number_arithmetic(n.clone(), op, r_val.clone()) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
+                            rational,
+                            primitive_number_arc().clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
                 if let ValueKind::Ratio(r, _) = &left.value {
-                    return match number_ratio_arithmetic(*r_val, op, *r) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::calendar_with_type(
-                                rational,
-                                unit,
-                                right.lemma_type.clone(),
-                            )))
-                        }
+                    return match number_ratio_arithmetic(r_val.clone(), op, r.clone()) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
+                            rational,
+                            unit,
+                            right.lemma_type.clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -613,13 +622,13 @@ pub fn arithmetic_operation(
                         right.lemma_type.name()
                     );
                     }
-                    match quantity_add_subtract(*l_val, op, *r_val) {
+                    match quantity_add_subtract(l_val.clone(), op, r_val.clone()) {
                         Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::quantity_with_signature(
+                            OperationResult::Value(LiteralValue::quantity_with_signature(
                                 rational,
                                 l_signature.clone(),
                                 left.lemma_type.clone(),
-                            )))
+                            ))
                         }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
@@ -665,28 +674,28 @@ pub fn arithmetic_operation(
                         matches!(op, ArithmeticComputation::Multiply),
                     );
                     if combined_decomposition.is_empty() {
-                        OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                        OperationResult::Value(LiteralValue::number_with_type(
                             raw_result,
                             primitive_number_arc().clone(),
-                        )))
+                        ))
                     } else {
                         let expanded_signature =
                             expand_signature_to_base_units(&raw_signature, unit_index);
                         if let Some((unit_name, owning_type)) =
                             signature_index.get(&expanded_signature)
                         {
-                            OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
+                            OperationResult::Value(LiteralValue::quantity_with_type(
                                 raw_result,
                                 unit_name.clone(),
                                 owning_type.clone(),
-                            )))
+                            ))
                         } else {
-                            OperationResult::Value(Box::new(LiteralValue {
+                            OperationResult::Value(LiteralValue {
                                 value: ValueKind::Quantity(raw_result, raw_signature),
                                 lemma_type: Arc::new(LemmaType::anonymous_for_decomposition(
                                     combined_decomposition,
                                 )),
-                            }))
+                            })
                         }
                     }
                 }
@@ -705,21 +714,19 @@ pub fn arithmetic_operation(
                 &right.lemma_type,
             ) {
                 (ValueKind::Quantity(q_val, q_sig), ValueKind::Ratio(r, _), qt, _) => {
-                    (*q_val, q_sig.clone(), qt, *r)
+                    (q_val.clone(), q_sig.clone(), qt, r.clone())
                 }
                 (ValueKind::Ratio(r, _), ValueKind::Quantity(q_val, q_sig), _, qt) => {
-                    (*q_val, q_sig.clone(), qt, *r)
+                    (q_val.clone(), q_sig.clone(), qt, r.clone())
                 }
                 _ => unreachable!("BUG: matched quantity/ratio arm with other value kinds"),
             };
             match quantity_ratio_arithmetic(quantity_val, op, ratio_val) {
-                Ok(rational) => {
-                    OperationResult::Value(Box::new(LiteralValue::quantity_with_signature(
-                        rational,
-                        quantity_signature,
-                        quantity_type.clone(),
-                    )))
-                }
+                Ok(rational) => OperationResult::Value(LiteralValue::quantity_with_signature(
+                    rational,
+                    quantity_signature,
+                    quantity_type.clone(),
+                )),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             }
         }
@@ -741,7 +748,7 @@ pub fn arithmetic_operation(
                 let factor = left.lemma_type.quantity_unit_factor(unit_name);
                 let in_unit = checked_div(quantity_val, factor)
                     .expect("BUG: quantity de-canonicalization for modulo must not fail");
-                let modded = match number_arithmetic(in_unit, op, *n) {
+                let modded = match number_arithmetic(in_unit, op, n.clone()) {
                     Ok(value) => value,
                     Err(failure) => {
                         return OperationResult::Veto(VetoType::computation(failure.message()))
@@ -750,31 +757,31 @@ pub fn arithmetic_operation(
                 checked_mul(&modded, factor)
                     .expect("BUG: quantity re-canonicalization after modulo must not fail")
             } else {
-                match number_arithmetic(*quantity_val, op, *n) {
+                match number_arithmetic(quantity_val.clone(), op, n.clone()) {
                     Ok(value) => value,
                     Err(failure) => {
                         return OperationResult::Veto(VetoType::computation(failure.message()))
                     }
                 }
             };
-            OperationResult::Value(Box::new(LiteralValue::quantity_with_signature(
+            OperationResult::Value(LiteralValue::quantity_with_signature(
                 rational,
                 quantity_signature.clone(),
                 left.lemma_type.clone(),
-            )))
+            ))
         }
         // Number op Quantity → Quantity for multiply; for divide, negate signature if anonymous Quantity.
         (ValueKind::Number(n), ValueKind::Quantity(quantity_val, quantity_signature)) => match op {
-            ArithmeticComputation::Multiply => match number_arithmetic(*n, op, *quantity_val) {
-                Ok(rational) => {
-                    OperationResult::Value(Box::new(LiteralValue::quantity_with_signature(
+            ArithmeticComputation::Multiply => {
+                match number_arithmetic(n.clone(), op, quantity_val.clone()) {
+                    Ok(rational) => OperationResult::Value(LiteralValue::quantity_with_signature(
                         rational,
                         quantity_signature.clone(),
                         right.lemma_type.clone(),
-                    )))
+                    )),
+                    Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
                 }
-                Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
-            },
+            }
             ArithmeticComputation::Divide => {
                 if right.lemma_type.is_duration_like_quantity()
                     || right.lemma_type.is_calendar_like()
@@ -790,13 +797,11 @@ pub fn arithmetic_operation(
                     let factor = right.lemma_type.quantity_unit_factor(unit_name);
                     let in_unit = checked_div(quantity_val, factor)
                         .expect("BUG: quantity de-canonicalization for divide must not fail");
-                    return match number_arithmetic(*n, op, in_unit) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                                rational,
-                                primitive_number_arc().clone(),
-                            )))
-                        }
+                    return match number_arithmetic(n.clone(), op, in_unit) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
+                            rational,
+                            primitive_number_arc().clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -807,13 +812,11 @@ pub fn arithmetic_operation(
                     .quantity_type_decomposition()
                     .expect("BUG: decomposition must be resolved after planning");
                 if quantity_decomp.is_empty() {
-                    match number_arithmetic(*n, op, *quantity_val) {
-                        Ok(rational) => {
-                            OperationResult::Value(Box::new(LiteralValue::number_with_type(
-                                rational,
-                                primitive_number_arc().clone(),
-                            )))
-                        }
+                    match number_arithmetic(n.clone(), op, quantity_val.clone()) {
+                        Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
+                            rational,
+                            primitive_number_arc().clone(),
+                        )),
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -821,32 +824,33 @@ pub fn arithmetic_operation(
                 } else {
                     let negated_signature =
                         crate::planning::semantics::negate_signature(quantity_signature);
-                    match number_arithmetic(*n, op, *quantity_val) {
+                    match number_arithmetic(n.clone(), op, quantity_val.clone()) {
                         Ok(rational) => {
                             if let Some((unit_name, owning_type)) =
                                 signature_index.get(&negated_signature)
                             {
-                                let target_factor = *owning_type.quantity_unit_factor(unit_name);
+                                let target_factor =
+                                    owning_type.quantity_unit_factor(unit_name).clone();
                                 match crate::computation::rational::checked_div(
                                     &rational,
                                     &target_factor,
                                 ) {
-                                    Ok(magnitude) => OperationResult::Value(Box::new(
-                                        LiteralValue::quantity_with_type(
+                                    Ok(magnitude) => {
+                                        OperationResult::Value(LiteralValue::quantity_with_type(
                                             magnitude,
                                             unit_name.clone(),
                                             owning_type.clone(),
-                                        ),
-                                    )),
+                                        ))
+                                    }
                                     Err(failure) => OperationResult::Veto(VetoType::computation(
                                         failure.to_string(),
                                     )),
                                 }
                             } else {
-                                OperationResult::Value(Box::new(LiteralValue::number_with_type(
+                                OperationResult::Value(LiteralValue::number_with_type(
                                     rational,
                                     primitive_number_arc().clone(),
-                                )))
+                                ))
                             }
                         }
                         Err(failure) => {
@@ -867,7 +871,7 @@ pub fn arithmetic_operation(
                 let factor = right.lemma_type.quantity_unit_factor(unit_name);
                 let in_unit = checked_div(quantity_val, factor)
                     .expect("BUG: quantity de-canonicalization for modulo must not fail");
-                number_op_on_stored_rationals_primitive(*n, op, in_unit)
+                number_op_on_stored_rationals_primitive(n.clone(), op, in_unit)
             }
             _ => unreachable!(
                 "BUG: Number {:?} Quantity should be rejected during planning",
@@ -937,7 +941,7 @@ fn quantity_ratio_arithmetic(
     operator: &ArithmeticComputation,
     ratio_value: RationalInteger,
 ) -> Result<RationalInteger, NumberArithmeticFailure> {
-    let one = RationalInteger::new(1, 1);
+    let one = rational_new(1, 1);
     match operator {
         ArithmeticComputation::Add => {
             let factor = checked_add(&one, &ratio_value).map_err(map_numeric_failure)?;
@@ -1006,13 +1010,7 @@ fn operate_on_operation_results(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(
-        left_value.as_ref(),
-        op,
-        right_value.as_ref(),
-        unit_index,
-        signature_index,
-    )
+    arithmetic_operation(&left_value, op, &right_value, unit_index, signature_index)
 }
 
 fn operate_with_left_result(
@@ -1026,7 +1024,7 @@ fn operate_with_left_result(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(left_value.as_ref(), op, right, unit_index, signature_index)
+    arithmetic_operation(&left_value, op, right, unit_index, signature_index)
 }
 
 fn operate_with_right_result(
@@ -1040,7 +1038,7 @@ fn operate_with_right_result(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(left, op, right_value.as_ref(), unit_index, signature_index)
+    arithmetic_operation(left, op, &right_value, unit_index, signature_index)
 }
 
 fn shift_date_range_right_endpoint(
@@ -1072,10 +1070,10 @@ fn shift_date_range_right_endpoint(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    OperationResult::Value(Box::new(LiteralValue::range(
+    OperationResult::Value(LiteralValue::range(
         range_left.clone(),
-        shifted_right.as_ref().clone(),
-    )))
+        shifted_right.clone(),
+    ))
 }
 
 fn shift_calendar_range_right_endpoint(
@@ -1084,8 +1082,7 @@ fn shift_calendar_range_right_endpoint(
     calendar_value: RationalInteger,
     calendar_unit: &SemanticCalendarUnit,
     add: bool,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
-    signature_index: &SignatureIndex,
+    indexes: &CalendarRangeShiftIndexes<'_>,
 ) -> OperationResult {
     let (ValueKind::Quantity(_, _), ValueKind::Quantity(_, _)) =
         (&range_left.value, &range_right.value)
@@ -1114,17 +1111,17 @@ fn shift_calendar_range_right_endpoint(
         range_right,
         &op,
         &calendar_literal,
-        unit_index,
-        signature_index,
+        indexes.unit_index,
+        indexes.signature_index,
     ) {
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    OperationResult::Value(Box::new(LiteralValue::range(
+    OperationResult::Value(LiteralValue::range(
         range_left.clone(),
-        shifted_right.as_ref().clone(),
-    )))
+        shifted_right.clone(),
+    ))
 }
 
 fn type_name(value: &LiteralValue) -> String {
@@ -1134,7 +1131,7 @@ fn type_name(value: &LiteralValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computation::rational::RationalInteger;
+    use crate::computation::rational::rational_new;
     use crate::evaluation::operations::{OperationResult, VetoType};
     use crate::planning::semantics::{ArithmeticComputation, LiteralValue, ValueKind};
     use rust_decimal::Decimal;
@@ -1142,20 +1139,20 @@ mod tests {
     #[test]
     fn number_arithmetic_add_on_stored_decimals() {
         let sum = number_arithmetic(
-            RationalInteger::new(1, 1),
+            rational_new(1, 1),
             &ArithmeticComputation::Add,
-            RationalInteger::new(2, 1),
+            rational_new(2, 1),
         )
         .unwrap();
-        assert_eq!(sum, RationalInteger::new(3, 1));
+        assert_eq!(sum, rational_new(3, 1));
     }
 
     #[test]
     fn number_arithmetic_divide_ten_by_three_returns_value_decimal() {
         let quotient = number_arithmetic(
-            RationalInteger::new(10, 1),
+            rational_new(10, 1),
             &ArithmeticComputation::Divide,
-            RationalInteger::new(3, 1),
+            rational_new(3, 1),
         )
         .unwrap();
         let decimal = crate::computation::rational::commit_rational_to_decimal(&quotient).unwrap();
@@ -1166,9 +1163,9 @@ mod tests {
     #[test]
     fn number_arithmetic_division_by_zero_returns_failure() {
         let failure = number_arithmetic(
-            RationalInteger::new(10, 1),
+            rational_new(10, 1),
             &ArithmeticComputation::Divide,
-            RationalInteger::new(0, 1),
+            rational_new(0, 1),
         )
         .unwrap_err();
         assert_eq!(failure, NumberArithmeticFailure::DivisionByZero);
@@ -1193,7 +1190,7 @@ mod tests {
         };
         match &lit.value {
             ValueKind::Number(n) => {
-                assert_eq!(*n, decimal_to_rational(Decimal::new(2, 0)).unwrap())
+                assert_eq!(n, &decimal_to_rational(Decimal::new(2, 0)).unwrap());
             }
             other => panic!("expected number, got {other:?}"),
         }
@@ -1202,13 +1199,13 @@ mod tests {
     #[test]
     fn arithmetic_operation_propagates_veto_from_left() {
         let left = OperationResult::Veto(VetoType::computation("left failed"));
-        let right = LiteralValue::number(RationalInteger::new(1, 1));
+        let right = LiteralValue::number(rational_new(1, 1));
         let unit_index = HashMap::new();
         let signature_index = SignatureIndex::new();
         let result = operate_on_operation_results(
             left,
             &ArithmeticComputation::Add,
-            OperationResult::Value(Box::new(right)),
+            OperationResult::Value(right),
             &unit_index,
             &signature_index,
         );
@@ -1238,19 +1235,16 @@ mod tests {
             )
             .expect("spec must load");
         let response = engine
-            .run(None, spec, None, HashMap::new(), true)
+            .run(None, spec, None, HashMap::new(), false, None)
             .expect("spec must evaluate");
-        response
+        let rule_result = response
             .results
             .get(rule)
-            .unwrap_or_else(|| panic!("rule '{}' missing", rule))
-            .trace
-            .as_ref()
-            .expect("BUG: run_rule requires trace")
-            .result
-            .value()
-            .unwrap_or_else(|| panic!("rule '{}' must return value", rule))
-            .clone()
+            .unwrap_or_else(|| panic!("rule '{}' missing", rule));
+        if rule_result.vetoed {
+            panic!("rule '{}' vetoed", rule);
+        }
+        rule_result.materialized_literal()
     }
 
     /// Phase 0 — Q*Q producing a signature hit must emit a named lemma_type.

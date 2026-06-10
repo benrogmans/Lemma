@@ -2,7 +2,7 @@ use lemma::DateTimeValue;
 /// Comprehensive tests for data binding validation at runtime.
 ///
 /// After planning succeeds, invalid overrides complete evaluation with Veto on
-/// affected rules — not `Err(Error)` from `set_data_values`. Unknown data keys
+/// affected rules — not `Err(Error)` from `DataOverlay::resolve`. Unknown data keys
 /// remain planning/request errors.
 use lemma::Engine;
 use std::collections::HashMap;
@@ -48,7 +48,7 @@ rule doubled: age * 2
     data.insert("age".to_string(), "twenty".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, true);
+    let result = engine.run(None, "test", Some(&now), data, true, None);
 
     assert_run_completes_with_veto_on_rule(result, "doubled", "number");
 }
@@ -74,7 +74,7 @@ rule flagged: active
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true),
+        engine.run(None, "test", Some(&now), data, true, None),
         "total",
         "number",
     );
@@ -85,7 +85,7 @@ rule flagged: active
     data.insert("active".to_string(), "true".to_string());
 
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true),
+        engine.run(None, "test", Some(&now), data, true, None),
         "total",
         "number",
     );
@@ -96,7 +96,7 @@ rule flagged: active
     data.insert("active".to_string(), "maybe".to_string());
 
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true),
+        engine.run(None, "test", Some(&now), data, true, None),
         "flagged",
         "boolean",
     );
@@ -105,9 +105,8 @@ rule flagged: active
     data.insert("price".to_string(), "100".to_string());
     data.insert("quantity".to_string(), "5".to_string());
     data.insert("active".to_string(), "true".to_string());
-
     let response = engine
-        .run(None, "test", Some(&now), data, true)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("valid data must evaluate");
     let total = response.results.get("total").expect("total rule");
     assert_eq!(total.display.as_deref(), Some("500"));
@@ -129,16 +128,15 @@ rule total: base_price * 1.2
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true),
+        engine.run(None, "test", Some(&now), data, true, None),
         "total",
         "number",
     );
 
     let mut data = HashMap::new();
     data.insert("base_price".to_string(), "60".to_string());
-
     let response = engine
-        .run(None, "test", Some(&now), data, true)
+        .run(None, "test", Some(&now), data, true, None)
         .expect("valid base_price must evaluate");
     let total = response.results.get("total").expect("total rule");
     let display = total.display.as_deref().expect("display");
@@ -161,7 +159,7 @@ rule total: price * 1.1
     data.insert("unknown_data".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, true);
+    let result = engine.run(None, "test", Some(&now), data, true, None);
     assert!(result.is_err(), "Expected error for unknown data binding");
     assert!(result.unwrap_err().to_string().contains("unknown_data"));
 }
@@ -194,7 +192,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, true),
+        engine.run(None, "s", Some(&now), data, true, None),
         "r",
         "minimum",
     );
@@ -230,12 +228,12 @@ rule r: p
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true)
+        .run(None, "s", Some(&now), data, true, None)
         .expect("'5%' must parse on a percent type without constraints");
     let rr = resp.results.get("r").expect("rule 'r' not found");
     assert!(!rr.vetoed, "unexpected veto: {:?}", rr.veto_reason);
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -244,7 +242,9 @@ rule r: p
     match &lit.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(n.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 decimal_lit("0.05")
             );
             assert_eq!(u.as_deref(), Some("percent"));
@@ -273,7 +273,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, true, None),
         "r",
         "maximum",
     );
@@ -310,7 +310,7 @@ rule r: d
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, true, None),
         "r",
         "minimum",
     );
@@ -344,7 +344,7 @@ rule r: when
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, true, None),
         "r",
         "minimum",
     );
@@ -372,7 +372,7 @@ rule r: n
     data.insert("n".to_string(), "3.14159".to_string());
 
     let now = DateTimeValue::now();
-    match engine.run(None, "s", Some(&now), data, false) {
+    match engine.run(None, "s", Some(&now), data, true, None) {
         Ok(resp) => {
             let rr = resp.results.get("r").expect("rule 'r'");
             if rr.vetoed {
@@ -413,7 +413,7 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false)
+        .run(None, "s", Some(&now), data, true, None)
         .expect("5-char string must be accepted");
     let rr = resp.results.get("r").expect("rule 'r'");
     assert!(!rr.vetoed, "expected value, got veto: {:?}", rr.veto_reason);
@@ -509,7 +509,7 @@ rule r: price
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, true, None),
         "r",
         "unit",
     );
@@ -538,7 +538,7 @@ rule span: bridge_height
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "bridge", Some(&now), data, false),
+        engine.run(None, "bridge", Some(&now), data, true, None),
         "span",
         "Unknown unit",
     );

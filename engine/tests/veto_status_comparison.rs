@@ -1,9 +1,7 @@
 //! `is veto` / `ResultIsVeto` — boolean coercion from operand `OperationResult`.
 
-use lemma::ComputationKind;
 use lemma::DateTimeValue;
 use lemma::Engine;
-use lemma::TraceNode;
 use std::collections::HashMap;
 
 #[test]
@@ -22,7 +20,7 @@ rule total: validated_price * quantity
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), false)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let total = response
@@ -49,7 +47,7 @@ rule total: validated_price
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let total = response
@@ -76,7 +74,7 @@ rule flag: validated_quantity is veto
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let flag = response
@@ -104,7 +102,7 @@ rule total: price * validated_quantity
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let total = response
@@ -130,7 +128,7 @@ rule flag: validated_price is veto
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let flag = response
@@ -157,7 +155,7 @@ rule right_to_left: veto is validated_price
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let ltr = response
@@ -189,7 +187,7 @@ rule b: not veto is validated_price
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let a = response
@@ -222,7 +220,7 @@ rule total: validated_price * quantity
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let total = response
@@ -230,19 +228,15 @@ rule total: validated_price * quantity
         .values()
         .find(|r| r.rule.name == "total")
         .expect("total");
-    let explanation = total.trace.as_ref().expect("trace");
-
-    let TraceNode::Branches { matched, .. } = explanation.tree.as_ref() else {
-        panic!("expected Branches explanation, got {:?}", explanation.tree);
-    };
-    let condition = matched
-        .condition
-        .as_ref()
-        .expect("matched unless should have condition");
-    let TraceNode::Computation { kind, .. } = condition.as_ref() else {
-        panic!("expected Computation on unless condition, got {condition:?}");
-    };
-    assert_eq!(*kind, ComputationKind::ResultIsVeto);
+    let explanation = total.explanation.as_ref().expect("explanation");
+    assert!(
+        explanation
+            .causes
+            .iter()
+            .any(|c| c.condition.contains("is veto") && c.value == "true"),
+        "expected unless cause with is veto true, got {:?}",
+        explanation.causes
+    );
 }
 
 #[test]

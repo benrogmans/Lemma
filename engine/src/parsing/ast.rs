@@ -82,7 +82,9 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-pub use crate::literals::{BooleanValue, DateTimeValue, TimeValue, TimezoneValue, Value};
+pub use crate::literals::{
+    BooleanValue, DateGranularity, DateTimeValue, TimeValue, TimezoneValue, Value,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EffectiveDate {
@@ -1511,12 +1513,18 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
         match self.0 {
             Value::Number(n) => write!(f, "{}", format_decimal_source(n)),
             Value::Text(s) => write!(f, "{}", quote_lemma_text(s)),
-            Value::Date(dt) => {
-                let is_date_only =
-                    dt.hour == 0 && dt.minute == 0 && dt.second == 0 && dt.timezone.is_none();
-                if is_date_only {
+            Value::Date(dt) => match dt.granularity {
+                crate::literals::DateGranularity::Year => write!(f, "{:04}", dt.year),
+                crate::literals::DateGranularity::YearMonth => {
+                    write!(f, "{:04}-{:02}", dt.year, dt.month)
+                }
+                crate::literals::DateGranularity::IsoWeek { iso_year, week } => {
+                    write!(f, "{:04}-W{:02}", iso_year, week)
+                }
+                crate::literals::DateGranularity::Full => {
                     write!(f, "{:04}-{:02}-{:02}", dt.year, dt.month, dt.day)
-                } else {
+                }
+                crate::literals::DateGranularity::DateTime => {
                     write!(
                         f,
                         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -1527,7 +1535,7 @@ impl<'a> fmt::Display for AsLemmaSource<'a, Value> {
                     }
                     Ok(())
                 }
-            }
+            },
             Value::Time(t) => {
                 write!(f, "{:02}:{:02}:{:02}", t.hour, t.minute, t.second)?;
                 if let Some(tz) = &t.timezone {
@@ -1825,6 +1833,8 @@ mod tests {
                 offset_hours: 1,
                 offset_minutes: 0,
             }),
+
+            granularity: DateGranularity::DateTime,
         };
         assert_eq!(format!("{}", dt), "2024-12-25T14:30:45+01:00");
     }
@@ -1840,6 +1850,8 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         assert_eq!(format!("{}", dt), "2026-03-04");
     }
@@ -1858,6 +1870,8 @@ mod tests {
                 offset_hours: 0,
                 offset_minutes: 0,
             }),
+
+            granularity: DateGranularity::DateTime,
         };
         assert_eq!(format!("{}", dt), "2026-02-23T14:30:45.123456Z");
     }
@@ -1873,6 +1887,8 @@ mod tests {
             second: 0,
             microsecond: 100,
             timezone: None,
+
+            granularity: DateGranularity::DateTime,
         };
         let b = DateTimeValue {
             year: 2026,
@@ -1883,6 +1899,8 @@ mod tests {
             second: 0,
             microsecond: 200,
             timezone: None,
+
+            granularity: DateGranularity::DateTime,
         };
         assert!(a < b);
     }
@@ -1894,6 +1912,14 @@ mod tests {
         assert_eq!(dt.month, 12);
         assert_eq!(dt.day, 29);
         assert_eq!(dt.microsecond, 0);
+        assert_eq!(dt.to_string(), "2026-W01");
+        assert!(matches!(
+            dt.granularity,
+            DateGranularity::IsoWeek {
+                iso_year: 2026,
+                week: 1
+            }
+        ));
     }
 
     #[test]

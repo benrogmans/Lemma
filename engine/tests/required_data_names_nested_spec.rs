@@ -34,7 +34,7 @@ rule total: calc.total
 
     // Schema for all rules: cashier.total depends on pricing.total (via calc.total),
     // so cashier's schema must include nested data like calc.price.
-    let schema_all = plan.schema();
+    let schema_all = plan.schema(&lemma::DataOverlay::default());
     assert!(
         schema_all.data.contains_key("calc.price"),
         "Expected schema data to include calc.price, got: {:?}",
@@ -48,7 +48,9 @@ rule total: calc.total
     );
 
     // Schema for specific rule: same result for cashier.total
-    let schema_total = plan.schema_for_rules(&["total".to_string()]).unwrap();
+    let schema_total = plan
+        .schema_for_rules(&["total".to_string()], &lemma::DataOverlay::default())
+        .unwrap();
     let scoped_price_type = &schema_total
         .data
         .get("calc.price")
@@ -77,7 +79,8 @@ fn schema_errors_on_unknown_rule() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
-    let result = plan.schema_for_rules(&["nonexistent".to_string()]);
+    let result =
+        plan.schema_for_rules(&["nonexistent".to_string()], &lemma::DataOverlay::default());
     assert!(result.is_err(), "Expected error for unknown rule");
     assert!(
         result.unwrap_err().to_string().contains("not found"),

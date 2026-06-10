@@ -1,4 +1,4 @@
-use crate::computation::rational::RationalInteger;
+use crate::computation::rational::rational_new;
 use crate::parsing::ast::*;
 use crate::planning::semantics::{
     date_time_to_semantic, primitive_time, time_to_semantic, BaseQuantityVector, LemmaType,
@@ -8,10 +8,13 @@ use rust_decimal::Decimal;
 
 #[test]
 fn test_literal_value_to_primitive_type() {
-    let one = RationalInteger::new(1, 1);
+    let one = rational_new(1, 1);
 
     assert_eq!(LiteralValue::text("".to_string()).lemma_type.name(), "text");
-    assert_eq!(LiteralValue::number(one).lemma_type.name(), "number");
+    assert_eq!(
+        LiteralValue::number(one.clone()).lemma_type.name(),
+        "number"
+    );
     assert_eq!(
         LiteralValue::from_bool(bool::from(BooleanValue::True))
             .lemma_type
@@ -28,6 +31,8 @@ fn test_literal_value_to_primitive_type() {
         second: 0,
         microsecond: 0,
         timezone: None,
+
+        granularity: DateGranularity::Full,
     };
     assert_eq!(
         LiteralValue::date(date_time_to_semantic(&dt))
@@ -36,7 +41,7 @@ fn test_literal_value_to_primitive_type() {
         "date"
     );
     assert_eq!(
-        LiteralValue::ratio(RationalInteger::new(1, 2), None)
+        LiteralValue::ratio(rational_new(1, 2), None)
             .lemma_type
             .name(),
         "ratio"
@@ -63,9 +68,13 @@ fn test_literal_value_to_primitive_type() {
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::quantity_with_type(one, "second".to_string(), std::sync::Arc::new(dur_type))
-            .lemma_type
-            .name(),
+        LiteralValue::quantity_with_type(
+            one.clone(),
+            "second".to_string(),
+            std::sync::Arc::new(dur_type)
+        )
+        .lemma_type
+        .name(),
         "duration"
     );
 }
@@ -171,8 +180,8 @@ fn test_type_serialization() {
 
 #[test]
 fn test_literal_value_display_value() {
-    let ten = RationalInteger::new(10, 1);
-    let ten_hours_canonical = RationalInteger::new(36_000, 1);
+    let ten = rational_new(10, 1);
+    let ten_hours_canonical = rational_new(36_000, 1);
 
     assert_eq!(
         LiteralValue::text("hello".to_string()).display_value(),
@@ -182,7 +191,7 @@ fn test_literal_value_display_value() {
     assert_eq!(LiteralValue::from_bool(true).display_value(), "true");
     assert_eq!(LiteralValue::from_bool(false).display_value(), "false");
 
-    let ten_percent_ratio = LiteralValue::ratio(RationalInteger::new(1, 10), None);
+    let ten_percent_ratio = LiteralValue::ratio(rational_new(1, 10), None);
     assert_eq!(ten_percent_ratio.display_value(), "0.1");
 
     let date = DateTimeValue {
@@ -194,6 +203,8 @@ fn test_literal_value_display_value() {
         second: 0,
         microsecond: 0,
         timezone: None,
+
+        granularity: DateGranularity::Full,
     };
     assert_eq!(
         LiteralValue::date(date_time_to_semantic(&date)).display_value(),
@@ -212,6 +223,8 @@ fn test_literal_value_display_value() {
             offset_hours: 1,
             offset_minutes: 0,
         }),
+
+        granularity: DateGranularity::DateTime,
     };
     assert_eq!(
         LiteralValue::date(date_time_to_semantic(&datetime)).display_value(),
@@ -294,6 +307,8 @@ fn test_datetime_value_display() {
             offset_hours: 1,
             offset_minutes: 0,
         }),
+
+        granularity: DateGranularity::DateTime,
     };
     let display = format!("{}", dt);
     assert_eq!(display, "2024-12-25T14:30:45+01:00");
@@ -371,4 +386,49 @@ fn test_datetime_value_parse_year_and_year_month_equal() {
     assert_eq!(from_year.hour, 0);
     assert_eq!(from_year.minute, 0);
     assert_eq!(from_year.second, 0);
+}
+
+#[test]
+fn test_datetime_value_granularity_display() {
+    let year: DateTimeValue = "2026".parse().expect("2026 should parse");
+    assert_eq!(year.to_string(), "2026");
+    assert_eq!(year.granularity, DateGranularity::Year);
+
+    let year_month: DateTimeValue = "2026-01".parse().expect("2026-01 should parse");
+    assert_eq!(year_month.to_string(), "2026-01");
+    assert_eq!(year_month.granularity, DateGranularity::YearMonth);
+
+    let year_month_march: DateTimeValue = "2026-03".parse().expect("2026-03 should parse");
+    assert_eq!(year_month_march.to_string(), "2026-03");
+    assert_eq!(year_month_march.granularity, DateGranularity::YearMonth);
+
+    let full: DateTimeValue = "2026-01-01".parse().expect("2026-01-01 should parse");
+    assert_eq!(full.to_string(), "2026-01-01");
+    assert_eq!(full.granularity, DateGranularity::Full);
+
+    let week_34: DateTimeValue = "2026-W34".parse().expect("2026-W34 should parse");
+    assert_eq!(week_34.to_string(), "2026-W34");
+    assert_eq!(
+        week_34.granularity,
+        DateGranularity::IsoWeek {
+            iso_year: 2026,
+            week: 34
+        }
+    );
+
+    let week_01: DateTimeValue = "2026-W01".parse().expect("2026-W01 should parse");
+    assert_eq!(week_01.to_string(), "2026-W01");
+    assert_eq!(
+        week_01.granularity,
+        DateGranularity::IsoWeek {
+            iso_year: 2026,
+            week: 1
+        }
+    );
+    assert_eq!(week_01.year, 2025);
+
+    assert_eq!(
+        "2026".parse::<DateTimeValue>().unwrap(),
+        "2026-01-01".parse::<DateTimeValue>().unwrap()
+    );
 }

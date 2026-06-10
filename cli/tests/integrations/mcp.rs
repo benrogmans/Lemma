@@ -165,8 +165,8 @@ fn test_mcp_evaluate_includes_reasoning() {
         "Should contain reasoning section, got: {text}"
     );
     assert!(
-        text.contains("quantity: 25"),
-        "Should show data value in reasoning, got: {text}"
+        text.contains("quantity is 25"),
+        "Should show unless cause datum and value in reasoning, got: {text}"
     );
 }
 
@@ -246,7 +246,8 @@ fn test_mcp_admin_enables_add_spec() {
                 json!({
                     "name": "add_spec",
                     "arguments": {
-                        "code": "spec test_spec\ndata x: 5\nrule y: x * 2"
+                        "code": "spec test_spec\ndata x: 5\nrule y: x * 2",
+                        "source_id": "test_spec.lemma"
                     }
                 }),
             ),
@@ -1067,7 +1068,10 @@ fn test_mcp_add_spec_invalid_code() {
                 "tools/call",
                 json!({
                     "name": "add_spec",
-                    "arguments": { "code": "this is not valid lemma code !!!" }
+                    "arguments": {
+                        "code": "this is not valid lemma code !!!",
+                        "source_id": "invalid.lemma"
+                    }
                 }),
             ),
         ],
@@ -1265,7 +1269,8 @@ fn test_mcp_add_spec_then_evaluate() {
                 json!({
                     "name": "add_spec",
                     "arguments": {
-                        "code": "spec dynamic\ndata n: 7\nrule doubled: n * 2\n"
+                        "code": "spec dynamic\ndata n: 7\nrule doubled: n * 2\n",
+                        "source_id": "dynamic.lemma"
                     }
                 }),
             ),
@@ -1468,4 +1473,70 @@ fn test_mcp_response_ids_match_request_ids() {
     assert_eq!(responses[0]["id"], 10, "First response should have id 10");
     assert_eq!(responses[1]["id"], 20, "Second response should have id 20");
     assert_eq!(responses[2]["id"], 30, "Third response should have id 30");
+}
+
+#[test]
+fn mcp_add_spec_without_source_id_must_require_source_id() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": "spec test_spec\ndata x: 5\nrule y: x * 2"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    assert!(
+        responses[1]["error"].is_object(),
+        "add_spec without source_id must return error, got: {}",
+        responses[1]
+    );
+}
+
+#[test]
+fn mcp_evaluate_veto_must_not_invent_vetoed_placeholder() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "veto_no_message.lemma",
+        "spec veto_no_message\ndata value: -5\nrule r: value > 0\n    unless value < 0 then veto\n",
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "veto_no_message"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let eval_result = &responses[1]["result"]["content"][0]["text"];
+    let text = eval_result.as_str().expect("evaluate should return text");
+    assert!(
+        !text.contains("Vetoed"),
+        "MCP must not invent 'Vetoed' placeholder when veto_reason missing, got: {text}"
+    );
 }

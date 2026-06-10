@@ -33,8 +33,7 @@ rule is_adult: user_age >= 18
 
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "25".to_string());
-
-    let response = engine.run(None, "test", Some(&now), data, false)?;
+    let response = engine.run(None, "test", Some(&now), data, false, None)?;
 
     // The data should be evaluated correctly with the imported type
 
@@ -85,8 +84,7 @@ rule is_senior: user_age >= 65
 
     let mut data = HashMap::new();
     data.insert("user_age".to_string(), "70".to_string());
-
-    let response = engine.run(None, "test", Some(&now), data, false)?;
+    let response = engine.run(None, "test", Some(&now), data, false, None)?;
 
     // Check the rule result
     let is_senior_result = response

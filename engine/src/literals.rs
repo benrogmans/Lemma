@@ -24,14 +24,14 @@ pub type BaseQuantityVector = BTreeMap<String, i32>;
 // -----------------------------------------------------------------------------
 
 pub fn rational_to_serialized_str(rational: &RationalInteger) -> Result<String, String> {
-    rational::rational_to_wire_str(rational).map_err(|failure| failure.to_string())
+    rational::rational_to_decimal_string(rational).map_err(|failure| failure.to_string())
 }
 
 pub fn rational_from_parsed_decimal(decimal: Decimal) -> Result<RationalInteger, String> {
     rational::decimal_to_rational(decimal).map_err(|failure| failure.to_string())
 }
 
-/// Serde for stored rationals: wire format is decimal string or JSON number (lifted at boundary).
+/// Serde for stored rationals: API format is decimal string or JSON number (lifted at boundary).
 pub mod stored_rational_serde {
     use super::{rational_from_parsed_decimal, rational_to_serialized_str, RationalInteger};
     use rust_decimal::Decimal;
@@ -41,8 +41,10 @@ pub mod stored_rational_serde {
         value: &RationalInteger,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
-        serializer
-            .serialize_str(&rational_to_serialized_str(value).map_err(serde::ser::Error::custom)?)
+        serializer.serialize_str(
+            &rational_to_serialized_str(value)
+                .expect("BUG: planned bound must serialize to decimal string"),
+        )
     }
 
     pub mod option {
@@ -103,20 +105,22 @@ impl Serialize for QuantityUnit {
         if let Some(minimum) = &self.minimum {
             state.serialize_field(
                 "minimum",
-                &rational_to_serialized_str(minimum).map_err(serde::ser::Error::custom)?,
+                &rational_to_serialized_str(minimum)
+                    .expect("BUG: planned quantity unit minimum must serialize to decimal string"),
             )?;
         }
         if let Some(maximum) = &self.maximum {
             state.serialize_field(
                 "maximum",
-                &rational_to_serialized_str(maximum).map_err(serde::ser::Error::custom)?,
+                &rational_to_serialized_str(maximum)
+                    .expect("BUG: planned quantity unit maximum must serialize to decimal string"),
             )?;
         }
         if let Some(default_magnitude) = &self.default_magnitude {
             state.serialize_field(
                 "default",
                 &rational_to_serialized_str(default_magnitude)
-                    .map_err(serde::ser::Error::custom)?,
+                    .expect("BUG: planned quantity unit default must serialize to decimal string"),
             )?;
         }
         state.end()
@@ -196,9 +200,9 @@ impl QuantityUnit {
     }
 
     pub fn is_positive_factor(&self) -> bool {
-        let numerator = *self.factor.numer();
-        let denominator = *self.factor.denom();
-        numerator != 0 && (numerator > 0) == (denominator > 0)
+        let numerator = self.factor.numer();
+        let denominator = self.factor.denom();
+        !numerator.is_zero() && numerator.is_positive() == denominator.is_positive()
     }
 
     /// Conversion factor as decimal (schema unit factors always commit).
@@ -209,36 +213,44 @@ impl QuantityUnit {
 
     #[must_use]
     pub fn minimum_decimal(&self) -> Option<Decimal> {
-        self.minimum
-            .as_ref()
-            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+        self.minimum.as_ref().map(|bound| {
+            rational::commit_rational_to_decimal(bound)
+                .expect("BUG: planned quantity unit minimum must commit to decimal")
+        })
     }
 
     #[must_use]
     pub fn maximum_decimal(&self) -> Option<Decimal> {
-        self.maximum
-            .as_ref()
-            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+        self.maximum.as_ref().map(|bound| {
+            rational::commit_rational_to_decimal(bound)
+                .expect("BUG: planned quantity unit maximum must commit to decimal")
+        })
     }
 
     #[must_use]
     pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
-        self.default_magnitude
-            .as_ref()
-            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+        self.default_magnitude.as_ref().map(|bound| {
+            rational::commit_rational_to_decimal(bound)
+                .expect("BUG: planned quantity unit default must commit to decimal")
+        })
     }
 
     /// Maximum bound lifted to canonical units via `maximum * factor`.
     #[must_use]
     pub fn maximum_canonical_decimal(&self) -> Option<Decimal> {
-        let maximum = self.maximum.as_ref()?;
-        let canonical = rational::checked_mul(maximum, &self.factor).ok()?;
-        rational::commit_rational_to_decimal(&canonical).ok()
+        self.maximum.as_ref().map(|maximum| {
+            let canonical = rational::checked_mul(maximum, &self.factor)
+                .expect("BUG: planned quantity unit maximum canonical multiply must succeed");
+            rational::commit_rational_to_decimal(&canonical)
+                .expect("BUG: planned quantity unit maximum canonical must commit to decimal")
+        })
     }
 }
 
 mod quantity_unit_factor_serialization {
     use super::RationalInteger;
+    use crate::computation::bigint::BigInt;
+    use crate::computation::rational::try_rational_new;
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -249,7 +261,10 @@ mod quantity_unit_factor_serialization {
 
     impl FactorSerializer {
         pub fn from_ratio(value: &RationalInteger) -> Self {
-            let reduced = value.reduced();
+            let reduced = value
+                .clone()
+                .try_reduce()
+                .expect("BUG: stored quantity unit factor must reduce");
             FactorSerializer {
                 numer: reduced.numer().to_string(),
                 denom: reduced.denom().to_string(),
@@ -257,18 +272,14 @@ mod quantity_unit_factor_serialization {
         }
 
         pub fn into_ratio(self) -> Result<RationalInteger, String> {
-            let numer: i128 = self
-                .numer
-                .parse()
-                .map_err(|error: std::num::ParseIntError| error.to_string())?;
-            let denom: i128 = self
-                .denom
-                .parse()
-                .map_err(|error: std::num::ParseIntError| error.to_string())?;
-            if denom == 0 {
+            let numer = BigInt::try_from_str_radix(&self.numer, 10)
+                .map_err(|_| format!("invalid numerator: {}", self.numer))?;
+            let denom = BigInt::try_from_str_radix(&self.denom, 10)
+                .map_err(|_| format!("invalid denominator: {}", self.denom))?;
+            if denom.is_zero() {
                 return Err("QuantityUnit conversion factor denominator cannot be zero".to_string());
             }
-            Ok(RationalInteger::new(numer, denom).reduced())
+            try_rational_new(numer, denom).map_err(|e| e.to_string())
         }
     }
 
@@ -377,20 +388,22 @@ impl Serialize for RatioUnit {
         if let Some(minimum) = &self.minimum {
             state.serialize_field(
                 "minimum",
-                &rational_to_serialized_str(minimum).map_err(serde::ser::Error::custom)?,
+                &rational_to_serialized_str(minimum)
+                    .expect("BUG: planned ratio unit minimum must serialize to decimal string"),
             )?;
         }
         if let Some(maximum) = &self.maximum {
             state.serialize_field(
                 "maximum",
-                &rational_to_serialized_str(maximum).map_err(serde::ser::Error::custom)?,
+                &rational_to_serialized_str(maximum)
+                    .expect("BUG: planned ratio unit maximum must serialize to decimal string"),
             )?;
         }
         if let Some(default_magnitude) = &self.default_magnitude {
             state.serialize_field(
                 "default",
                 &rational_to_serialized_str(default_magnitude)
-                    .map_err(serde::ser::Error::custom)?,
+                    .expect("BUG: planned ratio unit default must serialize to decimal string"),
             )?;
         }
         state.end()
@@ -449,31 +462,37 @@ impl RatioUnit {
 
     #[must_use]
     pub fn minimum_decimal(&self) -> Option<Decimal> {
-        self.minimum
-            .as_ref()
-            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+        self.minimum.as_ref().map(|bound| {
+            rational::commit_rational_to_decimal(bound)
+                .expect("BUG: planned ratio unit minimum must commit to decimal")
+        })
     }
 
     #[must_use]
     pub fn maximum_decimal(&self) -> Option<Decimal> {
-        self.maximum
-            .as_ref()
-            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+        self.maximum.as_ref().map(|bound| {
+            rational::commit_rational_to_decimal(bound)
+                .expect("BUG: planned ratio unit maximum must commit to decimal")
+        })
     }
 
     #[must_use]
     pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
-        self.default_magnitude
-            .as_ref()
-            .and_then(|bound| rational::commit_rational_to_decimal(bound).ok())
+        self.default_magnitude.as_ref().map(|bound| {
+            rational::commit_rational_to_decimal(bound)
+                .expect("BUG: planned ratio unit default must commit to decimal")
+        })
     }
 
     /// Maximum bound lifted to canonical ratio space via `maximum * value`.
     #[must_use]
     pub fn maximum_canonical_decimal(&self) -> Option<Decimal> {
-        let maximum = self.maximum.as_ref()?;
-        let canonical = rational::checked_mul(maximum, &self.value).ok()?;
-        rational::commit_rational_to_decimal(&canonical).ok()
+        self.maximum.as_ref().map(|maximum| {
+            let canonical = rational::checked_mul(maximum, &self.value)
+                .expect("BUG: planned ratio unit maximum canonical multiply must succeed");
+            rational::commit_rational_to_decimal(&canonical)
+                .expect("BUG: planned ratio unit maximum canonical must commit to decimal")
+        })
     }
 }
 
@@ -671,7 +690,26 @@ impl fmt::Display for TimeValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum DateGranularity {
+    Year,
+    YearMonth,
+    /// ISO 8601 week date. Stores original (iso_year, week) because the ISO
+    /// week year can differ from the calendar year — e.g. "2026-W01" has
+    /// iso_year=2026 but the stored calendar date year=2025.
+    IsoWeek {
+        iso_year: i32,
+        week: u32,
+    },
+    #[default]
+    Full,
+    DateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -682,6 +720,56 @@ pub struct DateTimeValue {
     #[serde(default)]
     pub microsecond: u32,
     pub timezone: Option<TimezoneValue>,
+    #[serde(default)]
+    pub granularity: DateGranularity,
+}
+
+impl PartialEq for DateTimeValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.year == other.year
+            && self.month == other.month
+            && self.day == other.day
+            && self.hour == other.hour
+            && self.minute == other.minute
+            && self.second == other.second
+            && self.microsecond == other.microsecond
+            && self.timezone == other.timezone
+    }
+}
+
+impl Eq for DateTimeValue {}
+
+impl PartialOrd for DateTimeValue {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DateTimeValue {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.year
+            .cmp(&other.year)
+            .then_with(|| self.month.cmp(&other.month))
+            .then_with(|| self.day.cmp(&other.day))
+            .then_with(|| self.hour.cmp(&other.hour))
+            .then_with(|| self.minute.cmp(&other.minute))
+            .then_with(|| self.second.cmp(&other.second))
+            .then_with(|| self.microsecond.cmp(&other.microsecond))
+            .then_with(|| self.timezone.cmp(&other.timezone))
+    }
+}
+
+impl std::hash::Hash for DateTimeValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.year.hash(state);
+        self.month.hash(state);
+        self.day.hash(state);
+        self.hour.hash(state);
+        self.minute.hash(state);
+        self.second.hash(state);
+        self.microsecond.hash(state);
+        self.timezone.hash(state);
+    }
 }
 
 impl DateTimeValue {
@@ -700,6 +788,7 @@ impl DateTimeValue {
                 offset_hours: (offset_secs / 3600) as i8,
                 offset_minutes: ((offset_secs.abs() % 3600) / 60) as u8,
             }),
+            granularity: DateGranularity::DateTime,
         }
     }
 
@@ -708,12 +797,12 @@ impl DateTimeValue {
         if parts.len() != 2 {
             return None;
         }
-        let year: i32 = parts[0].parse().ok()?;
+        let iso_year: i32 = parts[0].parse().ok()?;
         let week: u32 = parts[1].parse().ok()?;
         if week == 0 || week > 53 {
             return None;
         }
-        let date = chrono::NaiveDate::from_isoywd_opt(year, week, chrono::Weekday::Mon)?;
+        let date = chrono::NaiveDate::from_isoywd_opt(iso_year, week, chrono::Weekday::Mon)?;
         Some(Self {
             year: date.year(),
             month: date.month(),
@@ -723,32 +812,36 @@ impl DateTimeValue {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: DateGranularity::IsoWeek { iso_year, week },
         })
     }
 }
 
 impl fmt::Display for DateTimeValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let has_time = self.hour != 0
-            || self.minute != 0
-            || self.second != 0
-            || self.microsecond != 0
-            || self.timezone.is_some();
-        if !has_time {
-            write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
-        } else {
-            write!(
-                f,
-                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-                self.year, self.month, self.day, self.hour, self.minute, self.second
-            )?;
-            if self.microsecond != 0 {
-                write!(f, ".{:06}", self.microsecond)?;
+        match self.granularity {
+            DateGranularity::Year => write!(f, "{:04}", self.year),
+            DateGranularity::YearMonth => write!(f, "{:04}-{:02}", self.year, self.month),
+            DateGranularity::IsoWeek { iso_year, week } => {
+                write!(f, "{:04}-W{:02}", iso_year, week)
             }
-            if let Some(tz) = &self.timezone {
-                write!(f, "{}", tz)?;
+            DateGranularity::Full => {
+                write!(f, "{:04}-{:02}-{:02}", self.year, self.month, self.day)
             }
-            Ok(())
+            DateGranularity::DateTime => {
+                write!(
+                    f,
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                    self.year, self.month, self.day, self.hour, self.minute, self.second
+                )?;
+                if self.microsecond != 0 {
+                    write!(f, ".{:06}", self.microsecond)?;
+                }
+                if let Some(tz) = &self.timezone {
+                    write!(f, "{}", tz)?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -834,6 +927,7 @@ impl std::str::FromStr for DateTimeValue {
                     offset_hours: (offset / 3600) as i8,
                     offset_minutes: ((offset.abs() % 3600) / 60) as u8,
                 }),
+                granularity: DateGranularity::DateTime,
             });
         }
         if let Ok(dt) = s.parse::<chrono::NaiveDateTime>() {
@@ -847,6 +941,7 @@ impl std::str::FromStr for DateTimeValue {
                 second: dt.second(),
                 microsecond,
                 timezone: None,
+                granularity: DateGranularity::DateTime,
             });
         }
         if let Ok(d) = s.parse::<chrono::NaiveDate>() {
@@ -859,6 +954,7 @@ impl std::str::FromStr for DateTimeValue {
                 second: 0,
                 microsecond: 0,
                 timezone: None,
+                granularity: DateGranularity::Full,
             });
         }
         if let Some(week_val) = Self::parse_iso_week(s) {
@@ -874,6 +970,7 @@ impl std::str::FromStr for DateTimeValue {
                 second: 0,
                 microsecond: 0,
                 timezone: None,
+                granularity: DateGranularity::YearMonth,
             });
         }
         if let Ok(year) = s.parse::<i32>() {
@@ -887,6 +984,7 @@ impl std::str::FromStr for DateTimeValue {
                     second: 0,
                     microsecond: 0,
                     timezone: None,
+                    granularity: DateGranularity::Year,
                 });
             }
         }

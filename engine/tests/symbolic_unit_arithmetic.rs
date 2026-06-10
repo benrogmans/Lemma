@@ -17,13 +17,13 @@ fn eval_value(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("spec must load");
     let response = engine
-        .run(None, spec_name, None, HashMap::new(), true)
+        .run(None, spec_name, None, HashMap::new(), true, None)
         .expect("spec must evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -40,7 +40,7 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
     let mut engine = Engine::new();
     engine.load(code, source()).expect("spec must load");
     let response = engine
-        .run(None, spec_name, None, HashMap::new(), true)
+        .run(None, spec_name, None, HashMap::new(), true, None)
         .expect("spec must evaluate");
     let rule = response
         .results
@@ -48,7 +48,7 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name));
     if let Some(quantity) = &rule.quantity {
         let value = rule
-            .trace
+            .explanation
             .as_ref()
             .expect("explanation")
             .result
@@ -76,14 +76,14 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
             .unwrap_or_else(|error| panic!("invalid decimal in calendar result: {error}"));
     }
     let value = rule
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("rule must return a value");
     match &value.value {
-        ValueKind::Number(n) => lemma::ValueKind::Number(*n)
+        ValueKind::Number(n) => lemma::ValueKind::Number(n.clone())
             .as_decimal_magnitude()
             .expect("numeric value kind"),
         other => panic!("expected numeric value, got {:?}", other),
@@ -684,7 +684,7 @@ rule deadline: veto "Everything is fine: no deadline"
         .load(code, source())
         .expect("burn_baby_burn must load and plan");
     let response = engine
-        .run(None, "burn_baby_burn", None, data, true)
+        .run(None, "burn_baby_burn", None, data, true, None)
         .expect("burn_baby_burn must evaluate");
     let deadline = response.results.get("deadline").expect("deadline rule");
     assert!(
@@ -693,14 +693,14 @@ rule deadline: veto "Everything is fine: no deadline"
         deadline.veto_reason
     );
     let value = deadline
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("deadline value");
     let decimal = match &value.value {
-        ValueKind::Quantity(n, ..) => lemma::ValueKind::Number(*n)
+        ValueKind::Quantity(n, ..) => lemma::ValueKind::Number(n.clone())
             .as_decimal_magnitude()
             .expect("deadline magnitude must commit to decimal"),
         other => panic!("expected quantity deadline, got {:?}", other),

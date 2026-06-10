@@ -182,7 +182,7 @@ export async function test() {
       rule double: x * 2`,
         'test.lemma'
       );
-      const r = runEx(engine, 'test', [], {}, null);
+      const r = runEx(engine, 'test', null, {}, null);
       assertResponseShape(r, 'test');
       assert(Object.keys(r.results).includes('double'), `keys: ${Object.keys(r.results)}`);
       assert(!r.results.double.vetoed, 'double not vetoed');
@@ -265,7 +265,7 @@ rule rate_out: rate`,
       const r = runEx(
         engine,
         'type_test',
-        [],
+        null,
         {
           number_data: 50,
           bool_data: true,
@@ -316,7 +316,7 @@ data bridge_height: quantity -> unit meter 1.0
 rule span: bridge_height`,
         'workspace.lemma'
       );
-      const response = runEx(engine, 'bridge', [], { bridge_height: '4 mete' }, null);
+      const response = runEx(engine, 'bridge', null, { bridge_height: '4 mete' }, null);
       assert(response.results.span.vetoed === true, 'span must veto on unknown unit');
       assert(
         typeof response.results.span.veto_reason === 'string' &&
@@ -328,7 +328,7 @@ rule span: bridge_height`,
     await run('run missing spec', () => {
       let threw = false;
       try {
-        runEx(engine, '__nope__', [], {}, null);
+        runEx(engine, '__nope__', null, {}, null);
       } catch {
         threw = true;
       }
@@ -338,7 +338,7 @@ rule span: bridge_height`,
     await run('data_values not object', () => {
       let threw = false;
       try {
-        engine.run(null, 'test', [], 'not-an-object', null);
+        engine.run(null, 'test', null, 'not-an-object', null);
       } catch {
         threw = true;
       }
@@ -352,8 +352,24 @@ rule span: bridge_height`,
       rule bad_sqrt: sqrt(-1)`,
         'veto.lemma'
       );
-      const r = runEx(engine, 'veto_test', [], {}, null);
+      const r = runEx(engine, 'veto_test', null, {}, null);
       assert(r.results.bad_sqrt.vetoed === true);
+    });
+
+    await run('invalid effective must error not default to now', () => {
+      engine.load(
+        `spec temporal
+data x: 1
+rule r: x`,
+        'temporal.lemma'
+      );
+      let threw = false;
+      try {
+        runEx(engine, 'temporal', null, {}, 'not-a-datetime');
+      } catch {
+        threw = true;
+      }
+      assert(threw, 'invalid effective string must throw before planning, not fall back to now');
     });
 
     await run('missing data veto', () => {
@@ -364,7 +380,7 @@ rule span: bridge_height`,
       rule sum: x + y`,
         'miss.lemma'
       );
-      const r = runEx(engine, 'missing_test', [], { x: 10 }, null);
+      const r = runEx(engine, 'missing_test', null, { x: 10 }, null);
       assert(r.results.sum.vetoed === true);
       assert(typeof r.results.sum.veto_reason === 'string' && r.results.sum.veto_reason.includes('y'));
     });
@@ -379,7 +395,7 @@ rule span: bridge_height`,
       rule price_eur: 100 usd as eur`,
         'sc.lemma'
       );
-      const r = runEx(engine, 'quantity_conv', [], {}, null);
+      const r = runEx(engine, 'quantity_conv', null, {}, null);
       const eur = ruleQuantityUnit(r.results.price_eur, 'eur');
       assert(eur === 84, `expected 84 eur, got ${eur}`);
     });

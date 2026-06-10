@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import { ExtensionContext, workspace } from "vscode";
+import { ExtensionContext, window, workspace } from "vscode";
 import {
   LanguageClient,
   LanguageClientOptions,
@@ -10,33 +10,44 @@ import {
 
 let client: LanguageClient | undefined;
 
-function resolveServerPath(raw: string): string {
+interface ServerCommand {
+  command: string;
+  args: string[];
+}
+
+function resolveServerCommand(raw: string): ServerCommand {
   const folder = workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
   const expanded = raw.replace(/\$\{workspaceFolder\}/g, folder);
-  if (expanded !== "lsp") {
-    return expanded;
+  if (expanded !== "lemma") {
+    return { command: expanded, args: ["lsp"] };
   }
   if (folder) {
-    const inRepo = path.join(folder, "target", "release", "lsp");
-    if (fs.existsSync(inRepo)) {
-      return inRepo;
+    const release = path.join(folder, "target", "release", "lemma");
+    if (fs.existsSync(release)) {
+      return { command: release, args: ["lsp"] };
+    }
+    const debug = path.join(folder, "target", "debug", "lemma");
+    if (fs.existsSync(debug)) {
+      return { command: debug, args: ["lsp"] };
     }
   }
-  return "lsp";
+  return { command: "lemma", args: ["lsp"] };
 }
 
 export function activate(context: ExtensionContext): void {
   const config = workspace.getConfiguration("lemma");
-  const rawPath: string = config.get<string>("lspServerPath", "lsp");
-  const serverPath = resolveServerPath(rawPath);
+  const rawPath: string = config.get<string>("lspServerPath", "lemma");
+  const server = resolveServerCommand(rawPath);
 
   const serverOptions: ServerOptions = {
     run: {
-      command: serverPath,
+      command: server.command,
+      args: server.args,
       transport: TransportKind.stdio,
     },
     debug: {
-      command: serverPath,
+      command: server.command,
+      args: server.args,
       transport: TransportKind.stdio,
     },
   };
@@ -57,8 +68,14 @@ export function activate(context: ExtensionContext): void {
     serverOptions,
     clientOptions
   );
+  context.subscriptions.push(client);
 
-  client.start();
+  void client.start().catch((err: unknown) => {
+    void window.showErrorMessage(
+      "Lemma LSP requires the `lemma` binary. Install via: npm install -g lemma or cargo install lemma"
+    );
+    console.error(err);
+  });
 }
 
 export function deactivate(): Thenable<void> | undefined {

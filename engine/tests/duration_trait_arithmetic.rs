@@ -19,13 +19,13 @@ fn eval_literal(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> lemm
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -49,7 +49,7 @@ fn eval_rule_quantity_unit(
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
         .expect("Should evaluate");
     response
         .results

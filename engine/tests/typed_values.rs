@@ -16,13 +16,13 @@ rule net_multiplier: 1 - discount
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response
         .results
         .get("net_multiplier")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -34,7 +34,9 @@ rule net_multiplier: 1 - discount
             value: ValueKind::Number(n),
             ..
         } => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::new(75, 2)
         ),
         _ => panic!("Expected Number, got {:?}", result),
@@ -55,7 +57,7 @@ rule double_meeting: meeting_length * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "scheduling", Some(&now), HashMap::new(), true)
+        .run(None, "scheduling", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response.results.get("double_meeting").unwrap();
     let quantity = rule.quantity.as_ref().expect("quantity map");
@@ -80,13 +82,13 @@ rule end: start + 7 days
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "dates", Some(&now), HashMap::new(), true)
+        .run(None, "dates", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response
         .results
         .get("end")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -120,13 +122,13 @@ rule can_access: is_active and not is_premium
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "logic", Some(&now), HashMap::new(), true)
+        .run(None, "logic", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let result = response
         .results
         .get("can_access")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result

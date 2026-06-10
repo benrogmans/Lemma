@@ -1,4 +1,4 @@
-use lemma::{DateTimeValue, Engine};
+use lemma::{DateGranularity, DateTimeValue, Engine};
 
 #[test]
 fn test_meta_fields_parsing_and_planning() {
@@ -31,6 +31,8 @@ data x: 1
         second: 0,
         microsecond: 0,
         timezone: None,
+
+        granularity: DateGranularity::Full,
     };
     let plan = engine
         .get_plan(None, "meta_test", Some(&effective))

@@ -1,26 +1,12 @@
 use lemma::{
-    type_detail_lines, BindingDataValue, ComputationKind, ConversionTraceStep, DataEntry,
-    LiteralValue, OperationResult, Response, RulePath, RuleResult, SpecSchema, TraceBranch,
-    TraceNode, TraceNonMatchedBranch, TraceValueSource, ValueKind,
+    format_explanation, type_detail_lines, BindingDataValue, DataEntry, LiteralValue, Response,
+    RuleResult, SpecSchema, ValueKind,
 };
-use std::collections::HashSet;
 use super_table::{presets, Cell, CellAlignment, Table};
 
 pub struct RepositorySpecGroup<'a> {
     pub repository: Option<&'a str>,
     pub specs: &'a [String],
-}
-
-#[derive(Clone, Copy)]
-enum Connector {
-    Branch,
-    Last,
-}
-
-struct RenderContext<'a> {
-    rows: &'a mut Vec<String>,
-    expanded: &'a mut HashSet<String>,
-    indent: &'a str,
 }
 
 pub struct Formatter;
@@ -80,6 +66,37 @@ impl Formatter {
             }
         }
         output
+    }
+
+    pub fn response_json_value(
+        &self,
+        response: &Response,
+        include_explanations: bool,
+    ) -> serde_json::Value {
+        let mut value =
+            serde_json::to_value(response).expect("BUG: failed to serialize response JSON");
+        if !include_explanations {
+            if let Some(results) = value.get_mut("results").and_then(|r| r.as_object_mut()) {
+                for rule in results.values_mut() {
+                    if let Some(obj) = rule.as_object_mut() {
+                        obj.remove("explanation");
+                    }
+                }
+            }
+            if let Some(obj) = value.as_object_mut() {
+                obj.remove("data");
+            }
+        }
+        value
+    }
+
+    pub fn serialize_response_json(
+        &self,
+        response: &Response,
+        include_explanations: bool,
+    ) -> String {
+        serde_json::to_string_pretty(&self.response_json_value(response, include_explanations))
+            .expect("BUG: failed to serialize response JSON")
     }
 
     pub fn format_spec_schema(&self, schema: &SpecSchema) -> String {
@@ -271,28 +288,22 @@ impl Formatter {
     }
 
     fn format_rule_result(&self, result: &RuleResult) -> String {
-        let mut rows: Vec<String> = Vec::new();
-        let mut expanded: HashSet<String> = HashSet::new();
-
-        if let Some(trace) = &result.trace {
-            self.render_node(trace.tree.as_ref(), "", &mut rows, &mut expanded);
-        }
-
         let mut table = Table::new();
         table.load_preset(presets::UTF8_FULL);
         table.set_style(super_table::TableComponent::MiddleIntersections, '┼');
         table.set_style(super_table::TableComponent::HorizontalLines, '─');
 
-        let header = format!(
-            "{}: {}",
-            result.rule.name,
-            self.highlight_value(&self.format_rule_display(result))
-        );
-        table.add_row(vec![Cell::new(&header).set_alignment(CellAlignment::Left)]);
-
-        if !rows.is_empty() {
-            let content = rows.join("\n");
-            table.add_row(vec![Cell::new(content).set_alignment(CellAlignment::Left)]);
+        if let Some(explanation) = &result.explanation {
+            table.add_row(vec![
+                Cell::new(format_explanation(explanation)).set_alignment(CellAlignment::Left)
+            ]);
+        } else {
+            let header = format!(
+                "{}: {}",
+                result.rule.name,
+                self.highlight_value(&self.format_rule_display(result))
+            );
+            table.add_row(vec![Cell::new(&header).set_alignment(CellAlignment::Left)]);
         }
 
         let source = &result.rule.source_location;
@@ -302,391 +313,6 @@ impl Formatter {
         ]);
 
         table.to_string()
-    }
-
-    fn render_node(
-        &self,
-        node: &TraceNode,
-        indent: &str,
-        rows: &mut Vec<String>,
-        expanded: &mut HashSet<String>,
-    ) {
-        let mut ctx = RenderContext {
-            rows,
-            expanded,
-            indent,
-        };
-        match node {
-            TraceNode::Value { value, source, .. } => {
-                self.render_value(value, source, &mut ctx);
-            }
-            TraceNode::RuleReference {
-                rule_path,
-                result,
-                expansion,
-                ..
-            } => {
-                self.render_rule_reference(rule_path, result, expansion, Connector::Last, &mut ctx);
-            }
-            TraceNode::Computation {
-                kind,
-                conversion_steps,
-                expression,
-                operands,
-                ..
-            } => match kind {
-                ComputationKind::UnitConversion { .. } => {
-                    self.render_unit_conversion_computation(conversion_steps, operands, &mut ctx);
-                }
-                _ => {
-                    self.render_computation(expression, operands, &mut ctx);
-                }
-            },
-            TraceNode::Branches {
-                matched,
-                non_matched,
-                ..
-            } => {
-                self.render_branches(matched, non_matched, &mut ctx);
-            }
-            TraceNode::Veto { message, .. } => {
-                self.render_veto(message, &mut ctx);
-            }
-        }
-    }
-
-    fn render_node_with_connector(
-        &self,
-        node: &TraceNode,
-        indent: &str,
-        connector: Connector,
-        rows: &mut Vec<String>,
-        expanded: &mut HashSet<String>,
-    ) {
-        let mut ctx = RenderContext {
-            rows,
-            expanded,
-            indent,
-        };
-        match node {
-            TraceNode::Value { value, source, .. } => {
-                let display = match source {
-                    TraceValueSource::Data { data_ref } => {
-                        format!("{} is {}", data_ref, self.format_literal_inline(value))
-                    }
-                    TraceValueSource::Literal | TraceValueSource::Computed => {
-                        self.format_literal_inline(value)
-                    }
-                };
-                ctx.rows.push(format!(
-                    "{}{} {}",
-                    ctx.indent,
-                    self.connector_str(connector),
-                    display
-                ));
-            }
-            TraceNode::RuleReference {
-                rule_path,
-                result,
-                expansion,
-                ..
-            } => {
-                self.render_rule_reference(
-                    rule_path,
-                    result,
-                    expansion.as_ref(),
-                    connector,
-                    &mut ctx,
-                );
-            }
-            _ => {
-                self.render_node(node, indent, rows, expanded);
-            }
-        }
-    }
-
-    fn render_value(
-        &self,
-        value: &LiteralValue,
-        source: &TraceValueSource,
-        ctx: &mut RenderContext,
-    ) {
-        let display = match source {
-            TraceValueSource::Data { data_ref } => {
-                format!("{} is {}", data_ref, self.format_literal_inline(value))
-            }
-            TraceValueSource::Literal | TraceValueSource::Computed => {
-                self.format_literal_inline(value)
-            }
-        };
-        ctx.rows.push(format!("{}└─ {}", ctx.indent, display));
-    }
-
-    fn render_rule_reference(
-        &self,
-        rule_path: &RulePath,
-        result: &OperationResult,
-        expansion: &TraceNode,
-        connector: Connector,
-        ctx: &mut RenderContext,
-    ) {
-        let rule_key = rule_path.to_string();
-        let result_str = self.highlight_value(&self.format_result_inline(result));
-        ctx.rows.push(format!(
-            "{}{} {}: {}",
-            ctx.indent,
-            self.connector_str(connector),
-            rule_path,
-            result_str
-        ));
-
-        if ctx.expanded.insert(rule_key) {
-            let child_indent = self.child_indent(ctx.indent, connector);
-            self.render_node(expansion, &child_indent, ctx.rows, ctx.expanded);
-        }
-    }
-
-    fn render_unit_conversion_computation(
-        &self,
-        conversion_steps: &[ConversionTraceStep],
-        operands: &[TraceNode],
-        ctx: &mut RenderContext,
-    ) {
-        assert!(
-            !conversion_steps.is_empty(),
-            "BUG: UnitConversion computation must have conversion_steps"
-        );
-        let steps_count = conversion_steps.len();
-        for (index, step) in conversion_steps.iter().enumerate() {
-            if index == 0 {
-                ctx.rows.push(format!("{}{}", ctx.indent, step.text));
-            } else {
-                let step_indent = format!("{}{}", "   ".repeat(index), ctx.indent);
-                let connector = if index + 1 == steps_count && operands.is_empty() {
-                    Connector::Last
-                } else {
-                    Connector::Branch
-                };
-                ctx.rows.push(format!(
-                    "{}{} {}",
-                    step_indent,
-                    self.connector_str(connector),
-                    step.text
-                ));
-            }
-        }
-
-        if operands.is_empty() {
-            return;
-        }
-
-        let operand_indent = format!("{}   ", "   ".repeat(steps_count) + ctx.indent);
-        let len = operands.len();
-        for (index, child) in operands.iter().enumerate() {
-            let connector = if index == len - 1 {
-                Connector::Last
-            } else {
-                Connector::Branch
-            };
-            self.render_node_with_connector(
-                child,
-                &operand_indent,
-                connector,
-                ctx.rows,
-                ctx.expanded,
-            );
-        }
-    }
-
-    fn render_computation(
-        &self,
-        expression: &str,
-        operands: &[TraceNode],
-        ctx: &mut RenderContext,
-    ) {
-        ctx.rows.push(format!("{}└─ {}", ctx.indent, expression));
-
-        let child_indent = format!("{}   ", ctx.indent);
-        let expandable = Self::collect_expandable_operands(operands);
-
-        let len = expandable.len();
-        for (i, child) in expandable.iter().enumerate() {
-            let connector = if i == len - 1 {
-                Connector::Last
-            } else {
-                Connector::Branch
-            };
-            self.render_node_with_connector(
-                child,
-                &child_indent,
-                connector,
-                ctx.rows,
-                ctx.expanded,
-            );
-        }
-    }
-
-    /// Recursively flatten nested Computation operands so that
-    /// `(a + b) + c` expands as `[a, b, c]` instead of nesting.
-    fn collect_expandable_operands(operands: &[TraceNode]) -> Vec<&TraceNode> {
-        let mut result = Vec::new();
-        for op in operands {
-            match op {
-                TraceNode::Value { source, .. } => {
-                    if matches!(source, TraceValueSource::Data { .. }) {
-                        result.push(op);
-                    }
-                }
-                TraceNode::Computation {
-                    operands: nested, ..
-                } => {
-                    result.extend(Self::collect_expandable_operands(nested));
-                }
-                other => result.push(other),
-            }
-        }
-        result
-    }
-
-    fn render_branches(
-        &self,
-        matched: &TraceBranch,
-        non_matched: &[TraceNonMatchedBranch],
-        ctx: &mut RenderContext,
-    ) {
-        enum TraceBranchItem<'a> {
-            Matched(&'a TraceBranch),
-            NonMatched(&'a TraceNonMatchedBranch),
-        }
-
-        let mut all_branches: Vec<((bool, usize), TraceBranchItem)> = Vec::new();
-
-        let matched_key = match matched.clause_index {
-            None => (false, 0),
-            Some(idx) => (true, idx),
-        };
-        all_branches.push((matched_key, TraceBranchItem::Matched(matched)));
-
-        for branch in non_matched {
-            let key = match branch.clause_index {
-                None => (false, 0),
-                Some(idx) => (true, idx),
-            };
-            all_branches.push((key, TraceBranchItem::NonMatched(branch)));
-        }
-
-        all_branches.sort_by_key(|((is_some, idx), _)| (*is_some, *idx));
-
-        // Collect non-matched branches so we can deduplicate operand expansion across them.
-        let non_matched_branches: Vec<&TraceNonMatchedBranch> = all_branches
-            .iter()
-            .filter_map(|(_, item)| {
-                if let TraceBranchItem::NonMatched(b) = item {
-                    Some(*b)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        for (_, branch_item) in &all_branches {
-            match branch_item {
-                TraceBranchItem::Matched(branch) => {
-                    let has_condition = branch.condition.is_some();
-
-                    if let Some(condition) = &branch.condition {
-                        ctx.rows.push(format!(
-                            "{}→ {}",
-                            ctx.indent,
-                            self.extract_condition_text(condition)
-                        ));
-                    }
-
-                    if !matches!(branch.result.as_ref(), TraceNode::Value { .. }) {
-                        let result_indent = if has_condition {
-                            format!("{}   ", ctx.indent)
-                        } else {
-                            ctx.indent.to_string()
-                        };
-                        self.render_node(&branch.result, &result_indent, ctx.rows, ctx.expanded);
-                    }
-                }
-                TraceBranchItem::NonMatched(branch) => {
-                    ctx.rows.push(format!(
-                        "{}→ {}",
-                        ctx.indent,
-                        self.extract_condition_text(&branch.condition)
-                    ));
-                }
-            }
-        }
-
-        // Render operands from all non-matched conditions once, deduplicated by rule path.
-        if !non_matched_branches.is_empty() {
-            let condition_indent = format!("{}  ", ctx.indent);
-            let operands = Self::collect_operands_dedup(
-                non_matched_branches.iter().map(|b| b.condition.as_ref()),
-            );
-            let len = operands.len();
-            for (i, node) in operands.iter().enumerate() {
-                let connector = if i == len - 1 {
-                    Connector::Last
-                } else {
-                    Connector::Branch
-                };
-                self.render_node_with_connector(
-                    node,
-                    &condition_indent,
-                    connector,
-                    ctx.rows,
-                    ctx.expanded,
-                );
-            }
-        }
-    }
-
-    /// Collect RuleReference operands from condition nodes, deduplicated by rule path (first occurrence order).
-    fn collect_operands_dedup<'a>(
-        condition_nodes: impl Iterator<Item = &'a TraceNode>,
-    ) -> Vec<&'a TraceNode> {
-        let mut seen = HashSet::new();
-        let mut out = Vec::new();
-        for node in condition_nodes {
-            let operands: &[TraceNode] = match node {
-                TraceNode::Computation { operands, .. } => operands.as_ref(),
-                _ => continue,
-            };
-            for op in operands {
-                if let TraceNode::RuleReference { rule_path, .. } = op {
-                    if seen.insert(rule_path.to_string()) {
-                        out.push(op);
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    fn render_veto(&self, message: &Option<String>, ctx: &mut RenderContext) {
-        let msg = match message {
-            Some(m) => format!("veto: {}", m),
-            None => "veto".to_string(),
-        };
-        ctx.rows.push(format!("{}└─ {}", ctx.indent, msg));
-    }
-
-    fn connector_str(&self, connector: Connector) -> &'static str {
-        match connector {
-            Connector::Branch => "├─",
-            Connector::Last => "└─",
-        }
-    }
-
-    fn child_indent(&self, parent_indent: &str, connector: Connector) -> String {
-        match connector {
-            Connector::Branch => format!("{}│  ", parent_indent),
-            Connector::Last => format!("{}   ", parent_indent),
-        }
     }
 
     fn format_rule_display(&self, result: &RuleResult) -> String {
@@ -700,32 +326,6 @@ impl Formatter {
             .display
             .clone()
             .expect("BUG: non-veto rule result must have display after materialization")
-    }
-
-    fn format_result_inline(&self, result: &OperationResult) -> String {
-        match result {
-            OperationResult::Value(v) => self.format_literal_inline(v),
-            OperationResult::Veto(reason) => format!("Veto: {reason}"),
-        }
-    }
-
-    fn format_literal_inline(&self, lit: &LiteralValue) -> String {
-        lit.display_value()
-    }
-
-    fn extract_condition_text(&self, node: &TraceNode) -> String {
-        match node {
-            TraceNode::Computation { expression, .. } => expression.clone(),
-            TraceNode::Value { value, source, .. } => match source {
-                TraceValueSource::Data { data_ref } => data_ref.to_string(),
-                TraceValueSource::Literal | TraceValueSource::Computed => value.to_string(),
-            },
-            TraceNode::RuleReference { rule_path, .. } => rule_path.to_string(),
-            TraceNode::Branches { .. } => "<branches>".to_string(),
-            TraceNode::Veto { message, .. } => {
-                message.clone().unwrap_or_else(|| "veto".to_string())
-            }
-        }
     }
 
     fn gray(&self, text: &str) -> String {

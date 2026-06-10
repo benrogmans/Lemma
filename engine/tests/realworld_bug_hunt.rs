@@ -15,7 +15,9 @@ fn run_spec(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Respon
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-    engine.run(None, spec, Some(&now), data_map, true).unwrap()
+    engine
+        .run(None, spec, Some(&now), data_map, false, None)
+        .unwrap()
 }
 
 fn rule_display(response: &lemma::Response, rule_name: &str) -> String {

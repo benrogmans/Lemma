@@ -2,6 +2,35 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.17] - 2026-06-10
+
+0.8.17 replaces tree-walking evaluation with a compiled virtual machine, makes exact math hold at any magnitude and gives every result a machine-readable explanation. Planning now compiles each rule into a validated instruction stream that a register-based VM executes, so evaluation costs only what the requested rules cost: the engine skips unrequested rules and builds explanations only on demand. Execution plans are no longer cloned per request. Larger calculations whose intermediate values exceed machine-integer range stay exact instead of switching to approximation. Current measured performance is published in [`documentation/benchmarks/`](documentation/benchmarks/).
+
+### Added
+
+- **Explanations fit for audit trails**: every rule result carries a flat explanation object holding the rule's body, its operand values, the branch that applied, and the condition that vetoed. The format is specified in a JSON schema ([`documentation/schemas/explanation.v1.json`](documentation/schemas/explanation.v1.json)); the previous trace format was undocumented and is replaced.
+- **One-binary editor setup**: installing the `lemma` CLI is now the only requirement for editor support — the new `lemma lsp` subcommand starts the language server over stdio. This removes the separate language-server binary and the version skew it allowed.
+- **A shared server survives bad specs**: a service evaluating specs it did not author can no longer be hung or crashed by them. Self-doubling rule chains are rejected at planning with a resource-limit error (`ResourceLimits::max_normalized_expression_nodes`, default 30,000) instead of exhausting memory; tampered or stale serialized execution plans are rejected at load by full instruction validation instead of crashing the virtual machine; a step budget halts instruction streams that loop.
+- **Reproducible performance reports**: `cargo benchmarks <engine|cli|all>` regenerates the engine and CLI benchmark reports in [`documentation/benchmarks/`](documentation/benchmarks/), so the published numbers can be independently re-measured from the repository.
+
+### Changed
+
+- **Compiled virtual machine**: rules are compiled at planning into register-based instruction streams that the engine executes directly, replacing per-request tree-walking of the expression graph. Compilation happens once per plan; evaluation then dispatches flat instructions over a register file. Run output is unchanged.
+- **Greater precision for math with large numbers**: financial and scientific calculations whose intermediate values grow very large now stay exact end to end. Previously, magnitudes were bounded by `i128` (~1.7×10³⁸) and arithmetic beyond that bound fell back to decimal approximation; that fallback is gone. A calculation that genuinely exhausts memory vetoes the affected rule with `out of memory` rather than taking the process down. Transcendental functions (`sqrt`, `sin`, `log`, …) compute in decimal as before; see [`documentation/numeric_precision.md`](documentation/numeric_precision.md).
+- **Improved performance**: callers that need one answer no longer pay for the whole spec. Evaluation computes only the requested rules (`rules: Option<&[String]>` on `Engine::run` / `Engine::run_plan`), explanations are built only when `explain` is set, and immutable plans (`DataOverlay`) remove the per-request plan clone; the VM (above) removes per-request expression-tree walking. On the benchmark specs, a single-rule evaluation measures 20–169 µs where 0.8.16 measured 285 µs–6.2 ms evaluating every rule with per-call JSON parsing — methodology and numbers in [`documentation/benchmarks/engine.md`](documentation/benchmarks/engine.md). API: `None` means all local rules, and `lemma::plan(context)` is now `lemma::plan(context, &ResourceLimits)`.
+- **Plans serve concurrent requests**: an `ExecutionPlan` is immutable — data values ride alongside in a `DataOverlay` instead of mutating the plan — so one compiled plan can be shared across requests and memory allocation is reduced. Run output unchanged.
+- **Decisions always show what they depended on**: the optimizer can no longer change which inputs a result requires — algebraic folds (`x * 0`, `false and …`, …) apply only to literal operands, so `rule r: x * 0` still requires `x` and vetoes when it is missing. `response.data` again lists the effective values of the data behind the requested rules (it had regressed to always empty). Together these guarantee an auditor sees the true inputs of every decision.
+- **Consistent explanations**: a result exceeding the decimal output limit now vetoes identically in downstream references, `is veto` checks, explanations, and the response — previously these could disagree. Explanations of vetoed unless conditions now name the vetoing condition and carry its veto instead of describing a branch that never ran. Callers and auditors can no longer receive contradictory accounts of the same evaluation.
+- **Range error messages**: mixed-type range literals (`data x: 1 ... yes`), text range literals, type references into a spec that failed its own type resolution, and temporal slices that change a type mid-history now fail planning with a descriptive error where they previously crashed the engine.
+- **LSP integration**: extensions call `lemma lsp`; requires a globally installed `lemma` CLI. Release the CLI before publishing the extension update. `cargo lsp` (`xtask`) release-builds `lemma` accordingly.
+- **Honest cross-language benchmarks**: the Lemma-vs-Python comparison now measures equivalent work — typed inputs on both sides, JSON parsed once before the timed loop, one terminal rule per fixture, and Python ports using exact `fractions.Fraction` arithmetic matching Lemma's rational model.
+
+### Removed
+
+- **Dependencies**: `num-rational`, `num-integer`, `postcard`, `sha2`, and `boolean_expression` dropped from the engine; `proptest` and `insta` dropped from dev-dependencies. Fewer third-party crates to audit and update.
+- **Legacy trace API**: `EvaluationTrace` / `TraceNode`, `format_provenance_explanation`, and `Response::filter_rules` are replaced by the explanation object, `format_explanation`, and the `rules` evaluation parameter.
+- **Inversion module**: the experimental inversion API was unfinished and has been removed from this release. `Engine::invert`, Elixir `Lemma.invert`, and the `lemma_invert` NIF are no longer available. Inversion will return in a future release.
+
 ## [0.8.16] - 2026-06-03
 
 0.8.16 makes unit math smarter and the API simpler. Quantity arithmetic now flows across types — `rule wage: rate * hours` resolves to a money amount on its own — and every quantity or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (years, months) are now ordinary quantity units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
@@ -90,7 +119,7 @@ rule net_salary: contract.net
 ### Added
 
 - Public `lemma::deps`: `lemma_deps_dir`, `relative_dependency_cache_path`, `dependency_identifier_from_dependency_path`, `dependency_cache_file` — `.deps/` layout shared by CLI fetch, workspace load, and LSP.
-- `cargo lsp` (`xtask`): release-build `lsp`, then `npm ci` + `npm run compile` in `engine/lsp/editors/vscode`; `cargo lsp vsix` runs `npm run package` and prints the newest `.vsix` path.
+- `cargo lsp` (`xtask`): release-build `lemma`, then `npm ci` + `npm run compile` in `engine/lsp/editors/vscode`; `cargo lsp vsix` runs `npm run package` and prints the newest `.vsix` path.
 - `@lemmabase/lemma-engine` npm bundle: `LspClient.didClose` sends `textDocument/didClose`.
 
 ### Changed

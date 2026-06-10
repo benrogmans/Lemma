@@ -149,42 +149,17 @@ pub fn generate_openapi_effective(
     for (spec_arc, spec_effective_from, spec_effective_to) in &active_specs {
         let spec_name = &spec_arc.name;
         if let Ok(plan) = engine.get_plan(None, spec_name, Some(effective)) {
-            let schema = plan.schema();
-            let data = collect_input_data_from_schema(&schema);
-            let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
-
-            let safe_name = spec_name.replace('.', "_");
-            let get_response_schema_name = format!("{}_get_response", safe_name);
-            components_schemas.insert(
-                get_response_schema_name.clone(),
-                build_get_schema_response(),
+            let schema = plan.schema(&lemma::DataOverlay::default());
+            let artifacts = build_spec_openapi_artifacts(
+                spec_name,
+                &schema,
+                (spec_effective_from.as_ref(), spec_effective_to.as_ref()),
+                explanations_enabled,
             );
-
-            let evaluate_response_schema_name = format!("{}_evaluate_response", safe_name);
-            components_schemas.insert(
-                evaluate_response_schema_name.clone(),
-                build_evaluate_response_schema(&schema, &rule_names),
-            );
-
-            let post_body_schema_name = format!("{}_request", safe_name);
-            components_schemas.insert(
-                post_body_schema_name.clone(),
-                build_post_request_schema(&data),
-            );
-
-            let path = format!("/{}", spec_name);
-            paths.insert(
-                path,
-                build_spec_path_item(
-                    spec_name,
-                    &get_response_schema_name,
-                    &evaluate_response_schema_name,
-                    &post_body_schema_name,
-                    &rule_names,
-                    explanations_enabled,
-                    (spec_effective_from.as_ref(), spec_effective_to.as_ref()),
-                ),
-            );
+            paths.insert(format!("/{spec_name}"), artifacts.path_item);
+            for (name, schema_value) in artifacts.component_schemas {
+                components_schemas.insert(name, schema_value);
+            }
         }
     }
 
@@ -237,7 +212,7 @@ struct InputData {
     lemma_type: LemmaType,
     /// Literal bound in the spec (`data x: literal`).
     bound_value: Option<lemma::LiteralValue>,
-    /// Suggestion from `-> default ...` (`ExecutionPlan::with_defaults` applies it when omitted).
+    /// Suggestion from `-> default ...` (evaluator applies it when no overlay value is provided).
     suggestion_default: Option<lemma::LiteralValue>,
 }
 
@@ -507,7 +482,7 @@ fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[Stri
             },
             "data": {
                 "type": "array",
-                "description": "Data entries used during evaluation when explanations are enabled"
+                "description": "Data entries in effect for the evaluated rules when explanations are enabled"
             }
         }
     })
@@ -516,6 +491,82 @@ fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[Stri
 // ---------------------------------------------------------------------------
 // Spec path items
 // ---------------------------------------------------------------------------
+
+struct SpecOpenApiArtifacts {
+    path_item: Value,
+    component_schemas: Map<String, Value>,
+}
+
+fn spec_component_schema_names(spec_name: &str) -> (String, String, String, String) {
+    let safe_name = spec_name.replace('.', "_");
+    (
+        format!("{safe_name}_get_response"),
+        format!("{safe_name}_evaluate_response"),
+        format!("{safe_name}_request"),
+        format!("{safe_name}_form_request"),
+    )
+}
+
+/// Build the PathItem and per-spec component schemas for `/{spec_name}`.
+///
+/// `effective_range` is the half-open `[effective_from, effective_to)`
+/// validity range of the temporal version resolved at the OpenAPI document's
+/// effective instant. Both bounds are emitted as the `x-effective-from` /
+/// `x-effective-to` vendor extensions on the PathItem so tooling can render
+/// the active version's window without having to inspect the `versions`
+/// array. `None` in either position (unbounded start for the first row,
+/// unbounded end for the latest row) is serialised as JSON `null`.
+fn build_spec_openapi_artifacts(
+    spec_name: &str,
+    schema: &lemma::SpecSchema,
+    effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
+    explanations_enabled: bool,
+) -> SpecOpenApiArtifacts {
+    let data = collect_input_data_from_schema(schema);
+    let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
+    let (
+        get_response_schema_name,
+        evaluate_response_schema_name,
+        post_body_schema_name,
+        post_form_body_schema_name,
+    ) = spec_component_schema_names(spec_name);
+
+    let mut component_schemas = Map::new();
+    component_schemas.insert(
+        get_response_schema_name.clone(),
+        build_get_schema_response(),
+    );
+    component_schemas.insert(
+        evaluate_response_schema_name.clone(),
+        build_evaluate_response_schema(schema, &rule_names),
+    );
+    component_schemas.insert(
+        post_body_schema_name.clone(),
+        build_post_request_schema(&data),
+    );
+    component_schemas.insert(
+        post_form_body_schema_name.clone(),
+        build_post_form_request_schema(&data),
+    );
+
+    let path_item = build_spec_path_item_with_schema_refs(
+        spec_name,
+        (
+            &get_response_schema_name,
+            &evaluate_response_schema_name,
+            &post_body_schema_name,
+            &post_form_body_schema_name,
+        ),
+        &rule_names,
+        explanations_enabled,
+        effective_range,
+    );
+
+    SpecOpenApiArtifacts {
+        path_item,
+        component_schemas,
+    }
+}
 
 fn x_explanations_header_parameter() -> Value {
     json!({
@@ -539,23 +590,19 @@ fn accept_datetime_header_parameter() -> Value {
 }
 
 /// Build the PathItem for `/{spec_name}` (GET schema + POST evaluate).
-///
-/// `effective_range` is the half-open `[effective_from, effective_to)`
-/// validity range of the temporal version resolved at the OpenAPI document's
-/// effective instant. Both bounds are emitted as the `x-effective-from` /
-/// `x-effective-to` vendor extensions on the PathItem so tooling can render
-/// the active version's window without having to inspect the `versions`
-/// array. `None` in either position (unbounded start for the first row,
-/// unbounded end for the latest row) is serialised as JSON `null`.
-fn build_spec_path_item(
+fn build_spec_path_item_with_schema_refs(
     spec_name: &str,
-    get_response_schema_name: &str,
-    evaluate_response_schema_name: &str,
-    post_body_schema_name: &str,
+    schema_names: (&str, &str, &str, &str),
     rule_names: &[String],
     explanations_enabled: bool,
     effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
 ) -> Value {
+    let (
+        get_response_schema_name,
+        evaluate_response_schema_name,
+        post_body_schema_name,
+        post_form_body_schema_name,
+    ) = schema_names;
     let (effective_from, effective_to) = effective_range;
 
     let get_schema_ref = json!({
@@ -566,6 +613,9 @@ fn build_spec_path_item(
     });
     let body_ref = json!({
         "$ref": format!("#/components/schemas/{}", post_body_schema_name)
+    });
+    let form_body_ref = json!({
+        "$ref": format!("#/components/schemas/{}", post_form_body_schema_name)
     });
 
     let tag = spec_name.replace('.', "_");
@@ -639,8 +689,11 @@ fn build_spec_path_item(
             "requestBody": {
                 "required": true,
                 "content": {
-                    "application/x-www-form-urlencoded": {
+                    "application/json": {
                         "schema": body_ref
+                    },
+                    "application/x-www-form-urlencoded": {
+                        "schema": form_body_ref
                     }
                 }
             },
@@ -688,7 +741,7 @@ fn type_help(lemma_type: &LemmaType) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// POST request body schema generation (form-encoded — all string values)
+// POST request body schema generation (JSON object keyed by data field names)
 // ---------------------------------------------------------------------------
 
 fn build_post_request_schema(data: &[InputData]) -> Value {
@@ -748,6 +801,69 @@ fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
             schema
         }
         TypeSpecification::Boolean { .. } => {
+            json!({ "type": "boolean" })
+        }
+        _ => json!({ "type": "string" }),
+    }
+}
+
+fn build_post_form_request_schema(data: &[InputData]) -> Value {
+    let mut properties = Map::new();
+    let mut required = Vec::new();
+
+    for data in data {
+        let default_for_docs = data
+            .bound_value
+            .as_ref()
+            .or(data.suggestion_default.as_ref());
+        properties.insert(
+            data.name.clone(),
+            build_post_form_property_schema(&data.lemma_type, default_for_docs),
+        );
+        if data.bound_value.is_none() && data.suggestion_default.is_none() {
+            required.push(Value::String(data.name.clone()));
+        }
+    }
+
+    let mut schema = json!({
+        "type": "object",
+        "properties": Value::Object(properties)
+    });
+    if !required.is_empty() {
+        schema["required"] = Value::Array(required);
+    }
+    schema
+}
+
+fn build_post_form_property_schema(
+    lemma_type: &LemmaType,
+    data_value: Option<&lemma::LiteralValue>,
+) -> Value {
+    let mut schema = build_post_form_type_schema(lemma_type);
+
+    let help = type_help(lemma_type);
+    if !help.is_empty() {
+        schema["description"] = Value::String(help);
+    }
+
+    if let Some(v) = data_value {
+        schema["default"] = Value::String(v.display_value());
+    }
+
+    schema
+}
+
+fn build_post_form_type_schema(lemma_type: &LemmaType) -> Value {
+    match &lemma_type.specifications {
+        TypeSpecification::Text { options, .. } => {
+            let mut schema = json!({ "type": "string" });
+            if !options.is_empty() {
+                schema["enum"] =
+                    Value::Array(options.iter().map(|o| Value::String(o.clone())).collect());
+            }
+            schema
+        }
+        TypeSpecification::Boolean { .. } => {
             json!({ "type": "string", "enum": ["true", "false"] })
         }
         _ => json!({ "type": "string" }),
@@ -761,7 +877,7 @@ fn build_post_type_schema(lemma_type: &LemmaType) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lemma::{DateTimeValue, SourceType};
+    use lemma::{DateGranularity, DateTimeValue, SourceType};
 
     fn create_engine_with_code(code: &str) -> Engine {
         let mut engine = Engine::new();
@@ -797,6 +913,7 @@ mod tests {
             second: 0,
             microsecond: 0,
             timezone: None,
+            granularity: DateGranularity::Full,
         }
     }
 
@@ -985,13 +1102,19 @@ mod tests {
         let spec = generate_openapi(&engine, false);
 
         assert!(spec["paths"]["/bc"]["post"].is_object());
-        let body_ref = spec["paths"]["/bc"]["post"]["requestBody"]["content"]
-            ["application/x-www-form-urlencoded"]["schema"]["$ref"]
+        let post_content = &spec["paths"]["/bc"]["post"]["requestBody"]["content"];
+        let body_ref = post_content["application/json"]["schema"]["$ref"]
+            .as_str()
+            .unwrap();
+        let form_body_ref = post_content["application/x-www-form-urlencoded"]["schema"]["$ref"]
             .as_str()
             .unwrap();
         assert_eq!(body_ref, "#/components/schemas/bc_request");
+        assert_eq!(form_body_ref, "#/components/schemas/bc_form_request");
         assert!(spec["components"]["schemas"]["bc_request"].is_object());
+        assert!(spec["components"]["schemas"]["bc_form_request"].is_object());
         assert!(spec["components"]["schemas"]["bc_request"]["properties"]["x"].is_object());
+        assert!(spec["components"]["schemas"]["bc_form_request"]["properties"]["x"].is_object());
     }
 
     // =======================================================================
@@ -1275,7 +1398,7 @@ rule discount: 20
     }
 
     #[test]
-    fn test_post_schema_boolean_is_string_with_enum() {
+    fn test_post_schema_boolean_is_json_boolean() {
         let engine = create_engine_with_code(
             "spec test
             data is_active: boolean
@@ -1285,8 +1408,12 @@ rule discount: 20
 
         let schema = &spec["components"]["schemas"]["test_request"];
         let is_active = &schema["properties"]["is_active"];
-        assert_eq!(is_active["type"], "string");
-        assert_eq!(is_active["enum"], json!(["true", "false"]));
+        assert_eq!(is_active["type"], "boolean");
+
+        let form_schema = &spec["components"]["schemas"]["test_form_request"];
+        let form_is_active = &form_schema["properties"]["is_active"];
+        assert_eq!(form_is_active["type"], "string");
+        assert_eq!(form_is_active["enum"], json!(["true", "false"]));
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! These tests define the target behavior. Many will fail until the
 //! temporal slicing implementation is complete.
 
-use lemma::{DateTimeValue, Engine};
+use lemma::{DateGranularity, DateTimeValue, Engine};
 use std::collections::HashMap;
 
 fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
@@ -20,12 +20,20 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(None, spec_name, Some(effective), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            HashMap::new(),
+            false,
+            None,
+        )
         .unwrap()
 }
 
@@ -40,7 +48,7 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec_name, Some(effective), map, false)
+        .run(None, spec_name, Some(effective), map, false, None)
         .unwrap()
 }
 
@@ -1415,6 +1423,62 @@ rule t: c.threshold
 // ============================================================================
 // SLICE INTERFACE — CATEGORY 2: INCOMPATIBLE INTERFACES (planning rejects)
 // ============================================================================
+
+#[test]
+fn slice_incompat_type_change_skipping_middle_slice() {
+    // The unified-surface check must catch a type change between two slices
+    // even when an intermediate slice does not expose the name at all:
+    // pairwise adjacent comparison would miss it (compatibility of shared
+    // names is not transitive through a slice that shares nothing).
+    let mut engine = Engine::new();
+
+    engine
+        .load(
+            r#"
+spec skipping_dep
+data x: 10
+
+spec skipping_dep 2025-06-01
+data y: 5
+
+spec skipping_dep 2025-09-01
+data x: "ten"
+data y: 5
+"#,
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "skipping.lemma",
+            ))),
+        )
+        .unwrap();
+
+    let result = engine.load(
+        r#"
+spec consumer 2025-01-01
+uses d: skipping_dep
+rule sy: d.y
+"#,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "consumer.lemma",
+        ))),
+    );
+
+    assert!(
+        result.is_err(),
+        "Must reject: skipping_dep.x changes from number to text across the \
+         middle slice that does not expose x"
+    );
+    let errs = result.unwrap_err();
+    let joined = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        joined.contains("changed its interface between temporal slices"),
+        "Error must come from SliceInterface validation. Got: {}",
+        joined
+    );
+}
 
 #[test]
 fn slice_incompat_multiple_deps_one_unstable() {

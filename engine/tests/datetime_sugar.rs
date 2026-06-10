@@ -23,14 +23,14 @@ fn eval_rule_date(
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let response = engine
-        .run(None, spec_name, Some(effective), data, true)
+        .run(None, spec_name, Some(effective), data, true, None)
         .unwrap();
     response
         .results
         .values()
         .find(|r| r.rule.name == rule)
         .unwrap_or_else(|| panic!("rule '{}' not found in response", rule))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -78,7 +78,7 @@ rule age_duration: birth_date...now as seconds as number
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     let lit = eval_rule_date(&engine, "test", "age_duration", &effective, HashMap::new());
     if let ValueKind::Number(seconds) = &lit.value {
-        let days = lemma::ValueKind::Number(*seconds)
+        let days = lemma::ValueKind::Number(seconds.clone())
             .as_decimal_magnitude()
             .unwrap()
             / rust_decimal::Decimal::from(86_400);
@@ -731,7 +731,9 @@ rule shipping_fee: 15
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             decimal_lit("0")
         );
     } else {
@@ -754,7 +756,9 @@ rule shipping_fee: 15
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             rust_decimal::Decimal::from(15)
         );
     } else {

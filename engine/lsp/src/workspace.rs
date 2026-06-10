@@ -242,7 +242,7 @@ impl WorkspaceModel {
     pub fn validate_workspace_with_resolved_specs(&self, ctx: &Context) -> Vec<FileDiagnostics> {
         let mut planning_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
 
-        let planning_result = lemma::plan(ctx);
+        let planning_result = lemma::plan(ctx, &self.limits);
         let all_planning_errors: Vec<Error> = planning_result
             .results
             .into_iter()

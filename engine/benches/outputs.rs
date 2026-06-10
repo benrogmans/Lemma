@@ -170,17 +170,17 @@ fn main() {
         let plan = engine
             .get_plan(None, fixture.spec_name, Some(&fixture.effective))
             .expect("BUG: bench fixture must produce execution plan");
-        let data = common::parse_data_values(fixture.data_json.as_bytes());
+        let data = fixture.data.clone();
         let response = engine
-            .run_plan(plan, Some(&fixture.effective), data, true, true)
+            .run_plan(plan, Some(&fixture.effective), data, true, None)
             .expect("BUG: outputs bench fixture must evaluate");
 
         let mut outputs = serde_json::Map::new();
         for (rule_name, result) in &response.results {
             let operation_result = &result
-                .trace
+                .explanation
                 .as_ref()
-                .expect("BUG: bench evaluation always attaches trace")
+                .expect("BUG: outputs bench requires explain: true")
                 .result;
             let normalized = match operation_result {
                 OperationResult::Value(literal) => normalize_value_kind(&literal.value),

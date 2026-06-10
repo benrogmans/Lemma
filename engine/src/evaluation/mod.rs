@@ -1,33 +1,37 @@
 //! Pure Rust evaluation engine for Lemma
 //!
-//! Executes pre-validated execution plans in dependency order.
-//! Authoritative results come from normalized decision tables; when `explain` is
-//! enabled, original branches are also evaluated to build a full trace tree.
+//! Executes pre-validated execution plans. Authoritative results come from each
+//! rule's compiled instructions. Structural explanations are built separately in plan order.
 
-pub mod conversion_trace;
-pub mod evaluation_trace;
+pub(crate) mod branch_semantics;
+pub mod explanations;
 pub mod expression;
 pub mod operations;
+pub(crate) mod partial;
 pub mod response;
 
+use crate::computation::{
+    arithmetic_operation, comparison_operation, convert_unit, UnitResolutionContext,
+};
 use crate::evaluation::operations::VetoType;
 use crate::evaluation::response::EvaluatedRule;
-use crate::planning::execution_plan::validate_value_against_type;
-use crate::planning::semantics::{
-    Data, DataDefinition, DataPath, DataValue, LemmaType, LiteralValue, ReferenceTarget, RulePath,
-    ValueKind,
+use crate::planning::execution_plan::{
+    build_known_values, validate_value_against_type, DataOverlay, ExecutionPlan, Instruction,
+    Instructions, INSTRUCTIONS_VERSION,
 };
-use crate::planning::ExecutionPlan;
+use crate::planning::semantics::{
+    Data, DataDefinition, DataPath, DataValue, LiteralValue, ReferenceTarget, RulePath, ValueKind,
+};
 use indexmap::IndexMap;
 pub use operations::OperationResult;
 pub use response::{DataGroup, Response, RuleResult};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub(crate) const DECIMAL_VALUE_LIMIT_VETO_MESSAGE: &str =
     "Calculated result exceeds decimal value limit";
 
-fn literal_value_committable_to_decimal_wire(value: &LiteralValue) -> bool {
+fn literal_value_committable_to_decimal(value: &LiteralValue) -> bool {
     use crate::computation::rational::commit_rational_to_decimal;
 
     match &value.value {
@@ -35,8 +39,8 @@ fn literal_value_committable_to_decimal_wire(value: &LiteralValue) -> bool {
         | ValueKind::Ratio(rational, _)
         | ValueKind::Quantity(rational, _) => commit_rational_to_decimal(rational).is_ok(),
         ValueKind::Range(left, right) => {
-            literal_value_committable_to_decimal_wire(left)
-                && literal_value_committable_to_decimal_wire(right)
+            literal_value_committable_to_decimal(left)
+                && literal_value_committable_to_decimal(right)
         }
         ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) | ValueKind::Boolean(_) => {
             true
@@ -44,10 +48,10 @@ fn literal_value_committable_to_decimal_wire(value: &LiteralValue) -> bool {
     }
 }
 
-fn ensure_rule_result_within_decimal_wire_limit(result: OperationResult) -> OperationResult {
+fn ensure_rule_result_within_decimal_limit(result: OperationResult) -> OperationResult {
     match result {
         OperationResult::Value(value) => {
-            if literal_value_committable_to_decimal_wire(value.as_ref()) {
+            if literal_value_committable_to_decimal(&value) {
                 OperationResult::Value(value)
             } else {
                 OperationResult::Veto(VetoType::computation(DECIMAL_VALUE_LIMIT_VETO_MESSAGE))
@@ -65,83 +69,38 @@ pub(crate) struct EvaluationContext<'plan> {
     plan: &'plan ExecutionPlan,
     data_values: HashMap<DataPath, LiteralValue>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
-    rule_explanations: HashMap<RulePath, crate::evaluation::evaluation_trace::EvaluationTrace>,
     now: LiteralValue,
-    /// Map of rule-target reference data paths to their target rule path.
-    /// Used by [`Self::lazy_rule_reference_resolve`] at first read of the
-    /// reference data path: if the target rule produced a `Value`, we copy
-    /// it into `data_values` (memoizing further reads); if it produced a
-    /// `Veto`, we propagate that exact veto reason. The target rule is
-    /// guaranteed to have been evaluated already because planning injected
-    /// a `depends_on_rules` edge from every consumer rule to the target.
-    rule_references: HashMap<DataPath, RulePath>,
-    /// Constraint-violation vetoes on reference data paths discovered at
-    /// run-time. Populated for data-target references when the copied
-    /// value fails validation against the merged `resolved_type`; used by
-    /// the data-path read in [`expression`] so consumers see a precise
-    /// `Computation` veto naming the violated constraint instead of a
-    /// generic missing-data veto.
-    reference_vetoes: HashMap<DataPath, VetoType>,
-    /// Merged `resolved_type` per reference data path, used to validate
-    /// rule-target reference values lazily in
-    /// [`Self::lazy_rule_reference_resolve`].
-    reference_types: HashMap<DataPath, Arc<LemmaType>>,
-    /// Data paths read during evaluation (successful reads only).
-    used_data_paths: HashSet<DataPath>,
+    /// Computation vetoes on data paths that cannot be read.
+    vetoes: HashMap<DataPath, VetoType>,
+    /// Register file for compiled instruction execution; sized from plan
+    /// max_register_count. `None` marks a register that has not been written
+    /// yet; reading one is a compiler bug and crashes.
+    register_values: Vec<Option<OperationResult>>,
 }
 
 impl<'plan> EvaluationContext<'plan> {
-    fn new(plan: &'plan ExecutionPlan, now: LiteralValue) -> Self {
-        let mut data_values: HashMap<DataPath, LiteralValue> = plan
-            .data
+    fn new(plan: &'plan ExecutionPlan, overlay: &DataOverlay, now: LiteralValue) -> Self {
+        let mut data_values = build_known_values(plan, overlay);
+
+        for (path, definition) in &plan.data {
+            if data_values.contains_key(path) || overlay.violated.contains_key(path) {
+                continue;
+            }
+            if let Some(default) = definition.default_suggestion() {
+                data_values.insert(path.clone(), default);
+            }
+        }
+
+        let mut vetoes: HashMap<DataPath, VetoType> = overlay
+            .violated
             .iter()
-            .filter_map(|(path, d)| d.value().map(|v| (path.clone(), v.clone())))
+            .map(|(path, reason)| (path.clone(), VetoType::computation(reason.clone())))
             .collect();
 
-        let rule_references: HashMap<DataPath, RulePath> =
-            build_transitive_rule_references(&plan.data);
-
-        let reference_types: HashMap<DataPath, Arc<LemmaType>> = plan
-            .data
-            .iter()
-            .filter_map(|(path, def)| match def {
-                DataDefinition::Reference { resolved_type, .. } => {
-                    Some((path.clone(), Arc::clone(resolved_type)))
-                }
-                _ => None,
-            })
-            .collect();
-        let mut reference_vetoes: HashMap<DataPath, VetoType> = plan
-            .data
-            .iter()
-            .filter_map(|(path, def)| {
-                if let DataDefinition::Violated { reason, .. } = def {
-                    Some((path.clone(), VetoType::computation(reason.clone())))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Resolve data-target references: copy the target's value into the
-        // reference path. Must happen in dependency order so reference-of-
-        // reference chains see their target already populated. A reference
-        // whose target value is missing simply stays missing here; any
-        // rule/expression that later reads the reference will produce a
-        // `MissingData` veto, matching the existing missing-data semantics
-        // for type-declaration data with no value.
-        //
-        // A caller-supplied value (via `set_data_values`) replaces the
-        // `DataDefinition::Reference` entry with `DataDefinition::Value`
-        // before evaluation, so any path that is no longer a `Reference` is
-        // skipped here — the user-provided value has already been placed in
-        // `data_values` and wins over the reference copy.
-        //
-        // Rule-target references are intentionally absent from
-        // `reference_evaluation_order` (filtered in planning); they are
-        // resolved lazily at the consumer's read site once the target rule
-        // has been evaluated.
         for reference_path in &plan.reference_evaluation_order {
+            if data_values.contains_key(reference_path) {
+                continue;
+            }
             match plan.data.get(reference_path) {
                 Some(DataDefinition::Reference {
                     target: ReferenceTarget::Data(target_path),
@@ -161,7 +120,7 @@ impl<'plan> EvaluationContext<'plan> {
                                 data_values.insert(reference_path.clone(), value);
                             }
                             Err(msg) => {
-                                reference_vetoes.insert(
+                                vetoes.insert(
                                     reference_path.clone(),
                                     VetoType::computation(format!(
                                         "Reference '{}' violates declared constraint: {}",
@@ -181,16 +140,8 @@ impl<'plan> EvaluationContext<'plan> {
                 Some(DataDefinition::Reference {
                     target: ReferenceTarget::Rule(_),
                     ..
-                }) => {
-                    // Rule-target references are resolved lazily on first
-                    // read. They should never appear in
-                    // `reference_evaluation_order` (planning filters them
-                    // out), but skip defensively.
-                }
-                Some(_) => {
-                    // User-provided value has replaced the reference;
-                    // nothing to copy.
-                }
+                }) => {}
+                Some(_) => {}
                 None => unreachable!(
                     "BUG: reference_evaluation_order references missing data path '{}'",
                     reference_path
@@ -202,140 +153,617 @@ impl<'plan> EvaluationContext<'plan> {
             plan,
             data_values,
             rule_results: HashMap::new(),
-            rule_explanations: HashMap::new(),
             now,
-            rule_references,
-            reference_vetoes,
-            reference_types,
-            used_data_paths: HashSet::new(),
+            vetoes,
+            register_values: Vec::with_capacity(plan.max_register_count as usize),
         }
     }
 
-    pub(crate) fn record_data_use(&mut self, data_path: &DataPath) {
-        self.used_data_paths.insert(data_path.clone());
-    }
-
-    fn used_data_values(&self) -> HashMap<DataPath, LiteralValue> {
-        self.used_data_paths
-            .iter()
-            .filter_map(|path| {
-                self.data_values
-                    .get(path)
-                    .map(|value| (path.clone(), value.clone()))
-            })
-            .collect()
-    }
-
-    /// Resolve a rule-target reference data path lazily from the already-
-    /// evaluated target rule's result. Returns:
-    /// - `Some(Ok(value))` — target rule produced a value; memoized into `data_values`.
-    /// - `Some(Err(veto))` — target rule produced a veto, or the rule's
-    ///   value violates the reference's merged `resolved_type` constraints.
-    /// - `None` — the path is not a rule-target reference.
-    pub(crate) fn lazy_rule_reference_resolve(
-        &mut self,
-        data_path: &DataPath,
-    ) -> Option<Result<LiteralValue, crate::evaluation::operations::VetoType>> {
-        let rule_path = self.rule_references.get(data_path)?.clone();
-        let result = self
-            .rule_results
-            .get(&rule_path)
-            .cloned()
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: rule-target reference '{}' read before target rule '{}' evaluated; \
-                 planning must have injected the dependency edge",
-                    data_path, rule_path
-                );
-            });
-        match result {
-            OperationResult::Value(v) => {
-                let v = *v;
-                let v = match self.reference_types.get(data_path) {
-                    Some(ref_type) => {
-                        let retyped = LiteralValue {
-                            value: v.value,
-                            lemma_type: ref_type.clone(),
-                        };
-                        if let Err(msg) = validate_value_against_type(ref_type, &retyped) {
-                            return Some(Err(VetoType::computation(format!(
-                                "Reference '{}' violates declared constraint: {}",
-                                data_path, msg
-                            ))));
-                        }
-                        retyped
-                    }
-                    None => v,
-                };
-                self.data_values.insert(data_path.clone(), v.clone());
-                Some(Ok(v))
-            }
-            OperationResult::Veto(veto) => Some(Err(veto)),
-        }
-    }
-
-    /// Returns a recorded constraint-violation veto for a reference data
-    /// path, if any. Populated in [`Self::new`] for data-target references
-    /// whose copied value failed `validate_value_against_type`.
-    pub(crate) fn get_reference_veto(&self, data_path: &DataPath) -> Option<&VetoType> {
-        self.reference_vetoes.get(data_path)
+    pub(crate) fn get_veto(&self, data_path: &DataPath) -> Option<&VetoType> {
+        self.vetoes.get(data_path)
     }
 
     pub(crate) fn now(&self) -> &LiteralValue {
         &self.now
     }
 
-    fn get_data(&self, data_path: &DataPath) -> Option<&LiteralValue> {
+    pub(crate) fn get_data_value(&self, data_path: &DataPath) -> Option<&LiteralValue> {
         self.data_values.get(data_path)
     }
 
-    fn get_rule_explanation(
-        &self,
-        rule_path: &RulePath,
-    ) -> Option<&crate::evaluation::evaluation_trace::EvaluationTrace> {
-        self.rule_explanations.get(rule_path)
+    /// When a qualified [`DataPath`] misses in the map, match by local datum name if unambiguous.
+    pub(crate) fn unique_data_value_by_name(&self, data: &str) -> Option<&LiteralValue> {
+        let matches: Vec<&LiteralValue> = self
+            .data_values
+            .iter()
+            .filter(|(key, _)| key.data == data)
+            .map(|(_, value)| value)
+            .collect();
+        if matches.len() == 1 {
+            Some(matches[0])
+        } else {
+            None
+        }
     }
 
-    fn set_rule_explanation(
-        &mut self,
-        rule_path: RulePath,
-        explanation: crate::evaluation::evaluation_trace::EvaluationTrace,
-    ) {
-        self.rule_explanations.insert(rule_path, explanation);
+    pub(crate) fn plan(&self) -> &ExecutionPlan {
+        self.plan
+    }
+
+    fn read_register(&self, register: u16) -> OperationResult {
+        match self.register_values.get(register as usize) {
+            Some(Some(value)) => value.clone(),
+            Some(None) => panic!("BUG: read of unset register r{register}"),
+            None => panic!("BUG: read of out-of-bounds register r{register}"),
+        }
+    }
+
+    fn write_register(&mut self, register: u16, value: OperationResult) {
+        let index = register as usize;
+        if index >= self.register_values.len() {
+            assert!(
+                index < self.plan.max_register_count as usize,
+                "BUG: register {register} exceeds plan max_register_count"
+            );
+            self.register_values.resize(index + 1, None);
+        }
+        self.register_values[index] = Some(value);
     }
 }
 
-/// For every reference data path in `data`, follow the data-target reference
-/// chain and record the eventual rule-target (if any). Includes direct
-/// rule-target references. A visited set guards against pathological cycles
-/// that planning should already have rejected.
-fn build_transitive_rule_references(
-    data: &IndexMap<DataPath, DataDefinition>,
-) -> HashMap<DataPath, RulePath> {
-    let mut out: HashMap<DataPath, RulePath> = HashMap::new();
-    for (path, def) in data {
-        if !matches!(def, DataDefinition::Reference { .. }) {
-            continue;
+fn operand_value(result: OperationResult) -> OperationResult {
+    if result.vetoed() {
+        return result;
+    }
+    result
+}
+
+fn unwrap_literal(result: OperationResult, operand: &str) -> LiteralValue {
+    result.value().cloned().unwrap_or_else(|| {
+        panic!("BUG: {operand} passed veto check but has no value");
+    })
+}
+
+pub(crate) fn execute_instructions(
+    instructions: &Instructions,
+    context: &mut EvaluationContext<'_>,
+) -> OperationResult {
+    if instructions.version != INSTRUCTIONS_VERSION {
+        panic!("BUG: instructions version mismatch");
+    }
+    if instructions.register_count > context.plan.max_register_count {
+        panic!("BUG: register_count exceeds plan max_register_count");
+    }
+    context.register_values.clear();
+    context
+        .register_values
+        .resize(instructions.register_count as usize, None);
+
+    let unit_index = context.plan().resolved_types.unit_index.clone();
+    let signature_index = context.plan().signature_index.clone();
+    let unit_ctx = UnitResolutionContext::WithIndex(&unit_index);
+
+    // Compiled instruction streams are loop-free: every jump target is
+    // forward, so a legitimate execution runs each instruction at most once.
+    // The budget is a generous multiple to keep the invariant check far away
+    // from legitimate executions while still catching cyclic jumps.
+    let step_budget = instructions.code.len().saturating_mul(4).saturating_add(16);
+    let mut steps: usize = 0;
+
+    let mut pc: u32 = 0;
+    while (pc as usize) < instructions.code.len() {
+        steps += 1;
+        if steps > step_budget {
+            panic!(
+                "BUG: instruction step budget exceeded at pc={pc}; compiled instructions must be loop-free"
+            );
         }
-        let mut visited: HashSet<DataPath> = HashSet::new();
-        let mut cursor: DataPath = path.clone();
-        loop {
-            if !visited.insert(cursor.clone()) {
-                break;
+        let insn = &instructions.code[pc as usize];
+        pc += 1;
+        match insn {
+            Instruction::LoadConstant {
+                destination_register,
+                constant_index,
+            } => {
+                let constant = instructions
+                    .constants
+                    .get(*constant_index as usize)
+                    .expect("BUG: invalid constant_index");
+                context.write_register(
+                    *destination_register,
+                    OperationResult::Value(constant.clone()),
+                );
             }
-            let Some(DataDefinition::Reference { target, .. }) = data.get(&cursor) else {
-                break;
-            };
-            match target {
-                ReferenceTarget::Data(next) => cursor = next.clone(),
-                ReferenceTarget::Rule(rule_path) => {
-                    out.insert(path.clone(), rule_path.clone());
-                    break;
+            Instruction::LoadData {
+                destination_register,
+                data_index,
+            } => {
+                let data_path = instructions
+                    .data_manifest
+                    .get(*data_index as usize)
+                    .expect("BUG: invalid data_index");
+                let result = expression::resolve_data_path_value(data_path, context);
+                context.write_register(*destination_register, result);
+            }
+            Instruction::LoadNow {
+                destination_register,
+            } => {
+                context.write_register(
+                    *destination_register,
+                    OperationResult::Value(context.now().clone()),
+                );
+            }
+            Instruction::Arithmetic {
+                destination_register,
+                operation,
+                left_register,
+                right_register,
+            } => {
+                let left = operand_value(context.read_register(*left_register));
+                if left.vetoed() {
+                    context.write_register(*destination_register, left);
+                    continue;
                 }
+                let right = operand_value(context.read_register(*right_register));
+                if right.vetoed() {
+                    context.write_register(*destination_register, right);
+                    continue;
+                }
+                let left_val = unwrap_literal(left, "left operand");
+                let right_val = unwrap_literal(right, "right operand");
+                let result = arithmetic_operation(
+                    &left_val,
+                    operation,
+                    &right_val,
+                    &unit_index,
+                    &signature_index,
+                );
+                context.write_register(*destination_register, result);
+            }
+            Instruction::Comparison {
+                destination_register,
+                operation,
+                left_register,
+                right_register,
+            } => {
+                let left = operand_value(context.read_register(*left_register));
+                if left.vetoed() {
+                    context.write_register(*destination_register, left);
+                    continue;
+                }
+                let right = operand_value(context.read_register(*right_register));
+                if right.vetoed() {
+                    context.write_register(*destination_register, right);
+                    continue;
+                }
+                let left_val = unwrap_literal(left, "left operand");
+                let right_val = unwrap_literal(right, "right operand");
+                let result = comparison_operation(&left_val, operation, &right_val, unit_ctx);
+                context.write_register(*destination_register, result);
+            }
+            Instruction::UnitConversion {
+                destination_register,
+                source_register,
+                target,
+            } => {
+                let source = operand_value(context.read_register(*source_register));
+                if source.vetoed() {
+                    context.write_register(*destination_register, source);
+                    continue;
+                }
+                let source_val = unwrap_literal(source, "operand");
+                let result = convert_unit(&source_val, target, unit_ctx);
+                context.write_register(*destination_register, result);
+            }
+            Instruction::Mathematical {
+                destination_register,
+                operation,
+                source_register,
+            } => {
+                let source = operand_value(context.read_register(*source_register));
+                if source.vetoed() {
+                    context.write_register(*destination_register, source);
+                    continue;
+                }
+                let source_val = unwrap_literal(source, "operand");
+                let result = expression::evaluate_mathematical_operator(operation, &source_val);
+                context.write_register(*destination_register, result);
+            }
+            Instruction::DateRelative {
+                destination_register,
+                kind,
+                source_register,
+            } => {
+                let source = operand_value(context.read_register(*source_register));
+                if source.vetoed() {
+                    context.write_register(*destination_register, source);
+                    continue;
+                }
+                let date_val = unwrap_literal(source, "date operand");
+                let date_semantic = match &date_val.value {
+                    ValueKind::Date(dt) => dt,
+                    other => panic!("BUG: date-relative operand expected date, got {other:?}"),
+                };
+                let now_semantic = match &context.now().value {
+                    ValueKind::Date(dt) => dt,
+                    other => panic!("BUG: context.now() must be a date, got {other:?}"),
+                };
+                let result = crate::computation::datetime::compute_date_relative(
+                    kind,
+                    date_semantic,
+                    now_semantic,
+                );
+                context.write_register(*destination_register, result);
+            }
+            Instruction::DateCalendar {
+                destination_register,
+                kind,
+                unit,
+                source_register,
+            } => {
+                let source = operand_value(context.read_register(*source_register));
+                if source.vetoed() {
+                    context.write_register(*destination_register, source);
+                    continue;
+                }
+                let date_val = unwrap_literal(source, "date operand");
+                let date_semantic = match &date_val.value {
+                    ValueKind::Date(dt) => dt,
+                    other => panic!("BUG: date-calendar operand expected date, got {other:?}"),
+                };
+                let now_semantic = match &context.now().value {
+                    ValueKind::Date(dt) => dt,
+                    other => panic!("BUG: context.now() must be a date, got {other:?}"),
+                };
+                let result = crate::computation::datetime::compute_date_calendar(
+                    kind,
+                    unit,
+                    date_semantic,
+                    now_semantic,
+                );
+                context.write_register(*destination_register, result);
+            }
+            Instruction::RangeLiteral {
+                destination_register,
+                left_register,
+                right_register,
+            } => {
+                let left = operand_value(context.read_register(*left_register));
+                if left.vetoed() {
+                    context.write_register(*destination_register, left);
+                    continue;
+                }
+                let right = operand_value(context.read_register(*right_register));
+                if right.vetoed() {
+                    context.write_register(*destination_register, right);
+                    continue;
+                }
+                let range_value = LiteralValue::range(
+                    unwrap_literal(left, "left endpoint"),
+                    unwrap_literal(right, "right endpoint"),
+                );
+                context.write_register(*destination_register, OperationResult::Value(range_value));
+            }
+            Instruction::PastFutureRange {
+                destination_register,
+                kind,
+                source_register,
+            } => {
+                let source = operand_value(context.read_register(*source_register));
+                if source.vetoed() {
+                    context.write_register(*destination_register, source);
+                    continue;
+                }
+                let now_semantic = match &context.now().value {
+                    ValueKind::Date(dt) => dt,
+                    other => panic!("BUG: context.now() must be a date, got {other:?}"),
+                };
+                let offset_val = unwrap_literal(source, "offset operand");
+                let result = crate::computation::datetime::evaluate_past_future_range(
+                    kind,
+                    &offset_val,
+                    now_semantic,
+                );
+                context.write_register(*destination_register, result);
+            }
+            Instruction::RangeContainment {
+                destination_register,
+                value_register,
+                range_register,
+            } => {
+                let value = operand_value(context.read_register(*value_register));
+                if value.vetoed() {
+                    context.write_register(*destination_register, value);
+                    continue;
+                }
+                let range = operand_value(context.read_register(*range_register));
+                if range.vetoed() {
+                    context.write_register(*destination_register, range);
+                    continue;
+                }
+                let value_literal = unwrap_literal(value, "value operand");
+                let range_literal = unwrap_literal(range, "range operand");
+                let contained = match &range_literal.value {
+                    ValueKind::Range(range_left, range_right) => {
+                        crate::computation::range::check_containment(
+                            &value_literal,
+                            range_left.as_ref(),
+                            range_right.as_ref(),
+                        )
+                    }
+                    other => panic!("BUG: range containment expected range operand, got {other:?}"),
+                };
+                context.write_register(
+                    *destination_register,
+                    OperationResult::Value(LiteralValue::from_bool(contained)),
+                );
+            }
+            Instruction::ResultIsVeto {
+                destination_register,
+                source_register,
+            } => {
+                let source = context.read_register(*source_register);
+                context.write_register(
+                    *destination_register,
+                    OperationResult::Value(LiteralValue::from_bool(source.vetoed())),
+                );
+            }
+            Instruction::MoveRegister {
+                destination_register,
+                source_register,
+            } => {
+                let value = context.read_register(*source_register);
+                context.write_register(*destination_register, value);
+            }
+            Instruction::UserVeto {
+                destination_register,
+                message_index,
+            } => {
+                let message = instructions
+                    .veto_messages
+                    .get(*message_index as usize)
+                    .expect("BUG: invalid message_index")
+                    .clone();
+                context.write_register(
+                    *destination_register,
+                    OperationResult::Veto(VetoType::UserDefined {
+                        message: Some(message).filter(|m| !m.is_empty()),
+                    }),
+                );
+            }
+            Instruction::JumpIfFalse {
+                condition_register,
+                target_instruction,
+                veto_semantics,
+            } => {
+                let condition = context.read_register(*condition_register);
+                match branch_semantics::unless_condition_outcome(&condition, *veto_semantics) {
+                    branch_semantics::BranchOutcome::Propagate(result) => return result,
+                    branch_semantics::BranchOutcome::Taken => {}
+                    branch_semantics::BranchOutcome::NotTaken => pc = *target_instruction,
+                }
+            }
+            Instruction::Jump { target_instruction } => {
+                pc = *target_instruction;
+            }
+            Instruction::Return { source_register } => {
+                return context.read_register(*source_register);
             }
         }
     }
-    out
+    panic!("BUG: instruction stream ended without Return");
+}
+
+#[cfg(test)]
+mod vm_tests {
+    use super::*;
+    use crate::parsing::ast::{DateTimeValue, EffectiveDate};
+    use crate::planning::execution_plan::{Instructions, INSTRUCTIONS_VERSION};
+    use crate::planning::graph::ResolvedSpecTypes;
+    use crate::planning::semantics::primitive_boolean_arc;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn empty_plan(max_register_count: u16) -> ExecutionPlan {
+        ExecutionPlan {
+            spec_name: "vm_test".to_string(),
+            commentary: None,
+            data: IndexMap::new(),
+            rules: Vec::new(),
+            max_register_count,
+            reference_evaluation_order: Vec::new(),
+            meta: HashMap::new(),
+            resolved_types: ResolvedSpecTypes::default(),
+            signature_index: HashMap::new(),
+            effective: EffectiveDate::Origin,
+            sources: Vec::new(),
+        }
+    }
+
+    fn run_instructions(instructions: &Instructions) -> OperationResult {
+        let plan = empty_plan(instructions.register_count);
+        let overlay = DataOverlay::default();
+        let now = LiteralValue {
+            value: ValueKind::Date(crate::planning::semantics::date_time_to_semantic(
+                &DateTimeValue::now(),
+            )),
+            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
+        };
+        let mut context = EvaluationContext::new(&plan, &overlay, now);
+        execute_instructions(instructions, &mut context)
+    }
+
+    fn bool_instructions(code: Vec<Instruction>, constants: Vec<LiteralValue>) -> Instructions {
+        Instructions {
+            version: INSTRUCTIONS_VERSION,
+            register_count: 2,
+            register_types: vec![
+                Arc::clone(primitive_boolean_arc()),
+                Arc::clone(primitive_boolean_arc()),
+            ],
+            constants,
+            data_manifest: Vec::new(),
+            veto_messages: Vec::new(),
+            code,
+        }
+    }
+
+    #[test]
+    fn short_circuit_and_first_false_skips_second_conjunct() {
+        let false_lit = LiteralValue::from_bool(false);
+        let true_lit = LiteralValue::from_bool(true);
+        let instructions = bool_instructions(
+            vec![
+                Instruction::LoadConstant {
+                    destination_register: 0,
+                    constant_index: 0,
+                },
+                Instruction::JumpIfFalse {
+                    condition_register: 0,
+                    target_instruction: 4,
+                    veto_semantics: Default::default(),
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 1,
+                },
+                Instruction::Jump {
+                    target_instruction: 5,
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 0,
+                },
+                Instruction::Return { source_register: 1 },
+            ],
+            vec![false_lit, true_lit],
+        );
+        let result = run_instructions(&instructions);
+        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(false));
+    }
+
+    #[test]
+    fn short_circuit_and_both_true_returns_true() {
+        let true_lit = LiteralValue::from_bool(true);
+        let false_lit = LiteralValue::from_bool(false);
+        let instructions = bool_instructions(
+            vec![
+                Instruction::LoadConstant {
+                    destination_register: 0,
+                    constant_index: 0,
+                },
+                Instruction::JumpIfFalse {
+                    condition_register: 0,
+                    target_instruction: 4,
+                    veto_semantics: Default::default(),
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 0,
+                },
+                Instruction::Jump {
+                    target_instruction: 5,
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 1,
+                },
+                Instruction::Return { source_register: 1 },
+            ],
+            vec![true_lit, false_lit],
+        );
+        let result = run_instructions(&instructions);
+        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(true));
+    }
+
+    #[test]
+    fn short_circuit_or_first_true_skips_second_disjunct() {
+        let false_lit = LiteralValue::from_bool(false);
+        let true_lit = LiteralValue::from_bool(true);
+        let instructions = bool_instructions(
+            vec![
+                Instruction::LoadConstant {
+                    destination_register: 0,
+                    constant_index: 0,
+                },
+                Instruction::JumpIfFalse {
+                    condition_register: 0,
+                    target_instruction: 3,
+                    veto_semantics: Default::default(),
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 0,
+                },
+                Instruction::Jump {
+                    target_instruction: 5,
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 1,
+                },
+                Instruction::Return { source_register: 1 },
+            ],
+            vec![true_lit, false_lit],
+        );
+        let result = run_instructions(&instructions);
+        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(true));
+    }
+
+    #[test]
+    fn short_circuit_or_both_false_returns_false() {
+        let false_lit = LiteralValue::from_bool(false);
+        let true_lit = LiteralValue::from_bool(true);
+        let instructions = bool_instructions(
+            vec![
+                Instruction::LoadConstant {
+                    destination_register: 0,
+                    constant_index: 0,
+                },
+                Instruction::JumpIfFalse {
+                    condition_register: 0,
+                    target_instruction: 4,
+                    veto_semantics: Default::default(),
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 1,
+                },
+                Instruction::Jump {
+                    target_instruction: 5,
+                },
+                Instruction::LoadConstant {
+                    destination_register: 1,
+                    constant_index: 0,
+                },
+                Instruction::Return { source_register: 1 },
+            ],
+            vec![false_lit, true_lit],
+        );
+        let result = run_instructions(&instructions);
+        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(false));
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: instruction step budget exceeded")]
+    fn unpatched_jump_to_zero_hits_step_budget() {
+        let false_lit = LiteralValue::from_bool(false);
+        let instructions = bool_instructions(
+            vec![
+                Instruction::LoadConstant {
+                    destination_register: 0,
+                    constant_index: 0,
+                },
+                Instruction::JumpIfFalse {
+                    condition_register: 0,
+                    target_instruction: 0,
+                    veto_semantics: Default::default(),
+                },
+            ],
+            vec![false_lit],
+        );
+        run_instructions(&instructions);
+    }
 }
 
 #[cfg(test)]
@@ -344,13 +772,6 @@ mod runtime_invariant_tests {
     use crate::parsing::ast::DateTimeValue;
     use crate::Engine;
 
-    /// At evaluation time the LiteralValue stored under a reference data path
-    /// must carry the reference's own `resolved_type`, not the (possibly looser)
-    /// type embedded in the target's LiteralValue. The merge pass folds in the
-    /// LHS-declared constraints (e.g. a binding's parent-spec type chain) so
-    /// the reference's `resolved_type` is the contract the evaluator promises;
-    /// any consumer that reads `data_values[ref].lemma_type` directly must see
-    /// that contract, not the target's loose shape.
     #[test]
     fn reference_runtime_value_carries_resolved_type_not_target_type() {
         let code = r#"
@@ -379,8 +800,7 @@ rule r: i.slot
         let now = DateTimeValue::now();
         let plan_basis = engine
             .get_plan(None, "outer", Some(&now))
-            .expect("must plan")
-            .clone();
+            .expect("must plan");
 
         let reference_path = plan_basis
             .data
@@ -396,7 +816,7 @@ rule r: i.slot
             _ => unreachable!("filter above kept only Reference entries"),
         };
 
-        let plan = plan_basis.with_defaults();
+        let overlay = DataOverlay::default();
 
         let now_lit = LiteralValue {
             value: crate::planning::semantics::ValueKind::Date(
@@ -404,7 +824,7 @@ rule r: i.slot
             ),
             lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
-        let context = EvaluationContext::new(&plan, now_lit);
+        let context = EvaluationContext::new(plan_basis, &overlay, now_lit);
 
         let stored = context
             .data_values
@@ -426,30 +846,23 @@ rule r: i.slot
 pub(crate) struct Evaluator;
 
 impl Evaluator {
-    /// Evaluate an execution plan.
+    /// Evaluate an execution plan: one compiled-instruction pass per rule.
     ///
-    /// Executes rules in pre-computed dependency order with all data pre-loaded.
-    /// Rules are already flattened into executable branches with data prefixes resolved.
-    ///
-    /// After planning, evaluation completes without `Error`: numeric rules return
-    /// `Value` (stored `Decimal` semantics) or `Veto` for impossible data (e.g. division
-    /// by zero). Panics indicate engine bugs, not user-facing failures.
-    ///
-    /// When `explain` is true, each rule is evaluated on both the normalized decision
-    /// table and the original branches (with a debug assertion that they agree), and
-    /// each rule's [`RuleResult::trace`] is included in the response (serialized as
-    /// `explanation`). When `explain` is false, only the normalized path runs.
-    pub(crate) fn evaluate(
+    /// Returns the response and evaluation context. Call [`Self::explain`] to
+    /// attach structural explanation trees.
+    pub(crate) fn evaluate<'a>(
         &self,
-        plan: &ExecutionPlan,
+        plan: &'a ExecutionPlan,
+        overlay: &DataOverlay,
         now: LiteralValue,
         explain: bool,
-    ) -> Response {
+        response_rules: &std::collections::HashSet<String>,
+    ) -> (Response, EvaluationContext<'a>) {
         let effective = match &now.value {
             ValueKind::Date(date) => date.to_string(),
             other => panic!("BUG: evaluation now must be a date, got {other:?}"),
         };
-        let mut context = EvaluationContext::new(plan, now);
+        let mut context = EvaluationContext::new(plan, overlay, now);
 
         let mut response = Response {
             spec_name: plan.spec_name.clone(),
@@ -461,28 +874,33 @@ impl Evaluator {
             results: IndexMap::new(),
         };
 
-        // Execute each rule in topological order (already sorted by ExecutionPlan)
+        let vm_rules: std::collections::HashSet<String> = if explain {
+            plan.local_rule_names().into_iter().collect()
+        } else {
+            response_rules.clone()
+        };
+
         for exec_rule in &plan.rules {
-            let (mut result, mut explanation) =
-                expression::evaluate_rule(exec_rule, &mut context, explain);
-
-            context
-                .rule_results
-                .insert(exec_rule.path.clone(), result.clone());
-            context.set_rule_explanation(exec_rule.path.clone(), explanation.clone());
-
-            if !exec_rule.path.segments.is_empty() {
+            let should_vm = if explain {
+                !exec_rule.path.segments.is_empty() || vm_rules.contains(&exec_rule.name)
+            } else {
+                exec_rule.path.segments.is_empty() && vm_rules.contains(&exec_rule.name)
+            };
+            if !should_vm {
                 continue;
             }
 
-            result = ensure_rule_result_within_decimal_wire_limit(result);
-            if matches!(result, OperationResult::Veto(_)) {
-                explanation = crate::evaluation::evaluation_trace::EvaluationTrace {
-                    rule_path: exec_rule.path.clone(),
-                    source: Some(exec_rule.source.clone()),
-                    result: result.clone(),
-                    tree: explanation.tree,
-                };
+            let result = execute_instructions(&exec_rule.instructions, &mut context);
+            // The decimal limit applies before the result is stored: every
+            // consumer — downstream rule-target references, `is veto`
+            // checks, explanations, and the response — sees the same value.
+            let result = ensure_rule_result_within_decimal_limit(result);
+            context
+                .rule_results
+                .insert(exec_rule.path.clone(), result.clone());
+
+            if !exec_rule.path.segments.is_empty() || !response_rules.contains(&exec_rule.name) {
+                continue;
             }
 
             response.add_result(RuleResult::from_operation_result(
@@ -495,20 +913,23 @@ impl Evaluator {
                 result,
                 exec_rule.rule_type.as_ref(),
                 plan.expression_unit_index(),
-                if explain { Some(explanation) } else { None },
+                None,
             ));
         }
 
-        let mut used_data = context.used_data_values();
+        let response_rule_names: Vec<String> = response_rules.iter().cloned().collect();
+        let needed_data_paths = plan
+            .collect_needed_data_paths(&response_rule_names, overlay)
+            .expect("BUG: response rule names must be pre-validated by the caller");
 
-        // Build data list in definition order (plan.data is an IndexMap)
         let data_list: Vec<Data> = plan
             .data
             .keys()
+            .filter(|path| needed_data_paths.contains(*path))
             .filter_map(|path| {
-                used_data.remove(path).map(|value| Data {
+                context.get_data_value(path).map(|value| Data {
                     path: path.clone(),
-                    value: DataValue::from_bound_literal(value),
+                    value: DataValue::from_bound_literal(value.clone()),
                     source: None,
                 })
             })
@@ -522,6 +943,28 @@ impl Evaluator {
             }];
         }
 
-        response
+        (response, context)
+    }
+
+    /// Build structural explanations from source branches and attach them to rule results.
+    pub(crate) fn explain(
+        &self,
+        response: &mut Response,
+        plan: &ExecutionPlan,
+        context: &mut EvaluationContext<'_>,
+    ) {
+        use crate::evaluation::explanations::{build_explanation, Explanation};
+        use std::collections::HashMap;
+
+        let mut built: HashMap<RulePath, Explanation> = HashMap::new();
+
+        for exec_rule in &plan.rules {
+            let explanation = build_explanation(exec_rule, context, plan, &built);
+            built.insert(exec_rule.path.clone(), explanation.clone());
+
+            if let Some(result) = response.results.get_mut(&exec_rule.name) {
+                result.explanation = Some(explanation);
+            }
+        }
     }
 }

@@ -1,5 +1,5 @@
-use lemma::{DateTimeValue, TimezoneValue};
-use lemma::{Engine, LiteralValue, ValueKind};
+use lemma::{DataValueInput, DateTimeValue, TimezoneValue};
+use lemma::{DateGranularity, Engine, LiteralValue, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +21,7 @@ fn default_effective() -> DateTimeValue {
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -32,14 +33,28 @@ fn eval_literal_with_data(
 ) -> LiteralValue {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
+    let effective = default_effective();
+    let plan = engine
+        .get_plan(None, spec_name, Some(&effective))
+        .expect("plan");
+    let data_values: HashMap<String, DataValueInput> = data
+        .into_iter()
+        .map(|(k, v)| (k, DataValueInput::convenience(v)))
+        .collect();
     let response = engine
-        .run(None, spec_name, Some(&default_effective()), data, true)
+        .run_plan(
+            plan,
+            Some(&effective),
+            data_values,
+            true,
+            Some(&[rule_name.to_string()]),
+        )
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -59,13 +74,17 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
+    let effective = default_effective();
+    let plan = engine
+        .get_plan(None, spec_name, Some(&effective))
+        .expect("plan");
     let response = engine
-        .run(
-            None,
-            spec_name,
-            Some(&default_effective()),
+        .run_plan(
+            plan,
+            Some(&effective),
             HashMap::new(),
-            false,
+            true,
+            Some(&[rule_name.to_string()]),
         )
         .expect("Should evaluate");
     response

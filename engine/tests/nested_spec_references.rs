@@ -40,7 +40,7 @@ rule line_total: pricing.final_price * quantity
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "line_item", Some(&now), HashMap::new(), true)
+        .run(None, "line_item", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let line_total = response
         .results
@@ -51,7 +51,7 @@ rule line_total: pricing.final_price * quantity
     // Should be: (100 * 1.21) * 10 = 1210
     assert!(!line_total.vetoed);
     let lit = line_total
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -59,7 +59,9 @@ rule line_total: pricing.final_price * quantity
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(1210)
         ),
         other => panic!("Expected Number for line_total, got {:?}", other),
@@ -99,7 +101,7 @@ rule top_calc: middle_ref.middle_calc
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), true)
+        .run(None, "top", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let top_calc = response
@@ -110,7 +112,7 @@ rule top_calc: middle_ref.middle_calc
 
     assert!(!top_calc.vetoed);
     let lit = top_calc
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -118,7 +120,9 @@ rule top_calc: middle_ref.middle_calc
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(250)
         ),
         other => panic!("Expected Number for top_calc, got {:?}", other),
@@ -178,7 +182,7 @@ rule final_value: settings.config.value * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), true)
+        .run(None, "top", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let final_value = response
         .results
@@ -189,7 +193,7 @@ rule final_value: settings.config.value * 2
     // Should be: 100 * 2 = 200 (using the overridden value from middle)
     assert!(!final_value.vetoed);
     let lit = final_value
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -197,7 +201,9 @@ rule final_value: settings.config.value * 2
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(200)
         ),
         other => panic!("Expected Number for final_value, got {:?}", other),
@@ -244,7 +250,7 @@ rule order_total: line.line_total
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), true)
+        .run(None, "order", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let order_total = response
@@ -257,7 +263,7 @@ rule order_total: line.line_total
     // (100 * 1.10) * 5 = 550
     assert!(!order_total.vetoed);
     let lit = order_total
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -265,7 +271,9 @@ rule order_total: line.line_total
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(550)
         ),
         other => panic!("Expected Number for order_total, got {:?}", other),
@@ -310,7 +318,7 @@ rule difference: total2 - total1
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "comparison", Some(&now), HashMap::new(), true)
+        .run(None, "comparison", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let total1 = response
@@ -332,7 +340,7 @@ rule difference: total2 - total1
     // path1: 100 * 1.21 = 121
     assert!(!total1.vetoed);
     let lit = total1
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -340,7 +348,9 @@ rule difference: total2 - total1
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(121)
         ),
         other => panic!("Expected Number for total1, got {:?}", other),
@@ -348,7 +358,7 @@ rule difference: total2 - total1
     // path2: 75 * 1.21 = 90.75
     assert!(!total2.vetoed);
     let lit = total2
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -356,7 +366,9 @@ rule difference: total2 - total1
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::new(9075, 2)
         ),
         other => panic!("Expected Number for total2, got {:?}", other),
@@ -364,7 +376,7 @@ rule difference: total2 - total1
     // difference: 90.75 - 121 = -30.25
     assert!(!difference.vetoed);
     let lit = difference
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -372,7 +384,9 @@ rule difference: total2 - total1
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::new(-3025, 2)
         ),
         other => panic!("Expected Number for difference, got {:?}", other),
@@ -417,7 +431,7 @@ rule product: c1.value * c2.value
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "combined", Some(&now), HashMap::new(), true)
+        .run(None, "combined", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let sum = response
@@ -434,7 +448,7 @@ rule product: c1.value * c2.value
     // sum: (100 * 2) + (50 * 3) = 200 + 150 = 350
     assert!(!sum.vetoed);
     let lit = sum
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -442,7 +456,9 @@ rule product: c1.value * c2.value
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(350)
         ),
         other => panic!("Expected Number for sum, got {:?}", other),
@@ -450,7 +466,7 @@ rule product: c1.value * c2.value
     // product: 100 * 50 = 5000
     assert!(!product.vetoed);
     let lit = product
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -458,7 +474,9 @@ rule product: c1.value * c2.value
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(5000)
         ),
         other => panic!("Expected Number for product, got {:?}", other),
@@ -513,7 +531,7 @@ rule final_result: middle_config.x_squared_plus_ten * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), true)
+        .run(None, "top", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let final_result = response
@@ -525,7 +543,7 @@ rule final_result: middle_config.x_squared_plus_ten * 2
     // x=20 (overridden), x_squared=400, x_squared_plus_ten=410, final=820
     assert!(!final_result.vetoed);
     let lit = final_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -533,7 +551,9 @@ rule final_result: middle_config.x_squared_plus_ten * 2
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(820)
         ),
         other => panic!("Expected Number for final_result, got {:?}", other),
@@ -576,7 +596,7 @@ rule price_difference: retail_final - wholesale_final
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "scenarios", Some(&now), HashMap::new(), true)
+        .run(None, "scenarios", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let retail_final = response
@@ -598,7 +618,7 @@ rule price_difference: retail_final - wholesale_final
     // retail: 100 * (1 - 0.05) = 95
     assert!(!retail_final.vetoed);
     let lit = retail_final
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -606,7 +626,9 @@ rule price_difference: retail_final - wholesale_final
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(95)
         ),
         other => panic!("Expected Number for retail_final, got {:?}", other),
@@ -614,7 +636,7 @@ rule price_difference: retail_final - wholesale_final
     // wholesale: 80 * (1 - 0.15) = 68
     assert!(!wholesale_final.vetoed);
     let lit = wholesale_final
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -622,7 +644,9 @@ rule price_difference: retail_final - wholesale_final
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(68)
         ),
         other => panic!("Expected Number for wholesale_final, got {:?}", other),
@@ -630,7 +654,7 @@ rule price_difference: retail_final - wholesale_final
     // difference: 95 - 68 = 27
     assert!(!price_difference.vetoed);
     let lit = price_difference
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -638,7 +662,9 @@ rule price_difference: retail_final - wholesale_final
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(27)
         ),
         other => panic!("Expected Number for price_difference, got {:?}", other),

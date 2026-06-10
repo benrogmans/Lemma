@@ -1,3 +1,4 @@
+// Criterion cases synced with xtask/src/benchmarks/cli.rs HTTP_BENCH_CASES.
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::net::TcpStream;
 use std::process::{Child, Command, Stdio};
@@ -34,7 +35,7 @@ fn start_server() -> ServerGuard {
 
     let child = Command::new(env!("CARGO_BIN_EXE_lemma"))
         .arg("server")
-        .arg(&examples_dir)
+        .args(["--prefix", &examples_dir.to_string_lossy()])
         .args(["--port", &PORT.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -53,6 +54,7 @@ fn bench_evaluate(c: &mut Criterion) {
     let client = reqwest::blocking::Client::new();
 
     let mut group = c.benchmark_group("evaluate");
+    group.measurement_time(std::time::Duration::from_secs(10));
 
     // --- simple: coffee order (7 rules, basic arithmetic + unless) ---
     group.bench_function("coffee_order", |b| {
@@ -84,7 +86,7 @@ fn bench_evaluate(c: &mut Criterion) {
     group.bench_function("dutch_salary", |b| {
         b.iter(|| {
             let resp = client
-                .post(format!("{BASE}/nl/tax/net_salary"))
+                .post(format!("{BASE}/net_salary"))
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body("gross_salary=5000 eur&pay_period=month&income_source=employment&pension_contribution=150 eur&payroll_tax_credit=true")
                 .send()
@@ -101,7 +103,7 @@ fn bench_evaluate(c: &mut Criterion) {
     schema_group.bench_function("dutch_salary", |b| {
         b.iter(|| {
             let resp = client
-                .get(format!("{BASE}/nl/tax/net_salary"))
+                .get(format!("{BASE}/net_salary"))
                 .send()
                 .expect("GET net_salary");
             assert!(resp.status().is_success());

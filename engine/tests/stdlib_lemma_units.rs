@@ -15,7 +15,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
         .expect("load");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false)
+        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
         .expect("run");
     response
         .results
@@ -40,7 +40,7 @@ rule hours: age as hours"#;
     let mut data = HashMap::new();
     data.insert("age".to_string(), "90 minutes".to_string());
     let response = engine
-        .run(None, "consumer", Some(&now), data, true)
+        .run(None, "consumer", Some(&now), data, false, None)
         .expect("run");
     assert_eq!(
         response

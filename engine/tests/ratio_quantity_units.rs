@@ -17,7 +17,7 @@ fn decimal_lit(s: &str) -> Decimal {
 
 fn rule_literal(rule: &lemma::RuleResult) -> &lemma::LiteralValue {
     assert!(!rule.vetoed, "unexpected veto: {:?}", rule.veto_reason);
-    rule.trace
+    rule.explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -42,7 +42,7 @@ rule is_above_30: savings_ratio > 30%
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "savings", Some(&now), HashMap::new(), true)
+        .run(None, "savings", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let ratio_result = response
@@ -53,7 +53,9 @@ rule is_above_30: savings_ratio > 30%
     match &lit.value {
         ValueKind::Ratio(r, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(r.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 Decimal::new(25, 2),
                 "75/300 = 0.25"
             );
@@ -86,7 +88,7 @@ rule tier: "low"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "summary", Some(&now), HashMap::new(), true)
+        .run(None, "summary", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let tier = response.results.get("tier").expect("tier");
     assert_eq!(tier.text.as_deref(), Some("mid"));
@@ -107,14 +109,23 @@ rule above_20_permille: as_permille > 20 permille
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "permille_spec", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "permille_spec",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .unwrap();
     let as_permille = response.results.get("as_permille").expect("as_permille");
     let lit = rule_literal(as_permille);
     match &lit.value {
         ValueKind::Ratio(r, u) => {
             assert_eq!(
-                lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(r.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 Decimal::new(25, 3)
             );
             assert_eq!(u.as_deref(), Some("permille"));
@@ -166,6 +177,7 @@ rule price: 100 - discount
             Some(&now),
             HashMap::from([("discount".to_string(), "20 percent".to_string())]),
             true,
+            None,
         )
         .unwrap();
 
@@ -173,7 +185,9 @@ rule price: 100 - discount
     let lit = rule_literal(price);
     if let ValueKind::Number(n) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::from(80),
             "100 - 20% = 100 * (1 - 0.20) = 80"
         );
@@ -219,7 +233,7 @@ rule compared: plus_five > 25%
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "chained", Some(&now), HashMap::new(), true)
+        .run(None, "chained", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let pct = response.results.get("pct").expect("pct");
     let plus_five = response.results.get("plus_five").expect("plus_five");
@@ -227,7 +241,9 @@ rule compared: plus_five > 25%
 
     if let ValueKind::Ratio(r, _) = &rule_literal(pct).value {
         assert_eq!(
-            lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(r.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::new(25, 2)
         );
     } else {
@@ -235,7 +251,9 @@ rule compared: plus_five > 25%
     }
     if let ValueKind::Ratio(r, _) = &rule_literal(plus_five).value {
         assert_eq!(
-            lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(r.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::new(30, 2)
         );
     } else {
@@ -264,7 +282,7 @@ rule share_above_20: share_pct > 20%
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "mixed", Some(&now), HashMap::new(), true)
+        .run(None, "mixed", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let as_eur = response.results.get("as_eur").expect("as_eur");
     let share_pct = response.results.get("share_pct").expect("share_pct");
@@ -277,7 +295,7 @@ rule share_above_20: share_pct > 20%
     match &lit.value {
         ValueKind::Quantity(n, signature) => {
             assert_eq!(
-                ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+                ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 Decimal::from(200)
             );
             assert_eq!(
@@ -290,7 +308,9 @@ rule share_above_20: share_pct > 20%
     let lit = rule_literal(share_pct);
     if let ValueKind::Ratio(r, u) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(*r).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(r.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             Decimal::new(25, 2)
         );
         assert_eq!(u.as_deref(), Some("percent"));

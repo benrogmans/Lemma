@@ -1,7 +1,7 @@
 //! Adversarial: `effective_dates` unions every `effective_from` in the context; a consumer
 //! whose range contains many foreign boundaries must still plan and evaluate consistently.
 
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 fn date(y: i32, m: u32, d: u32) -> DateTimeValue {
@@ -14,6 +14,7 @@ fn date(y: i32, m: u32, d: u32) -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
@@ -43,7 +44,7 @@ rule out: s.v
 
     for month in 1..=12 {
         let d = date(2025, month, 5);
-        let r = engine.run(None, "consumer", Some(&d), HashMap::new(), false);
+        let r = engine.run(None, "consumer", Some(&d), HashMap::new(), false, None);
         assert!(r.is_ok(), "month {month}: {:?}", r.err());
         let resp = r.unwrap();
         let rule = resp.results.get("out").expect("out");

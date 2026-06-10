@@ -262,51 +262,6 @@ defmodule LemmaTest do
     end
   end
 
-  describe "invert/6" do
-    test "inverts a rule with any_value target" do
-      {:ok, engine} = Lemma.new()
-
-      spec = """
-      spec invertible
-      data x: number
-      rule y: x * 2
-      """
-
-      :ok = Lemma.load(engine, spec, "inv.lemma")
-
-      target = %{outcome: :any_value}
-
-      assert {:ok, result} = Lemma.invert(engine, "invertible", "2025-01-01", "y", target)
-      assert is_map(result)
-    end
-
-    test "inverts a rule with value target" do
-      {:ok, engine} = Lemma.new()
-
-      spec = """
-      spec invertible2
-      data x: number
-      rule y: x * 2
-      """
-
-      :ok = Lemma.load(engine, spec, "inv2.lemma")
-
-      target = %{outcome: :value, op: :eq, value: "10"}
-
-      assert {:ok, result} = Lemma.invert(engine, "invertible2", "2025-01-01", "y", target)
-      assert is_map(result)
-    end
-
-    test "rejects target without outcome" do
-      {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec inv3\ndata x: number\nrule y: x + 1", "inv3.lemma")
-
-      assert_raise ErlangError, fn ->
-        Lemma.invert(engine, "inv3", "2025-01-01", "y", %{op: :eq, value: "5"})
-      end
-    end
-  end
-
   describe "remove_spec/3" do
     test "removes a loaded spec" do
       {:ok, engine} = Lemma.new()

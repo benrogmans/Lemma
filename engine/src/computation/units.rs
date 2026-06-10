@@ -1,7 +1,8 @@
 //! Type casts (`as number`, `as text`, `as eur`, …).
 
 use crate::computation::rational::{
-    checked_div, checked_mul, convert_quantity_magnitude_rational, rational_one, RationalInteger,
+    checked_div, checked_mul, convert_quantity_magnitude_rational, rational_new, rational_one,
+    RationalInteger,
 };
 use crate::evaluation::operations::OperationResult;
 use crate::parsing::ast::PrimitiveKind;
@@ -31,12 +32,12 @@ pub fn convert_unit(
 ) -> OperationResult {
     match target {
         SemanticConversionTarget::Type(PrimitiveKind::Number) => cast_to_number(value),
-        SemanticConversionTarget::Type(PrimitiveKind::Text) => OperationResult::Value(Box::new(
+        SemanticConversionTarget::Type(PrimitiveKind::Text) => OperationResult::Value(
             LiteralValue::text_with_type(value.display_value(), primitive_text_arc().clone()),
-        )),
+        ),
         SemanticConversionTarget::Type(PrimitiveKind::Boolean) => {
             if value.lemma_type.is_boolean() {
-                OperationResult::Value(Box::new(value.clone()))
+                OperationResult::Value(value.clone())
             } else {
                 unreachable!(
                     "BUG: boolean cast on non-boolean; planning should have rejected {:?}",
@@ -46,7 +47,7 @@ pub fn convert_unit(
         }
         SemanticConversionTarget::Type(target_kind) => {
             if same_primitive_kind(value, *target_kind) {
-                OperationResult::Value(Box::new(value.clone()))
+                OperationResult::Value(value.clone())
             } else {
                 unreachable!(
                     "BUG: invalid identity cast {:?} -> {:?} reached runtime",
@@ -82,17 +83,17 @@ fn cast_to_unit(
 ) -> OperationResult {
     match &value.value {
         ValueKind::Number(magnitude) => {
-            cast_number_to_unit(*magnitude, unit_name, resolution_context)
+            cast_number_to_unit(magnitude.clone(), unit_name, resolution_context)
         }
         ValueKind::Quantity(magnitude, _) => {
-            cast_quantity_to_unit(*magnitude, unit_name, resolution_context)
+            cast_quantity_to_unit(magnitude.clone(), unit_name, resolution_context)
         }
         ValueKind::Range(left, right) => {
             cast_range_span_to_unit(left, right, unit_name, resolution_context)
         }
         ValueKind::Ratio(magnitude, from_unit) => cast_ratio_to_unit(
             value,
-            *magnitude,
+            magnitude.clone(),
             from_unit.as_deref(),
             unit_name,
             resolution_context,
@@ -119,14 +120,14 @@ fn cast_number_to_unit(
         )
     });
     if target_type.is_ratio() {
-        return OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+        return OperationResult::Value(LiteralValue::ratio_with_type(
             magnitude,
             Some(unit_name.to_string()),
             Arc::clone(target_type),
-        )));
+        ));
     }
-    let factor = target_type.quantity_unit_factor(unit_name);
-    let canonical = match checked_mul(&magnitude, factor) {
+    let factor = target_type.quantity_unit_factor(unit_name).clone();
+    let canonical = match checked_mul(&magnitude, &factor) {
         Ok(v) => v,
         Err(failure) => {
             return OperationResult::Veto(crate::evaluation::operations::VetoType::computation(
@@ -134,11 +135,11 @@ fn cast_number_to_unit(
             ))
         }
     };
-    OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
+    OperationResult::Value(LiteralValue::quantity_with_type(
         canonical,
         unit_name.to_string(),
         Arc::clone(target_type),
-    )))
+    ))
 }
 
 fn cast_quantity_to_unit(
@@ -155,11 +156,11 @@ fn cast_quantity_to_unit(
             unit_name
         )
     });
-    OperationResult::Value(Box::new(LiteralValue::quantity_with_type(
+    OperationResult::Value(LiteralValue::quantity_with_type(
         magnitude,
         unit_name.to_string(),
         Arc::clone(target_type),
-    )))
+    ))
 }
 
 fn cast_ratio_to_unit(
@@ -180,9 +181,9 @@ fn cast_ratio_to_unit(
     });
     if value.lemma_type.same_quantity_family(target_type.as_ref()) {
         let from_factor = from_unit
-            .map(|u| *value.lemma_type.quantity_unit_factor(u))
+            .map(|u| value.lemma_type.quantity_unit_factor(u).clone())
             .unwrap_or(rational_one());
-        let to_factor = *target_type.quantity_unit_factor(unit_name);
+        let to_factor = target_type.quantity_unit_factor(unit_name).clone();
         let converted =
             match convert_quantity_magnitude_rational(magnitude, &from_factor, &to_factor) {
                 Ok(m) => m,
@@ -192,17 +193,17 @@ fn cast_ratio_to_unit(
                     );
                 }
             };
-        OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+        OperationResult::Value(LiteralValue::ratio_with_type(
             converted,
             Some(unit_name.to_string()),
             Arc::clone(target_type),
-        )))
+        ))
     } else {
-        OperationResult::Value(Box::new(LiteralValue::ratio_with_type(
+        OperationResult::Value(LiteralValue::ratio_with_type(
             magnitude,
             Some(unit_name.to_string()),
             Arc::clone(target_type),
-        )))
+        ))
     }
 }
 
@@ -232,13 +233,13 @@ fn cast_range_span_to_unit(
         let OperationResult::Value(span) = super::range::compute_span(left, right) else {
             return super::range::compute_span(left, right);
         };
-        return convert_span_quantity_to_unit(span.as_ref(), unit_name, resolution_context);
+        return convert_span_quantity_to_unit(&span, unit_name, resolution_context);
     }
 
     let OperationResult::Value(span) = super::range::compute_span(left, right) else {
         return super::range::compute_span(left, right);
     };
-    let span = span.as_ref();
+    let span = &span;
     match &span.value {
         ValueKind::Quantity(_, _) => {
             convert_span_quantity_to_unit(span, unit_name, resolution_context)
@@ -249,14 +250,14 @@ fn cast_range_span_to_unit(
             };
             cast_ratio_to_unit(
                 span,
-                *magnitude,
+                magnitude.clone(),
                 from_unit.as_deref(),
                 unit_name,
                 resolution_context,
             )
         }
         ValueKind::Number(magnitude) => {
-            cast_number_to_unit(*magnitude, unit_name, resolution_context)
+            cast_number_to_unit(magnitude.clone(), unit_name, resolution_context)
         }
         other => unreachable!("BUG: unexpected range span value kind for unit cast: {other:?}"),
     }
@@ -270,7 +271,7 @@ fn convert_span_quantity_to_unit(
     let ValueKind::Quantity(magnitude, _) = &span.value else {
         unreachable!("BUG: span quantity expected");
     };
-    cast_quantity_to_unit(*magnitude, unit_name, resolution_context)
+    cast_quantity_to_unit(magnitude.clone(), unit_name, resolution_context)
 }
 
 fn semantic_calendar_unit(unit_name: &str) -> SemanticCalendarUnit {
@@ -288,41 +289,42 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             let OperationResult::Value(span_value) = span else {
                 return span;
             };
-            cast_to_number(span_value.as_ref())
+            cast_to_number(&span_value)
         }
         ValueKind::Quantity(magnitude, signature) if value.lemma_type.is_calendar_like() => {
             let unit_name = signature
                 .first()
                 .map(|(name, _)| name.as_str())
                 .expect("BUG: calendar quantity must carry a unit signature");
-            let factor = *value.lemma_type.quantity_unit_factor(unit_name);
+            let factor = value.lemma_type.quantity_unit_factor(unit_name).clone();
             let in_unit = checked_div(magnitude, &factor)
                 .expect("BUG: calendar de-canonicalization by unit factor must not fail");
-            OperationResult::Value(Box::new(LiteralValue::number_with_type(
+            OperationResult::Value(LiteralValue::number_with_type(
                 in_unit,
                 primitive_number_arc().clone(),
-            )))
+            ))
         }
-        ValueKind::Number(number) => OperationResult::Value(Box::new(
-            LiteralValue::number_with_type(*number, primitive_number_arc().clone()),
+        ValueKind::Number(number) => OperationResult::Value(LiteralValue::number_with_type(
+            number.clone(),
+            primitive_number_arc().clone(),
         )),
         ValueKind::Boolean(b) => {
             let n = if *b {
-                RationalInteger::new(1, 1)
+                rational_new(1, 1)
             } else {
-                RationalInteger::new(0, 1)
+                rational_new(0, 1)
             };
-            OperationResult::Value(Box::new(LiteralValue::number_with_type(
+            OperationResult::Value(LiteralValue::number_with_type(
                 n,
                 primitive_number_arc().clone(),
-            )))
+            ))
         }
-        ValueKind::Ratio(rational_value, _) => OperationResult::Value(Box::new(
-            LiteralValue::number_with_type(*rational_value, primitive_number_arc().clone()),
-        )),
+        ValueKind::Ratio(rational_value, _) => OperationResult::Value(
+            LiteralValue::number_with_type(rational_value.clone(), primitive_number_arc().clone()),
+        ),
         ValueKind::Quantity(magnitude, signature) => {
             let factor = match signature.as_slice() {
-                [(unit_name, 1)] => *value.lemma_type.quantity_unit_factor(unit_name),
+                [(unit_name, 1)] => value.lemma_type.quantity_unit_factor(unit_name).clone(),
                 [] => rational_one(),
                 _ => panic!(
                     "BUG: cast_to_number with compound signature must be rejected at planning"
@@ -330,43 +332,14 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             };
             let in_unit = checked_div(magnitude, &factor)
                 .expect("BUG: de-canonicalization by unit factor must not fail");
-            OperationResult::Value(Box::new(LiteralValue::number_with_type(
+            OperationResult::Value(LiteralValue::number_with_type(
                 in_unit,
                 primitive_number_arc().clone(),
-            )))
+            ))
         }
         ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) => unreachable!(
             "BUG: cast to number from {:?} should be rejected at planning",
             value.lemma_type.name()
         ),
     }
-}
-
-pub(crate) fn convert_calendar_magnitude(
-    value: crate::computation::rational::RationalInteger,
-    from: &crate::planning::semantics::SemanticCalendarUnit,
-    to: &crate::planning::semantics::SemanticCalendarUnit,
-) -> crate::computation::rational::RationalInteger {
-    convert_calendar(value, from, to)
-}
-
-fn convert_calendar(
-    value: crate::computation::rational::RationalInteger,
-    from: &crate::planning::semantics::SemanticCalendarUnit,
-    to: &crate::planning::semantics::SemanticCalendarUnit,
-) -> crate::computation::rational::RationalInteger {
-    use crate::computation::rational::{convert_quantity_magnitude_rational, rational_one};
-    if from == to {
-        return value;
-    }
-    let from_factor = match from {
-        crate::planning::semantics::SemanticCalendarUnit::Month => rational_one(),
-        crate::planning::semantics::SemanticCalendarUnit::Year => RationalInteger::new(12, 1),
-    };
-    let to_factor = match to {
-        crate::planning::semantics::SemanticCalendarUnit::Month => rational_one(),
-        crate::planning::semantics::SemanticCalendarUnit::Year => RationalInteger::new(12, 1),
-    };
-    convert_quantity_magnitude_rational(value, &from_factor, &to_factor)
-        .expect("BUG: calendar unit conversion failed after planning")
 }

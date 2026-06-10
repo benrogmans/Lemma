@@ -67,7 +67,7 @@ fn invalid_text_option_override_completes_with_veto_not_validation_error() {
     let data = full_coffee_data("tea");
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "coffee_order", Some(&now), data, false),
+        engine.run(None, "coffee_order", Some(&now), data, false, None),
         "product=tea (not in options)",
     );
 
@@ -91,7 +91,7 @@ fn below_minimum_number_override_completes_with_veto_not_validation_error() {
     data.insert("age".to_string(), "-5".to_string());
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "coffee_order", Some(&now), data, false),
+        engine.run(None, "coffee_order", Some(&now), data, false, None),
         "age=-5 (below minimum 0)",
     );
 
@@ -118,7 +118,7 @@ rule doubled: age * 2
     data.insert("age".to_string(), "twenty".to_string());
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "age=twenty (not a number)",
     );
 
@@ -139,7 +139,7 @@ fn below_minimum_typedecl_override_completes_with_veto_not_validation_error() {
     ]);
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "recipe_scaling", Some(&now), data, false),
+        engine.run(None, "recipe_scaling", Some(&now), data, false, None),
         "desired_servings=0 (below minimum 1)",
     );
 
@@ -166,7 +166,7 @@ rule flag: active
     data.insert("active".to_string(), "maybe".to_string());
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "s", Some(&now), data, false),
+        engine.run(None, "s", Some(&now), data, false, None),
         "active=maybe (not boolean)",
     );
 

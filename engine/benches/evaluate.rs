@@ -1,32 +1,53 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 mod common;
 
+fn latency_target_rule(spec_name: &str) -> &'static str {
+    match spec_name {
+        "bench_shipping" | "bench_pricing" => "total",
+        "bench_order_pipeline" => "grand_total",
+        other => panic!("BUG: no latency target rule for bench spec '{other}'"),
+    }
+}
+
 fn bench_fixture(criterion: &mut Criterion, fixture: &common::Fixture) {
     let engine = common::build_engine(fixture);
     let plan = engine
         .get_plan(None, fixture.spec_name, Some(&fixture.effective))
         .expect("BUG: bench fixture must produce execution plan");
-    let raw_bytes = fixture.data_json.as_bytes();
+    let data_template = &fixture.data;
+    let target_rule = latency_target_rule(fixture.spec_name).to_string();
 
     let mut group = criterion.benchmark_group(fixture.spec_name);
     group.throughput(Throughput::Elements(1));
 
     group.bench_function("run_plan", |bencher| {
         bencher.iter(|| {
-            let data = common::parse_data_values(raw_bytes);
+            let data = data_template.clone();
             let response = engine
-                .run_plan(plan, Some(&fixture.effective), data, false, true)
+                .run_plan(
+                    plan,
+                    Some(&fixture.effective),
+                    data,
+                    false,
+                    Some(std::slice::from_ref(&target_rule)),
+                )
                 .expect("BUG: bench fixture must evaluate");
             std::hint::black_box(response);
         });
     });
 
-    group.bench_function("run_plan_traced", |bencher| {
+    group.bench_function("run_plan_explain", |bencher| {
         bencher.iter(|| {
-            let data = common::parse_data_values(raw_bytes);
+            let data = data_template.clone();
             let response = engine
-                .run_plan(plan, Some(&fixture.effective), data, true, true)
-                .expect("BUG: bench fixture must evaluate with trace");
+                .run_plan(
+                    plan,
+                    Some(&fixture.effective),
+                    data,
+                    true,
+                    Some(std::slice::from_ref(&target_rule)),
+                )
+                .expect("BUG: bench fixture must evaluate");
             std::hint::black_box(response);
         });
     });

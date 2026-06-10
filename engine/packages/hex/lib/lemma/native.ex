@@ -34,16 +34,6 @@ defmodule Lemma.Native do
   def lemma_run(_resource, _spec, _effective_opt, _data_values),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_invert(
-        _resource,
-        _spec_name,
-        _effective_opt,
-        _rule_name,
-        _target_term,
-        _values
-      ),
-      do: :erlang.nif_error(:nif_not_loaded)
-
   def lemma_remove_spec(_resource, _spec_name, _effective),
     do: :erlang.nif_error(:nif_not_loaded)
 

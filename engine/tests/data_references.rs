@@ -87,7 +87,7 @@ rule answer: lic.slot
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false, None)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "answer"), "99");
@@ -258,7 +258,7 @@ rule r: i.limited
     match load_result {
         Ok(()) => {
             let now = DateTimeValue::now();
-            let run_result = engine.run(None, "outer", Some(&now), HashMap::new(), false);
+            let run_result = engine.run(None, "outer", Some(&now), HashMap::new(), false, None);
 
             match run_result {
                 Ok(resp) => {
@@ -319,7 +319,7 @@ rule r: person
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "s", Some(&now), HashMap::new(), false)
+        .run(None, "s", Some(&now), HashMap::new(), false, None)
         .expect("evaluates; `person` is typed 'age' and inherits its default");
 
     assert_eq!(rule_value(&result, "r"), "30");
@@ -350,7 +350,7 @@ rule r: i.slot
 
     let now = DateTimeValue::now();
     let result = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
     assert_eq!(rule_value(&result, "r"), "123");
 }

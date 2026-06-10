@@ -1151,7 +1151,7 @@
             const dataObj = serializeDataValues(key);
 
             try {
-                const response = engine.run(repo, name, [], dataObj, effective);
+                const response = engine.run(repo, name, null, dataObj, effective);
                 state.evalResults[key] = { success: true, response: response };
             } catch (e) {
                 state.evalResults[key] = { success: false, error: e.message || String(e) };

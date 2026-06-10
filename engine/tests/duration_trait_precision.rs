@@ -1,5 +1,4 @@
-use lemma::{DateTimeValue, TimezoneValue};
-use lemma::{Engine, ValueKind};
+use lemma::{DateGranularity, DateTimeValue, Engine, TimezoneValue, ValueKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,6 +20,7 @@ fn effective_us(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32, us: u32) -> Da
             offset_hours: 0,
             offset_minutes: 0,
         }),
+        granularity: DateGranularity::DateTime,
     }
 }
 
@@ -34,13 +34,13 @@ fn eval_literal(
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let response = engine
-        .run(None, spec_name, Some(effective), HashMap::new(), true)
+        .run(None, spec_name, Some(effective), HashMap::new(), true, None)
         .expect("Should evaluate");
     response
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result

@@ -24,14 +24,16 @@ fn rule_answer_decimal(response: &lemma::Response) -> Decimal {
         .get("answer")
         .expect("spec defines rule answer");
     let lit = rr
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
     match &lit.value {
-        lemma::ValueKind::Number(n) => lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+        lemma::ValueKind::Number(n) => lemma::ValueKind::Number(n.clone())
+            .as_decimal_magnitude()
+            .unwrap(),
         other => panic!("expected number answer, got {:?}", other),
     }
 }
@@ -74,12 +76,25 @@ rule answer: 99
         "BUG: plan_sets and planning results are keyed only by spec.name — \
          alpha::duped and beta::duped must not share the same &ExecutionPlan"
     );
-
     let run_alpha = engine
-        .run(Some("alpha"), "duped", Some(&now), Default::default(), true)
+        .run(
+            Some("alpha"),
+            "duped",
+            Some(&now),
+            Default::default(),
+            true,
+            None,
+        )
         .expect("run alpha");
     let run_beta = engine
-        .run(Some("beta"), "duped", Some(&now), Default::default(), true)
+        .run(
+            Some("beta"),
+            "duped",
+            Some(&now),
+            Default::default(),
+            true,
+            None,
+        )
         .expect("run beta");
 
     assert_eq!(

@@ -16,7 +16,7 @@ fn run_override_veto_message(
 ) -> String {
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, true)
+        .run(None, spec, Some(&now), data, true, None)
         .unwrap_or_else(|err| panic!("run must complete with veto, not Error: {err}"));
     let rr = resp
         .results
@@ -56,7 +56,8 @@ rule check: accept
             "pricing",
             Some(&now),
             HashMap::from([("price".to_string(), "150 eur".to_string())]),
-            false,
+            true,
+            None,
         )
         .unwrap();
 
@@ -116,7 +117,7 @@ rule price_eur: amount as eur
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true)
+        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule_result = response
         .results
@@ -126,7 +127,7 @@ rule price_eur: amount as eur
 
     assert!(!rule_result.vetoed);
     let lit = rule_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -151,7 +152,7 @@ rule price_eur: amount as eur
     };
 
     assert_eq!(
-        lemma::ValueKind::Number(*amount)
+        lemma::ValueKind::Number(amount.clone())
             .as_decimal_magnitude()
             .unwrap(),
         Decimal::from(84)
@@ -176,7 +177,7 @@ rule taxable: gross - pension
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true)
+        .run(None, "t", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let rule_result = response
@@ -237,7 +238,7 @@ rule base_shipping: 5.99
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "shipping", Some(&now), HashMap::new(), true)
+        .run(None, "shipping", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let rule_result = response
@@ -249,7 +250,7 @@ rule base_shipping: 5.99
     // package_weight = 2.5 kg, which is > 1 kg but not > 5 kg, so second unless wins: 8.99
     assert!(!rule_result.vetoed);
     let lit = rule_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -258,7 +259,9 @@ rule base_shipping: 5.99
     match &lit.value {
         ValueKind::Number(d) => {
             assert_eq!(
-                lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(d.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 Decimal::new(899, 2)
             );
         }
@@ -286,7 +289,7 @@ rule total: base_fee + surcharge
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "shipping", Some(&now), HashMap::new(), true)
+        .run(None, "shipping", Some(&now), HashMap::new(), true, None)
         .unwrap();
 
     let rule_result = response
@@ -297,7 +300,7 @@ rule total: base_fee + surcharge
 
     assert!(!rule_result.vetoed);
     let lit = rule_result
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -306,7 +309,9 @@ rule total: base_fee + surcharge
     match &lit.value {
         ValueKind::Quantity(d, _) => {
             assert_eq!(
-                lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap(),
+                lemma::ValueKind::Number(d.clone())
+                    .as_decimal_magnitude()
+                    .unwrap(),
                 Decimal::new(799, 2)
             );
         }
@@ -336,7 +341,7 @@ rule result: mass as gram as number
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true)
+        .run(None, "physics", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response
         .results
@@ -346,14 +351,14 @@ rule result: mass as gram as number
 
     assert!(!rule.vetoed);
     let lit = rule
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
     let amount = match &lit.value {
-        ValueKind::Number(n) => *n,
+        ValueKind::Number(n) => n.clone(),
         other => panic!("expected Number from unit extraction, got {other:?}"),
     };
 
@@ -383,7 +388,7 @@ rule result: mass as kilogram as number
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true)
+        .run(None, "physics", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response
         .results
@@ -393,14 +398,14 @@ rule result: mass as kilogram as number
 
     assert!(!rule.vetoed);
     let lit = rule
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
     let amount = match &lit.value {
-        ValueKind::Number(n) => *n,
+        ValueKind::Number(n) => n.clone(),
         other => panic!("expected Number from unit extraction, got {other:?}"),
     };
 
@@ -431,7 +436,7 @@ rule result: mass as gram as number
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true)
+        .run(None, "physics", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response
         .results
@@ -441,14 +446,14 @@ rule result: mass as gram as number
 
     assert!(!rule.vetoed);
     let lit = rule
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
         .expect("value");
     let amount = match &lit.value {
-        ValueKind::Number(n) => *n,
+        ValueKind::Number(n) => n.clone(),
         other => panic!("expected Number from unit extraction, got {other:?}"),
     };
 
@@ -480,7 +485,7 @@ rule total: a + b
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true)
+        .run(None, "physics", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response
         .results
@@ -511,7 +516,7 @@ rule heavy: package > 1 kilogram
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), false)
+        .run(None, "physics", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response
         .results
@@ -553,7 +558,8 @@ rule result: weight
         "physics",
         Some(&now),
         HashMap::from([("weight".to_string(), "1500 gram".to_string())]),
-        false,
+        true,
+        None,
     );
 
     assert!(
@@ -587,7 +593,8 @@ rule result: weight
         "physics",
         Some(&now),
         HashMap::from([("weight".to_string(), "1500 gram".to_string())]),
-        false,
+        true,
+        None,
     );
 
     assert!(
@@ -741,7 +748,8 @@ fn compound_quantity_below_maximum_in_other_unit_passes() {
             "cost_per_unit".to_string(),
             "2.01 usd_per_tonne".to_string(),
         )]),
-        false,
+        true,
+        None,
     );
 
     assert!(
@@ -820,7 +828,8 @@ fn tri_compound_quantity_below_maximum_in_other_unit_passes() {
             "storage_cost".to_string(),
             "2.01 usd_per_ton_hour".to_string(),
         )]),
-        false,
+        true,
+        None,
     );
 
     assert!(
@@ -917,7 +926,7 @@ fn eval_rule_quantity_magnitude(
 ) -> (Decimal, String) {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true)
+        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
         .expect("precision stress evaluation must complete");
     let rule = response
         .results
@@ -931,7 +940,7 @@ fn eval_rule_quantity_magnitude(
     );
     if let Some(quantity) = &rule.quantity {
         let lit = rule
-            .trace
+            .explanation
             .as_ref()
             .expect("explanation")
             .result
@@ -953,7 +962,7 @@ fn eval_rule_quantity_magnitude(
         );
     }
     let lit = rule
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -961,7 +970,7 @@ fn eval_rule_quantity_magnitude(
         .expect("value");
     match &lit.value {
         ValueKind::Quantity(amount, sig) => (
-            lemma::ValueKind::Number(*amount)
+            lemma::ValueKind::Number(amount.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             sig.first().map(|(n, _)| n.clone()).unwrap_or_default(),
@@ -1228,7 +1237,7 @@ rule quotient: ten / zero
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "div0_control", Some(&now), HashMap::new(), true)
+        .run(None, "div0_control", Some(&now), HashMap::new(), true, None)
         .expect("evaluation must complete");
     let rule = response
         .results
@@ -1276,7 +1285,7 @@ rule r: x as minutes
     let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
     let tampered_plan: ExecutionPlan = ExecutionPlan::try_from(serialized).unwrap();
 
-    let result = engine.run_plan(&tampered_plan, Some(&now), HashMap::new(), false, true);
+    let result = engine.run_plan(&tampered_plan, Some(&now), HashMap::new(), true, None);
     assert!(
         result.is_err(),
         "stale unit_index must surface as Error, not Ok: {:?}",
@@ -1302,13 +1311,13 @@ rule out: 5 eur as kg
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true)
+        .run(None, "t", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let lit = response
         .results
         .get("out")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -1316,7 +1325,9 @@ rule out: 5 eur as kg
         .expect("value");
     let (magnitude, sig) = match &lit.value {
         ValueKind::Quantity(m, s) => (
-            lemma::ValueKind::Number(*m).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(m.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             s,
         ),
         other => panic!("expected Quantity, got {other:?}"),
@@ -1351,13 +1362,13 @@ rule out: amount as eur as kg
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true)
+        .run(None, "t", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let lit = response
         .results
         .get("out")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -1365,7 +1376,9 @@ rule out: amount as eur as kg
         .expect("value");
     let (magnitude, sig) = match &lit.value {
         ValueKind::Quantity(m, s) => (
-            lemma::ValueKind::Number(*m).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(m.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             s,
         ),
         other => panic!("expected Quantity, got {other:?}"),
@@ -1393,13 +1406,13 @@ rule out: amount as eur as number as kg
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true)
+        .run(None, "t", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let lit = response
         .results
         .get("out")
         .unwrap()
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -1407,7 +1420,9 @@ rule out: amount as eur as number as kg
         .expect("value");
     let (magnitude, sig) = match &lit.value {
         ValueKind::Quantity(m, s) => (
-            lemma::ValueKind::Number(*m).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(m.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             s,
         ),
         other => panic!("expected Quantity, got {other:?}"),

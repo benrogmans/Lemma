@@ -56,8 +56,8 @@ impl Serialize for VetoType {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationResult {
-    /// Operation produced a value (boxed to keep enum small)
-    Value(Box<LiteralValue>),
+    /// Operation produced a value
+    Value(LiteralValue),
     /// Operation was vetoed (valid result, no value)
     Veto(VetoType),
 }
@@ -70,13 +70,13 @@ impl OperationResult {
     #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
-            OperationResult::Value(v) => Some(v.as_ref()),
+            OperationResult::Value(v) => Some(v),
             OperationResult::Veto(_) => None,
         }
     }
 
     pub fn number(number: rust_decimal::Decimal) -> Self {
-        Self::Value(Box::new(LiteralValue::number_from_decimal(number)))
+        Self::Value(LiteralValue::number_from_decimal(number))
     }
 
     pub fn quantity(
@@ -92,40 +92,43 @@ impl OperationResult {
         let rational = crate::literals::rational_from_parsed_decimal(value)
             .expect("BUG: operation result quantity must lift at boundary");
         let factor = if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
-            units.get(&unit_name).map(|u| u.factor).unwrap_or_else(|_| {
-                panic!(
-                    "BUG: OperationResult::quantity unit '{}' not declared on type",
-                    unit_name
-                )
-            })
+            units
+                .get(&unit_name)
+                .map(|u| u.factor.clone())
+                .unwrap_or_else(|_| {
+                    panic!(
+                        "BUG: OperationResult::quantity unit '{}' not declared on type",
+                        unit_name
+                    )
+                })
         } else {
             crate::computation::rational::rational_one()
         };
         let canonical = checked_mul(&rational, &factor)
             .expect("BUG: quantity canonicalization overflow in OperationResult::quantity");
-        Self::Value(Box::new(LiteralValue::quantity_with_type(
+        Self::Value(LiteralValue::quantity_with_type(
             canonical, unit_name, lemma_type,
-        )))
+        ))
     }
 
     pub fn text(text: impl Into<String>) -> Self {
-        Self::Value(Box::new(LiteralValue::text(text.into())))
+        Self::Value(LiteralValue::text(text.into()))
     }
 
     pub fn date(date: impl Into<SemanticDateTime>) -> Self {
-        Self::Value(Box::new(LiteralValue::date(date.into())))
+        Self::Value(LiteralValue::date(date.into()))
     }
 
     pub fn time(time: impl Into<SemanticTime>) -> Self {
-        Self::Value(Box::new(LiteralValue::time(time.into())))
+        Self::Value(LiteralValue::time(time.into()))
     }
 
     pub fn boolean(boolean: bool) -> Self {
-        Self::Value(Box::new(LiteralValue::from_bool(boolean)))
+        Self::Value(LiteralValue::from_bool(boolean))
     }
 
     pub fn ratio(rational: rust_decimal::Decimal) -> Self {
-        Self::Value(Box::new(LiteralValue::ratio_from_decimal(rational, None)))
+        Self::Value(LiteralValue::ratio_from_decimal(rational, None))
     }
 
     pub fn veto(veto: impl Into<String>) -> Self {

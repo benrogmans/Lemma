@@ -44,7 +44,14 @@ rule total: rules.final_total
     let now = DateTimeValue::now();
     // Evaluate with missing quantity data
     let response = engine
-        .run(None, "rules_and_unless", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "rules_and_unless",
+            Some(&now),
+            HashMap::new(),
+            false,
+            None,
+        )
         .unwrap();
 
     let total_rule = response
@@ -87,7 +94,7 @@ rule message: "Order processed"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_spec", Some(&now), data, false)
+        .run(None, "test_spec", Some(&now), data, false, None)
         .unwrap();
 
     // subtotal should fail due to missing quantity
@@ -139,7 +146,7 @@ rule r: i.slot
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false)
+        .run(None, "outer", Some(&now), HashMap::new(), false, None)
         .expect("evaluates");
 
     let rr = resp.results.get("r").expect("rule 'r'");
@@ -181,7 +188,7 @@ rule out: i.divided
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "top", Some(&now), HashMap::new(), false)
+        .run(None, "top", Some(&now), HashMap::new(), false, None)
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = resp.results.get("out").expect("rule 'out'");

@@ -18,19 +18,23 @@ The server uses the Lemma engine with **registry** support (LemmaBase) for resol
 From the **repository root**:
 
 ```bash
-cargo build --release -p lsp
+cargo build --release -p lemma
 ```
 
-The binary is produced at `target/release/lsp`.
+The LSP runs as `lemma lsp` (stdio). The standalone `lsp` binary (`cargo build --release -p lsp`) still exists for direct invocation and WASM builds.
 
 The crate also supports a **WASM** build for in-browser use; the library entry point is `lsp::browser::serve`. The Lemma WASM playground does not use the LSP for diagnostics; it uses the engine’s `getDiagnostics` API directly for inline errors.
 
 ## Usage
 
-Run the binary with no arguments. It speaks LSP over stdio:
+Run the server over stdio:
 
-- **VS Code / Cursor** — Use the extension under [editors/vscode](editors/vscode). It starts the LSP automatically and looks for `target/release/lsp` when the workspace root is the Lemma repo, or uses the `lemma.lspServerPath` setting. Format-on-save and diagnostics only work when the LSP is running; see [editors/vscode/README.md](editors/vscode/README.md) if format on save does nothing.
-- **Other editors** — Point your editor’s LSP client at the `lsp` binary with stdio transport (no extra arguments).
+```bash
+lemma lsp
+```
+
+- **VS Code / Cursor** — Use the extension under [editors/vscode](editors/vscode). It runs `lemma lsp` automatically and looks for `target/release/lemma` when the workspace root is the Lemma repo, or uses the `lemma.lspServerPath` setting. Format-on-save and diagnostics only work when the LSP is running; see [editors/vscode/README.md](editors/vscode/README.md) if format on save does nothing.
+- **Other editors** — Point your editor’s LSP client at `lemma` with argument `lsp` and stdio transport.
 
 ## Layout
 

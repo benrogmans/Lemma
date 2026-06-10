@@ -8,10 +8,16 @@ fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile)?;
     let now = DateTimeValue::now();
-    let mut resp = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+    let resp = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            Some(&[rule.to_string()]),
+        )
         .expect("run should succeed after load");
-    resp.filter_rules(&[rule.to_string()]);
     let v = resp
         .results
         .values()
@@ -24,7 +30,9 @@ fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
 fn run_decimal(code: &str, rule: &str) -> Result<Decimal, lemma::Errors> {
     let lit = run_literal(code, rule)?;
     match &lit.value {
-        ValueKind::Number(d) => Ok(lemma::ValueKind::Number(*d).as_decimal_magnitude().unwrap()),
+        ValueKind::Number(d) => Ok(lemma::ValueKind::Number(d.clone())
+            .as_decimal_magnitude()
+            .unwrap()),
         other => panic!("expected stored Number(Decimal), got {:?}", other),
     }
 }
@@ -33,20 +41,54 @@ fn run_literal(code: &str, rule: &str) -> Result<lemma::LiteralValue, lemma::Err
     let mut engine = Engine::new();
     engine.load(code, lemma::SourceType::Volatile)?;
     let now = DateTimeValue::now();
-    let mut resp = engine
-        .run(None, "test", Some(&now), HashMap::new(), true)
+    let resp = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            Some(&[rule.to_string()]),
+        )
         .expect("run should succeed after load");
-    resp.filter_rules(&[rule.to_string()]);
-    Ok(resp
-        .results
-        .values()
-        .find(|r| r.rule.name == rule)
-        .and_then(|r| r.trace.as_ref())
-        .expect("trace")
-        .result
-        .value()
-        .expect("value")
-        .clone())
+    let rule_result = resp.get(rule).unwrap_or_else(|_| panic!("rule {rule}"));
+    if rule_result.vetoed {
+        panic!("rule {rule} vetoed");
+    }
+    Ok(rule_result.materialized_literal())
+}
+
+fn run_authoritative_decimal(code: &str, rule: &str) -> Decimal {
+    let mut engine = Engine::new();
+    engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect("load");
+    let now = DateTimeValue::now();
+    let resp = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            HashMap::new(),
+            false,
+            Some(&[rule.to_string()]),
+        )
+        .expect("run");
+    let rule_result = resp.get(rule).unwrap_or_else(|_| {
+        panic!(
+            "rule '{rule}' missing from results; have {:?}",
+            resp.results.keys().collect::<Vec<_>>()
+        )
+    });
+    assert!(
+        !rule_result.vetoed,
+        "rule '{rule}' must not veto; reason={:?}",
+        rule_result.veto_reason
+    );
+    let display = rule_result.display.clone().expect("authoritative display");
+    display.parse().unwrap_or_else(|_| {
+        panic!("authoritative display for '{rule}' must be decimal, got '{display}'")
+    })
 }
 
 fn assert_close_decimal(actual: Decimal, expected: Decimal, tol: Decimal) {
@@ -106,20 +148,33 @@ fn test_sqrt_perfect_square_stores_decimal() -> Result<(), lemma::Errors> {
 }
 
 #[test]
-fn test_sqrt_and_log_irrational() -> Result<(), lemma::Errors> {
+fn test_sqrt_cross_rule_product_exact_two() {
     let code = r#"
     spec test
-    rule b: sqrt 2
-    rule c: log (exp 1)
-    rule d: log 1
-    rule bb: (sqrt 2) * (sqrt 2)
+    rule sqrt_two: sqrt 2
+    rule sqrt_product: sqrt_two * sqrt_two
     "#;
-    let bb = run_decimal(code, "bb")?;
-    assert_close_decimal(bb, Decimal::from(2), tol(9));
-    let c = run_decimal(code, "c")?;
-    assert_close_decimal(c, Decimal::ONE, tol(9));
-    assert_eq!(run_decimal(code, "d")?, Decimal::ZERO);
-    Ok(())
+    assert_eq!(
+        run_authoritative_decimal(code, "sqrt_product"),
+        Decimal::from(2),
+        "sqrt(2)*sqrt(2) across rules must normalize to exact 2"
+    );
+}
+
+#[test]
+fn test_log_cross_rule_exp_exact_one() {
+    let code = r#"
+    spec test
+    rule exp_one: exp 1
+    rule log_one: log exp_one
+    rule log_zero: log 1
+    "#;
+    assert_eq!(
+        run_authoritative_decimal(code, "log_one"),
+        Decimal::ONE,
+        "log(exp(1)) across rules must normalize to exact 1"
+    );
+    assert_eq!(run_authoritative_decimal(code, "log_zero"), Decimal::ZERO);
 }
 
 #[test]

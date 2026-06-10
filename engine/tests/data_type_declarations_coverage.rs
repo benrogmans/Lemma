@@ -59,7 +59,7 @@ fn run(
     data: HashMap<String, String>,
 ) -> Result<lemma::Response, lemma::Error> {
     let now = DateTimeValue::now();
-    engine.run(None, spec, Some(&now), data, false)
+    engine.run(None, spec, Some(&now), data, false, None)
 }
 
 // ─── Type-only data + missing at runtime → MissingData veto ──────────

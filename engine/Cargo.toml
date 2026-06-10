@@ -18,16 +18,11 @@ name = "lemma"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-postcard = { version = "1", features = ["alloc"] }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rust_decimal.workspace = true
-num-rational.workspace = true
-num-integer.workspace = true
 indexmap = { version = "2.0", features = ["serde"] }
-sha2 = "0.10"
-boolean_expression = "0.4"
 async-trait = "0.1"
 reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls"] }
 
@@ -47,8 +42,6 @@ serde-wasm-bindgen = "0.6"
 workspace = true
 
 [dev-dependencies]
-proptest = "1.4"
-insta = "1.34"
 tokio.workspace = true
 criterion = { version = "0.8", features = ["html_reports"] }
 stats_alloc = "0.1"

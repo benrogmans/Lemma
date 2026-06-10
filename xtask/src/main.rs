@@ -1,4 +1,4 @@
-mod bench_report;
+mod benchmarks;
 mod hex_standalone;
 mod lsp;
 mod versions;
@@ -149,7 +149,7 @@ fn precommit() {
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo run -p xtask -- bench-report"
+        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>"
     );
 }
 
@@ -212,15 +212,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Some("bench-report") => {
-            if args.next().is_some() {
-                eprintln!("bench-report: takes no arguments");
-                usage();
-                std::process::exit(1);
-            }
+        Some("benchmarks") => {
+            let rest: Vec<String> = args.collect();
             let root = versions::workspace_root();
-            if let Err(e) = bench_report::run(&root) {
-                eprintln!("bench-report: {e}");
+            if let Err(e) = benchmarks::run(&root, &rest) {
+                eprintln!("benchmarks: {e}");
+                usage();
                 std::process::exit(1);
             }
         }

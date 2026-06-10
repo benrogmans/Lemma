@@ -2,7 +2,7 @@
 //!
 //! Each `scenario_XX_*` test encodes a fixture and asserts planning/load or eval outcomes.
 
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,6 +16,7 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
@@ -25,7 +26,14 @@ fn path_source(name: &str) -> SourceType {
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(None, spec_name, Some(effective), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            HashMap::new(),
+            false,
+            None,
+        )
         .unwrap()
 }
 
@@ -236,7 +244,7 @@ rule r: i.x
     let now = DateTimeValue::now();
     assert_rule_value(
         &engine
-            .run(None, "outer", Some(&now), HashMap::new(), false)
+            .run(None, "outer", Some(&now), HashMap::new(), false, None)
             .expect("scenario 27b: eval outer"),
         "r",
         "1",

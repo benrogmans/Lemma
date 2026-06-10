@@ -21,12 +21,19 @@ fn engine_run_resolves_unambiguous_spec_from_any_repo() {
         .expect("parse and plan must succeed for named-repo specs");
 
     let now = DateTimeValue::now();
-    let outcome = engine.run(None, "tax", Some(&now), HashMap::new(), false);
+    let outcome = engine.run(None, "tax", Some(&now), HashMap::new(), false, None);
     assert!(
         outcome.is_err(),
         "run(None, name) targets workspace; spec in named repo should not be found"
     );
-    let outcome = engine.run(Some("scoped"), "tax", Some(&now), HashMap::new(), false);
+    let outcome = engine.run(
+        Some("scoped"),
+        "tax",
+        Some(&now),
+        HashMap::new(),
+        false,
+        None,
+    );
     assert!(
         outcome.is_ok(),
         "run(Some(repo), name) should find spec in named repo"
@@ -52,7 +59,7 @@ rule r: x"#,
         .expect("duplicate names across repos should load");
 
     let now = DateTimeValue::now();
-    let main_run = engine.run(None, "s", Some(&now), HashMap::new(), false);
+    let main_run = engine.run(None, "s", Some(&now), HashMap::new(), false, None);
     assert!(
         main_run.is_err(),
         "bare spec name `s` is not in main repository; run must not silently pick one repo"
@@ -83,7 +90,7 @@ rule out: dep.val"#,
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "consumer", Some(&now), HashMap::new(), false)
+        .run(None, "consumer", Some(&now), HashMap::new(), false, None)
         .expect("consumer should resolve cross-repo uses");
     assert!(
         response.results.contains_key("out"),
@@ -282,17 +289,31 @@ rule z: q"#,
 
     let now = DateTimeValue::now();
     assert!(engine
-        .run(None, "main_only", Some(&now), HashMap::new(), false,)
+        .run(None, "main_only", Some(&now), HashMap::new(), false, None,)
         .is_ok());
     assert!(
         engine
-            .run(None, "named_only", Some(&now), HashMap::new(), false,)
+            .run(
+                None,
+                "named_only",
+                Some(&now),
+                HashMap::new(),
+                false,
+                Some(&["z".to_string()]),
+            )
             .is_err(),
         "run(None, name) targets workspace; spec in named repo `r` should not be found"
     );
     assert!(
         engine
-            .run(Some("r"), "named_only", Some(&now), HashMap::new(), false,)
+            .run(
+                Some("r"),
+                "named_only",
+                Some(&now),
+                HashMap::new(),
+                false,
+                None,
+            )
             .is_ok(),
         "run(Some(repo), name) should find spec in named repo"
     );

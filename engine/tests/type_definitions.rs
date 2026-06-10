@@ -80,9 +80,8 @@ rule total: age + adult_age + twenties
     data.insert("age".to_string(), "25".to_string());
     data.insert("adult_age".to_string(), "30".to_string());
     data.insert("twenties".to_string(), "25".to_string());
-
     let response = engine
-        .run(None, "test_types", Some(&now), data, false)
+        .run(None, "test_types", Some(&now), data, false, None)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "test_types");
@@ -120,7 +119,7 @@ rule x: pi
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "finance", Some(&now), HashMap::new(), false)
+        .run(None, "finance", Some(&now), HashMap::new(), false, None)
         .expect("run finance");
 
     let rule_x = response.results.get("x").expect("rule x");
@@ -153,7 +152,7 @@ fn test_quantity_type_default_before_unit_declarations() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "pricing", Some(&now)).unwrap();
-    let schema = plan.schema();
+    let schema = plan.schema(&lemma::DataOverlay::default());
     let entry = schema.data.get("price").expect("price data in schema");
     assert!(
         entry.lemma_type.is_quantity(),
@@ -196,7 +195,7 @@ fn test_quantity_type_default_after_unit_declarations() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "pricing", Some(&now)).unwrap();
-    let schema = plan.schema();
+    let schema = plan.schema(&lemma::DataOverlay::default());
     let entry = schema.data.get("money").expect("money data in schema");
     assert!(
         entry.lemma_type.is_quantity(),
@@ -237,7 +236,7 @@ fn test_schema_returns_data_in_definition_order() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "ordering", Some(&now)).unwrap();
-    let schema = plan.schema();
+    let schema = plan.schema(&lemma::DataOverlay::default());
     let data_names: Vec<&String> = schema.data.keys().collect();
     assert_eq!(
         data_names,
@@ -267,7 +266,9 @@ fn test_schema_for_rules_returns_data_in_definition_order() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "ordering", Some(&now)).unwrap();
-    let schema = plan.schema_for_rules(&["total".to_string()]).unwrap();
+    let schema = plan
+        .schema_for_rules(&["total".to_string()], &lemma::DataOverlay::default())
+        .unwrap();
     let data_names: Vec<&String> = schema.data.keys().collect();
     assert_eq!(
         data_names,
@@ -298,7 +299,7 @@ fn test_schema_splits_bound_literal_and_default_suggestion() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "defaults", Some(&now)).unwrap();
-    let schema = plan.schema();
+    let schema = plan.schema(&lemma::DataOverlay::default());
 
     let quantity = schema.data.get("quantity").expect("quantity should exist");
     assert!(
@@ -342,7 +343,7 @@ fn test_schema_quantity_default_is_value() {
     let now = DateTimeValue::now();
 
     let plan = engine.get_plan(None, "salary", Some(&now)).unwrap();
-    let schema = plan.schema();
+    let schema = plan.schema(&lemma::DataOverlay::default());
 
     let salary = schema.data.get("salary").expect("salary should exist");
     assert!(
@@ -373,7 +374,10 @@ fn test_typedef_default_inherits_through_extension_chain() {
         .unwrap();
     let now = DateTimeValue::now();
 
-    let schema = engine.get_plan(None, "chain", Some(&now)).unwrap().schema();
+    let schema = engine
+        .get_plan(None, "chain", Some(&now))
+        .unwrap()
+        .schema(&lemma::DataOverlay::default());
     let final_price = schema
         .data
         .get("final_price")

@@ -1,4 +1,4 @@
-//! Build the Lemma LSP binary and prepare the VS Code / Cursor extension from this workspace.
+//! Build the Lemma CLI and prepare the VS Code / Cursor extension from this workspace.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -31,15 +31,15 @@ fn run_npm(vscode_dir: &Path, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn build_release_lsp(root: &Path) -> Result<(), String> {
+fn build_release_lemma(root: &Path) -> Result<(), String> {
     let status = Command::new(cargo_bin())
         .current_dir(root)
-        .args(["build", "--release", "-p", "lsp"])
+        .args(["build", "--release", "-p", "lemma"])
         .status()
-        .map_err(|e| format!("failed to run cargo build --release -p lsp: {e}"))?;
+        .map_err(|e| format!("failed to run cargo build --release -p lemma: {e}"))?;
     if !status.success() {
         return Err(format!(
-            "cargo build --release -p lsp exited with status {:?}",
+            "cargo build --release -p lemma exited with status {:?}",
             status.code()
         ));
     }
@@ -47,8 +47,8 @@ fn build_release_lsp(root: &Path) -> Result<(), String> {
 }
 
 fn prepare_extension(root: &Path, vscode_dir: &Path) -> Result<(), String> {
-    eprintln!("xtask: cargo build --release -p lsp");
-    build_release_lsp(root)?;
+    eprintln!("xtask: cargo build --release -p lemma");
+    build_release_lemma(root)?;
     eprintln!("xtask: npm ci (vscode extension)");
     run_npm(vscode_dir, &["ci"])?;
     eprintln!("xtask: npm run compile (vscode extension)");
@@ -81,8 +81,8 @@ fn newest_vsix(vscode_dir: &Path) -> Option<PathBuf> {
 }
 
 fn print_paths(root: &Path, vscode_dir: &Path) {
-    let binary = root.join("target").join("release").join("lsp");
-    eprintln!("xtask: lsp binary: {}", binary.display());
+    let binary = root.join("target").join("release").join("lemma");
+    eprintln!("xtask: lemma binary: {}", binary.display());
     eprintln!("xtask: vscode extension dir: {}", vscode_dir.display());
 }
 
@@ -132,7 +132,7 @@ pub fn run(root: &Path, rest: &[String]) -> Result<(), String> {
                 ));
             }
             eprintln!(
-                "cargo lsp           — release-build `lsp` + npm ci && npm run compile in {}",
+                "cargo lsp           — release-build `lemma` + npm ci && npm run compile in {}",
                 vscode_dir.display()
             );
             eprintln!(

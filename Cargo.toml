@@ -12,7 +12,7 @@ default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.8.16"
+version = "0.8.17"
 edition = "2021"
 authors = ["Ben Rogmans <ben@amrai.nl>"]
 description = "A language that means business."
@@ -28,5 +28,3 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.39.2", features = ["full"] }
 rust_decimal = { version = "1.33", features = ["serde", "maths"] }
-num-rational = { version = "0.4", default-features = false, features = ["std", "serde"] }
-num-integer = { version = "0.1", default-features = false }

@@ -62,9 +62,8 @@ fn test_02_rules_and_unless() {
     data.insert("quantity".to_string(), "10".to_string());
     data.insert("is_premium".to_string(), "true".to_string());
     data.insert("customer_age".to_string(), "17".to_string());
-
     let response = engine
-        .run(None, "rules_and_unless", Some(&now), data, true)
+        .run(None, "rules_and_unless", Some(&now), data, true, None)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rules_and_unless");
@@ -72,7 +71,7 @@ fn test_02_rules_and_unless() {
     let final_total = response.results.get("final_total").unwrap();
     assert!(!final_total.vetoed);
     let lit = final_total
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -80,7 +79,9 @@ fn test_02_rules_and_unless() {
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             decimal_lit("800")
         ),
         other => panic!("Expected Number for final_total, got {:?}", other),
@@ -101,14 +102,21 @@ fn test_03_spec_references() {
 
     // specific_employee (references base_employee)
     let response = engine
-        .run(None, "specific_employee", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "specific_employee",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "specific_employee");
     let salary_with_bonus = response.results.get("salary_with_bonus").unwrap();
     assert!(!salary_with_bonus.vetoed);
     let lit = salary_with_bonus
-        .trace
+        .explanation
         .as_ref()
         .expect("explanation")
         .result
@@ -116,7 +124,9 @@ fn test_03_spec_references() {
         .expect("value");
     match &lit.value {
         lemma::ValueKind::Number(n) => assert_eq!(
-            lemma::ValueKind::Number(*n).as_decimal_magnitude().unwrap(),
+            lemma::ValueKind::Number(n.clone())
+                .as_decimal_magnitude()
+                .unwrap(),
             decimal_lit("99000")
         ),
         other => panic!("Expected Number for salary_with_bonus, got {:?}", other),
@@ -133,7 +143,14 @@ fn test_04_unit_conversions() {
 
     // Spec has all data defined, no type annotations needed
     let response = engine
-        .run(None, "unit_conversions", Some(&now), HashMap::new(), true)
+        .run(
+            None,
+            "unit_conversions",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "unit_conversions");
@@ -174,9 +191,8 @@ fn test_05_date_handling() {
 
     let mut data = std::collections::HashMap::new();
     data.insert("current_date".to_string(), "2024-06-15".to_string());
-
     let response = engine
-        .run(None, "date_handling", Some(&now), data, false)
+        .run(None, "date_handling", Some(&now), data, true, None)
         .expect("Evaluation failed");
 
     // Spec evaluates successfully
@@ -202,7 +218,14 @@ fn test_08_rule_references() {
 
     // Test examples/rule_references spec
     let response = engine
-        .run(None, "rule_references", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "rule_references",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rule_references");
@@ -216,7 +239,14 @@ fn test_08_rule_references() {
 
     // Test examples/eligibility_check spec (also in the same file)
     let response = engine
-        .run(None, "eligibility_check", Some(&now), HashMap::new(), false)
+        .run(
+            None,
+            "eligibility_check",
+            Some(&now),
+            HashMap::new(),
+            true,
+            None,
+        )
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "eligibility_check");

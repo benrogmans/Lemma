@@ -7,6 +7,14 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 mod common;
 
+fn latency_target_rule(spec_name: &str) -> &'static str {
+    match spec_name {
+        "bench_shipping" | "bench_pricing" => "total",
+        "bench_order_pipeline" => "grand_total",
+        other => panic!("BUG: no latency target rule for bench spec '{other}'"),
+    }
+}
+
 const WARMUP_ITERATIONS: usize = 1_000;
 const MEASURED_ITERATIONS: usize = 10_000;
 
@@ -28,21 +36,34 @@ fn main() {
         let plan = engine
             .get_plan(None, fixture.spec_name, Some(&fixture.effective))
             .expect("BUG: bench fixture must produce execution plan");
-        let raw_bytes = fixture.data_json.as_bytes();
+        let data_template = &fixture.data;
+        let target_rule = latency_target_rule(fixture.spec_name).to_string();
 
         for _ in 0..WARMUP_ITERATIONS {
-            let data = common::parse_data_values(raw_bytes);
+            let data = data_template.clone();
             let response = engine
-                .run_plan(plan, Some(&fixture.effective), data, false, true)
+                .run_plan(
+                    plan,
+                    Some(&fixture.effective),
+                    data,
+                    false,
+                    Some(std::slice::from_ref(&target_rule)),
+                )
                 .expect("BUG: warmup must evaluate");
             std::hint::black_box(response);
         }
 
         let region = Region::new(GLOBAL);
         for _ in 0..MEASURED_ITERATIONS {
-            let data = common::parse_data_values(raw_bytes);
+            let data = data_template.clone();
             let response = engine
-                .run_plan(plan, Some(&fixture.effective), data, false, true)
+                .run_plan(
+                    plan,
+                    Some(&fixture.effective),
+                    data,
+                    false,
+                    Some(std::slice::from_ref(&target_rule)),
+                )
                 .expect("BUG: memory iteration must evaluate");
             std::hint::black_box(response);
         }

@@ -2,7 +2,7 @@
 //!
 //! Normative source: [documentation/blueprint.md §2.1](../../documentation/blueprint.md#21-temporality-composition-and-dependency-interfaces-cornerstone).
 
-use lemma::{DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
@@ -15,12 +15,20 @@ fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
 fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::Response {
     engine
-        .run(None, spec_name, Some(effective), HashMap::new(), false)
+        .run(
+            None,
+            spec_name,
+            Some(effective),
+            HashMap::new(),
+            false,
+            None,
+        )
         .unwrap()
 }
 

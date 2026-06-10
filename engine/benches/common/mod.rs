@@ -1,5 +1,4 @@
-use lemma::SourceType;
-use lemma::{DataValueInput, DateTimeValue, Engine};
+use lemma::{DataValueInput, DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -8,10 +7,9 @@ pub struct Fixture {
     pub spec_name: &'static str,
     pub label: &'static str,
     pub source: &'static str,
-    /// Raw bytes of the `*.inputs.json` sidecar. Benches that time
-    /// JSON parsing must `serde_json::from_slice` this inside the
-    /// measured closure so the work matches the Python boundary.
-    pub data_json: &'static str,
+    /// Typed inputs for this fixture. JSON sidecar is parsed once when
+    /// fixtures are built; timed loops clone this map per call.
+    pub data: HashMap<String, DataValueInput>,
     pub effective: DateTimeValue,
 }
 
@@ -25,6 +23,7 @@ fn effective() -> DateTimeValue {
         second: 0,
         microsecond: 0,
         timezone: None,
+        granularity: DateGranularity::Full,
     }
 }
 
@@ -34,21 +33,21 @@ pub fn fixtures() -> Vec<Fixture> {
             spec_name: "bench_shipping",
             label: "engine/benches/specs/shipping.lemma",
             source: include_str!("../specs/shipping.lemma"),
-            data_json: include_str!("../specs/shipping.inputs.json"),
+            data: parse_data_values(include_str!("../specs/shipping.inputs.json").as_bytes()),
             effective: effective(),
         },
         Fixture {
             spec_name: "bench_pricing",
             label: "engine/benches/specs/pricing.lemma",
             source: include_str!("../specs/pricing.lemma"),
-            data_json: include_str!("../specs/pricing.inputs.json"),
+            data: parse_data_values(include_str!("../specs/pricing.inputs.json").as_bytes()),
             effective: effective(),
         },
         Fixture {
             spec_name: "bench_order_pipeline",
             label: "engine/benches/specs/order_pipeline.lemma",
             source: include_str!("../specs/order_pipeline.lemma"),
-            data_json: include_str!("../specs/order_pipeline.inputs.json"),
+            data: parse_data_values(include_str!("../specs/order_pipeline.inputs.json").as_bytes()),
             effective: effective(),
         },
     ]
@@ -100,12 +99,10 @@ fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput
     }
 }
 
-/// Parse the fixture's pinned `*.inputs.json` into [`DataValueInput`] values.
+/// Parse a fixture's pinned `*.inputs.json` into [`DataValueInput`] values.
 ///
-/// Used inside timed closures so JSON parsing is counted in the latency
-/// and allocation numbers, matching the Python harness which calls
-/// `json.loads` per iteration before invoking `compute`.
-pub fn parse_data_values(raw_bytes: &[u8]) -> HashMap<String, DataValueInput> {
+/// Called once per fixture at bench setup. Timed loops clone the result.
+fn parse_data_values(raw_bytes: &[u8]) -> HashMap<String, DataValueInput> {
     let map: HashMap<String, serde_json::Value> = serde_json::from_slice(raw_bytes)
         .expect("BUG: bench fixture inputs JSON must parse as HashMap<String, serde_json::Value>");
     map.into_iter()

@@ -521,6 +521,7 @@ fn find_missing_repositories(
 mod tests {
     use super::*;
     use crate::engine::Engine;
+    use crate::literals::DateGranularity;
 
     /// A test Registry that returns predefined bundles keyed by name.
     struct TestRegistry {
@@ -719,6 +720,8 @@ data quantity: 42"#,
             second: 0,
             microsecond: 0,
             timezone: None,
+
+            granularity: DateGranularity::Full,
         };
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
@@ -1063,6 +1066,7 @@ data money: quantity
     #[cfg(feature = "registry")]
     mod lemmabase_tests {
         use super::super::*;
+        use crate::literals::DateGranularity;
         use std::sync::{Arc, Mutex};
 
         // -------------------------------------------------------------------
@@ -1147,6 +1151,8 @@ data money: quantity
                 second: 0,
                 microsecond: 0,
                 timezone: None,
+
+                granularity: DateGranularity::Full,
             };
             let url = registry.source_url("@user/workspace/somespec", Some(&effective));
             assert_eq!(
@@ -1193,6 +1199,8 @@ data money: quantity
                 second: 0,
                 microsecond: 0,
                 timezone: None,
+
+                granularity: DateGranularity::Full,
             };
             let url = registry.navigation_url("@user/workspace/somespec", Some(&effective));
             assert_eq!(
@@ -1226,6 +1234,8 @@ data money: quantity
                 second: 0,
                 microsecond: 0,
                 timezone: None,
+
+                granularity: DateGranularity::Full,
             };
             let url = registry.url_for_id("@owner/repo/spec", Some(&effective));
             assert_eq!(

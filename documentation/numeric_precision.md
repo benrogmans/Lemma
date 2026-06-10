@@ -9,7 +9,7 @@ title: Numeric precision
 
 Lemma uses three layers:
 
-1. **Compute (ℚ)** — magnitudes stored as exact rationals (`i128` numerator/denominator). Arithmetic, comparisons, and unit conversions run in ℚ. No per-step decimal rounding.
+1. **Compute (ℚ)** — magnitudes stored as exact rationals (arbitrary-precision `BigInt` numerator/denominator). Arithmetic, comparisons, and unit conversions run in ℚ. No per-step decimal rounding.
 2. **Commit (decimal)** — a single conversion to `rust_decimal` at boundaries: API/JSON output, schema checks, transcendental functions.
 3. **Output (decimal string)** — API responses send magnitudes as JSON **strings** (`"37"`, `"99.50"`), never JSON number literals.
 
@@ -22,9 +22,11 @@ spec → parse (decimal literal → ℚ) → plan → evaluate (ℚ) → commit 
 | Layer | Constraint |
 |-------|------------|
 | **Literals, JSON input, API input** | Magnitude ±79,228,162,514,264,337,593,543,950,335 (~7.92×10²⁸); at most **28 decimal digits** (`rust_decimal`) |
-| **Internal compute (ℚ)** | ~±1.7×10³⁸ (`i128` numerator/denominator) |
+| **Internal compute (ℚ)** | Arbitrary precision; bounded by available memory (all BigInt allocation is fallible) |
 
 Intermediate values during evaluation may exceed the decimal range or use more precision than 28 digits. Only **top-level rule results** committed for output must fit `rust_decimal`. Oversized or uncommittable final results **Veto** with `Calculated result exceeds decimal value limit`.
+
+When an exact rational grows past what memory allows, evaluation **Veto**s with `out of memory` instead of crashing the process. This is resource exhaustion, not a decimal commit failure.
 
 JSON/API output never emits fraction strings (`"37/47"`) or scientific notation.
 
@@ -49,7 +51,7 @@ Long conversion chains telescope in ℚ. Example: `37 base` through fourteen pri
 |------|----------|
 | **`^` on irrationals** (e.g. `2 ^ 0.5`) | Decimal fallback when no exact root |
 | **`sqrt`, `sin`, `cos`, `log`, …** | Always decimal; inputs must commit to decimal |
-| **i128 overflow in arithmetic** | Decimal fallback on operands, then lift back |
+| **ℚ allocation failure** | **Veto** (`out of memory`); no decimal fallback |
 | **Division by zero** | Literal zero divisor in a rule (e.g. `1 / 0`) → **planning Error**. Zero from runtime data → **Veto** (never approximated) |
 
 ## Clients (JavaScript / Python)
