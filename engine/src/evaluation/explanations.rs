@@ -1,19 +1,27 @@
 //! Structural explanation trees for evaluated rules.
+//!
+//! Every runtime fact in an explanation (branch decisions, intermediate
+//! values, results) comes from the recorded execution of the rule's
+//! source-shaped instruction stream ([`RuleRecording`]) — explanations never
+//! re-evaluate expressions.
 
 use crate::computation::rational::checked_div;
 use crate::computation::UnitResolutionContext;
-use crate::evaluation::expression::{resolve_data_path_value, resolve_source_expression_values};
+use crate::evaluation::expression::resolve_data_path_value;
 use crate::evaluation::operations::{OperationResult, VetoType};
-use crate::evaluation::EvaluationContext;
-use crate::planning::execution_plan::{ExecutableRule, ExecutionPlan};
+use crate::evaluation::{BranchDecision, EvaluationContext, RuleRecording};
+use crate::planning::execution_plan::{
+    ArmRole, ExecutableRule, ExecutionPlan, Instruction, Instructions,
+};
 use crate::planning::semantics::{
-    compare_semantic_dates, ArithmeticComputation, DataPath, Expression, ExpressionKind, LemmaType,
-    LiteralValue, NegationType, RulePath, SemanticConversionTarget, TypeSpecification, ValueKind,
+    compare_semantic_dates, negated_comparison, ArithmeticComputation, ComparisonComputation,
+    DataPath, Expression, ExpressionKind, LemmaType, LiteralValue, NegationType, RulePath,
+    SemanticConversionTarget, TypeSpecification, ValueKind,
 };
 use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 fn serialize_rule_name<S>(path: &RulePath, serializer: S) -> Result<S::Ok, S::Error>
 where
@@ -44,6 +52,7 @@ pub enum ExplanationNode {
     Rule {
         #[serde(serialize_with = "serialize_rule_name")]
         rule: RulePath,
+        result: String,
         body: String,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         causes: Vec<Cause>,
@@ -68,12 +77,28 @@ pub enum ExplanationNode {
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
+    /// A unit reconciliation fact ("1 mile is 1.60934 kilometer") stated when
+    /// an operator's operands carry different units of the same quantity
+    /// family, so the implicit conversion inside the arithmetic is
+    /// followable without external lookup tables. Derived from declared unit
+    /// factors — static metadata, not evaluation.
+    UnitEquivalence { text: String },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One evaluated unless condition, stated as a fact.
+///
+/// `condition` is the true-form expression text: a falsified comparison is
+/// flipped to its complement (`distance < 5 mile` that failed becomes
+/// `distance >= 5 mile`) so the explanation states what *held*. `value` is
+/// `"true"` for stated facts, or `"false"` when the condition could not be
+/// flipped into a positive statement. `children` show the inputs that drove
+/// the condition (data values, embedded rule explanations).
+#[derive(Debug, Clone, Serialize)]
 pub struct Cause {
     pub condition: String,
     pub value: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ExplanationNode>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,11 +137,15 @@ fn build_conversion_steps(
         });
     }
 
-    steps.push(ConversionTraceStep {
-        role: ConversionTraceRole::Source,
-        text: conversion_source_step_text(value, data_ref),
-        data_ref: data_ref.cloned(),
-    });
+    // An identity conversion (operand already in the target unit) has no
+    // source step: it would restate the outcome value verbatim.
+    if value.to_string() != result.to_string() {
+        steps.push(ConversionTraceStep {
+            role: ConversionTraceRole::Source,
+            text: conversion_source_step_text(value, data_ref),
+            data_ref: data_ref.cloned(),
+        });
+    }
 
     steps
 }
@@ -180,15 +209,22 @@ fn conversion_rule_step_text(
 fn format_explanation_multiplier(
     rational: &crate::computation::rational::RationalInteger,
 ) -> String {
+    use crate::computation::rational::{commit_rational_to_decimal, decimal_to_rational};
     let reduced = rational
         .clone()
         .try_reduce()
         .unwrap_or_else(|_| rational.clone());
     if reduced.denom() == &crate::computation::rational::BigInt::one() {
-        reduced.numer().to_string()
-    } else {
-        format!("{}/{}", reduced.numer(), reduced.denom())
+        return reduced.numer().to_string();
     }
+    // Prefer a decimal display ("1.60934") when it is exact; fall back to
+    // the fraction only when decimal would lose precision.
+    if let Ok(decimal) = commit_rational_to_decimal(&reduced) {
+        if decimal_to_rational(decimal).is_ok_and(|round_trip| round_trip == reduced) {
+            return decimal.normalize().to_string();
+        }
+    }
+    format!("{}/{}", reduced.numer(), reduced.denom())
 }
 
 fn quantity_unit_equivalence_step_text(
@@ -322,6 +358,7 @@ impl Explanation {
     fn as_rule_node(&self) -> ExplanationNode {
         ExplanationNode::Rule {
             rule: self.rule.clone(),
+            result: format_operation_result(&self.result),
             body: self.body.clone(),
             causes: self.causes.clone(),
             children: self.children.clone(),
@@ -355,7 +392,7 @@ fn format_operation_result(result: &OperationResult) -> String {
 }
 
 /// Which source expression explains the rule's result.
-pub(crate) enum WinningSourceBranch<'a> {
+enum WinningSourceBranch<'a> {
     /// A branch was selected: its result expression is the rule's body.
     BranchResult {
         result_expression: &'a Expression,
@@ -370,61 +407,25 @@ pub(crate) enum WinningSourceBranch<'a> {
     },
 }
 
-/// Causes for one evaluated unless condition: per referenced data path, or a
-/// single condition-level cause when the condition references no data.
-fn unless_condition_causes<'plan>(
-    condition: &Expression,
-    condition_result: &OperationResult,
-    context: &mut EvaluationContext<'plan>,
-) -> Vec<Cause> {
-    let mut data_paths = std::collections::HashSet::new();
-    condition.collect_data_paths(&mut data_paths);
-    let mut paths: Vec<DataPath> = data_paths.into_iter().collect();
-    paths.sort();
-    if paths.is_empty() {
-        let value = match condition_result {
-            OperationResult::Veto(veto) => veto.to_string(),
-            OperationResult::Value(literal) => match &literal.value {
-                ValueKind::Boolean(value) => LiteralValue::from_bool(*value).display_value(),
-                _ => {
-                    unreachable!("BUG: unless condition non-boolean after type validation")
-                }
-            },
-        };
-        return vec![Cause {
-            condition: format_expression(condition),
-            value,
-        }];
-    }
-    paths
-        .into_iter()
-        .map(|data_path| {
-            let path_expr = Expression::with_source(
-                ExpressionKind::DataPath(data_path.clone()),
-                condition.source_location.clone(),
-            );
-            let value = match resolve_source_expression_values(&path_expr, context) {
-                OperationResult::Value(literal) => literal.display_value(),
-                OperationResult::Veto(veto) => context
-                    .unique_data_value_by_name(&data_path.data)
-                    .map(|value| value.display_value())
-                    .unwrap_or_else(|| veto.to_string()),
-            };
-            Cause {
-                condition: data_path.data.clone(),
-                value,
-            }
-        })
-        .collect()
+/// Everything the explanation builder reads while walking one rule's source
+/// expressions: the evaluation context (data lookups, rule results), the
+/// already-built dependency explanations, and the recorded execution of this
+/// rule's source instruction stream.
+struct ExplainCtx<'a, 'plan> {
+    context: &'a EvaluationContext<'plan>,
+    plan: &'a ExecutionPlan,
+    built: &'a HashMap<RulePath, Explanation>,
+    instructions: &'a Instructions,
+    recording: &'a RuleRecording,
 }
 
-pub(crate) fn winning_source_branch_and_causes<'a, 'plan>(
+/// Read the winning branch and evaluated-condition causes from the recorded
+/// execution: arm tags identify which `JumpIfFalse`/`Return` belongs to which
+/// source branch, and the recording says what each decided.
+fn winning_source_branch_and_causes<'a>(
     exec_rule: &'a ExecutableRule,
-    context: &mut EvaluationContext<'plan>,
+    ctx: &ExplainCtx<'_, '_>,
 ) -> WinningSourceBranch<'a> {
-    use crate::evaluation::branch_semantics::{unless_condition_outcome, BranchOutcome};
-    use crate::planning::execution_plan::JumpVetoSemantics;
-
     if exec_rule.branches.len() == 1 {
         return WinningSourceBranch::BranchResult {
             result_expression: &exec_rule.branches[0].result,
@@ -432,69 +433,201 @@ pub(crate) fn winning_source_branch_and_causes<'a, 'plan>(
         };
     }
 
-    // Mirror the compiled piecewise exactly (`compile_piecewise_rule`):
-    // unless conditions are evaluated in reverse source order (last match
-    // wins) under rule-reference veto semantics. The first condition that
-    // vetoes propagates as the rule result; the first that is true selects
-    // its branch; only the conditions actually evaluated produce causes.
-    let mut evaluated_in_reverse_order: Vec<Vec<Cause>> = Vec::new();
-    for branch in exec_rule.branches[1..].iter().rev() {
-        let condition = branch
-            .condition
-            .as_ref()
-            .expect("BUG: unless branch missing condition");
-        let condition_result = resolve_source_expression_values(condition, context);
-        let causes = unless_condition_causes(condition, &condition_result, context);
-        match unless_condition_outcome(&condition_result, JumpVetoSemantics::UnlessRuleReference) {
-            BranchOutcome::Propagate(_) => {
-                evaluated_in_reverse_order.push(causes);
-                return WinningSourceBranch::ConditionVeto {
-                    condition_expression: condition,
-                    causes: causes_in_source_order(evaluated_in_reverse_order, false),
-                };
-            }
-            BranchOutcome::Taken => {
-                evaluated_in_reverse_order.push(causes);
-                return WinningSourceBranch::BranchResult {
-                    result_expression: &branch.result,
-                    causes: causes_in_source_order(evaluated_in_reverse_order, false),
-                };
-            }
-            BranchOutcome::NotTaken => {
-                evaluated_in_reverse_order.push(causes);
+    let condition_arm: HashMap<u32, u16> = ctx
+        .instructions
+        .arm_tags
+        .iter()
+        .filter(|tag| tag.role == ArmRole::Condition)
+        .map(|tag| (tag.pc, tag.arm))
+        .collect();
+    let result_arm: HashMap<u32, u16> = ctx
+        .instructions
+        .arm_tags
+        .iter()
+        .filter(|tag| tag.role == ArmRole::Result)
+        .map(|tag| (tag.pc, tag.arm))
+        .collect();
+
+    // Decisions of this rule's own arms (nested piecewise jumps from inlined
+    // rules carry no arm tag and are filtered out), in execution order.
+    let mut decisions: Vec<(u16, BranchDecision)> = ctx
+        .recording
+        .branch_decisions
+        .iter()
+        .filter_map(|(pc, decision)| condition_arm.get(pc).map(|arm| (*arm, *decision)))
+        .collect();
+
+    if let Some(returned_pc) = ctx.recording.returned_pc {
+        let winning_arm = *result_arm
+            .get(&returned_pc)
+            .expect("BUG: executed Return must carry an arm tag");
+        // Conditions are evaluated in reverse source order; state causes in
+        // source order.
+        decisions.sort_by_key(|(arm, _)| *arm);
+        // When a branch was taken, only the matching condition explains the
+        // result — listing every non-matching condition is noise (especially
+        // for lookup tables with hundreds of entries). When no branch was
+        // taken (default), the non-matching conditions explain why the
+        // default applies.
+        let has_taken = decisions
+            .iter()
+            .any(|(_, d)| matches!(d, BranchDecision::Taken));
+        let causes = decisions
+            .iter()
+            .filter(|(_, decision)| {
+                if has_taken {
+                    matches!(decision, BranchDecision::Taken)
+                } else {
+                    true
+                }
+            })
+            .map(|(arm, decision)| {
+                let condition = exec_rule.branches[*arm as usize]
+                    .condition
+                    .as_ref()
+                    .expect("BUG: unless branch missing condition");
+                let held = matches!(decision, BranchDecision::Taken);
+                build_cause(condition, held, ctx)
+            })
+            .collect();
+        return WinningSourceBranch::BranchResult {
+            result_expression: &exec_rule.branches[winning_arm as usize].result,
+            causes,
+        };
+    }
+
+    // No Return executed: a veto propagated from a JumpIfFalse. The vetoing
+    // jump may be this rule's own (tagged) condition jump, or an untagged
+    // jump inside an inlined sub-expression. Either way the next tagged
+    // instruction after the veto pc identifies where execution was: an arm's
+    // condition (Condition tag) or an arm's selected result (Result tag).
+    let (veto_pc, _) = *ctx
+        .recording
+        .branch_decisions
+        .iter()
+        .rev()
+        .find(|(_, decision)| matches!(decision, BranchDecision::Veto))
+        .expect("BUG: execution ended without Return but no veto was recorded");
+    let enclosing_tag = ctx
+        .instructions
+        .arm_tags
+        .iter()
+        .filter(|tag| tag.pc >= veto_pc)
+        .min_by_key(|tag| tag.pc)
+        .expect("BUG: veto pc past the final tagged Return");
+
+    // Causes: this rule's own evaluated conditions, except the vetoing one
+    // (which becomes the body and would otherwise be stated twice).
+    let mut causes_decisions: Vec<(u16, BranchDecision)> = ctx
+        .recording
+        .branch_decisions
+        .iter()
+        .filter(|(pc, _)| *pc != veto_pc)
+        .filter_map(|(pc, decision)| condition_arm.get(pc).map(|arm| (*arm, *decision)))
+        .collect();
+    causes_decisions.sort_by_key(|(arm, _)| *arm);
+    let causes = causes_decisions
+        .iter()
+        .map(|(arm, decision)| {
+            let condition = exec_rule.branches[*arm as usize]
+                .condition
+                .as_ref()
+                .expect("BUG: unless branch missing condition");
+            let held = matches!(decision, BranchDecision::Taken);
+            build_cause(condition, held, ctx)
+        })
+        .collect();
+
+    match enclosing_tag.role {
+        ArmRole::Condition => {
+            let condition_expression = exec_rule.branches[enclosing_tag.arm as usize]
+                .condition
+                .as_ref()
+                .expect("BUG: unless branch missing condition");
+            WinningSourceBranch::ConditionVeto {
+                condition_expression,
+                causes,
             }
         }
-    }
-
-    WinningSourceBranch::BranchResult {
-        result_expression: &exec_rule.branches[0].result,
-        causes: causes_in_source_order(evaluated_in_reverse_order, true),
+        // The veto arose while computing the selected arm's result: that arm
+        // won, and the veto is the rule's result.
+        ArmRole::Result => WinningSourceBranch::BranchResult {
+            result_expression: &exec_rule.branches[enclosing_tag.arm as usize].result,
+            causes,
+        },
     }
 }
 
-/// Flatten per-condition causes (collected in reverse evaluation order) back
-/// into source order. When the default branch wins every condition was
-/// evaluated; duplicate condition texts are deduplicated, keeping the first
-/// occurrence in source order (preserving the established output shape).
-fn causes_in_source_order(
-    evaluated_in_reverse_order: Vec<Vec<Cause>>,
-    deduplicate: bool,
-) -> Vec<Cause> {
-    let mut causes: Vec<Cause> = evaluated_in_reverse_order
-        .into_iter()
-        .rev()
-        .flatten()
-        .collect();
-    if deduplicate {
-        let mut seen = std::collections::HashSet::new();
-        causes.retain(|cause| seen.insert(cause.condition.clone()));
+fn build_cause(condition: &Expression, held: bool, ctx: &ExplainCtx<'_, '_>) -> Cause {
+    let (text, value) = stated_fact(condition, held);
+    // A bare data reference is fully stated by the fact text itself
+    // ("is_rush is true"); a child would restate the same value. The same
+    // holds for an equality against a literal that held ("code is L17"):
+    // the data value appears verbatim in the fact.
+    let children = match &condition.kind {
+        ExpressionKind::DataPath(_) => Vec::new(),
+        ExpressionKind::Comparison(left, ComparisonComputation::Is, right)
+            if held
+                && matches!(left.kind, ExpressionKind::DataPath(_))
+                && matches!(right.kind, ExpressionKind::Literal(_)) =>
+        {
+            Vec::new()
+        }
+        _ => build_expression_children(condition, ctx),
+    };
+    Cause {
+        condition: text,
+        value,
+        children,
     }
-    causes
 }
 
-pub fn build_explanation<'plan>(
+/// State an evaluated condition as a fact.
+///
+/// Returns `(condition_text, value)`. When the fact can be stated positively
+/// (the condition held, or its falsification flips to a complement operator),
+/// the text is the true statement and `value` is `"true"`. Conditions that
+/// cannot be flipped keep their source text with `value` `"false"`.
+fn stated_fact(condition: &Expression, held: bool) -> (String, String) {
+    if held {
+        return match &condition.kind {
+            // A bare reference is not a readable statement on its own.
+            ExpressionKind::DataPath(_) | ExpressionKind::RulePath(_) => (
+                format!("{} is true", format_expression(condition)),
+                "true".to_string(),
+            ),
+            _ => (format_expression(condition), "true".to_string()),
+        };
+    }
+    match &condition.kind {
+        ExpressionKind::Comparison(left, op, right) => {
+            let flipped = Expression::with_source(
+                ExpressionKind::Comparison(
+                    std::sync::Arc::clone(left),
+                    negated_comparison(op.clone()),
+                    std::sync::Arc::clone(right),
+                ),
+                condition.source_location.clone(),
+            );
+            (format_expression(&flipped), "true".to_string())
+        }
+        // `not x` being false means `x` held.
+        ExpressionKind::LogicalNegation(inner, _) => stated_fact(inner, true),
+        ExpressionKind::ResultIsVeto(operand) => (
+            format!("{} is not veto", format_expression(operand)),
+            "true".to_string(),
+        ),
+        ExpressionKind::DataPath(_) | ExpressionKind::RulePath(_) => (
+            format!("{} is false", format_expression(condition)),
+            "true".to_string(),
+        ),
+        _ => (format_expression(condition), "false".to_string()),
+    }
+}
+
+pub fn build_explanation(
     exec_rule: &ExecutableRule,
-    context: &mut EvaluationContext<'plan>,
+    context: &EvaluationContext<'_>,
     plan: &ExecutionPlan,
     built: &HashMap<RulePath, Explanation>,
 ) -> Explanation {
@@ -503,15 +636,26 @@ pub fn build_explanation<'plan>(
         .get(&exec_rule.path)
         .expect("BUG: rule evaluated before explain")
         .clone();
+    let recording = context
+        .recordings
+        .get(&exec_rule.path)
+        .expect("BUG: recording must exist when explanations are requested");
+    let ctx = ExplainCtx {
+        context,
+        plan,
+        built,
+        instructions: &exec_rule.source_instructions,
+        recording,
+    };
 
-    let (body, causes, children) = match winning_source_branch_and_causes(exec_rule, context) {
+    let (body, causes, children) = match winning_source_branch_and_causes(exec_rule, &ctx) {
         WinningSourceBranch::BranchResult {
             result_expression,
             causes,
         } => (
             format_expression(result_expression),
             causes,
-            build_expression_children(result_expression, context, plan, built),
+            build_expression_children(result_expression, &ctx),
         ),
         WinningSourceBranch::ConditionVeto {
             condition_expression,
@@ -522,7 +666,7 @@ pub fn build_explanation<'plan>(
             // children show its operands.
             format_expression(condition_expression),
             causes,
-            build_expression_children(condition_expression, context, plan, built),
+            build_expression_children(condition_expression, &ctx),
         ),
     };
 
@@ -542,80 +686,155 @@ fn embed_rule(rule_path: &RulePath, built: &HashMap<RulePath, Explanation>) -> E
         .as_rule_node()
 }
 
-fn build_expression_children<'plan>(
-    expr: &Expression,
-    context: &mut EvaluationContext<'plan>,
-    plan: &ExecutionPlan,
-    built: &HashMap<RulePath, Explanation>,
-) -> Vec<ExplanationNode> {
-    if let Some(rule_paths) = direct_in_spec_rule_children(expr) {
-        return rule_paths
-            .into_iter()
-            .map(|rule_path| embed_rule(&rule_path, built))
-            .collect();
-    }
+fn is_literal(expr: &Expression) -> bool {
+    matches!(expr.kind, ExpressionKind::Literal(_))
+}
 
-    if let Some(data_paths) = direct_data_children(expr) {
-        return data_paths
-            .into_iter()
-            .map(|data_path| build_data_input_node(&data_path, context))
-            .collect();
-    }
-
-    if matches!(expr.kind, ExpressionKind::Literal(_)) {
-        return Vec::new();
-    }
-
+/// Flatten an associative same-operator arithmetic chain into its operands.
+fn flatten_arithmetic_chain<'e>(
+    expr: &'e Expression,
+    op: &ArithmeticComputation,
+    out: &mut Vec<&'e Expression>,
+) {
     match &expr.kind {
+        ExpressionKind::Arithmetic(left, inner_op, right) if inner_op == op => {
+            flatten_arithmetic_chain(left, op, out);
+            flatten_arithmetic_chain(right, op, out);
+        }
+        _ => out.push(expr),
+    }
+}
+
+fn build_operand_nodes(operands: &[&Expression], ctx: &ExplainCtx<'_, '_>) -> Vec<ExplanationNode> {
+    // Cross-unit facts first: when operands mix units of one quantity
+    // family, the arithmetic reconciles them implicitly; the factor is
+    // stated so the numbers are followable.
+    let mut nodes = unit_equivalence_nodes(operands, ctx);
+    nodes.extend(
+        operands
+            .iter()
+            // Literal operands are already visible in the expression line; a
+            // separate child restates them without adding information.
+            .filter(|operand| !is_literal(operand))
+            .map(|operand| build_expression_node(operand, ctx)),
+    );
+    nodes
+}
+
+/// The operand's value, when it is a leaf whose value is known without
+/// evaluation: a literal, a data lookup, or a recorded rule result.
+fn operand_leaf_value(expr: &Expression, ctx: &ExplainCtx<'_, '_>) -> Option<LiteralValue> {
+    match &expr.kind {
+        ExpressionKind::Literal(lit) => Some((**lit).clone()),
+        ExpressionKind::DataPath(path) => match resolve_data_path_value(path, ctx.context) {
+            OperationResult::Value(value) => Some(value),
+            OperationResult::Veto(_) => None,
+        },
+        ExpressionKind::RulePath(path) => ctx
+            .context
+            .rule_results
+            .get(path)
+            .and_then(|result| result.value().cloned()),
+        _ => None,
+    }
+}
+
+/// Does the type owning `unit` also declare `other` (same quantity family)?
+fn same_quantity_family(
+    unit: &str,
+    other: &str,
+    unit_index: &HashMap<String, std::sync::Arc<LemmaType>>,
+) -> bool {
+    unit_index.get(unit).is_some_and(|owning| {
+        matches!(
+            &owning.specifications,
+            TypeSpecification::Quantity { units, .. } if units.get(other).is_ok()
+        )
+    })
+}
+
+/// Unit reconciliation facts for one operator's operands, in operand order:
+/// each unit that shares a quantity family with an earlier-seen different
+/// unit yields one equivalence line. Pure unit-index metadata; no values are
+/// computed.
+fn unit_equivalence_nodes(
+    operands: &[&Expression],
+    ctx: &ExplainCtx<'_, '_>,
+) -> Vec<ExplanationNode> {
+    let unit_index = ctx.plan.expression_unit_index();
+    let resolution = UnitResolutionContext::WithIndex(unit_index);
+    let mut seen: Vec<String> = Vec::new();
+    let mut nodes = Vec::new();
+    for operand in operands {
+        let Some(value) = operand_leaf_value(operand, ctx) else {
+            continue;
+        };
+        if !matches!(value.value, ValueKind::Quantity(_, _)) {
+            continue;
+        }
+        // Expand named compound units (eur_per_km → eur/kilometer) so family
+        // members are visible.
+        let expanded =
+            crate::planning::normalize::expand_named_quantity_literal(&value, Some(&resolution))
+                .unwrap_or(value);
+        let ValueKind::Quantity(_, signature) = &expanded.value else {
+            continue;
+        };
+        for (unit, _) in signature {
+            if seen.iter().any(|known| known == unit) {
+                continue;
+            }
+            if let Some(earlier) = seen
+                .iter()
+                .find(|earlier| same_quantity_family(unit, earlier, unit_index))
+            {
+                if let Some(owning) = unit_index.get(unit.as_str()) {
+                    if let Some(text) = quantity_unit_equivalence_step_text(
+                        &[(unit.clone(), 1)],
+                        earlier,
+                        owning,
+                        UnitResolutionContext::WithIndex(unit_index),
+                    ) {
+                        nodes.push(ExplanationNode::UnitEquivalence { text });
+                    }
+                }
+            }
+            seen.push(unit.clone());
+        }
+    }
+    nodes
+}
+
+fn build_expression_children(expr: &Expression, ctx: &ExplainCtx<'_, '_>) -> Vec<ExplanationNode> {
+    match &expr.kind {
+        ExpressionKind::RulePath(rule_path) => vec![embed_rule(rule_path, ctx.built)],
+        ExpressionKind::DataPath(data_path) => vec![build_data_input_node(data_path, ctx)],
+        ExpressionKind::Literal(_) => Vec::new(),
+        ExpressionKind::Arithmetic(_, op, _)
+            if matches!(
+                op,
+                ArithmeticComputation::Add | ArithmeticComputation::Multiply
+            ) =>
+        {
+            let mut operands = Vec::new();
+            flatten_arithmetic_chain(expr, op, &mut operands);
+            build_operand_nodes(&operands, ctx)
+        }
         ExpressionKind::Arithmetic(left, _, right)
         | ExpressionKind::Comparison(left, _, right)
         | ExpressionKind::LogicalAnd(left, right)
         | ExpressionKind::LogicalOr(left, right)
         | ExpressionKind::RangeLiteral(left, right)
         | ExpressionKind::RangeContainment(left, right) => {
-            let operands = vec![
-                build_expression_node(left, context, plan, built),
-                build_expression_node(right, context, plan, built),
-            ];
-            let mut rule_paths = HashSet::new();
-            expr.collect_rule_paths(&mut rule_paths);
-            if !rule_paths.is_empty() {
-                return vec![ExplanationNode::Compose {
-                    expression: format_expression(expr),
-                    operands,
-                }];
-            }
-            // Keep the operand nodes: users need the values that drove the
-            // comparison or computation, not only its outcome.
-            operands
+            build_operand_nodes(&[left.as_ref(), right.as_ref()], ctx)
         }
         ExpressionKind::LogicalNegation(operand, _)
         | ExpressionKind::MathematicalComputation(_, operand)
         | ExpressionKind::ResultIsVeto(operand)
-        | ExpressionKind::PastFutureRange(_, operand) => {
-            let operands = vec![build_expression_node(operand, context, plan, built)];
-            let mut rule_paths = HashSet::new();
-            expr.collect_rule_paths(&mut rule_paths);
-            if !rule_paths.is_empty() {
-                return vec![ExplanationNode::Compose {
-                    expression: format_expression(expr),
-                    operands,
-                }];
-            }
-            operands
-        }
-        ExpressionKind::DateRelative(_, date_expr)
-        | ExpressionKind::DateCalendar(_, _, date_expr) => {
-            let operands = vec![build_expression_node(date_expr, context, plan, built)];
-            let mut rule_paths = HashSet::new();
-            expr.collect_rule_paths(&mut rule_paths);
-            if !rule_paths.is_empty() {
-                return vec![ExplanationNode::Compose {
-                    expression: format_expression(expr),
-                    operands,
-                }];
-            }
-            operands
+        | ExpressionKind::PastFutureRange(_, operand)
+        | ExpressionKind::DateRelative(_, operand)
+        | ExpressionKind::DateCalendar(_, _, operand) => {
+            build_operand_nodes(&[operand.as_ref()], ctx)
         }
         ExpressionKind::Veto(veto_expr) => {
             if veto_expr.message.is_none() {
@@ -627,132 +846,135 @@ fn build_expression_children<'plan>(
             }
         }
         ExpressionKind::UnitConversion(value_expr, target) => {
-            vec![build_conversion_node(
-                value_expr, target, expr, context, plan, built,
-            )]
+            vec![build_conversion_node(value_expr, target, expr, ctx)]
         }
         ExpressionKind::Now => Vec::new(),
         ExpressionKind::Piecewise(_) => {
             unreachable!("BUG: Piecewise in source expression for explanation")
         }
-        ExpressionKind::RulePath(_) | ExpressionKind::DataPath(_) | ExpressionKind::Literal(_) => {
-            unreachable!(
-                "BUG: expression kind must be handled by build_expression_children fast path"
-            )
-        }
     }
 }
 
-fn build_expression_node<'plan>(
-    expr: &Expression,
-    context: &mut EvaluationContext<'plan>,
-    plan: &ExecutionPlan,
-    built: &HashMap<RulePath, Explanation>,
-) -> ExplanationNode {
+fn build_expression_node(expr: &Expression, ctx: &ExplainCtx<'_, '_>) -> ExplanationNode {
     match &expr.kind {
-        ExpressionKind::RulePath(rule_path) => embed_rule(rule_path, built),
-        ExpressionKind::DataPath(data_path) => build_data_input_node(data_path, context),
-        ExpressionKind::Literal(lit) => ExplanationNode::DataInput {
-            data: DataPath::local(String::new()),
-            display: lit.display_value(),
-        },
+        ExpressionKind::RulePath(rule_path) => embed_rule(rule_path, ctx.built),
+        ExpressionKind::DataPath(data_path) => build_data_input_node(data_path, ctx),
+        ExpressionKind::Literal(_) => {
+            unreachable!("BUG: literal operands are filtered before node construction")
+        }
         ExpressionKind::UnitConversion(value_expr, target) => {
-            build_conversion_node(value_expr, target, expr, context, plan, built)
+            build_conversion_node(value_expr, target, expr, ctx)
         }
         ExpressionKind::Veto(veto_expr) => ExplanationNode::Veto {
             message: veto_expr.message.clone(),
         },
-        ExpressionKind::Arithmetic(left, _, right)
-        | ExpressionKind::Comparison(left, _, right)
-        | ExpressionKind::LogicalAnd(left, right)
-        | ExpressionKind::LogicalOr(left, right)
-        | ExpressionKind::RangeLiteral(left, right)
-        | ExpressionKind::RangeContainment(left, right) => {
-            let operands = vec![
-                build_expression_node(left, context, plan, built),
-                build_expression_node(right, context, plan, built),
-            ];
-            ExplanationNode::Compose {
-                expression: format_expression(expr),
-                operands,
-            }
-        }
-        ExpressionKind::LogicalNegation(operand, _)
-        | ExpressionKind::MathematicalComputation(_, operand)
-        | ExpressionKind::ResultIsVeto(operand)
-        | ExpressionKind::PastFutureRange(_, operand) => {
-            let operands = vec![build_expression_node(operand, context, plan, built)];
-            ExplanationNode::Compose {
-                expression: format_expression(expr),
-                operands,
-            }
-        }
-        ExpressionKind::DateRelative(_, date_expr)
-        | ExpressionKind::DateCalendar(_, _, date_expr) => {
-            let operands = vec![build_expression_node(date_expr, context, plan, built)];
-            ExplanationNode::Compose {
-                expression: format_expression(expr),
-                operands,
-            }
-        }
         ExpressionKind::Now => ExplanationNode::DataInput {
             data: DataPath::local(String::new()),
-            display: context.now().display_value(),
+            display: ctx.context.now().display_value(),
         },
         ExpressionKind::Piecewise(_) => {
             unreachable!("BUG: Piecewise in source expression for explanation")
         }
+        _ => ExplanationNode::Compose {
+            expression: format_expression(expr),
+            operands: build_expression_children(expr, ctx),
+        },
     }
 }
 
-fn build_conversion_node<'plan>(
+/// Recorded operand/result values for a conversion expression, looked up via
+/// the conversion provenance tag matching the expression's source location.
+/// `None` when the conversion was not executed (untaken branch) or carries no
+/// tag (synthetic expression without a source location).
+fn recorded_conversion_values(
+    expr: &Expression,
+    ctx: &ExplainCtx<'_, '_>,
+) -> Option<(OperationResult, OperationResult)> {
+    let source = expr.source_location.as_ref()?;
+    for tag in &ctx.instructions.conversion_tags {
+        if &tag.source != source {
+            continue;
+        }
+        let Instruction::UnitConversion {
+            destination_register,
+            source_register,
+            ..
+        } = &ctx.instructions.code[tag.pc as usize]
+        else {
+            unreachable!("BUG: conversion tag must reference a UnitConversion instruction");
+        };
+        let operand = ctx
+            .recording
+            .registers
+            .get(*source_register as usize)
+            .cloned()
+            .flatten();
+        let result = ctx
+            .recording
+            .registers
+            .get(*destination_register as usize)
+            .cloned()
+            .flatten();
+        if let (Some(operand), Some(result)) = (operand, result) {
+            return Some((operand, result));
+        }
+    }
+    None
+}
+
+fn build_conversion_node(
     value_expr: &Expression,
     target: &SemanticConversionTarget,
     expr: &Expression,
-    context: &mut EvaluationContext<'plan>,
-    plan: &ExecutionPlan,
-    built: &HashMap<RulePath, Explanation>,
+    ctx: &ExplainCtx<'_, '_>,
 ) -> ExplanationNode {
-    let operand_result = resolve_source_expression_values(value_expr, context);
-    let OperationResult::Value(operand_value) = operand_result else {
-        if let OperationResult::Veto(veto) = operand_result {
+    let steps = match recorded_conversion_values(expr, ctx) {
+        Some((OperationResult::Veto(veto), _)) => {
             return ExplanationNode::Veto {
                 message: Some(veto.to_string()),
             };
         }
-        unreachable!("BUG: conversion operand missing value");
-    };
-
-    let converted_result = resolve_source_expression_values(expr, context);
-    let OperationResult::Value(converted_value) = converted_result else {
-        if let OperationResult::Veto(veto) = converted_result {
+        Some((_, OperationResult::Veto(veto))) => {
             return ExplanationNode::Veto {
                 message: Some(veto.to_string()),
             };
         }
-        unreachable!("BUG: conversion result missing value");
+        Some((OperationResult::Value(operand_value), OperationResult::Value(converted_value))) => {
+            let data_ref = data_path_in_expression(value_expr);
+            build_conversion_steps(
+                &operand_value,
+                target,
+                &converted_value,
+                data_ref.as_ref(),
+                UnitResolutionContext::WithIndex(ctx.plan.expression_unit_index()),
+            )
+        }
+        // Not executed (or untagged): the conversion's structure still
+        // renders; only value-bearing steps are omitted.
+        None => Vec::new(),
     };
 
-    let data_ref = data_path_in_expression(value_expr);
-    let steps = build_conversion_steps(
-        &operand_value,
-        target,
-        &converted_value,
-        data_ref.as_ref(),
-        UnitResolutionContext::WithIndex(plan.expression_unit_index()),
-    );
-    assert!(
-        !steps.is_empty(),
-        "BUG: unit conversion succeeded but explanation steps are empty"
-    );
-
+    // The source step may already name the operand data leaf and its value
+    // ("The quantity of mass is 2 kilogram"); a child would restate it.
+    let operand_named_in_steps = data_path_in_expression(value_expr)
+        .map(|path| {
+            steps
+                .iter()
+                .any(|step| step.data_ref.as_ref() == Some(&path))
+        })
+        .unwrap_or(false);
+    let operands = if is_literal(value_expr) || operand_named_in_steps {
+        Vec::new()
+    } else {
+        vec![build_expression_node(value_expr, ctx)]
+    };
     ExplanationNode::Conversion {
         expression: format_expression(expr),
         steps: steps
             .iter()
             .map(SerializedConversionTraceStep::from)
             .collect(),
-        operands: vec![build_expression_node(value_expr, context, plan, built)],
+        operands,
     }
 }
 
@@ -769,11 +991,8 @@ impl From<&ConversionTraceStep> for SerializedConversionTraceStep {
     }
 }
 
-fn build_data_input_node(
-    data_path: &DataPath,
-    context: &mut EvaluationContext<'_>,
-) -> ExplanationNode {
-    match resolve_data_path_value(data_path, context) {
+fn build_data_input_node(data_path: &DataPath, ctx: &ExplainCtx<'_, '_>) -> ExplanationNode {
+    match resolve_data_path_value(data_path, ctx.context) {
         OperationResult::Value(value) => ExplanationNode::DataInput {
             data: data_path.clone(),
             display: value.display_value(),
@@ -792,72 +1011,16 @@ fn data_path_in_expression(value_expr: &Expression) -> Option<DataPath> {
     }
 }
 
-fn direct_in_spec_rule_children(expr: &Expression) -> Option<Vec<RulePath>> {
-    collect_flat_in_spec_add_rule_paths(expr)
-}
-
-fn collect_flat_in_spec_add_rule_paths(expr: &Expression) -> Option<Vec<RulePath>> {
-    match &expr.kind {
-        ExpressionKind::Arithmetic(left, ArithmeticComputation::Add, right) => {
-            let mut paths = collect_flat_in_spec_add_rule_paths(left)?;
-            paths.extend(collect_flat_in_spec_add_rule_paths(right)?);
-            Some(paths)
-        }
-        _ => Some(vec![single_in_spec_rule(expr)?]),
-    }
-}
-
-fn single_in_spec_rule(expr: &Expression) -> Option<RulePath> {
-    match &expr.kind {
-        ExpressionKind::RulePath(path) => Some(path.clone()),
-        _ => None,
-    }
-}
-
-fn direct_data_children(expr: &Expression) -> Option<Vec<DataPath>> {
-    let mut leaves = Vec::new();
-    if !collect_data_leaves(expr, &mut leaves) {
-        return None;
-    }
-    if leaves.is_empty() {
-        return None;
-    }
-    Some(leaves)
-}
-
-fn collect_data_leaves(expr: &Expression, out: &mut Vec<DataPath>) -> bool {
-    match &expr.kind {
-        ExpressionKind::DataPath(path) => {
-            out.push(path.clone());
-            true
-        }
-        ExpressionKind::Arithmetic(left, _, right) => {
-            collect_data_leaves(left, out) && collect_data_leaves(right, out)
-        }
-        _ => false,
-    }
-}
-
 pub fn format_explanation(explanation: &Explanation) -> String {
     let mut lines = Vec::new();
-    lines.push(format!(
-        "{}: {}",
-        explanation.rule.rule,
-        format_operation_result(&explanation.result)
-    ));
+    let result_display = format_operation_result(&explanation.result);
+    lines.push(format!("{}: {}", explanation.rule.rule, result_display));
     let mut ctx = FormatContext {
         lines: &mut lines,
         indent: String::new(),
     };
-    if !explanation.body.is_empty() {
-        ctx.push_line(Connector::Last, &explanation.body);
-    }
-    let child_indent = ctx.child_indent(Connector::Last);
-    let mut child_ctx = FormatContext {
-        lines: ctx.lines,
-        indent: child_indent,
-    };
-    child_ctx.render_causes_and_children(
+    ctx.render_rule_contents(
+        &result_display,
         &explanation.body,
         &explanation.causes,
         &explanation.children,
@@ -892,17 +1055,19 @@ impl<'a> FormatContext<'a> {
         }
     }
 
-    fn render_causes_and_children(
+    /// Render a rule's contents under its headline: causes first (branch
+    /// selection facts), then the body expression with its operand subtree.
+    /// A body that restates the result verbatim (literal branch results) is
+    /// omitted.
+    fn render_rule_contents(
         &mut self,
-        parent_body: &str,
+        result_display: &str,
+        body: &str,
         causes: &[Cause],
         children: &[ExplanationNode],
     ) {
-        let visible: Vec<_> = children
-            .iter()
-            .filter(|child| !should_skip_in_text(child, parent_body))
-            .collect();
-        let total = causes.len() + visible.len();
+        let body_shown = !body.is_empty() && body != result_display;
+        let total = causes.len() + usize::from(body_shown);
         let mut index = 0;
 
         for cause in causes {
@@ -912,20 +1077,71 @@ impl<'a> FormatContext<'a> {
             } else {
                 Connector::Branch
             };
-            self.push_line(
-                connector,
-                &format!("{} is {}", cause.condition, cause.value),
-            );
+            let line = if cause.value == "true" {
+                cause.condition.clone()
+            } else {
+                format!("{} is {}", cause.condition, cause.value)
+            };
+            self.push_line(connector, &line);
+            let child_indent = self.child_indent(connector);
+            let mut child_ctx = FormatContext {
+                lines: self.lines,
+                indent: child_indent,
+            };
+            child_ctx.render_nodes(&cause.children, None);
         }
 
-        for child in visible {
+        if body_shown {
+            self.push_line(Connector::Last, body);
+            let child_indent = self.child_indent(Connector::Last);
+            let mut child_ctx = FormatContext {
+                lines: self.lines,
+                indent: child_indent,
+            };
+            child_ctx.render_nodes(children, Some(body));
+        } else if !children.is_empty() {
+            self.render_nodes(children, None);
+        }
+    }
+
+    fn render_nodes(&mut self, nodes: &[ExplanationNode], parent_body: Option<&str>) {
+        let len = nodes.len();
+        for (i, node) in nodes.iter().enumerate() {
+            let connector = if i + 1 == len {
+                Connector::Last
+            } else {
+                Connector::Branch
+            };
+            self.render_node(node, connector, parent_body);
+        }
+    }
+
+    /// Conversion trace steps followed by operand subtrees, as one sibling
+    /// sequence with correct connectors.
+    fn render_conversion_contents(
+        &mut self,
+        steps: &[SerializedConversionTraceStep],
+        operands: &[ExplanationNode],
+    ) {
+        let total = steps.len() + operands.len();
+        let mut index = 0;
+        for step in steps {
             index += 1;
             let connector = if index == total {
                 Connector::Last
             } else {
                 Connector::Branch
             };
-            self.render_node(child, connector, Some(parent_body));
+            self.push_line(connector, &step.text);
+        }
+        for operand in operands {
+            index += 1;
+            let connector = if index == total {
+                Connector::Last
+            } else {
+                Connector::Branch
+            };
+            self.render_node(operand, connector, None);
         }
     }
 
@@ -938,41 +1154,18 @@ impl<'a> FormatContext<'a> {
         match node {
             ExplanationNode::Rule {
                 rule,
+                result,
                 body,
                 causes,
                 children,
             } => {
-                let style = rule_line_style(body, children);
-                match style {
-                    RuleLineStyle::NameOnly => {
-                        self.push_line(connector, &rule.rule);
-                        let child_indent = self.child_indent(connector);
-                        let mut child_ctx = FormatContext {
-                            lines: self.lines,
-                            indent: child_indent,
-                        };
-                        if !body.is_empty() {
-                            child_ctx.push_line(Connector::Last, body);
-                            let body_child_indent = child_ctx.child_indent(Connector::Last);
-                            let mut nested = FormatContext {
-                                lines: child_ctx.lines,
-                                indent: body_child_indent,
-                            };
-                            nested.render_causes_and_children(body, causes, children);
-                        } else {
-                            child_ctx.render_causes_and_children(body, causes, children);
-                        }
-                    }
-                    RuleLineStyle::NameWithBody => {
-                        self.push_line(connector, &format!("{}: {body}", rule.rule));
-                        let child_indent = self.child_indent(connector);
-                        let mut child_ctx = FormatContext {
-                            lines: self.lines,
-                            indent: child_indent,
-                        };
-                        child_ctx.render_causes_and_children(body, causes, children);
-                    }
-                }
+                self.push_line(connector, &format!("{}: {result}", rule.rule));
+                let child_indent = self.child_indent(connector);
+                let mut child_ctx = FormatContext {
+                    lines: self.lines,
+                    indent: child_indent,
+                };
+                child_ctx.render_rule_contents(result, body, causes, children);
             }
             ExplanationNode::Compose {
                 expression,
@@ -984,15 +1177,7 @@ impl<'a> FormatContext<'a> {
                     lines: self.lines,
                     indent: child_indent,
                 };
-                let len = operands.len();
-                for (i, operand) in operands.iter().enumerate() {
-                    let child_connector = if i + 1 == len {
-                        Connector::Last
-                    } else {
-                        Connector::Branch
-                    };
-                    child_ctx.render_node(operand, child_connector, None);
-                }
+                child_ctx.render_nodes(operands, None);
             }
             ExplanationNode::DataInput { data, display } => {
                 if data.data.is_empty() {
@@ -1005,26 +1190,27 @@ impl<'a> FormatContext<'a> {
                 expression,
                 steps,
                 operands,
-                ..
             } => {
+                // When the parent body line already names this conversion,
+                // its steps and operands render directly at this level. The
+                // outcome step is dropped there: the conversion's result is
+                // the rule result already shown in the headline.
                 let expression_is_parent_body = parent_body.is_some_and(|body| body == expression);
-                if !expression_is_parent_body {
+                if expression_is_parent_body {
+                    let steps_without_outcome: Vec<SerializedConversionTraceStep> = steps
+                        .iter()
+                        .filter(|step| step.role != "outcome")
+                        .cloned()
+                        .collect();
+                    self.render_conversion_contents(&steps_without_outcome, operands);
+                } else {
                     self.push_line(connector, expression);
-                }
-                render_conversion_steps(self, connector, steps);
-                let child_indent = self.child_indent(connector);
-                let mut child_ctx = FormatContext {
-                    lines: self.lines,
-                    indent: child_indent,
-                };
-                let len = operands.len();
-                for (i, operand) in operands.iter().enumerate() {
-                    let child_connector = if i + 1 == len {
-                        Connector::Last
-                    } else {
-                        Connector::Branch
+                    let child_indent = self.child_indent(connector);
+                    let mut child_ctx = FormatContext {
+                        lines: self.lines,
+                        indent: child_indent,
                     };
-                    child_ctx.render_node(operand, child_connector, None);
+                    child_ctx.render_conversion_contents(steps, operands);
                 }
             }
             ExplanationNode::Veto { message } => {
@@ -1035,6 +1221,9 @@ impl<'a> FormatContext<'a> {
                         .expect("BUG: veto explanation must carry message"),
                 );
             }
+            ExplanationNode::UnitEquivalence { text } => {
+                self.push_line(connector, text);
+            }
         }
     }
 }
@@ -1044,59 +1233,6 @@ fn connector_str(connector: Connector) -> &'static str {
         Connector::Branch => "├─",
         Connector::Last => "└─",
     }
-}
-
-fn should_skip_in_text(node: &ExplanationNode, parent_body: &str) -> bool {
-    match node {
-        ExplanationNode::Compose { expression, .. } => expression == parent_body,
-        _ => false,
-    }
-}
-
-fn render_conversion_steps(
-    ctx: &mut FormatContext<'_>,
-    connector: Connector,
-    steps: &[SerializedConversionTraceStep],
-) {
-    if steps.is_empty() {
-        return;
-    }
-    let child_indent = ctx.child_indent(connector);
-    let mut step_ctx = FormatContext {
-        lines: ctx.lines,
-        indent: child_indent,
-    };
-    for (index, step) in steps.iter().enumerate() {
-        let step_connector = if index + 1 == steps.len() {
-            Connector::Last
-        } else {
-            Connector::Branch
-        };
-        step_ctx.push_line(step_connector, &step.text);
-    }
-}
-
-enum RuleLineStyle {
-    NameOnly,
-    NameWithBody,
-}
-
-fn rule_line_style(body: &str, children: &[ExplanationNode]) -> RuleLineStyle {
-    if children
-        .iter()
-        .all(|child| matches!(child, ExplanationNode::Rule { .. }))
-        && children.len() >= 2
-    {
-        return RuleLineStyle::NameOnly;
-    }
-    if children.len() == 1 {
-        if let ExplanationNode::Compose { expression, .. } = &children[0] {
-            if expression == body {
-                return RuleLineStyle::NameWithBody;
-            }
-        }
-    }
-    RuleLineStyle::NameWithBody
 }
 
 fn expression_precedence(kind: &ExpressionKind) -> u8 {
@@ -1258,13 +1394,10 @@ mod tests {
     use super::*;
     use crate::computation::rational::rational_new;
     use crate::computation::UnitResolutionContext;
-    use crate::limits::ResourceLimits;
     use crate::literals::DateGranularity;
     use crate::literals::QuantityUnit;
     use crate::parsing::ast::DateTimeValue;
     use crate::parsing::source::SourceType;
-    use crate::planning::data_input::DataValueInput;
-    use crate::planning::execution_plan::DataOverlay;
     use crate::planning::semantics::{
         date_time_to_semantic, DataPath, LemmaType, LiteralValue, QuantityUnits, RulePath,
         SemanticConversionTarget, TypeSpecification, ValueKind,
@@ -1304,11 +1437,13 @@ rule total: subtotal + vat
     {
       "type": "rule",
       "rule": "subtotal",
+      "result": "3984.38 eur",
       "body": "labor + rush_surcharge",
       "children": [
         {
           "type": "rule",
           "rule": "labor",
+          "result": "3187.50 eur",
           "body": "hourly_rate * hours_worked",
           "children": [
             {
@@ -1326,37 +1461,30 @@ rule total: subtotal + vat
         {
           "type": "rule",
           "rule": "rush_surcharge",
+          "result": "796.88 eur",
           "body": "labor * 25%",
           "causes": [
-            { "condition": "is_rush", "value": "true" },
-            { "condition": "is_super_rush", "value": "false" }
+            {
+              "condition": "is_rush is true",
+              "value": "true"
+            }
           ],
           "children": [
             {
-              "type": "compose",
-              "expression": "labor * 25%",
-              "operands": [
+              "type": "rule",
+              "rule": "labor",
+              "result": "3187.50 eur",
+              "body": "hourly_rate * hours_worked",
+              "children": [
                 {
-                  "type": "rule",
-                  "rule": "labor",
-                  "body": "hourly_rate * hours_worked",
-                  "children": [
-                    {
-                      "type": "data_input",
-                      "data": "hourly_rate",
-                      "display": "85.00 eur"
-                    },
-                    {
-                      "type": "data_input",
-                      "data": "hours_worked",
-                      "display": "37.5"
-                    }
-                  ]
+                  "type": "data_input",
+                  "data": "hourly_rate",
+                  "display": "85.00 eur"
                 },
                 {
                   "type": "data_input",
-                  "data": "",
-                  "display": "25%"
+                  "data": "hours_worked",
+                  "display": "37.5"
                 }
               ]
             }
@@ -1367,20 +1495,49 @@ rule total: subtotal + vat
     {
       "type": "rule",
       "rule": "vat",
+      "result": "836.72 eur",
       "body": "subtotal * 21%",
       "children": [
         {
-          "type": "compose",
-          "expression": "subtotal * 21%",
-          "operands": [
+          "type": "rule",
+          "rule": "subtotal",
+          "result": "3984.38 eur",
+          "body": "labor + rush_surcharge",
+          "children": [
             {
               "type": "rule",
-              "rule": "subtotal",
-              "body": "labor + rush_surcharge",
+              "rule": "labor",
+              "result": "3187.50 eur",
+              "body": "hourly_rate * hours_worked",
+              "children": [
+                {
+                  "type": "data_input",
+                  "data": "hourly_rate",
+                  "display": "85.00 eur"
+                },
+                {
+                  "type": "data_input",
+                  "data": "hours_worked",
+                  "display": "37.5"
+                }
+              ]
+            },
+            {
+              "type": "rule",
+              "rule": "rush_surcharge",
+              "result": "796.88 eur",
+              "body": "labor * 25%",
+              "causes": [
+                {
+                  "condition": "is_rush is true",
+                  "value": "true"
+                }
+              ],
               "children": [
                 {
                   "type": "rule",
                   "rule": "labor",
+                  "result": "3187.50 eur",
                   "body": "hourly_rate * hours_worked",
                   "children": [
                     {
@@ -1394,52 +1551,8 @@ rule total: subtotal + vat
                       "display": "37.5"
                     }
                   ]
-                },
-                {
-                  "type": "rule",
-                  "rule": "rush_surcharge",
-                  "body": "labor * 25%",
-                  "causes": [
-                    { "condition": "is_rush", "value": "true" },
-                    { "condition": "is_super_rush", "value": "false" }
-                  ],
-                  "children": [
-                    {
-                      "type": "compose",
-                      "expression": "labor * 25%",
-                      "operands": [
-                        {
-                          "type": "rule",
-                          "rule": "labor",
-                          "body": "hourly_rate * hours_worked",
-                          "children": [
-                            {
-                              "type": "data_input",
-                              "data": "hourly_rate",
-                              "display": "85.00 eur"
-                            },
-                            {
-                              "type": "data_input",
-                              "data": "hours_worked",
-                              "display": "37.5"
-                            }
-                          ]
-                        },
-                        {
-                          "type": "data_input",
-                          "data": "",
-                          "display": "25%"
-                        }
-                      ]
-                    }
-                  ]
                 }
               ]
-            },
-            {
-              "type": "data_input",
-              "data": "",
-              "display": "21%"
             }
           ]
         }
@@ -1448,35 +1561,23 @@ rule total: subtotal + vat
   ]
 }"#;
 
-    fn rush_surcharge_causes(data: HashMap<String, String>) -> Vec<Cause> {
+    fn rush_surcharge_causes(data: HashMap<String, String>) -> serde_json::Value {
         let mut engine = Engine::new();
         engine
             .load(CALC_SPEC, crate::SourceType::Volatile)
             .expect("calc spec loads");
         let now = DateTimeValue::now();
-        let plan = engine
-            .get_plan(None, "calc", Some(&now))
-            .expect("calc plan");
-        let overlay = DataOverlay::resolve(
-            plan,
-            data.into_iter()
-                .map(|(k, v)| (k, DataValueInput::convenience(v)))
-                .collect(),
-            &ResourceLimits::default(),
-        )
-        .expect("overlay");
-        let now_lit = LiteralValue {
-            value: ValueKind::Date(crate::planning::semantics::date_time_to_semantic(&now)),
-            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
-        };
-        let mut context = EvaluationContext::new(plan, &overlay, now_lit);
-        let rush_rule = plan
-            .get_rule("rush_surcharge")
-            .expect("rush_surcharge rule");
-        match winning_source_branch_and_causes(rush_rule, &mut context) {
-            WinningSourceBranch::BranchResult { causes, .. } => causes,
-            WinningSourceBranch::ConditionVeto { causes, .. } => causes,
-        }
+        let response = engine
+            .run(None, "calc", Some(&now), data, true, None)
+            .expect("calc eval succeeds");
+        let explanation = response
+            .results
+            .get("rush_surcharge")
+            .expect("rush_surcharge rule evaluated")
+            .explanation
+            .as_ref()
+            .expect("explanation always built");
+        serde_json::to_value(&explanation.causes).expect("causes serialize")
     }
 
     #[test]
@@ -1487,16 +1588,10 @@ rule total: subtotal + vat
         let causes = rush_surcharge_causes(data);
         assert_eq!(
             causes,
-            vec![
-                Cause {
-                    condition: "is_rush".to_string(),
-                    value: "false".to_string(),
-                },
-                Cause {
-                    condition: "is_super_rush".to_string(),
-                    value: "false".to_string(),
-                },
-            ]
+            serde_json::json!([
+                { "condition": "is_rush is false", "value": "true" },
+                { "condition": "is_super_rush is false", "value": "true" },
+            ])
         );
     }
 
@@ -1537,16 +1632,9 @@ rule total: subtotal + vat
         let causes = rush_surcharge_causes(data);
         assert_eq!(
             causes,
-            vec![
-                Cause {
-                    condition: "is_rush".to_string(),
-                    value: "true".to_string(),
-                },
-                Cause {
-                    condition: "is_super_rush".to_string(),
-                    value: "false".to_string(),
-                },
-            ]
+            serde_json::json!([
+                { "condition": "is_rush is true", "value": "true" },
+            ])
         );
     }
 
@@ -1558,10 +1646,9 @@ rule total: subtotal + vat
         let causes = rush_surcharge_causes(data);
         assert_eq!(
             causes,
-            vec![Cause {
-                condition: "is_super_rush".to_string(),
-                value: "true".to_string(),
-            }]
+            serde_json::json!([
+                { "condition": "is_super_rush is true", "value": "true" },
+            ])
         );
     }
 
@@ -1678,7 +1765,7 @@ rule total: subtotal + vat
     }
 
     #[test]
-    fn build_conversion_steps_identity_omits_rule() {
+    fn build_conversion_steps_identity_omits_rule_and_source() {
         let mut units = QuantityUnits::new();
         units.0.push(
             QuantityUnit::from_decimal_factor("kilogram".to_string(), Decimal::ONE, vec![])
@@ -1712,9 +1799,10 @@ rule total: subtotal + vat
             None,
             UnitResolutionContext::NamedQuantityOnly,
         );
-        assert_eq!(steps.len(), 2);
+        // Identity conversion: no factor to show, and a source step would
+        // restate the outcome value verbatim.
+        assert_eq!(steps.len(), 1);
         assert!(matches!(steps[0].role, ConversionTraceRole::Outcome));
-        assert!(matches!(steps[1].role, ConversionTraceRole::Source));
     }
 
     #[test]

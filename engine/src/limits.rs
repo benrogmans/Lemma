@@ -86,7 +86,7 @@ impl Default for ResourceLimits {
         Self {
             max_source_size_bytes: 5 * 1024 * 1024, // 5 MB
             max_expression_depth: 7,
-            max_expression_count: 4096,
+            max_expression_count: 65_536,
             max_total_expression_count: 3_141_592,
             max_data_value_bytes: 1024,         // 1 KB
             max_loaded_bytes: 50 * 1024 * 1024, // 50 MB

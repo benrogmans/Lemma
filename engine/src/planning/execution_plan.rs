@@ -15,7 +15,7 @@ use crate::parsing::source::Source;
 use crate::planning::data_input::{parse_data_value, DataValueInput};
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
-use crate::planning::normalize::build_normalized_rule_instructions;
+use crate::planning::normalize::{build_normalized_rule_instructions, CompiledRule};
 use crate::planning::semantics::{
     value_kind_matches_spec, ArithmeticComputation, ComparisonComputation, DataDefinition,
     DataPath, Expression, LemmaType, LiteralValue, MathematicalComputation, ReferenceTarget,
@@ -121,7 +121,7 @@ impl ExecutionPlanSet {
     }
 }
 
-pub const INSTRUCTIONS_VERSION: u32 = 1;
+pub const INSTRUCTIONS_VERSION: u32 = 2;
 
 /// How [`Instruction::JumpIfFalse`] treats a vetoed condition register.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -334,12 +334,54 @@ pub fn validate_instructions(instructions: &Instructions) -> Result<(), String> 
     }
 
     match instructions.code.last() {
-        Some(Instruction::Return { .. }) => Ok(()),
-        Some(other) => Err(format!(
-            "instruction stream must end with Return, found {other:?}"
-        )),
-        None => Err("instruction stream is empty".to_string()),
+        Some(Instruction::Return { .. }) => {}
+        Some(other) => {
+            return Err(format!(
+                "instruction stream must end with Return, found {other:?}"
+            ))
+        }
+        None => return Err("instruction stream is empty".to_string()),
     }
+
+    let code_len = instructions.code.len();
+    for tag in &instructions.arm_tags {
+        if (tag.pc as usize) >= code_len {
+            return Err(format!(
+                "arm tag pc {} is out of bounds (code length {code_len})",
+                tag.pc
+            ));
+        }
+        let tagged = &instructions.code[tag.pc as usize];
+        let valid = match tag.role {
+            ArmRole::Condition => matches!(tagged, Instruction::JumpIfFalse { .. }),
+            ArmRole::Result => matches!(tagged, Instruction::Return { .. }),
+        };
+        if !valid {
+            return Err(format!(
+                "arm tag at pc {} does not match its instruction {tagged:?}",
+                tag.pc
+            ));
+        }
+    }
+    for tag in &instructions.conversion_tags {
+        if (tag.pc as usize) >= code_len {
+            return Err(format!(
+                "conversion tag pc {} is out of bounds (code length {code_len})",
+                tag.pc
+            ));
+        }
+        if !matches!(
+            instructions.code[tag.pc as usize],
+            Instruction::UnitConversion { .. }
+        ) {
+            return Err(format!(
+                "conversion tag at pc {} does not reference a UnitConversion instruction",
+                tag.pc
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// Compiled normalized equation for authoritative evaluation.
@@ -353,6 +395,47 @@ pub struct Instructions {
     pub data_manifest: Vec<DataPath>,
     pub veto_messages: Vec<String>,
     pub code: Vec<Instruction>,
+    /// Piecewise arm provenance: which `JumpIfFalse`/`Return` instructions
+    /// belong to which source branch (`ExecutableRule::branches` index).
+    /// Emitted by `compile_piecewise_rule` after all rewrite passes, so arm
+    /// tags are present in both the optimized and source instruction streams.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arm_tags: Vec<ArmTag>,
+    /// Unit-conversion provenance: maps a `UnitConversion` instruction back
+    /// to the source location of the conversion expression it compiles.
+    /// Reliable in the source (un-optimized) stream; best-effort in the
+    /// optimized stream (rewrites may fold or merge conversion nodes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversion_tags: Vec<ConversionTag>,
+}
+
+/// Role of an arm-tagged instruction within a rule's piecewise compilation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArmRole {
+    /// A `JumpIfFalse` testing this arm's condition.
+    Condition,
+    /// A `Return` producing this arm's result.
+    Result,
+}
+
+/// Provenance tag linking one instruction to a piecewise arm.
+///
+/// `arm` indexes `ExecutableRule::branches`: 0 is the default branch, 1.. are
+/// the unless branches in source order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArmTag {
+    pub pc: u32,
+    pub arm: u16,
+    pub role: ArmRole,
+}
+
+/// Provenance tag linking one `UnitConversion` instruction to the source
+/// location of the conversion expression it compiles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversionTag {
+    pub pc: u32,
+    pub source: Source,
 }
 
 mod register_types_serde {
@@ -482,6 +565,12 @@ pub struct ExecutableRule {
 
     /// Fully inlined, once-normalized compiled equation; authoritative for evaluation
     pub instructions: Instructions,
+
+    /// Fully inlined equation compiled **without** rewrite passes: instruction
+    /// shape mirrors the source expressions. Executed (with recording) when
+    /// explanations are requested, so every runtime fact in an explanation
+    /// comes from an actual execution of source-shaped code.
+    pub source_instructions: Instructions,
 
     /// Source location for error messages (always present for rules from parsed specs)
     pub source: Source,
@@ -630,7 +719,7 @@ pub(crate) fn build_execution_plan(
         }
 
         let unit_ctx = UnitResolutionContext::WithIndex(&main_resolved_types.unit_index);
-        let (instructions, inlined_expression) = build_normalized_rule_instructions(
+        let compiled = build_normalized_rule_instructions(
             &rule_node.branches,
             &completed_rules,
             &plan_rule_paths,
@@ -644,7 +733,14 @@ pub(crate) fn build_execution_plan(
         // planning error (resource limit or constant-fold failure) carrying
         // its own kind and source location.
         .map_err(|error| vec![error])?;
-        max_register_count = max_register_count.max(instructions.register_count);
+        let CompiledRule {
+            instructions,
+            source_instructions,
+            inlined_expression,
+        } = compiled;
+        max_register_count = max_register_count
+            .max(instructions.register_count)
+            .max(source_instructions.register_count);
         completed_rules.insert(rule_path.clone(), inlined_expression);
 
         executable_rules.push(ExecutableRule {
@@ -652,6 +748,7 @@ pub(crate) fn build_execution_plan(
             name: rule_path.rule.clone(),
             branches: executable_branches,
             instructions,
+            source_instructions,
             source: rule_node.source.clone(),
             rule_type: Arc::clone(&rule_node.rule_type),
         });
@@ -1810,6 +1907,15 @@ impl TryFrom<ExecutionPlanSerialized> for ExecutionPlan {
                     None::<String>,
                 )
             })?;
+            validate_instructions(&rule.source_instructions).map_err(|message| {
+                crate::Error::request(
+                    format!(
+                        "Serialized execution plan for spec '{}' contains invalid source instructions for rule '{}': {message}",
+                        serialized.spec_name, rule.name
+                    ),
+                    None::<String>,
+                )
+            })?;
         }
         let max_register_count = serialized
             .rules
@@ -2052,6 +2158,8 @@ mod tests {
             constants: vec![literal],
             data_manifest: Vec::new(),
             veto_messages: Vec::new(),
+            arm_tags: Vec::new(),
+            conversion_tags: Vec::new(),
             code: vec![
                 Instruction::LoadConstant {
                     destination_register: 0,
@@ -2415,6 +2523,7 @@ mod tests {
                 }
             }],
             instructions: constant_return_instructions(create_boolean_literal(true)),
+            source_instructions: constant_return_instructions(create_boolean_literal(true)),
             source: test_source(),
             rule_type: Arc::new(primitive_boolean().clone()),
         };
@@ -2605,6 +2714,9 @@ mod tests {
                 },
             ],
             instructions: constant_return_instructions(create_text_literal("bronze".to_string())),
+            source_instructions: constant_return_instructions(create_text_literal(
+                "bronze".to_string(),
+            )),
             source: test_source(),
             rule_type: Arc::new(primitive_text().clone()),
         };
@@ -2690,6 +2802,7 @@ mod tests {
                 }
             }],
             instructions: constant_return_instructions(create_number_literal(0.into())),
+            source_instructions: constant_return_instructions(create_number_literal(0.into())),
             source: test_source(),
             rule_type: Arc::new(crate::planning::semantics::primitive_number().clone()),
         };
@@ -2763,6 +2876,7 @@ mod tests {
                 }
             }],
             instructions: constant_return_instructions(create_boolean_literal(true)),
+            source_instructions: constant_return_instructions(create_boolean_literal(true)),
             source: test_source(),
             rule_type: Arc::new(primitive_boolean().clone()),
         };

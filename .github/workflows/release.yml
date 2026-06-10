@@ -5,7 +5,7 @@ on:
     workflows: ["Quality"]
     types: [completed]
     branches: [main]
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch: # Allow manual trigger
 
 permissions:
   contents: write
@@ -193,11 +193,15 @@ jobs:
       matrix:
         nif: ["2.15"]
         job:
-          - { target: aarch64-apple-darwin,      os: macos-latest }
-          - { target: x86_64-apple-darwin,       os: macos-15-intel }
-          - { target: aarch64-unknown-linux-gnu,  os: ubuntu-latest, use-cross: true }
-          - { target: x86_64-unknown-linux-gnu,   os: ubuntu-latest }
-          - { target: x86_64-pc-windows-msvc,     os: windows-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - {
+              target: aarch64-unknown-linux-gnu,
+              os: ubuntu-latest,
+              use-cross: true,
+            }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
     steps:
       - uses: actions/checkout@v4
 
@@ -272,13 +276,13 @@ jobs:
         run: cargo publish -p lemma-engine --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Wait for crates.io index
-        run: sleep 30
+        run: sleep 60
 
       - name: Publish lemma-openapi
         run: cargo publish -p lemma-openapi --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Wait for crates.io index
-        run: sleep 30
+        run: sleep 60
 
       - name: Publish lemma
         run: cargo publish -p lemma --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -329,8 +333,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Build WASM
         working-directory: engine/packages/npm
@@ -358,8 +362,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Download CLI binaries from release
         env:
@@ -423,7 +427,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: "24"
 
       - name: Install dependencies
         working-directory: engine/lsp/editors/vscode
@@ -447,7 +451,13 @@ jobs:
 
   publish-hex:
     name: Publish to Hex.pm
-    needs: [detect-version-changes, create-release, publish-crates, build-nif-binaries]
+    needs:
+      [
+        detect-version-changes,
+        create-release,
+        publish-crates,
+        build-nif-binaries,
+      ]
     if: |
       !cancelled() &&
       needs.create-release.result == 'success' &&
@@ -466,8 +476,8 @@ jobs:
       - name: Setup Erlang & Elixir
         uses: erlef/setup-beam@v1
         with:
-          otp-version: '28.4'
-          elixir-version: '1.19.5'
+          otp-version: "28.4"
+          elixir-version: "1.19.5"
 
       - name: Rewrite NIF Cargo.toml for standalone build
         run: cargo run -p xtask -- hex-standalone

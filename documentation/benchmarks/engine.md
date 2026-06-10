@@ -15,7 +15,7 @@ Numbers are produced by `cargo benchmarks engine`. Lemma and the hand-written Py
 ## Environment
 
 - Host: `Linux 6.17.0-35-generic x86_64`
-- Lemma git SHA: `4eba6cfdf5ffd07a75dedee2b239dd9ff2f4e50c`
+- Lemma git SHA: `94f8ad42c9644b65a80a29e13d5ef53afcc0f9de`
 - Python: `Python 3.12.3`
 - Rustc:
 
@@ -33,9 +33,9 @@ LLVM version: 21.1.3
 
 | Spec | Terminal rule | Lemma median | Lemma std dev | Python median | Python iter | Python std dev | Python / Lemma |
 |------|---------------|-------------:|--------------:|--------------:|------------:|---------------:|---------------:|
-| `bench_shipping` | `total` | 19.81 us | 409 ns | 7.03 us | 100000 | 1.85 us | 0.3548 |
-| `bench_pricing` | `total` | 68.61 us | 3.01 us | 28.33 us | 100000 | 4.78 us | 0.4130 |
-| `bench_order_pipeline` | `grand_total` | 168.75 us | 10.67 us | 60.26 us | 100000 | 7.40 us | 0.3571 |
+| `bench_shipping` | `total` | 19.50 us | 555 ns | 6.87 us | 100000 | 1.57 us | 0.3524 |
+| `bench_pricing` | `total` | 70.01 us | 1.74 us | 27.72 us | 100000 | 5.46 us | 0.3960 |
+| `bench_order_pipeline` | `grand_total` | 167.44 us | 4.20 us | 59.01 us | 100000 | 9.66 us | 0.3524 |
 
 ## Numerical accuracy
 

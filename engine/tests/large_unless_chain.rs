@@ -134,7 +134,7 @@ fn alpha2_analog_199_branches_compiles_and_evaluates() {
 }
 
 #[test]
-fn alpha2_analog_explanation_causes_deduped() {
+fn alpha2_analog_explanation_states_evaluated_conditions() {
     let src = alpha2_analog_source(199, 18);
     let mut engine = Engine::new();
     engine
@@ -165,17 +165,18 @@ fn alpha2_analog_explanation_causes_deduped() {
         .explanation
         .as_ref()
         .expect("explanation built");
-    assert!(
-        explanation.causes.len() < 10,
-        "expected deduped causes, got {}",
-        explanation.causes.len()
+    assert_eq!(
+        explanation.causes.len(),
+        1,
+        "only the matching condition should be a cause, got {:?}",
+        explanation.causes
     );
     assert!(
         explanation
             .causes
             .iter()
-            .any(|c| c.condition == "code" && c.value == "L17"),
-        "expected code cause with L17, got {:?}",
+            .any(|c| c.condition == "code is L17" && c.value == "true"),
+        "expected the matched condition stated as a fact, got {:?}",
         explanation.causes
     );
 
@@ -201,9 +202,11 @@ fn alpha2_analog_explanation_causes_deduped() {
     assert_eq!(
         explanation.causes.len(),
         1,
-        "199-branch base should dedupe to one code cause, got {:?}",
+        "the latest slice has one unless condition; only it produces a cause, got {:?}",
         explanation.causes
     );
-    assert_eq!(explanation.causes[0].condition, "code");
-    assert_eq!(explanation.causes[0].value, "C042");
+    // The condition `code is "L17"` was false; the cause states the
+    // flipped fact that held.
+    assert_eq!(explanation.causes[0].condition, "code is not L17");
+    assert_eq!(explanation.causes[0].value, "true");
 }

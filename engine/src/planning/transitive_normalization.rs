@@ -103,6 +103,54 @@ rule scaled: doubled
         );
     }
 
+    /// Pinning test: rewrite passes preserve the piecewise arm list. Both
+    /// instruction streams must carry a Condition tag per unless arm and a
+    /// Result tag per arm — even when a condition is constant-foldable —
+    /// because explanations attribute recorded branch decisions by arm tag.
+    #[test]
+    fn rewrite_passes_preserve_piecewise_arm_tags() {
+        use crate::planning::execution_plan::ArmRole;
+        let code = r#"
+spec t
+data flag: boolean
+data other: boolean
+rule out: 1
+  unless flag then 2
+  unless other and true then 3
+"#;
+        let plan = plan_from_code(code);
+        let rule = plan.get_rule("out").expect("rule");
+        for (label, instructions) in [
+            ("optimized", &rule.instructions),
+            ("source", &rule.source_instructions),
+        ] {
+            let mut condition_arms: Vec<u16> = instructions
+                .arm_tags
+                .iter()
+                .filter(|t| t.role == ArmRole::Condition)
+                .map(|t| t.arm)
+                .collect();
+            condition_arms.sort_unstable();
+            assert_eq!(
+                condition_arms,
+                vec![1, 2],
+                "{label} stream must tag every unless condition"
+            );
+            let mut result_arms: Vec<u16> = instructions
+                .arm_tags
+                .iter()
+                .filter(|t| t.role == ArmRole::Result)
+                .map(|t| t.arm)
+                .collect();
+            result_arms.sort_unstable();
+            assert_eq!(
+                result_arms,
+                vec![0, 1, 2],
+                "{label} stream must tag every arm result"
+            );
+        }
+    }
+
     #[test]
     fn sqrt_product_folds_to_literal_two_in_plan() {
         let code = r#"

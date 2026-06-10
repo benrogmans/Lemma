@@ -1,21 +1,19 @@
 //! Single source of truth for branch and veto decision semantics.
 //!
-//! Three consumers must agree on how a condition or boolean operand decides:
+//! Two consumers must agree on how a condition or boolean operand decides:
 //!
 //! - the virtual machine's [`Instruction::JumpIfFalse`] handler
 //!   (`execute_instructions`), which consults [`unless_condition_outcome`];
 //! - the instruction compiler (`compile_short_circuit_and`,
 //!   `compile_short_circuit_or`, `compile_piecewise_rule` in
 //!   `planning::normalize`), which emits jump sequences implementing
-//!   [`and_conjunct_outcome`] and [`or_disjunct_outcome`] in instruction form;
-//! - the explanation source walker (`evaluation::expression` and
-//!   `evaluation::explanations`), which re-derives the reasoning from the
-//!   source expressions and consults all three functions.
+//!   [`and_conjunct_outcome`] and [`or_disjunct_outcome`] in instruction form.
 //!
-//! Centralizing the decisions here makes silent divergence between the
-//! authoritative virtual machine result and the explanation structurally
-//! impossible for the walker, and gives the compiled sequences a single
-//! specification to be verified against.
+//! Explanations no longer evaluate anything: they read recorded VM execution
+//! (see `evaluation::explanations`), so they agree with these semantics by
+//! construction. [`and_conjunct_outcome`] and [`or_disjunct_outcome`] remain
+//! as the executable specification (verified by this module's tests) that
+//! the compiled jump sequences implement.
 //!
 //! [`Instruction::JumpIfFalse`]: crate::planning::execution_plan::Instruction::JumpIfFalse
 
@@ -95,6 +93,7 @@ pub(crate) fn unless_condition_outcome(
 /// The last conjunct is not inspected through this function: its result
 /// (value or veto) is the conjunction's result directly, mirroring the
 /// compiled form which computes it into the destination register.
+#[cfg(test)]
 pub(crate) fn and_conjunct_outcome(conjunct: &OperationResult) -> BranchOutcome {
     if conjunct.vetoed() {
         return BranchOutcome::Propagate(conjunct.clone());
@@ -119,6 +118,7 @@ pub(crate) fn and_conjunct_outcome(conjunct: &OperationResult) -> BranchOutcome 
 /// composing binary nodes with `is_last_disjunct = true` for every right
 /// child reproduces the flat semantics exactly (source order is never
 /// reordered for `and`/`or`).
+#[cfg(test)]
 pub(crate) fn or_disjunct_outcome(
     disjunct: &OperationResult,
     is_last_disjunct: bool,

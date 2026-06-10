@@ -436,9 +436,11 @@ rule out: true
         stdout
     );
 
+    // The condition `5 < 3` was false; the explanation states the flipped
+    // fact that held instead of appending "is false".
     assert!(
-        stdout.contains("5 < 3 is false"),
-        "explain should show unless condition evaluation, got:\n{}",
+        stdout.contains("5 >= 3"),
+        "explain should state the falsified unless condition as a flipped fact, got:\n{}",
         stdout
     );
 }

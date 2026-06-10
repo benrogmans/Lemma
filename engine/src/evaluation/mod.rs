@@ -69,6 +69,11 @@ pub(crate) struct EvaluationContext<'plan> {
     plan: &'plan ExecutionPlan,
     data_values: HashMap<DataPath, LiteralValue>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
+    /// Recorded executions of each rule's source-shaped instruction stream;
+    /// populated only when explanations are requested. Explanations read all
+    /// runtime facts (register values, branch decisions, winning arm) from
+    /// here — never by re-evaluating expressions.
+    pub(crate) recordings: HashMap<RulePath, RuleRecording>,
     now: LiteralValue,
     /// Computation vetoes on data paths that cannot be read.
     vetoes: HashMap<DataPath, VetoType>,
@@ -76,6 +81,32 @@ pub(crate) struct EvaluationContext<'plan> {
     /// max_register_count. `None` marks a register that has not been written
     /// yet; reading one is a compiler bug and crashes.
     register_values: Vec<Option<OperationResult>>,
+}
+
+/// What one `JumpIfFalse` decided during a recorded execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BranchDecision {
+    /// Condition was true: the arm's result branch was taken.
+    Taken,
+    /// Condition was false: execution jumped past the arm.
+    NotTaken,
+    /// Condition vetoed: the veto propagated as the rule result.
+    Veto,
+}
+
+/// Facts retained from one execution of a rule's instruction stream.
+///
+/// Registers are allocated monotonically and never reused, so the final
+/// register file holds the value of every executed instruction; untaken
+/// branches remain `None`.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct RuleRecording {
+    pub(crate) registers: Vec<Option<OperationResult>>,
+    /// `(pc, decision)` per executed `JumpIfFalse`, in execution order.
+    pub(crate) branch_decisions: Vec<(u32, BranchDecision)>,
+    /// The pc of the `Return` that produced the result, when one executed
+    /// (a vetoing condition propagates without reaching a `Return`).
+    pub(crate) returned_pc: Option<u32>,
 }
 
 impl<'plan> EvaluationContext<'plan> {
@@ -153,6 +184,7 @@ impl<'plan> EvaluationContext<'plan> {
             plan,
             data_values,
             rule_results: HashMap::new(),
+            recordings: HashMap::new(),
             now,
             vetoes,
             register_values: Vec::with_capacity(plan.max_register_count as usize),
@@ -169,21 +201,6 @@ impl<'plan> EvaluationContext<'plan> {
 
     pub(crate) fn get_data_value(&self, data_path: &DataPath) -> Option<&LiteralValue> {
         self.data_values.get(data_path)
-    }
-
-    /// When a qualified [`DataPath`] misses in the map, match by local datum name if unambiguous.
-    pub(crate) fn unique_data_value_by_name(&self, data: &str) -> Option<&LiteralValue> {
-        let matches: Vec<&LiteralValue> = self
-            .data_values
-            .iter()
-            .filter(|(key, _)| key.data == data)
-            .map(|(_, value)| value)
-            .collect();
-        if matches.len() == 1 {
-            Some(matches[0])
-        } else {
-            None
-        }
     }
 
     pub(crate) fn plan(&self) -> &ExecutionPlan {
@@ -227,6 +244,7 @@ fn unwrap_literal(result: OperationResult, operand: &str) -> LiteralValue {
 pub(crate) fn execute_instructions(
     instructions: &Instructions,
     context: &mut EvaluationContext<'_>,
+    mut recording: Option<&mut RuleRecording>,
 ) -> OperationResult {
     if instructions.version != INSTRUCTIONS_VERSION {
         panic!("BUG: instructions version mismatch");
@@ -259,6 +277,7 @@ pub(crate) fn execute_instructions(
             );
         }
         let insn = &instructions.code[pc as usize];
+        let current_pc = pc;
         pc += 1;
         match insn {
             Instruction::LoadConstant {
@@ -538,15 +557,37 @@ pub(crate) fn execute_instructions(
             } => {
                 let condition = context.read_register(*condition_register);
                 match branch_semantics::unless_condition_outcome(&condition, *veto_semantics) {
-                    branch_semantics::BranchOutcome::Propagate(result) => return result,
-                    branch_semantics::BranchOutcome::Taken => {}
-                    branch_semantics::BranchOutcome::NotTaken => pc = *target_instruction,
+                    branch_semantics::BranchOutcome::Propagate(result) => {
+                        if let Some(rec) = recording.as_deref_mut() {
+                            rec.branch_decisions
+                                .push((current_pc, BranchDecision::Veto));
+                            rec.registers = context.register_values.clone();
+                        }
+                        return result;
+                    }
+                    branch_semantics::BranchOutcome::Taken => {
+                        if let Some(rec) = recording.as_deref_mut() {
+                            rec.branch_decisions
+                                .push((current_pc, BranchDecision::Taken));
+                        }
+                    }
+                    branch_semantics::BranchOutcome::NotTaken => {
+                        if let Some(rec) = recording.as_deref_mut() {
+                            rec.branch_decisions
+                                .push((current_pc, BranchDecision::NotTaken));
+                        }
+                        pc = *target_instruction;
+                    }
                 }
             }
             Instruction::Jump { target_instruction } => {
                 pc = *target_instruction;
             }
             Instruction::Return { source_register } => {
+                if let Some(rec) = recording.as_deref_mut() {
+                    rec.returned_pc = Some(current_pc);
+                    rec.registers = context.register_values.clone();
+                }
                 return context.read_register(*source_register);
             }
         }
@@ -590,7 +631,7 @@ mod vm_tests {
             lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
         let mut context = EvaluationContext::new(&plan, &overlay, now);
-        execute_instructions(instructions, &mut context)
+        execute_instructions(instructions, &mut context, None)
     }
 
     fn bool_instructions(code: Vec<Instruction>, constants: Vec<LiteralValue>) -> Instructions {
@@ -604,6 +645,8 @@ mod vm_tests {
             constants,
             data_manifest: Vec::new(),
             veto_messages: Vec::new(),
+            arm_tags: Vec::new(),
+            conversion_tags: Vec::new(),
             code,
         }
     }
@@ -890,7 +933,21 @@ impl Evaluator {
                 continue;
             }
 
-            let result = execute_instructions(&exec_rule.instructions, &mut context);
+            // Explanations execute the source-shaped stream with recording:
+            // that run's result is the authoritative result, so the response
+            // and the explanation come from the same execution.
+            let result = if explain {
+                let mut recording = RuleRecording::default();
+                let result = execute_instructions(
+                    &exec_rule.source_instructions,
+                    &mut context,
+                    Some(&mut recording),
+                );
+                context.recordings.insert(exec_rule.path.clone(), recording);
+                result
+            } else {
+                execute_instructions(&exec_rule.instructions, &mut context, None)
+            };
             // The decimal limit applies before the result is stored: every
             // consumer — downstream rule-target references, `is veto`
             // checks, explanations, and the response — sees the same value.
@@ -951,7 +1008,7 @@ impl Evaluator {
         &self,
         response: &mut Response,
         plan: &ExecutionPlan,
-        context: &mut EvaluationContext<'_>,
+        context: &EvaluationContext<'_>,
     ) {
         use crate::evaluation::explanations::{build_explanation, Explanation};
         use std::collections::HashMap;

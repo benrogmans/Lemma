@@ -92,6 +92,19 @@ pub(crate) fn unless_branches_to_piecewise(
 }
 
 /// One complete transitive equation per rule: unless → Piecewise, inline deps, normalize, compile.
+///
+/// Produces two instruction streams from the same inlined expression:
+/// - `instructions`: the optimized stream (full `simplify` fixed-point), used
+///   for normal evaluation;
+/// - `source_instructions`: compiled with **zero rewrite passes**, mirroring
+///   the source expression shape; executed with recording when explanations
+///   are requested.
+pub(crate) struct CompiledRule {
+    pub(crate) instructions: Instructions,
+    pub(crate) source_instructions: Instructions,
+    pub(crate) inlined_expression: Arc<Expression>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_normalized_rule_instructions(
     branches: &[(Option<Expression>, Expression)],
@@ -102,7 +115,7 @@ pub(crate) fn build_normalized_rule_instructions(
     source: Option<Source>,
     rule_type: &Arc<LemmaType>,
     max_normalized_expression_nodes: usize,
-) -> Result<(Instructions, Arc<Expression>), Error> {
+) -> Result<CompiledRule, Error> {
     let piecewise = unless_branches_to_piecewise(branches);
     let inlined_rules = substitute_completed_rule_paths_arc(&piecewise, completed_rules);
     let rule_target_data = build_in_plan_rule_target_data_map(data);
@@ -122,6 +135,9 @@ pub(crate) fn build_normalized_rule_instructions(
         ));
     }
     let mut nf = to_normal_form(inlined.as_ref());
+    // Source stream: zero rewrite passes — the compiled shape mirrors the
+    // source expression, so recorded execution maps back to source nodes.
+    let source_instructions = compile_normal_form(&nf, data, unit_ctx, rule_type)?;
     loop {
         let prev = nf.clone();
         nf = normalize_once(nf, Some(unit_ctx), source.clone())?;
@@ -138,8 +154,12 @@ pub(crate) fn build_normalized_rule_instructions(
             source,
         ));
     }
-    let instructions = compile_normal_form(&nf, data, rule_type)?;
-    Ok((instructions, inlined))
+    let instructions = compile_normal_form(&nf, data, unit_ctx, rule_type)?;
+    Ok(CompiledRule {
+        instructions,
+        source_instructions,
+        inlined_expression: inlined,
+    })
 }
 
 fn expression_node_limit_error(limit: usize, source: Option<Source>) -> Error {
@@ -233,7 +253,7 @@ fn normal_form_exceeds_node_budget(nf: &NormalForm, budget: usize) -> bool {
             | NormalForm::Reciprocal(x)
             | NormalForm::Not(x)
             | NormalForm::MathOp(_, x)
-            | NormalForm::UnitConversion(x, _)
+            | NormalForm::UnitConversion(x, _, _)
             | NormalForm::DateRelative(_, x)
             | NormalForm::DateCalendar(_, _, x)
             | NormalForm::PastFutureRange(_, x)
@@ -257,19 +277,29 @@ struct CompileContext<'a> {
     data_manifest: Vec<DataPath>,
     veto_messages: Vec<String>,
     code: Vec<Instruction>,
+    arm_tags: Vec<crate::planning::execution_plan::ArmTag>,
+    conversion_tags: Vec<crate::planning::execution_plan::ConversionTag>,
     data: &'a IndexMap<DataPath, DataDefinition>,
+    unit_ctx: &'a UnitResolutionContext<'a>,
     rule_type: Arc<LemmaType>,
 }
 
 impl<'a> CompileContext<'a> {
-    fn new(data: &'a IndexMap<DataPath, DataDefinition>, rule_type: &Arc<LemmaType>) -> Self {
+    fn new(
+        data: &'a IndexMap<DataPath, DataDefinition>,
+        unit_ctx: &'a UnitResolutionContext<'a>,
+        rule_type: &Arc<LemmaType>,
+    ) -> Self {
         Self {
             register_types: Vec::new(),
             constants: Vec::new(),
             data_manifest: Vec::new(),
             veto_messages: Vec::new(),
             code: Vec::new(),
+            arm_tags: Vec::new(),
+            conversion_tags: Vec::new(),
             data,
+            unit_ctx,
             rule_type: Arc::clone(rule_type),
         }
     }
@@ -286,6 +316,11 @@ impl<'a> CompileContext<'a> {
     }
 
     fn constant_index(&mut self, value: LiteralValue) -> u16 {
+        // Named compound-unit literals (e.g. `0.5 eur_per_km`) are lowered to
+        // their base-unit signature at interning so both instruction streams
+        // carry signatures runtime arithmetic understands. This is lowering,
+        // not rewriting: deterministic per literal given the unit index.
+        let value = expand_named_quantity_literal(&value, Some(self.unit_ctx)).unwrap_or(value);
         if let Some((idx, _)) = self
             .constants
             .iter()
@@ -354,6 +389,8 @@ impl<'a> CompileContext<'a> {
             data_manifest: self.data_manifest,
             veto_messages: self.veto_messages,
             code: self.code,
+            arm_tags: self.arm_tags,
+            conversion_tags: self.conversion_tags,
         };
         if let Err(message) = crate::planning::execution_plan::validate_instructions(&instructions)
         {
@@ -381,15 +418,21 @@ fn data_path_type(data: &IndexMap<DataPath, DataDefinition>, path: &DataPath) ->
 fn compile_normal_form(
     nf: &NormalForm,
     data: &IndexMap<DataPath, DataDefinition>,
+    unit_ctx: &UnitResolutionContext<'_>,
     rule_type: &Arc<LemmaType>,
 ) -> Result<Instructions, Error> {
-    let mut ctx = CompileContext::new(data, rule_type);
+    let mut ctx = CompileContext::new(data, unit_ctx, rule_type);
     match nf {
         NormalForm::Piecewise(arms) => compile_piecewise_rule(arms, &mut ctx),
         other => {
             let result_reg = compile_nf(other, &mut ctx, None);
-            ctx.emit(Instruction::Return {
+            let return_pc = ctx.emit(Instruction::Return {
                 source_register: result_reg,
+            });
+            ctx.arm_tags.push(crate::planning::execution_plan::ArmTag {
+                pc: return_pc,
+                arm: 0,
+                role: crate::planning::execution_plan::ArmRole::Result,
             });
         }
     }
@@ -401,12 +444,17 @@ fn compile_piecewise_rule(
     arms: &[(Arc<NormalForm>, Arc<NormalForm>)],
     ctx: &mut CompileContext<'_>,
 ) {
-    use crate::planning::execution_plan::JumpVetoSemantics;
+    use crate::planning::execution_plan::{ArmRole, ArmTag, JumpVetoSemantics};
     assert!(!arms.is_empty(), "BUG: empty piecewise rule");
     if arms.len() == 1 {
         let result_reg = compile_nf(&arms[0].1, ctx, None);
-        ctx.emit(Instruction::Return {
+        let return_pc = ctx.emit(Instruction::Return {
             source_register: result_reg,
+        });
+        ctx.arm_tags.push(ArmTag {
+            pc: return_pc,
+            arm: 0,
+            role: ArmRole::Result,
         });
         return;
     }
@@ -420,17 +468,32 @@ fn compile_piecewise_rule(
             target_instruction: 0,
             veto_semantics: JumpVetoSemantics::UnlessRuleReference,
         });
+        ctx.arm_tags.push(ArmTag {
+            pc: jump_idx as u32,
+            arm: i as u16,
+            role: ArmRole::Condition,
+        });
         let result_reg = compile_nf(result, ctx, None);
-        ctx.emit(Instruction::Return {
+        let return_pc = ctx.emit(Instruction::Return {
             source_register: result_reg,
+        });
+        ctx.arm_tags.push(ArmTag {
+            pc: return_pc,
+            arm: i as u16,
+            role: ArmRole::Result,
         });
         let next_target = ctx.code.len() as u32;
         ctx.patch_jump_target(jump_idx, next_target);
     }
 
     let result_reg = compile_nf(&arms[0].1, ctx, None);
-    ctx.emit(Instruction::Return {
+    let return_pc = ctx.emit(Instruction::Return {
         source_register: result_reg,
+    });
+    ctx.arm_tags.push(ArmTag {
+        pc: return_pc,
+        arm: 0,
+        role: ArmRole::Result,
     });
 }
 
@@ -648,14 +711,21 @@ fn compile_nf(nf: &NormalForm, ctx: &mut CompileContext<'_>, dest: Option<u16>) 
             });
             d
         }
-        NormalForm::UnitConversion(inner, target) => {
+        NormalForm::UnitConversion(inner, target, origin) => {
             let inner_reg = compile_nf(inner, ctx, None);
             let d = ctx.resolve_dest(dest, ctx.rule_type.clone());
-            ctx.emit(Instruction::UnitConversion {
+            let pc = ctx.emit(Instruction::UnitConversion {
                 destination_register: d,
                 source_register: inner_reg,
                 target: target.clone(),
             });
+            if let Some(source) = origin {
+                ctx.conversion_tags
+                    .push(crate::planning::execution_plan::ConversionTag {
+                        pc,
+                        source: source.clone(),
+                    });
+            }
             d
         }
         NormalForm::DateRelative(kind, inner) => {
@@ -1223,7 +1293,7 @@ enum NormalForm {
     Or(Vec<NormalForm>),
     Not(Arc<NormalForm>),
     MathOp(MathematicalComputation, Arc<NormalForm>),
-    UnitConversion(Arc<NormalForm>, SemanticConversionTarget),
+    UnitConversion(Arc<NormalForm>, SemanticConversionTarget, Option<Source>),
     Veto(VetoExpression),
     DateRelative(DateRelativeKind, Arc<NormalForm>),
     DateCalendar(DateCalendarKind, CalendarPeriodUnit, Arc<NormalForm>),
@@ -1307,9 +1377,10 @@ fn normalize_children(
             op,
             Arc::new(normalize_once((*x).clone(), unit_ctx, source.clone())?),
         )),
-        NormalForm::UnitConversion(x, target) => Ok(NormalForm::UnitConversion(
+        NormalForm::UnitConversion(x, target, origin) => Ok(NormalForm::UnitConversion(
             Arc::new(normalize_once((*x).clone(), unit_ctx, source.clone())?),
             target,
+            origin,
         )),
         NormalForm::DateRelative(kind, x) => Ok(NormalForm::DateRelative(
             kind,
@@ -1430,7 +1501,7 @@ fn fold_unit_literals(
             op,
             Arc::new(fold_unit_literals((*x).clone(), unit_ctx, source.clone())?),
         )),
-        NormalForm::UnitConversion(inner, target) => {
+        NormalForm::UnitConversion(inner, target, origin) => {
             let inner_done = fold_unit_literals((*inner).clone(), unit_ctx, source.clone())?;
             if let (Some(_unit_context), NormalForm::Leaf(LeafKind::Literal(literal))) =
                 (unit_ctx, &inner_done)
@@ -1448,7 +1519,11 @@ fn fold_unit_literals(
                     ))));
                 }
             }
-            Ok(NormalForm::UnitConversion(Arc::new(inner_done), target))
+            Ok(NormalForm::UnitConversion(
+                Arc::new(inner_done),
+                target,
+                origin,
+            ))
         }
         NormalForm::DateRelative(kind, x) => Ok(NormalForm::DateRelative(
             kind,
@@ -1503,7 +1578,7 @@ fn fold_unit_literals(
     }
 }
 
-fn expand_named_quantity_literal(
+pub(crate) fn expand_named_quantity_literal(
     literal: &LiteralValue,
     unit_ctx: Option<&UnitResolutionContext<'_>>,
 ) -> Option<LiteralValue> {
@@ -1580,9 +1655,11 @@ fn to_normal_form(expr: &Expression) -> NormalForm {
             op.clone(),
             Arc::new(to_normal_form(right)),
         ),
-        ExpressionKind::UnitConversion(inner, target) => {
-            NormalForm::UnitConversion(Arc::new(to_normal_form(inner)), target.clone())
-        }
+        ExpressionKind::UnitConversion(inner, target) => NormalForm::UnitConversion(
+            Arc::new(to_normal_form(inner)),
+            target.clone(),
+            expr.source_location.clone(),
+        ),
         ExpressionKind::LogicalNegation(inner, _) => {
             NormalForm::Not(Arc::new(to_normal_form(inner)))
         }
@@ -1698,7 +1775,7 @@ fn nf_to_kind(nf: &NormalForm, source: Option<Source>) -> ExpressionKind {
         NormalForm::MathOp(op, x) => {
             ExpressionKind::MathematicalComputation(op.clone(), Arc::new(to_expression(x, source)))
         }
-        NormalForm::UnitConversion(x, target) => {
+        NormalForm::UnitConversion(x, target, _) => {
             ExpressionKind::UnitConversion(Arc::new(to_expression(x, source)), target.clone())
         }
         NormalForm::Veto(v) => ExpressionKind::Veto(v.clone()),
@@ -1887,9 +1964,10 @@ fn expand_numeric_subtract_divide(nf: NormalForm) -> NormalForm {
         NormalForm::MathOp(op, x) => {
             NormalForm::MathOp(op, Arc::new(expand_numeric_subtract_divide((*x).clone())))
         }
-        NormalForm::UnitConversion(x, target) => NormalForm::UnitConversion(
+        NormalForm::UnitConversion(x, target, origin) => NormalForm::UnitConversion(
             Arc::new(expand_numeric_subtract_divide((*x).clone())),
             target,
+            origin,
         ),
         other => other,
     }
@@ -3347,7 +3425,7 @@ mod tests {
         let unit_ctx = UnitResolutionContext::NamedQuantityOnly;
         let data: IndexMap<DataPath, DataDefinition> = IndexMap::new();
         let rule_type = Arc::clone(crate::planning::semantics::primitive_number_arc());
-        let (instructions, _) = build_normalized_rule_instructions(
+        let compiled = build_normalized_rule_instructions(
             &branches,
             &completed,
             &plan_paths,
@@ -3358,6 +3436,7 @@ mod tests {
             crate::limits::ResourceLimits::default().max_normalized_expression_nodes,
         )
         .expect("build normalized rule instructions");
+        let instructions = compiled.instructions;
 
         assert_eq!(
             instructions.code.len(),

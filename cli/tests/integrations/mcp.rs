@@ -165,8 +165,12 @@ fn test_mcp_evaluate_includes_reasoning() {
         "Should contain reasoning section, got: {text}"
     );
     assert!(
-        text.contains("quantity is 25"),
-        "Should show unless cause datum and value in reasoning, got: {text}"
+        text.contains("quantity >= 10"),
+        "Should state the matching condition as a fact in reasoning, got: {text}"
+    );
+    assert!(
+        text.contains("quantity: 25"),
+        "Should show the data value that drove the conditions, got: {text}"
     );
 }
 

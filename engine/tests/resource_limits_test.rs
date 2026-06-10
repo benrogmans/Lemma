@@ -405,7 +405,7 @@ fn bench_deep_chains_body() {
     const TREE_INTERNAL_NODES: usize = 5;
 
     eprintln!("--- Linear chain ---");
-    for num_rules in [100, 500, 1_000] {
+    for num_rules in [50, 100, 200] {
         let code = build_linear_chain(num_rules);
         let est_nodes = num_rules * LINEAR_NODES_PER_RULE;
         let limits = ResourceLimits {
@@ -441,7 +441,7 @@ fn bench_deep_chains_body() {
     }
 
     eprintln!("--- Binary tree ---");
-    for depth in [6, 8, 10] {
+    for depth in [4, 6, 8] {
         let leaves = 1_usize << depth;
         let total_rules = (1 << (depth + 1)) - 1;
         let est_nodes = leaves * TREE_LEAF_NODES + (total_rules - leaves) * TREE_INTERNAL_NODES;
