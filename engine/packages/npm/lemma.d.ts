@@ -308,9 +308,3 @@ export interface LemmaSpecJson {
   rules: unknown[];
   meta_fields: unknown[];
 }
-
-/** One entry of {@link Engine.repositories}. */
-export interface RepositoryEntry {
-  name: string | null;
-  dependency: string | null;
-}

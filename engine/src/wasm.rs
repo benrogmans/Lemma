@@ -257,23 +257,6 @@ impl WasmEngine {
             Err(e) => Err(error_to_js(&e)),
         }
     }
-
-    /// Loaded repositories (workspace and dependencies): `{ name, dependency }`.
-    #[wasm_bindgen(js_name = repositories)]
-    pub fn repositories(&self) -> Result<JsValue, JsValue> {
-        let rows: Vec<serde_json::Value> = self
-            .engine
-            .list()
-            .iter()
-            .map(|r| {
-                serde_json::json!({
-                    "name": r.repository.name,
-                    "dependency": r.repository.dependency,
-                })
-            })
-            .collect();
-        serialize_engine_json(&rows)
-    }
 }
 
 #[derive(Serialize)]
