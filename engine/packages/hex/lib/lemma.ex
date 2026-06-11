@@ -186,17 +186,6 @@ defmodule Lemma do
   end
 
   @doc """
-  Loaded repositories (workspace and dependencies). Each map has string keys `"name"` and `"dependency"`.
-  """
-  @spec repositories(engine()) :: {:ok, [map()]} | {:error, term()}
-  def repositories(engine) do
-    case Lemma.Native.lemma_repositories(engine) do
-      {:ok, binary} -> {:ok, Jason.decode!(binary)}
-      err -> err
-    end
-  end
-
-  @doc """
   Formats Lemma source code. Does not require an engine instance.
 
   ## Example

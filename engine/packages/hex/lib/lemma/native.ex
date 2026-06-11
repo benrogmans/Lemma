@@ -39,8 +39,6 @@ defmodule Lemma.Native do
 
   def lemma_format(_code), do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_repositories(_resource), do: :erlang.nif_error(:nif_not_loaded)
-
   def lemma_generate_openapi(_resource, _explanations_enabled, _effective_opt),
     do: :erlang.nif_error(:nif_not_loaded)
 
