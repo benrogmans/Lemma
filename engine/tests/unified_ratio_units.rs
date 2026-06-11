@@ -407,7 +407,7 @@ rule out: margin
     expect_load_error(
         code,
         "redefine_percent.lemma",
-        &["margin", "custom", "percent"],
+        &["percent", "cannot change factor", "inherited"],
     );
 }
 

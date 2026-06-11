@@ -371,7 +371,7 @@ pub(crate) fn execute_instructions(
                     continue;
                 }
                 let source_val = unwrap_literal(source, "operand");
-                let result = convert_unit(&source_val, target, unit_ctx);
+                let result = convert_unit(&source_val, target);
                 context.write_register(*destination_register, result);
             }
             Instruction::Mathematical {

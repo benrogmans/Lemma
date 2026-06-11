@@ -25,7 +25,7 @@ use crate::Error;
 use crate::ResourceLimits;
 use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// One spec's contribution to an [`ExecutionPlan`], together with its
@@ -1491,18 +1491,14 @@ pub(crate) fn validate_value_against_type(
         }
     }
 
-    fn format_rational(r: &RationalInteger, decimals: Option<u8>) -> String {
+    fn format_rational_for_validation_message(
+        expected_type: &crate::planning::semantics::LemmaType,
+        magnitude: &RationalInteger,
+    ) -> String {
         use crate::computation::rational::rational_to_display_str;
-        match commit_rational_to_decimal(r) {
-            Ok(decimal) => match decimals {
-                Some(dp) => {
-                    let rounded = decimal.round_dp(u32::from(dp));
-                    format!("{:.prec$}", rounded, prec = dp as usize)
-                }
-                None => decimal.normalize().to_string(),
-            },
-            Err(_) => rational_to_display_str(r),
-        }
+        expected_type
+            .try_materialize_rational_as_decimal_string(magnitude)
+            .unwrap_or_else(|_| rational_to_display_str(magnitude))
     }
 
     match (&expected_type.specifications, &value.value) {
@@ -1519,7 +1515,7 @@ pub(crate) fn validate_value_against_type(
                 if exceeds_decimal_places(n, *d) {
                     return Err(format!(
                         "{} exceeds decimals constraint {d}",
-                        format_rational(n, *decimals)
+                        format_rational_for_validation_message(expected_type, n)
                     ));
                 }
             }
@@ -1527,8 +1523,8 @@ pub(crate) fn validate_value_against_type(
                 if n < min {
                     return Err(format!(
                         "{} is below minimum {}",
-                        format_rational(n, *decimals),
-                        format_rational(min, *decimals)
+                        format_rational_for_validation_message(expected_type, n),
+                        format_rational_for_validation_message(expected_type, min)
                     ));
                 }
             }
@@ -1536,8 +1532,8 @@ pub(crate) fn validate_value_against_type(
                 if n > max {
                     return Err(format!(
                         "{} is above maximum {}",
-                        format_rational(n, *decimals),
-                        format_rational(max, *decimals)
+                        format_rational_for_validation_message(expected_type, n),
+                        format_rational_for_validation_message(expected_type, max)
                     ));
                 }
             }
@@ -1568,7 +1564,7 @@ pub(crate) fn validate_value_against_type(
                 if exceeds_decimal_places(&in_unit, *d) {
                     return Err(format!(
                         "{} {unit} exceeds decimals constraint {d}",
-                        format_rational(&in_unit, *decimals)
+                        format_rational_for_validation_message(expected_type, &in_unit)
                     ));
                 }
             }
@@ -1583,11 +1579,14 @@ pub(crate) fn validate_value_against_type(
                     let min_in_unit = checked_div(&canonical_min, factor).map_err(|failure| {
                         format!("cannot de-canonicalize minimum for validation: {failure}")
                     })?;
-                    let value_display =
-                        format!("{} {}", format_rational(&in_unit, *decimals), unit);
+                    let value_display = format!(
+                        "{} {}",
+                        format_rational_for_validation_message(expected_type, &in_unit),
+                        unit
+                    );
                     let bound_display = format!(
                         "{} {}",
-                        format_rational(&min_in_unit, *decimals),
+                        format_rational_for_validation_message(expected_type, &min_in_unit),
                         quantity_unit.name
                     );
                     return Err(format!("{value_display} is below minimum {bound_display}"));
@@ -1604,11 +1603,14 @@ pub(crate) fn validate_value_against_type(
                     let max_in_unit = checked_div(&canonical_max, factor).map_err(|failure| {
                         format!("cannot de-canonicalize maximum for validation: {failure}")
                     })?;
-                    let value_display =
-                        format!("{} {}", format_rational(&in_unit, *decimals), unit);
+                    let value_display = format!(
+                        "{} {}",
+                        format_rational_for_validation_message(expected_type, &in_unit),
+                        unit
+                    );
                     let bound_display = format!(
                         "{} {}",
-                        format_rational(&max_in_unit, *decimals),
+                        format_rational_for_validation_message(expected_type, &max_in_unit),
                         quantity_unit.name
                     );
                     return Err(format!("{value_display} is above maximum {bound_display}"));
@@ -1656,7 +1658,7 @@ pub(crate) fn validate_value_against_type(
                 if exceeds_decimal_places(r, *d) {
                     return Err(format!(
                         "{} exceeds decimals constraint {d}",
-                        format_rational(r, *decimals)
+                        format_rational_for_validation_message(expected_type, r)
                     ));
                 }
             }
@@ -1672,14 +1674,20 @@ pub(crate) fn validate_value_against_type(
                             );
                             format!(
                                 "{} {unit} is below minimum {} {unit}",
-                                format_rational(&value_per_unit, *decimals),
-                                format_rational(&bound_per_unit.clone(), *decimals),
+                                format_rational_for_validation_message(
+                                    expected_type,
+                                    &value_per_unit
+                                ),
+                                format_rational_for_validation_message(
+                                    expected_type,
+                                    &bound_per_unit.clone()
+                                ),
                             )
                         }
                         None => format!(
                             "{} is below minimum {}",
-                            format_rational(r, *decimals),
-                            format_rational(type_minimum, *decimals),
+                            format_rational_for_validation_message(expected_type, r),
+                            format_rational_for_validation_message(expected_type, type_minimum),
                         ),
                     };
                     return Err(message);
@@ -1697,14 +1705,20 @@ pub(crate) fn validate_value_against_type(
                             );
                             format!(
                                 "{} {unit} is above maximum {} {unit}",
-                                format_rational(&value_per_unit, *decimals),
-                                format_rational(&bound_per_unit.clone(), *decimals),
+                                format_rational_for_validation_message(
+                                    expected_type,
+                                    &value_per_unit
+                                ),
+                                format_rational_for_validation_message(
+                                    expected_type,
+                                    &bound_per_unit.clone()
+                                ),
                             )
                         }
                         None => format!(
                             "{} is above maximum {}",
-                            format_rational(r, *decimals),
-                            format_rational(type_maximum, *decimals),
+                            format_rational_for_validation_message(expected_type, r),
+                            format_rational_for_validation_message(expected_type, type_maximum),
                         ),
                     };
                     return Err(message);
@@ -1802,37 +1816,40 @@ pub(crate) fn validate_literal_data_against_types(plan: &ExecutionPlan) -> Vec<E
     errors
 }
 
-fn collect_unit_conversion_targets_from_instructions(
-    instructions: &Instructions,
-    units: &mut BTreeSet<String>,
-) {
-    for insn in &instructions.code {
-        if let Instruction::UnitConversion {
-            target: SemanticConversionTarget::Unit { unit_name },
-            ..
-        } = insn
-        {
-            units.insert(unit_name.clone());
+pub(crate) fn validate_unit_conversion_targets(plan: &ExecutionPlan) -> Result<(), Error> {
+    for rule in &plan.rules {
+        for instructions in [&rule.instructions, &rule.source_instructions] {
+            for insn in &instructions.code {
+                let Instruction::UnitConversion { target, .. } = insn else {
+                    continue;
+                };
+                let Some((unit_name, owning_type)) =
+                    crate::computation::units::conversion_target_declares_unit(target)
+                else {
+                    continue;
+                };
+                if crate::computation::units::owning_type_declares_unit_name(
+                    owning_type.as_ref(),
+                    unit_name,
+                ) {
+                    continue;
+                }
+                return Err(Error::validation(
+                    format!(
+                        "Unit conversion target '{unit_name}' is not declared on owning type '{}'",
+                        owning_type.name()
+                    ),
+                    None::<Source>,
+                    Some(plan.spec_name.clone()),
+                ));
+            }
         }
     }
+    Ok(())
 }
 
 pub(crate) fn validate_unit_index_references(plan: &ExecutionPlan) -> Result<(), Error> {
-    let mut required_units = BTreeSet::new();
-    for rule in &plan.rules {
-        collect_unit_conversion_targets_from_instructions(&rule.instructions, &mut required_units);
-    }
-    for unit_name in required_units {
-        if plan.resolved_types.unit_index.contains_key(&unit_name) {
-            continue;
-        }
-        return Err(Error::validation(
-            format!("Unknown unit '{unit_name}' in execution plan unit index."),
-            None::<Source>,
-            Some(plan.spec_name.clone()),
-        ));
-    }
-    Ok(())
+    validate_unit_conversion_targets(plan)
 }
 
 /// The serializable form of an [`ExecutionPlan`].
@@ -1923,7 +1940,7 @@ impl TryFrom<ExecutionPlanSerialized> for ExecutionPlan {
             .map(|rule| rule.instructions.register_count)
             .max()
             .unwrap_or(0);
-        Ok(Self {
+        let plan = Self {
             spec_name: serialized.spec_name,
             commentary: serialized.commentary,
             data: serialized.data,
@@ -1938,7 +1955,18 @@ impl TryFrom<ExecutionPlanSerialized> for ExecutionPlan {
             signature_index,
             effective: serialized.effective,
             sources: serialized.sources,
-        })
+        };
+        validate_unit_index_references(&plan).map_err(|error| {
+            crate::Error::request(
+                format!(
+                    "Serialized execution plan for spec '{}' is invalid: {}",
+                    plan.spec_name,
+                    error.message()
+                ),
+                None::<String>,
+            )
+        })?;
+        Ok(plan)
     }
 }
 

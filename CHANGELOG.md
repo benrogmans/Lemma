@@ -2,6 +2,26 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.19] - 2026-06-11
+
+0.8.19 fixes registry resolution and quantity planning/materialization bugs; removes a redundant SDK method.
+
+### Added
+
+- **Quantity ceil/floor/round/abs**: preserve operand unit.
+
+### Fixed
+
+- **Registry resolve skips non-`@` repository qualifiers**: workspace-local repository references no longer trigger registry fetches.
+- **Decomposition promotion**: binding aliases no longer collide across quantity families.
+- **Materialization**: converted quantities honor type `decimals`; decimal overflow vetoes the rule.
+- **Inherited units**: conflicting inherited unit definitions rejected at planning.
+- **Unit-index validation**: structural plan checks run at planning and deserialize, not first `run`.
+
+### Removed
+
+- **`Engine.repositories()` / `Lemma.repositories/1`**: returned only `{ name, dependency }` per loaded repository — the same fields already on `list()[].repository`. Use `list()` for loaded-repo discovery.
+
 ## [0.8.18] - 2026-06-10
 
 0.8.18 completes the recorded-execution explanation architecture: explanations now read all runtime facts (register values, branch decisions, winning arm) from a recorded execution of the rule's source-shaped instruction stream — they never re-evaluate expressions. The language server is unified into the `lemma` CLI binary, eliminating the standalone `lsp` crate.

@@ -53,6 +53,8 @@ Bare `veto` in `is veto` is not `veto "message"` (that form is only a rule/unles
 | `ceil` | Round up | `ceil(value)` or `ceil value` |
 | `round` | Round nearest | `round(value)` or `round value` |
 
+`ceil`, `floor`, `round`, and `abs` also accept **quantity** operands (the unit is preserved; the function applies to the magnitude in the operand's bound unit). All other mathematical operators require a **number** operand.
+
 Note: Mathematical operators are prefix operators, not functions. Parentheses are optional.
 
 ### Type cast (`as`)

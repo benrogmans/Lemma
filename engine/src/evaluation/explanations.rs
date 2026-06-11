@@ -188,14 +188,16 @@ fn conversion_rule_step_text(
         ValueKind::Range(left, right) => range_span_rule_step_text(left, right, result),
         ValueKind::Quantity(_, from_signature) if !value.lemma_type.is_calendar_like() => {
             match target {
-                SemanticConversionTarget::Unit { unit_name } => {
-                    quantity_unit_equivalence_step_text(
-                        from_signature,
-                        unit_name,
-                        &value.lemma_type,
-                        resolution_context,
-                    )
-                }
+                SemanticConversionTarget::Unit {
+                    unit_name,
+                    owning_type,
+                } => quantity_unit_equivalence_step_text(
+                    from_signature,
+                    unit_name,
+                    &value.lemma_type,
+                    owning_type.as_ref(),
+                    resolution_context,
+                ),
                 _ => None,
             }
         }
@@ -231,6 +233,7 @@ fn quantity_unit_equivalence_step_text(
     from_signature: &[(String, i32)],
     to_unit: &str,
     lemma_type: &LemmaType,
+    target_owning_type: &LemmaType,
     resolution_context: UnitResolutionContext<'_>,
 ) -> Option<String> {
     let from_unit = from_signature
@@ -259,11 +262,10 @@ fn quantity_unit_equivalence_step_text(
         return Some(format!("1 {from_unit} is {multiplier_display} {to_unit}"));
     }
 
+    let to_factor = target_owning_type.quantity_unit_factor(to_unit).clone();
     let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
         return None;
     };
-    let target_type = unit_index.get(to_unit)?;
-    let to_factor = target_type.quantity_unit_factor(to_unit).clone();
     let from_factor =
         crate::planning::semantics::signature_factor(from_signature, unit_index, None);
     let multiplier = checked_div(&from_factor, &to_factor).ok()?;
@@ -788,11 +790,15 @@ fn unit_equivalence_nodes(
                 .iter()
                 .find(|earlier| same_quantity_family(unit, earlier, unit_index))
             {
-                if let Some(owning) = unit_index.get(unit.as_str()) {
+                if let (Some(owning), Some(target_owning)) = (
+                    unit_index.get(unit.as_str()),
+                    unit_index.get(earlier.as_str()),
+                ) {
                     if let Some(text) = quantity_unit_equivalence_step_text(
                         &[(unit.clone(), 1)],
                         earlier,
                         owning,
+                        target_owning,
                         UnitResolutionContext::WithIndex(unit_index),
                     ) {
                         nodes.push(ExplanationNode::UnitEquivalence { text });
@@ -1399,8 +1405,9 @@ mod tests {
     use crate::parsing::ast::DateTimeValue;
     use crate::parsing::source::SourceType;
     use crate::planning::semantics::{
-        date_time_to_semantic, DataPath, LemmaType, LiteralValue, QuantityUnits, RulePath,
-        SemanticConversionTarget, TypeSpecification, ValueKind,
+        date_time_to_semantic, duration_decomposition, DataPath, LemmaType, LiteralValue,
+        QuantityTrait, QuantityUnits, RulePath, SemanticConversionTarget, TypeSpecification,
+        ValueKind,
     };
     use crate::Engine;
     use rust_decimal::Decimal;
@@ -1689,13 +1696,18 @@ rule total: subtotal + vat
             "kilogram".to_string(),
             Arc::clone(&lemma_type),
         );
-        let result =
-            LiteralValue::quantity_with_type(rational_new(2, 1), "gram".to_string(), lemma_type);
+        let gram_target = Arc::clone(&lemma_type);
+        let result = LiteralValue::quantity_with_type(
+            rational_new(2, 1),
+            "gram".to_string(),
+            Arc::clone(&lemma_type),
+        );
         let path = DataPath::local("mass".to_string());
         let steps = build_conversion_steps(
             &operand,
             &SemanticConversionTarget::Unit {
                 unit_name: "gram".to_string(),
+                owning_type: gram_target,
             },
             &result,
             Some(&path),
@@ -1741,6 +1753,20 @@ rule total: subtotal + vat
             value: ValueKind::Range(Box::new(left), Box::new(right)),
             lemma_type: Arc::new(LemmaType::primitive(TypeSpecification::date_range())),
         };
+        let mut duration_units = QuantityUnits::new();
+        duration_units.0.push(
+            QuantityUnit::from_decimal_factor("days".to_string(), Decimal::from(86_400), vec![])
+                .unwrap(),
+        );
+        let days_owning_type = Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
+            minimum: None,
+            maximum: None,
+            decimals: None,
+            units: duration_units,
+            traits: vec![QuantityTrait::Duration],
+            decomposition: Some(duration_decomposition()),
+            help: String::new(),
+        }));
         let result = LiteralValue::quantity_with_type(
             rational_new(14, 1),
             "days".to_string(),
@@ -1751,6 +1777,7 @@ rule total: subtotal + vat
             &range,
             &SemanticConversionTarget::Unit {
                 unit_name: "days".to_string(),
+                owning_type: days_owning_type,
             },
             &result,
             Some(&path),
@@ -1785,6 +1812,7 @@ rule total: subtotal + vat
             "kilogram".to_string(),
             Arc::clone(&lemma_type),
         );
+        let kilogram_target = Arc::clone(&lemma_type);
         let result = LiteralValue::quantity_with_type(
             rational_new(2, 1),
             "kilogram".to_string(),
@@ -1794,6 +1822,7 @@ rule total: subtotal + vat
             &operand,
             &SemanticConversionTarget::Unit {
                 unit_name: "kilogram".to_string(),
+                owning_type: kilogram_target,
             },
             &result,
             None,

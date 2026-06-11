@@ -247,12 +247,18 @@ fn plan_spec(
                     limits,
                 ) {
                     Ok(execution_plan) => {
-                        let value_errors =
-                            execution_plan::validate_literal_data_against_types(&execution_plan);
-                        if value_errors.is_empty() {
+                        let mut plan_errors =
+                            execution_plan::validate_unit_index_references(&execution_plan)
+                                .err()
+                                .into_iter()
+                                .collect::<Vec<_>>();
+                        plan_errors.extend(execution_plan::validate_literal_data_against_types(
+                            &execution_plan,
+                        ));
+                        if plan_errors.is_empty() {
                             spec_result.plans.push(execution_plan);
                         } else {
-                            spec_result.errors.extend(value_errors);
+                            spec_result.errors.extend(plan_errors);
                         }
                     }
                     Err(plan_errors) => {

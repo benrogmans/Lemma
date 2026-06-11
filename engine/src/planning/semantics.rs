@@ -1424,10 +1424,17 @@ impl TypeSpecification {
                             );
                         }
                     };
-                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
-                        u.factor = crate::computation::rational::decimal_to_rational(value)
+                    if let Some(existing) = units.0.iter().find(|u| u.name == unit_name) {
+                        let new_factor = crate::computation::rational::decimal_to_rational(value)
                             .map_err(|failure| failure.to_string())?;
-                        u.derived_quantity_factors = derived_quantity_factors;
+                        if existing.factor != new_factor
+                            || existing.derived_quantity_factors != derived_quantity_factors
+                        {
+                            return Err(format!(
+                                "Unit '{unit_name}' is already defined in this type's inherited units; \
+                                 cannot change factor or decomposition. Add a new unit name instead."
+                            ));
+                        }
                     } else {
                         units.0.push(QuantityUnit::from_decimal_factor(
                             unit_name,
@@ -1631,8 +1638,13 @@ impl TypeSpecification {
                                 failure
                             )
                         })?;
-                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
-                        u.value = value;
+                    if let Some(existing) = units.0.iter().find(|u| u.name == unit_name) {
+                        if existing.value != value {
+                            return Err(format!(
+                                "Unit '{unit_name}' is already defined in this type's inherited units; \
+                                 cannot change factor. Add a new unit name instead."
+                            ));
+                        }
                     } else {
                         units.0.push(RatioUnit {
                             name: unit_name,
@@ -1714,8 +1726,13 @@ impl TypeSpecification {
                                 "ratio unit value is not exactly representable as a rational: {e}"
                             )
                         })?;
-                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
-                        u.value = value;
+                    if let Some(existing) = units.0.iter().find(|u| u.name == unit_name) {
+                        if existing.value != value {
+                            return Err(format!(
+                                "Unit '{unit_name}' is already defined in this type's inherited units; \
+                                 cannot change factor. Add a new unit name instead."
+                            ));
+                        }
                     } else {
                         units.0.push(RatioUnit {
                             name: unit_name,
@@ -1979,10 +1996,17 @@ impl TypeSpecification {
                             );
                         }
                     };
-                    if let Some(u) = units.0.iter_mut().find(|u| u.name == unit_name) {
-                        u.factor = crate::computation::rational::decimal_to_rational(value)
+                    if let Some(existing) = units.0.iter().find(|u| u.name == unit_name) {
+                        let new_factor = crate::computation::rational::decimal_to_rational(value)
                             .map_err(|failure| failure.to_string())?;
-                        u.derived_quantity_factors = derived_quantity_factors;
+                        if existing.factor != new_factor
+                            || existing.derived_quantity_factors != derived_quantity_factors
+                        {
+                            return Err(format!(
+                                "Unit '{unit_name}' is already defined in this type's inherited units; \
+                                 cannot change factor or decomposition. Add a new unit name instead."
+                            ));
+                        }
                     } else {
                         units.0.push(QuantityUnit::from_decimal_factor(
                             unit_name,
@@ -2229,15 +2253,57 @@ pub fn semantic_calendar_unit_from_quantity_signature(
     semantic_calendar_unit_from_unit_name(unit_name)
 }
 
+mod arc_lemma_type {
+    use super::LemmaType;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(value: &Arc<LemmaType>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.as_ref().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<LemmaType>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        LemmaType::deserialize(deserializer).map(Arc::new)
+    }
+}
+
 /// Target type for `as` casts (semantic; used by evaluation/computation).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticConversionTarget {
     Type(PrimitiveKind),
     /// `number as eur` — construct, convert, relabel, or range-span into `unit_name`.
     Unit {
         unit_name: String,
+        /// Quantity/ratio type resolved in the spec where the conversion was written.
+        #[serde(with = "arc_lemma_type")]
+        owning_type: Arc<LemmaType>,
     },
+}
+
+impl std::hash::Hash for SemanticConversionTarget {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Type(kind) => {
+                0u8.hash(state);
+                kind.hash(state);
+            }
+            Self::Unit {
+                unit_name,
+                owning_type,
+            } => {
+                1u8.hash(state);
+                unit_name.hash(state);
+                owning_type.hash(state);
+            }
+        }
+    }
 }
 
 impl SemanticConversionTarget {
@@ -2254,7 +2320,7 @@ impl fmt::Display for SemanticConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SemanticConversionTarget::Type(kind) => write!(f, "{:?}", kind),
-            SemanticConversionTarget::Unit { unit_name } => write!(f, "{unit_name}"),
+            SemanticConversionTarget::Unit { unit_name, .. } => write!(f, "{unit_name}"),
         }
     }
 }
@@ -3373,6 +3439,64 @@ impl LemmaType {
         }
     }
 
+    /// Commit a rational magnitude to a decimal string for API materialization.
+    ///
+    /// Applies this type's `decimal_places` when set. Returns [`NumericFailure`] when the
+    /// magnitude cannot commit to `rust_decimal` (callers map this to a decimal-limit Veto).
+    pub fn try_materialize_rational_as_decimal_string(
+        &self,
+        magnitude: &crate::computation::rational::RationalInteger,
+    ) -> Result<String, crate::computation::rational::NumericFailure> {
+        use crate::computation::rational::commit_rational_to_decimal;
+        let decimal = commit_rational_to_decimal(magnitude)?;
+        Ok(format_committed_decimal_for_api(
+            decimal,
+            self.decimal_places(),
+        ))
+    }
+
+    /// Commit a canonical quantity magnitude in the named declared unit for API materialization.
+    pub fn try_materialize_quantity_canonical_in_unit(
+        &self,
+        canonical_magnitude: &crate::computation::rational::RationalInteger,
+        unit_name: &str,
+    ) -> Result<String, crate::computation::rational::NumericFailure> {
+        use crate::computation::rational::checked_div;
+        let unit_factor = self.quantity_unit_factor(unit_name);
+        let magnitude_in_unit = checked_div(canonical_magnitude, unit_factor)?;
+        self.try_materialize_rational_as_decimal_string(&magnitude_in_unit)
+    }
+
+    /// Commit a canonical ratio magnitude in the named declared unit for API materialization.
+    pub fn try_materialize_ratio_canonical_in_unit(
+        &self,
+        canonical_magnitude: &crate::computation::rational::RationalInteger,
+        unit_name: &str,
+    ) -> Result<String, crate::computation::rational::NumericFailure> {
+        use crate::computation::rational::checked_mul;
+        let units = match &self.specifications {
+            TypeSpecification::Ratio { units, .. } => units,
+            _ => unreachable!(
+                "BUG: try_materialize_ratio_canonical_in_unit called on non-ratio type {}",
+                self.name()
+            ),
+        };
+        let ratio_unit = units
+            .iter()
+            .find(|unit| unit.name == unit_name)
+            .unwrap_or_else(|| {
+                let valid: Vec<&str> = units.iter().map(|unit| unit.name.as_str()).collect();
+                unreachable!(
+                    "BUG: unknown ratio unit '{}' for type {} (valid: {}); planning must reject invalid units",
+                    unit_name,
+                    self.name(),
+                    valid.join(", ")
+                )
+            });
+        let magnitude_in_unit = checked_mul(canonical_magnitude, &ratio_unit.value)?;
+        self.try_materialize_rational_as_decimal_string(&magnitude_in_unit)
+    }
+
     /// Get an example value string for this type, suitable for UI help text
     pub fn example_value(&self) -> &'static str {
         match &self.specifications {
@@ -4293,12 +4417,15 @@ pub fn conversion_target_to_semantic(
         ConversionTarget::Type(kind) => Ok(SemanticConversionTarget::Type(*kind)),
         ConversionTarget::Unit { unit_name } => {
             let unit_name = crate::parsing::ast::ascii_lowercase_logical_name(unit_name.clone());
-            if let Some(index) = unit_index {
-                if index.get(&unit_name).is_none() {
-                    return Err(format!("Unknown unit '{unit_name}'."));
-                }
-            }
-            Ok(SemanticConversionTarget::Unit { unit_name })
+            let index = unit_index.ok_or_else(|| format!("Unknown unit '{unit_name}'."))?;
+            let owning_type = index
+                .get(&unit_name)
+                .ok_or_else(|| format!("Unknown unit '{unit_name}'."))?
+                .clone();
+            Ok(SemanticConversionTarget::Unit {
+                unit_name,
+                owning_type,
+            })
         }
     }
 }
@@ -4464,16 +4591,47 @@ fn decimal_places_in_display_value(decimal: &rust_decimal::Decimal) -> u32 {
     decimal.fract().normalize().scale()
 }
 
-fn format_decimal_for_quantity_display(
+fn format_committed_decimal_for_api(
     decimal: rust_decimal::Decimal,
-    decimals: Option<u8>,
+    decimal_places: Option<u8>,
 ) -> String {
-    match decimals {
-        Some(dp) => {
-            let rounded = decimal.round_dp(u32::from(dp));
-            format!("{:.prec$}", rounded, prec = dp as usize)
+    match decimal_places {
+        Some(decimal_places) => {
+            let rounded = decimal.round_dp(u32::from(decimal_places));
+            format!("{:.prec$}", rounded, prec = decimal_places as usize)
+        }
+        None => {
+            let normalized = decimal.normalize();
+            if normalized.fract().is_zero() {
+                normalized.trunc().to_string()
+            } else {
+                normalized.to_string()
+            }
+        }
+    }
+}
+
+fn format_committed_decimal_for_human_display(
+    decimal: rust_decimal::Decimal,
+    decimal_places: Option<u8>,
+) -> String {
+    match decimal_places {
+        Some(decimal_places) => {
+            let rounded = decimal.round_dp(u32::from(decimal_places));
+            format!("{:.prec$}", rounded, prec = decimal_places as usize)
         }
         None => decimal.normalize().to_string(),
+    }
+}
+
+fn format_rational_for_human_display(
+    magnitude: &crate::computation::rational::RationalInteger,
+    decimal_places: Option<u8>,
+) -> String {
+    use crate::computation::rational::{commit_rational_to_decimal, rational_to_display_str};
+    match commit_rational_to_decimal(magnitude) {
+        Ok(decimal) => format_committed_decimal_for_human_display(decimal, decimal_places),
+        Err(_) => rational_to_display_str(magnitude),
     }
 }
 
@@ -4482,9 +4640,7 @@ fn format_quantity_canonical_for_display(
     lemma_type: &LemmaType,
     signature: &[(String, i32)],
 ) -> String {
-    use crate::computation::rational::{
-        checked_div, commit_rational_to_decimal, rational_to_display_str,
-    };
+    use crate::computation::rational::{checked_div, commit_rational_to_decimal};
     use rust_decimal::Decimal;
 
     let decimals = lemma_type.decimal_places();
@@ -4495,10 +4651,7 @@ fn format_quantity_canonical_for_display(
                 if let Some(unit) = units.iter().find(|u| u.name == *sig_unit) {
                     let in_unit = checked_div(canonical, &unit.factor)
                         .expect("BUG: de-canonicalization for quantity display must not fail");
-                    let formatted = match commit_rational_to_decimal(&in_unit) {
-                        Ok(decimal) => format_decimal_for_quantity_display(decimal, decimals),
-                        Err(_) => rational_to_display_str(&in_unit),
-                    };
+                    let formatted = format_rational_for_human_display(&in_unit, decimals);
                     return format!("{} {}", formatted, unit.name);
                 }
             }
@@ -4515,10 +4668,7 @@ fn format_quantity_canonical_for_display(
             for unit in units.iter() {
                 let in_unit = checked_div(canonical, &unit.factor)
                     .expect("BUG: de-canonicalization for quantity display must not fail");
-                let formatted = match commit_rational_to_decimal(&in_unit) {
-                    Ok(decimal) => format_decimal_for_quantity_display(decimal, decimals),
-                    Err(_) => rational_to_display_str(&in_unit),
-                };
+                let formatted = format_rational_for_human_display(&in_unit, decimals);
                 let abs_magnitude = match commit_rational_to_decimal(&in_unit) {
                     Ok(decimal) => decimal.abs(),
                     Err(_) => Decimal::MAX,
@@ -4562,10 +4712,7 @@ fn format_quantity_canonical_for_display(
         [(name, 1)] => name.clone(),
         _ => format_signature_operator_style(signature),
     };
-    let formatted = match commit_rational_to_decimal(canonical) {
-        Ok(decimal) => format_decimal_for_quantity_display(decimal, decimals),
-        Err(_) => rational_to_display_str(canonical),
-    };
+    let formatted = format_rational_for_human_display(canonical, decimals);
     if unit_label.is_empty() {
         formatted
     } else {
@@ -5611,5 +5758,90 @@ mod tests {
     fn value_kind_matches_spec_rejects_number_for_quantity() {
         let n = ValueKind::Number(rational_new(10, 1));
         assert!(!value_kind_matches_spec(&n, &quantity_type_with_kilogram()));
+    }
+
+    #[test]
+    fn apply_constraint_rejects_inherited_unit_factor_change() {
+        let mut specs = TypeSpecification::quantity();
+        specs = specs
+            .apply_constraint(
+                "money",
+                TypeConstraintCommand::Unit,
+                &unit_factor_arg("eur", 1),
+                &mut None,
+            )
+            .expect("seed eur");
+        let err = specs
+            .apply_constraint(
+                "money",
+                TypeConstraintCommand::Unit,
+                &[
+                    CommandArg::Label("eur".to_string()),
+                    CommandArg::UnitExpr(crate::parsing::ast::UnitArg::Factor(Decimal::new(11, 1))),
+                ],
+                &mut None,
+            )
+            .expect_err("must not change inherited unit factor");
+        assert!(err.contains("eur"), "error must name unit, got: {err}");
+        assert!(
+            err.contains("inherited") || err.contains("cannot change"),
+            "error must reject factor change, got: {err}"
+        );
+    }
+
+    #[test]
+    fn apply_constraint_allows_additive_unit_on_inherited_spec() {
+        let mut specs = TypeSpecification::quantity();
+        specs = specs
+            .apply_constraint(
+                "money",
+                TypeConstraintCommand::Unit,
+                &unit_factor_arg("eur", 1),
+                &mut None,
+            )
+            .expect("seed eur");
+        specs = specs
+            .apply_constraint(
+                "money",
+                TypeConstraintCommand::Unit,
+                &unit_factor_arg("usd", 1),
+                &mut None,
+            )
+            .expect("add usd");
+        match &specs {
+            TypeSpecification::Quantity { units, .. } => assert_eq!(units.len(), 2),
+            other => panic!("expected Quantity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_constraint_idempotent_inherited_unit_redeclare() {
+        let mut specs = TypeSpecification::quantity();
+        specs = specs
+            .apply_constraint(
+                "money",
+                TypeConstraintCommand::Unit,
+                &unit_factor_arg("eur", 1),
+                &mut None,
+            )
+            .expect("seed eur");
+        specs = specs
+            .apply_constraint(
+                "money",
+                TypeConstraintCommand::Unit,
+                &unit_factor_arg("eur", 1),
+                &mut None,
+            )
+            .expect("idempotent eur");
+        match &specs {
+            TypeSpecification::Quantity { units, .. } => {
+                assert_eq!(units.len(), 1);
+                assert_eq!(
+                    units.iter().find(|u| u.name == "eur").expect("eur").factor,
+                    crate::computation::rational::rational_one()
+                );
+            }
+            other => panic!("expected Quantity, got {other:?}"),
+        }
     }
 }

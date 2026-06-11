@@ -421,28 +421,7 @@ rule r: msg
 }
 
 #[test]
-fn quantity_overwrites_inherited_unit_factors() {
-    use lemma::TypeSpecification;
-    use rust_decimal::Decimal;
-    use std::str::FromStr;
-
-    fn decimal_lit(s: &str) -> Decimal {
-        Decimal::from_str(s).unwrap()
-    }
-
-    fn qty_factor(spec: &TypeSpecification, name: &str) -> Decimal {
-        match spec {
-            TypeSpecification::Quantity { units, .. } => {
-                let u = units
-                    .iter()
-                    .find(|u| u.name == name)
-                    .unwrap_or_else(|| panic!("unit {name} missing"));
-                u.factor_decimal()
-            }
-            other => panic!("expected Quantity, got {other:?}"),
-        }
-    }
-
+fn import_binding_unit_factor_override_errors() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -451,40 +430,34 @@ spec finance
 data money: quantity
   -> unit eur 1.00
   -> unit usd 0.91
-  -> decimals 2
 "#,
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "finance.lemma",
             ))),
         )
-        .unwrap();
-    engine
-        .load(
-            r#"
+        .expect("finance spec must load");
+
+    let result = engine.load(
+        r#"
 spec pricing
 uses fin: finance
 data currency: fin.money
-  -> unit eur 1
   -> unit usd 0.84
-  -> decimals 2
 rule r: currency
 "#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "pricing.lemma",
-            ))),
-        )
-        .unwrap();
-
-    let now = DateTimeValue::now();
-    let schema = engine.schema(None, "pricing", Some(&now)).expect("schema");
-    let entry = schema.data.get("currency").expect("currency");
-    let specs = &entry.lemma_type.specifications;
-    assert_eq!(qty_factor(specs, "usd"), decimal_lit("0.84"));
-    assert_eq!(qty_factor(specs, "eur"), decimal_lit("1"));
-    match specs {
-        TypeSpecification::Quantity { decimals, .. } => assert_eq!(*decimals, Some(2)),
-        other => panic!("expected Quantity, got {other:?}"),
-    }
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "pricing.lemma",
+        ))),
+    );
+    assert!(
+        result.is_err(),
+        "import binding must not override inherited unit factor"
+    );
+    let error_msg = format!("{:?}", result.unwrap_err());
+    assert!(
+        error_msg.contains("usd"),
+        "error must name unit usd, got: {error_msg}"
+    );
 }
 
 #[test]

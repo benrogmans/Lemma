@@ -2608,9 +2608,12 @@ impl<'a> GraphBuilder<'a> {
         right: &ast::Expression,
         ctx: &mut RuleExpressionConversion<'_>,
     ) -> Option<(Expression, Expression)> {
-        let converted_left = self.convert_expression_and_extract_dependencies(left, ctx)?;
-        let converted_right = self.convert_expression_and_extract_dependencies(right, ctx)?;
-        Some((converted_left, converted_right))
+        let converted_left = self.convert_expression_and_extract_dependencies(left, ctx);
+        let converted_right = self.convert_expression_and_extract_dependencies(right, ctx);
+        match (converted_left, converted_right) {
+            (Some(l), Some(r)) => Some((l, r)),
+            _ => None,
+        }
     }
 
     /// Converts an AST expression into a resolved expression and records any rule references.
@@ -3007,41 +3010,6 @@ fn find_types_by_spec<'b>(
         .map(|(_, _, t)| t)
 }
 
-fn find_type_by_name_in_scope(
-    resolved_types: &ResolvedTypesMap,
-    spec_arc: &Arc<LemmaSpec>,
-    name: &str,
-) -> Option<Arc<LemmaType>> {
-    if let Some(spec_types) = find_types_by_spec(resolved_types, spec_arc) {
-        if let Some(t) = spec_types
-            .resolved
-            .get(name)
-            .or_else(|| spec_types.unit_index.get(name))
-        {
-            return Some(Arc::clone(t));
-        }
-    }
-    for data in &spec_arc.data {
-        let ParsedDataValue::Import(spec_ref) = &data.value else {
-            continue;
-        };
-        let Some((_, _, imported_types)) = resolved_types
-            .iter()
-            .find(|(_, s, _)| s.name == spec_ref.name)
-        else {
-            continue;
-        };
-        if let Some(t) = imported_types
-            .resolved
-            .get(name)
-            .or_else(|| imported_types.unit_index.get(name))
-        {
-            return Some(Arc::clone(t));
-        }
-    }
-    None
-}
-
 /// Result of a decomposition-based type lookup in scope.
 ///
 /// Used by both `infer_expression_type` (to promote anonymous results to named types) and the
@@ -3051,78 +3019,59 @@ pub enum DecompositionMatch {
     /// No declared quantity type in scope has this decomposition.
     None,
     /// Exactly one declared quantity type in scope has this decomposition.
-    Unique(String),
-    /// Multiple declared quantity types in scope share this decomposition; the names
-    /// are sorted for stable diagnostic ordering.
+    Unique(Arc<LemmaType>),
+    /// Multiple quantity families in scope share this decomposition; family names are
+    /// sorted for stable diagnostic ordering.
     Multiple(Vec<String>),
 }
 
-/// Find the quantity type(s) in scope whose decomposition matches `decomposition` exactly.
+/// Find the quantity family (ies) in scope whose decomposition matches `decomposition` exactly.
 ///
-/// Replaces the special-case `find_duration_type_in_spec` and the inline decomposition
-/// match-loop. It walks every declared quantity type in `spec_arc` plus any quantity types
-/// reachable through imports, deduplicates by name, and reports whether exactly one matches.
+/// Uses the consumer spec's `unit_index` only. Units belong to families; binding aliases in
+/// `resolved` are ignored. Imports are already merged into `unit_index` during resolution.
 pub fn find_unique_quantity_type_by_decomposition(
     resolved_types: &ResolvedTypesMap,
     spec_arc: &Arc<LemmaSpec>,
     decomposition: &BaseQuantityVector,
 ) -> DecompositionMatch {
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: HashMap<String, Arc<LemmaType>> = HashMap::new();
 
-    let consider = |lemma_type: &LemmaType, seen: &mut HashSet<String>| {
+    let Some(spec_types) = find_types_by_spec(resolved_types, spec_arc) else {
+        return DecompositionMatch::None;
+    };
+
+    for arc in spec_types.unit_index.values() {
+        let lemma_type = arc.as_ref();
         if !matches!(
             lemma_type.specifications,
             TypeSpecification::Quantity { .. }
         ) {
-            return;
+            continue;
         }
         if lemma_type
             .quantity_type_decomposition()
-            .is_none_or(|d| d != decomposition)
+            .is_none_or(|decomposition_vector| decomposition_vector != decomposition)
         {
-            return;
-        }
-        seen.insert(lemma_type.name().to_string());
-    };
-
-    if let Some(spec_types) = find_types_by_spec(resolved_types, spec_arc) {
-        for lemma_type in spec_types.resolved.values() {
-            consider(lemma_type.as_ref(), &mut seen);
-        }
-        for lemma_type in spec_types.unit_index.values() {
-            consider(lemma_type.as_ref(), &mut seen);
-        }
-    }
-
-    for data in &spec_arc.data {
-        let ParsedDataValue::Import(spec_ref) = &data.value else {
             continue;
-        };
-        let Some((_, _, imported_types)) = resolved_types
-            .iter()
-            .find(|(_, s, _)| s.name == spec_ref.name)
-        else {
-            continue;
-        };
-        for lemma_type in imported_types.resolved.values() {
-            consider(lemma_type.as_ref(), &mut seen);
         }
-        for lemma_type in imported_types.unit_index.values() {
-            consider(lemma_type.as_ref(), &mut seen);
-        }
+        let quantity_family = lemma_type
+            .quantity_family_name()
+            .expect("BUG: unit_index quantity type must carry a family name");
+        seen.entry(quantity_family.to_string())
+            .or_insert_with(|| Arc::clone(arc));
     }
 
     match seen.len() {
         0 => DecompositionMatch::None,
         1 => DecompositionMatch::Unique(
-            seen.into_iter()
+            seen.into_values()
                 .next()
                 .expect("BUG: seen has exactly one element, len checked"),
         ),
         _ => {
-            let mut names: Vec<String> = seen.into_iter().collect();
-            names.sort();
-            DecompositionMatch::Multiple(names)
+            let mut family_names: Vec<String> = seen.into_keys().collect();
+            family_names.sort();
+            DecompositionMatch::Multiple(family_names)
         }
     }
 }
@@ -3153,9 +3102,9 @@ fn anonymous_rule_boundary_error(
         spec_arc,
         decomposition,
     ) {
-        DecompositionMatch::Multiple(names) => format!(
-            " Multiple types in scope share these dimensions: {}. Give the rule an explicit named type.",
-            names.join(", ")
+        DecompositionMatch::Multiple(family_names) => format!(
+            " Multiple quantity families in scope share these dimensions: {}. Give the rule an explicit named type.",
+            family_names.join(", ")
         ),
         _ => String::new(),
     };
@@ -3701,15 +3650,14 @@ fn infer_expression_type(
             if result.is_anonymous_quantity() {
                 if let Some(decomp) = result.quantity_type_decomposition() {
                     if !decomp.is_empty() {
-                        if let DecompositionMatch::Unique(name) =
+                        if let DecompositionMatch::Unique(lemma_type) =
                             find_unique_quantity_type_by_decomposition(
                                 resolved_types,
                                 spec_arc,
                                 decomp,
                             )
                         {
-                            result = find_type_by_name_in_scope(resolved_types, spec_arc, &name)
-                                .expect("BUG: Unique decomposition match must be findable by name");
+                            result = lemma_type;
                         }
                     }
                 }
@@ -3745,15 +3693,12 @@ fn infer_expression_type(
                 {
                     source_type
                 }
-                SemanticConversionTarget::Unit { unit_name } => {
-                    lookup_unit_type(resolved_types, spec_arc, unit_name)
-                        .unwrap_or_else(|| Arc::new(LemmaType::undetermined_type()))
-                }
+                SemanticConversionTarget::Unit { owning_type, .. } => Arc::clone(owning_type),
                 SemanticConversionTarget::Type(_) => Arc::new(LemmaType::undetermined_type()),
             }
         }
 
-        ExpressionKind::MathematicalComputation(_, operand) => {
+        ExpressionKind::MathematicalComputation(op, operand) => {
             let operand_type = infer_expression_type(
                 operand,
                 graph,
@@ -3766,6 +3711,11 @@ fn infer_expression_type(
             }
             if operand_type.is_undetermined() {
                 return Arc::new(LemmaType::undetermined_type());
+            }
+            if crate::computation::mathematical_computation_preserves_quantity_magnitude(op)
+                && operand_type.is_quantity()
+            {
+                return operand_type;
             }
             primitive_number_arc().clone()
         }
@@ -4403,20 +4353,9 @@ fn check_arithmetic_types(
                 }
             }
             ArithmeticComputation::Multiply => {
-                if left_type.same_quantity_family(right_type) {
-                    Err(vec![engine_error_at_graph(
-                        graph,
-                        source,
-                        format!(
-                            "Cannot multiply two '{}' quantity values of the same type. \
-                             Convert operands first: 'value as number'.",
-                            left_type.name()
-                        ),
-                    )])
-                } else {
-                    // Cross-family Quantity * Quantity → anonymous intermediate. Allowed.
-                    Ok(())
-                }
+                // Quantity * Quantity (same or cross family) → anonymous intermediate when
+                // dimensions combine; promotion resolves a unique named type when possible.
+                Ok(())
             }
             ArithmeticComputation::Divide => {
                 // Quantity / Quantity (any family) → scalar Number or anonymous intermediate. Allowed.
@@ -4712,9 +4651,15 @@ fn check_unit_conversion_types(
                 )])
             }
         }
-        SemanticConversionTarget::Unit { unit_name } => {
+        SemanticConversionTarget::Unit {
+            unit_name,
+            owning_type,
+        } => {
             if source_type.is_number() {
-                if unit_index.contains_key(unit_name) {
+                if crate::computation::units::owning_type_declares_unit_name(
+                    owning_type.as_ref(),
+                    unit_name,
+                ) {
                     return Ok(());
                 }
                 return Err(vec![engine_error_at_graph(
@@ -4724,16 +4669,9 @@ fn check_unit_conversion_types(
                 )]);
             }
             if source_type.is_quantity() {
-                let Some(target_type) = lookup_unit_type(resolved_types, spec_arc, unit_name)
-                else {
-                    return Err(vec![engine_error_at_graph(
-                        graph,
-                        source_loc,
-                        format!("Unknown unit '{unit_name}' in spec '{}'.", spec_arc.name),
-                    )]);
-                };
-                if source_type.same_quantity_family(&target_type)
-                    || source_type.compatible_with_anonymous_quantity(&target_type)
+                let target_type = owning_type.as_ref();
+                if source_type.same_quantity_family(target_type)
+                    || source_type.compatible_with_anonymous_quantity(target_type)
                     || target_type.compatible_with_anonymous_quantity(source_type)
                 {
                     return Ok(());
@@ -4771,7 +4709,10 @@ fn check_unit_conversion_types(
                 )]);
             }
             if source_type.is_calendar_like() {
-                if unit_index.contains_key(unit_name) {
+                if crate::computation::units::owning_type_declares_unit_name(
+                    owning_type.as_ref(),
+                    unit_name,
+                ) {
                     return Ok(());
                 }
                 return Err(vec![engine_error_at_graph(
@@ -4900,24 +4841,29 @@ fn check_unit_conversion_types(
 }
 fn check_mathematical_operand(
     graph: &Graph,
+    op: &semantics::MathematicalComputation,
     operand_type: &LemmaType,
     source: &Source,
 ) -> Result<(), Vec<Error>> {
     if operand_type.vetoed() {
         return Ok(());
     }
-    if !operand_type.is_number() {
-        Err(vec![engine_error_at_graph(
-            graph,
-            source,
-            format!(
-                "Mathematical function requires number operand, got {}",
-                operand_type
-            ),
-        )])
-    } else {
-        Ok(())
+    if operand_type.is_number() {
+        return Ok(());
     }
+    if operand_type.is_quantity()
+        && crate::computation::mathematical_computation_preserves_quantity_magnitude(op)
+    {
+        return Ok(());
+    }
+    let message = if operand_type.is_quantity() {
+        format!(
+            "Mathematical function '{op}' cannot be applied to {operand_type}; use 'as number' first"
+        )
+    } else {
+        format!("Mathematical function '{op}' requires number operand, got {operand_type}")
+    };
+    Err(vec![engine_error_at_graph(graph, source, message)])
 }
 
 /// Check that all rule references in the graph point to existing rules.
@@ -5163,7 +5109,7 @@ fn check_expression(
             let right_outcome = if is_multiplicative {
                 if let ExpressionKind::UnitConversion(
                     inner_source,
-                    SemanticConversionTarget::Unit { unit_name },
+                    conversion_target @ SemanticConversionTarget::Unit { unit_name, .. },
                 ) = &right.kind
                 {
                     // Always recurse into the inner source to catch errors in sub-expressions.
@@ -5207,9 +5153,7 @@ fn check_expression(
                                     graph,
                                     inner_source,
                                     &inner_type,
-                                    &SemanticConversionTarget::Unit {
-                                        unit_name: unit_name.clone(),
-                                    },
+                                    conversion_target,
                                     resolved_types,
                                     expr_source,
                                     spec_arc,
@@ -5260,9 +5204,7 @@ fn check_expression(
                                         graph,
                                         inner_source,
                                         &inner_type,
-                                        &SemanticConversionTarget::Unit {
-                                            unit_name: unit_name.clone(),
-                                        },
+                                        conversion_target,
                                         resolved_types,
                                         expr_source,
                                         spec_arc,
@@ -5372,7 +5314,7 @@ fn check_expression(
             );
         }
 
-        ExpressionKind::MathematicalComputation(_, operand) => {
+        ExpressionKind::MathematicalComputation(op, operand) => {
             collect(
                 check_expression(operand, graph, inferred_types, resolved_types, spec_arc),
                 &mut errors,
@@ -5385,7 +5327,7 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
             collect(
-                check_mathematical_operand(graph, &operand_type, expr_source),
+                check_mathematical_operand(graph, op, &operand_type, expr_source),
                 &mut errors,
             );
         }
@@ -5920,29 +5862,90 @@ fn arc_unwrap(arc: Arc<LemmaType>) -> LemmaType {
     Arc::try_unwrap(arc).unwrap_or_else(|shared| (*shared).clone())
 }
 
+fn unit_index_arc_declares_unit(lemma_type: &LemmaType, unit_name: &str) -> bool {
+    match &lemma_type.specifications {
+        TypeSpecification::Quantity { units, .. } => units.get(unit_name).is_ok(),
+        TypeSpecification::Ratio { units, .. } => units.get(unit_name).is_ok(),
+        _ => false,
+    }
+}
+
 fn sync_unit_index_from_resolved(
     resolved: &HashMap<String, Arc<LemmaType>>,
     unit_index: HashMap<String, Arc<LemmaType>>,
 ) -> HashMap<String, Arc<LemmaType>> {
-    unit_index
+    let synced = unit_index
         .into_iter()
-        .map(|(unit_name, pre_decomp_type)| {
-            let post = pre_decomp_type
+        .filter_map(|(unit_name, pre_decomp_type)| {
+            let lookup_name = pre_decomp_type
                 .name
                 .as_deref()
-                .or_else(|| pre_decomp_type.quantity_family_name())
-                .and_then(|type_name| {
-                    resolved.get(type_name).or_else(|| {
+                .or_else(|| pre_decomp_type.quantity_family_name());
+            let post = if pre_decomp_type.is_quantity() {
+                let type_name = lookup_name.expect(
+                    "BUG: quantity arc in unit_index must carry name or family for sync",
+                );
+                if let Some(synced) = resolved
+                    .get(type_name)
+                    .or_else(|| {
                         pre_decomp_type
                             .quantity_family_name()
                             .and_then(|family| resolved.get(family))
                     })
-                })
-                .map(Arc::clone)
-                .unwrap_or(pre_decomp_type);
-            (unit_name, post)
+                {
+                    Arc::clone(synced)
+                } else if pre_decomp_type.quantity_type_decomposition().is_some() {
+                    pre_decomp_type
+                } else {
+                    panic!(
+                        "BUG: quantity unit_index unit '{}' type '{}' must exist in resolved or carry decomposition after import merge",
+                        unit_name, type_name
+                    )
+                }
+            } else {
+                lookup_name
+                    .and_then(|type_name| {
+                        resolved.get(type_name).or_else(|| {
+                            pre_decomp_type
+                                .quantity_family_name()
+                                .and_then(|family| resolved.get(family))
+                        })
+                    })
+                    .map(Arc::clone)
+                    .unwrap_or(pre_decomp_type)
+            };
+            if unit_index_arc_declares_unit(post.as_ref(), &unit_name) {
+                Some((unit_name, post))
+            } else {
+                None
+            }
         })
-        .collect()
+        .collect();
+    merge_family_root_quantity_units_into_index(resolved, synced)
+}
+
+/// Ensure every unit declared on a family-root quantity type in `resolved` has an index entry.
+fn merge_family_root_quantity_units_into_index(
+    resolved: &HashMap<String, Arc<LemmaType>>,
+    mut unit_index: HashMap<String, Arc<LemmaType>>,
+) -> HashMap<String, Arc<LemmaType>> {
+    for (type_name, lemma_type) in resolved {
+        let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications else {
+            continue;
+        };
+        let is_family_root = lemma_type
+            .quantity_family_name()
+            .is_some_and(|family| family == type_name.as_str());
+        if !is_family_root {
+            continue;
+        }
+        for unit in units.iter() {
+            unit_index
+                .entry(unit.name.clone())
+                .or_insert_with(|| Arc::clone(lemma_type));
+        }
+    }
+    unit_index
 }
 
 /// `uses`-merged quantity rows in `unit_index` can still have empty `decomposition` until synced from
@@ -6120,9 +6123,18 @@ pub(crate) fn build_signature_index(
         let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications else {
             continue;
         };
-        let Ok(unit) = units.get(unit_name) else {
-            continue;
-        };
+        let unit = units.get(unit_name).map_err(|_| {
+            Error::validation(
+                format!(
+                    "In spec '{}': unit_index entry '{}' is not declared on quantity type '{}'",
+                    spec_name,
+                    unit_name,
+                    lemma_type.name()
+                ),
+                None::<Source>,
+                None::<String>,
+            )
+        })?;
         if unit.derived_quantity_factors.is_empty() {
             continue;
         }
@@ -7027,6 +7039,112 @@ mod tests {
     }
 
     #[test]
+    fn chained_add_reports_all_missing_references() {
+        let minimal = r#"spec s
+data a: 1
+rule bad: a + missing_one + missing_two
+"#;
+        let specs = crate::parse(
+            minimal,
+            crate::parsing::source::SourceType::Volatile,
+            &crate::ResourceLimits::default(),
+        )
+        .expect("minimal fixture parses")
+        .into_flattened_specs();
+        let s = specs.iter().find(|d| d.name == "s").expect("spec s");
+        let result = build_graph(s, &specs);
+        let errors = result.expect_err("chained + with two missing refs must fail planning");
+        let not_found: Vec<_> = errors
+            .iter()
+            .filter(|e| e.to_string().contains("not found"))
+            .collect();
+        assert_eq!(
+            not_found.len(),
+            2,
+            "expected two missing-reference errors, got: {}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        assert!(
+            not_found
+                .iter()
+                .any(|e| e.to_string().contains("missing_one")),
+            "expected error for missing_one"
+        );
+        assert!(
+            not_found
+                .iter()
+                .any(|e| e.to_string().contains("missing_two")),
+            "expected error for missing_two"
+        );
+        for error in &not_found {
+            let source = error
+                .location()
+                .expect("missing-reference error must carry source span");
+            assert_ne!(
+                source.span.start, source.span.end,
+                "error span must not be empty"
+            );
+        }
+
+        let user_shaped = r#"spec s
+data base_cost: 1
+data starch_levy: 2
+data quality_extra: 3
+rule landed_cost_per_kg:
+  base_cost + starch_levy + quality_extra + transport_extra_per_kg + amortization_per_kg
+"#;
+        let specs = crate::parse(
+            user_shaped,
+            crate::parsing::source::SourceType::Volatile,
+            &crate::ResourceLimits::default(),
+        )
+        .expect("user-shaped fixture parses")
+        .into_flattened_specs();
+        let s = specs.iter().find(|d| d.name == "s").expect("spec s");
+        let result = build_graph(s, &specs);
+        let errors = result.expect_err("landed_cost_per_kg with two typos must fail planning");
+        let not_found: Vec<_> = errors
+            .iter()
+            .filter(|e| e.to_string().contains("not found"))
+            .collect();
+        assert_eq!(
+            not_found.len(),
+            2,
+            "expected two missing-reference errors, got: {}",
+            errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+        assert!(
+            not_found
+                .iter()
+                .any(|e| e.to_string().contains("transport_extra_per_kg")),
+            "expected error for transport_extra_per_kg"
+        );
+        assert!(
+            not_found
+                .iter()
+                .any(|e| e.to_string().contains("amortization_per_kg")),
+            "expected error for amortization_per_kg"
+        );
+        for error in &not_found {
+            let source = error
+                .location()
+                .expect("missing-reference error must carry source span");
+            assert_ne!(
+                source.span.start, source.span.end,
+                "error span must not be empty"
+            );
+        }
+    }
+
+    #[test]
     fn test_missing_spec_reference() {
         let mut spec = create_test_spec("test");
 
@@ -7443,8 +7561,8 @@ pub struct ResolvedSpecTypes {
     /// Raw defaults retained after materialization for cross-spec parent lookup during later specs.
     pub(crate) source_defaults: HashMap<String, RawDefault>,
 
-    /// Unit index: unit_name -> resolved type.
-    /// Built during resolution — if unit appears in multiple types, resolution fails.
+    /// Unit index: unit_name -> family-root quantity type for that unit's family.
+    /// Binding aliases never appear; cross-family duplicate unit names fail at resolution.
     pub unit_index: HashMap<String, Arc<LemmaType>>,
 }
 
@@ -7821,12 +7939,19 @@ impl<'a> TypeResolver<'a> {
 
         let mut validated_in_unit_index: HashSet<String> = HashSet::new();
         for lemma_type in resolved_types.unit_index.values() {
-            let Some(type_name) = lemma_type.name.as_deref() else {
+            let Some(quantity_family) = lemma_type.quantity_family_name() else {
                 continue;
             };
-            if !lemma_type.is_quantity() || !validated_in_unit_index.insert(type_name.to_string()) {
+            if !lemma_type.is_quantity()
+                || !validated_in_unit_index.insert(quantity_family.to_string())
+            {
                 continue;
             }
+            let type_name = lemma_type
+                .name
+                .as_deref()
+                .filter(|name| *name == quantity_family)
+                .unwrap_or(quantity_family);
             let source = type_sources
                 .get(type_name)
                 .cloned()
@@ -8241,12 +8366,16 @@ impl<'a> TypeResolver<'a> {
                 .get(type_name.as_str())
                 .expect("BUG: type was resolved but not in registry");
             let merge_result = if type_arc.is_quantity() {
-                Self::add_quantity_units_to_index(
-                    spec,
-                    &mut unit_index_tmp,
-                    type_arc,
-                    data_type_def,
-                )
+                if matches!(data_type_def.parent, ParentType::Qualified { .. }) {
+                    Ok(())
+                } else {
+                    Self::add_quantity_units_to_index(
+                        spec,
+                        &mut unit_index_tmp,
+                        type_arc,
+                        data_type_def,
+                    )
+                }
             } else if type_arc.is_ratio() {
                 Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, data_type_def)
             } else {
@@ -8264,7 +8393,10 @@ impl<'a> TypeResolver<'a> {
             let (_, imported_spec) =
                 match self.resolve_spec_for_import(spec, spec_ref, &data_row.source_location, at) {
                     Ok(import_pair) => import_pair,
-                    Err(_) => continue,
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
                 };
             let Some(imported_resolved) = already_resolved
                 .iter()
@@ -8285,12 +8417,26 @@ impl<'a> TypeResolver<'a> {
                 if matches!(def.parent, ParentType::Qualified { .. }) {
                     continue;
                 }
-                let Some(type_arc) = imported_resolved.resolved.get(imported_type_name.as_str())
-                else {
-                    continue;
-                };
+                let type_arc = imported_resolved
+                    .resolved
+                    .get(imported_type_name.as_str())
+                    .unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: imported type '{}' must exist in resolved spec '{}'",
+                            imported_type_name, imported_spec.name
+                        )
+                    });
                 let merge_result = if type_arc.is_quantity() {
-                    Self::add_quantity_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                    let consumer_owns_type_locally = data_defs
+                        .get(imported_type_name.as_str())
+                        .is_some_and(|local_def| {
+                            !matches!(local_def.parent, ParentType::Qualified { .. })
+                        });
+                    if consumer_owns_type_locally {
+                        Ok(())
+                    } else {
+                        Self::add_quantity_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                    }
                 } else if type_arc.is_ratio() {
                     Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
                 } else {
@@ -8363,22 +8509,17 @@ impl<'a> TypeResolver<'a> {
         defined_by: &DataTypeDef,
     ) -> Result<(), Error> {
         let resolved_ref = resolved_type.as_ref();
+        if matches!(defined_by.parent, ParentType::Qualified { .. }) {
+            unreachable!("BUG: qualified import alias rows must not register units");
+        }
+        let quantity_family = resolved_ref
+            .quantity_family_name()
+            .expect("BUG: add_quantity_units_to_index requires quantity type with family");
         let units = Self::extract_units_from_type(&resolved_ref.specifications);
         for unit in units {
             if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
-                let same_type = existing_def.as_ref() == Some(defined_by);
-
-                if same_type {
-                    return Err(Error::validation_with_context(
-                        format!(
-                            "Unit '{}' is defined more than once in type '{}'",
-                            unit, defined_by.name
-                        ),
-                        Some(defined_by.source.clone()),
-                        None::<String>,
-                        Some(Arc::clone(spec)),
-                        None,
-                    ));
+                if existing_def.as_ref() == Some(defined_by) {
+                    continue;
                 }
 
                 let existing_name: String = existing_def
@@ -8396,6 +8537,8 @@ impl<'a> TypeResolver<'a> {
                     .map(|p| p == defined_by.name.as_str())
                     .unwrap_or(false);
 
+                // Defining-type extension chains only (family-root rows); binding aliases never
+                // reach this function.
                 if existing_type.is_quantity()
                     && (current_extends_existing || existing_extends_current)
                 {
@@ -8406,8 +8549,38 @@ impl<'a> TypeResolver<'a> {
                     continue;
                 }
 
-                if existing_type.same_quantity_family(resolved_ref) {
-                    continue;
+                if existing_type.is_quantity() && existing_type.same_quantity_family(resolved_ref) {
+                    if let (
+                        TypeSpecification::Quantity {
+                            units: existing_units,
+                            ..
+                        },
+                        TypeSpecification::Quantity {
+                            units: new_units, ..
+                        },
+                    ) = (&existing_type.specifications, &resolved_ref.specifications)
+                    {
+                        let same_factor = existing_units
+                            .iter()
+                            .find(|u| u.name == unit)
+                            .zip(new_units.iter().find(|u| u.name == unit))
+                            .is_some_and(|(existing_unit, new_unit)| {
+                                existing_unit.factor == new_unit.factor
+                            });
+                        if same_factor {
+                            continue;
+                        }
+                        return Err(Error::validation_with_context(
+                            format!(
+                                "Unit '{}' in quantity family '{}' is defined with conflicting factors",
+                                unit, quantity_family
+                            ),
+                            Some(defined_by.source.clone()),
+                            None::<String>,
+                            Some(Arc::clone(spec)),
+                            None,
+                        ));
+                    }
                 }
 
                 return Err(Error::validation_with_context(
@@ -9016,44 +9189,391 @@ data invalid: choice -> option "a""#,
     }
 
     #[test]
-    fn test_quantity_extension_overwrites_parent_units() {
+    fn extension_unit_factor_override_errors() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
 data money: quantity
-  -> unit eur 1.00
-  -> unit usd 0.84
-
+  -> unit eur 1
 data money2: money
-  -> unit eur 1.20
-  -> unit usd 1.21
-  -> unit gbp 1.30"#,
+  -> unit eur 1.10"#,
+        );
+
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        assert!(
+            result.is_err(),
+            "extension child must not override inherited unit factor"
+        );
+        let error_msg = result
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_msg.contains("eur"),
+            "error must name unit eur, got: {error_msg}"
+        );
+        assert!(
+            error_msg.contains("inherited") || error_msg.contains("cannot change"),
+            "error must reject inherited unit redefinition, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn inherited_unit_idempotent_redeclare_ok() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data money: quantity
+  -> unit eur 1
+data money2: money
+  -> unit eur 1"#,
         );
 
         let resolved = resolver
             .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let money2 = resolved.resolved.get("money2").unwrap();
+            .expect("idempotent inherited unit redeclare must resolve");
+        let money2 = resolved.resolved.get("money2").expect("money2");
         match &money2.specifications {
             TypeSpecification::Quantity { units, .. } => {
-                assert_eq!(units.len(), 3);
-                let eur = units.iter().find(|u| u.name == "eur").unwrap();
-                let usd = units.iter().find(|u| u.name == "usd").unwrap();
-                let gbp = units.iter().find(|u| u.name == "gbp").unwrap();
+                let eur = units.iter().find(|u| u.name == "eur").expect("eur");
                 assert_eq!(
                     crate::computation::rational::commit_rational_to_decimal(&eur.factor).unwrap(),
-                    Decimal::from_str_exact("1.20").unwrap()
-                );
-                assert_eq!(
-                    crate::computation::rational::commit_rational_to_decimal(&usd.factor).unwrap(),
-                    Decimal::from_str_exact("1.21").unwrap()
-                );
-                assert_eq!(
-                    crate::computation::rational::commit_rational_to_decimal(&gbp.factor).unwrap(),
-                    Decimal::from_str_exact("1.30").unwrap()
+                    Decimal::ONE,
+                    "eur factor must remain 1"
                 );
             }
-            other => panic!("Expected Quantity type specifications, got {:?}", other),
+            other => panic!("expected Quantity, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn extension_additive_unit_registers_in_unit_index() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data money: quantity
+  -> unit eur 1
+data money2: money
+  -> unit usd 1.24"#,
+        );
+
+        let resolved = resolver
+            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .expect("additive extension unit must resolve");
+        let money2 = resolved
+            .resolved
+            .get("money2")
+            .expect("money2 resolved")
+            .clone();
+        assert!(
+            resolved.unit_index.contains_key("eur"),
+            "eur must be in unit_index"
+        );
+        assert!(
+            resolved.unit_index.contains_key("usd"),
+            "usd must be in unit_index"
+        );
+        let eur_owner = resolved.unit_index.get("eur").expect("eur owner");
+        let usd_owner = resolved.unit_index.get("usd").expect("usd owner");
+        assert_eq!(
+            eur_owner.name.as_deref(),
+            Some("money2"),
+            "most-derived type must own inherited eur"
+        );
+        assert_eq!(
+            usd_owner.name.as_deref(),
+            Some("money2"),
+            "most-derived type must own new usd"
+        );
+        assert_eq!(eur_owner.as_ref(), money2.as_ref());
+        assert_eq!(usd_owner.as_ref(), money2.as_ref());
+    }
+
+    #[test]
+    fn find_unique_reports_multiple_families_with_same_decomposition() {
+        let code = r#"spec units
+data money: quantity
+  -> unit eur 1
+  -> unit usd 0.86
+data mass: quantity
+  -> unit kg 1
+data price_eur_per_kg: quantity
+  -> unit eur_per_kg eur/kg
+data price_usd_per_kg: quantity
+  -> unit usd_per_kg usd/kg
+"#;
+        let (resolver, spec_arcs) = resolver_for_code(code);
+        let units_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "units")
+            .cloned()
+            .expect("units spec");
+        let (context, _) = test_context_and_effective(&spec_arcs);
+        let repository = context.workspace();
+        let resolved = resolver
+            .resolve_and_validate(&units_arc, &EffectiveDate::Origin, &ResolvedTypesMap::new())
+            .expect("units resolves");
+        let eur_decomp = resolved
+            .unit_index
+            .get("eur_per_kg")
+            .expect("eur_per_kg")
+            .quantity_type_decomposition()
+            .expect("eur_per_kg decomposition")
+            .clone();
+        let map = vec![(repository, units_arc.clone(), resolved)];
+
+        let unique = find_unique_quantity_type_by_decomposition(&map, &units_arc, &eur_decomp);
+        match unique {
+            DecompositionMatch::Multiple(families) => {
+                assert_eq!(families.len(), 2);
+                assert!(families.contains(&"price_eur_per_kg".to_string()));
+                assert!(families.contains(&"price_usd_per_kg".to_string()));
+            }
+            other => panic!("expected Multiple families, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unit_index_maps_family_root_not_binding_alias() {
+        let code = r#"spec units
+data money: quantity
+  -> unit eur 1
+data mass: quantity
+  -> unit kg 1
+data price_per_weight: quantity
+  -> unit eur_per_kg eur/kg
+
+spec consumer
+uses u: units
+data starch_levy_per_kg: u.price_per_weight
+  -> default 0.1 eur_per_kg
+data amortization_per_kg: u.price_per_weight
+  -> default 0.2 eur_per_kg
+"#;
+        let (resolver, spec_arcs) = resolver_for_code(code);
+        let units_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "units")
+            .cloned()
+            .expect("units spec");
+        let consumer_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "consumer")
+            .cloned()
+            .expect("consumer spec");
+        let (context, _) = test_context_and_effective(&spec_arcs);
+        let repository = context.workspace();
+
+        let mut already_resolved = ResolvedTypesMap::new();
+        let units_types = resolver
+            .resolve_and_validate(&units_arc, &EffectiveDate::Origin, &already_resolved)
+            .expect("units spec resolves");
+        let units_price_per_weight = units_types
+            .resolved
+            .get("price_per_weight")
+            .expect("units defines price_per_weight")
+            .clone();
+        already_resolved.push((Arc::clone(&repository), units_arc, units_types));
+
+        let consumer_types = resolver
+            .resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved)
+            .expect("consumer spec resolves");
+
+        let eur_per_kg_owner = consumer_types
+            .unit_index
+            .get("eur_per_kg")
+            .expect("eur_per_kg in unit_index");
+        assert_eq!(
+            eur_per_kg_owner.name.as_deref(),
+            Some("price_per_weight"),
+            "unit must belong to family root, not binding alias row name"
+        );
+        assert_eq!(
+            eur_per_kg_owner.quantity_family_name(),
+            Some("price_per_weight")
+        );
+        assert_eq!(eur_per_kg_owner.as_ref(), units_price_per_weight.as_ref());
+
+        let starch_alias = consumer_types
+            .resolved
+            .get("starch_levy_per_kg")
+            .expect("alias row in resolved");
+        assert!(
+            !Arc::ptr_eq(eur_per_kg_owner, starch_alias),
+            "unit_index must not store binding alias arc"
+        );
+    }
+
+    #[test]
+    fn import_merge_skips_locally_owned_family_root() {
+        let code = r#"spec std_units
+data mass: quantity
+  -> unit kilogram 1
+  -> unit kilograms 1
+  -> unit gram 0.001
+
+spec s
+uses u: std_units
+data mass: quantity
+  -> unit kg 1
+  -> unit tonne 1000
+rule smoke: true
+"#;
+        let (resolver, spec_arcs) = resolver_for_code(code);
+        let std_units_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "std_units")
+            .cloned()
+            .expect("std_units spec");
+        let consumer_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "s")
+            .cloned()
+            .expect("consumer spec");
+        let (context, _) = test_context_and_effective(&spec_arcs);
+        let repository = context.workspace();
+
+        let mut already_resolved = ResolvedTypesMap::new();
+        let std_units_types = resolver
+            .resolve_and_validate(&std_units_arc, &EffectiveDate::Origin, &already_resolved)
+            .expect("std_units resolves");
+        already_resolved.push((Arc::clone(&repository), std_units_arc, std_units_types));
+
+        let consumer_types = resolver
+            .resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved)
+            .expect("consumer resolves");
+
+        let local_mass = consumer_types
+            .resolved
+            .get("mass")
+            .expect("consumer defines mass")
+            .clone();
+
+        assert!(
+            consumer_types.unit_index.contains_key("kg"),
+            "local kg must be indexed"
+        );
+        assert!(
+            consumer_types.unit_index.contains_key("tonne"),
+            "local tonne must be indexed"
+        );
+        assert!(
+            !consumer_types.unit_index.contains_key("kilogram"),
+            "import kilogram must not leak after local shadow"
+        );
+        assert!(
+            !consumer_types.unit_index.contains_key("kilograms"),
+            "import kilograms must not leak after local shadow"
+        );
+        assert!(
+            !consumer_types.unit_index.contains_key("gram"),
+            "import gram must not leak after local shadow"
+        );
+
+        let kg_owner = consumer_types.unit_index.get("kg").expect("kg owner");
+        let tonne_owner = consumer_types.unit_index.get("tonne").expect("tonne owner");
+        assert_eq!(kg_owner.as_ref(), local_mass.as_ref());
+        assert_eq!(tonne_owner.as_ref(), local_mass.as_ref());
+    }
+
+    #[test]
+    fn same_family_same_unit_same_factor_is_idempotent() {
+        let code = r#"spec units_a
+data duration: quantity
+  -> unit hour 1
+
+spec consumer
+uses a: units_a
+uses b: units_a
+rule smoke: true
+"#;
+        let (resolver, spec_arcs) = resolver_for_code(code);
+        let units_a_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "units_a")
+            .cloned()
+            .expect("units_a spec");
+        let consumer_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "consumer")
+            .cloned()
+            .expect("consumer spec");
+        let (context, _) = test_context_and_effective(&spec_arcs);
+        let repository = context.workspace();
+
+        let mut already_resolved = ResolvedTypesMap::new();
+        let units_a_types = resolver
+            .resolve_and_validate(&units_a_arc, &EffectiveDate::Origin, &already_resolved)
+            .expect("units_a resolves");
+        already_resolved.push((Arc::clone(&repository), units_a_arc, units_a_types));
+
+        let consumer_types = resolver
+            .resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved)
+            .expect("double import of same duration must be idempotent");
+
+        assert!(
+            consumer_types.unit_index.contains_key("hour"),
+            "hour must be indexed once"
+        );
+    }
+
+    #[test]
+    fn same_family_same_unit_different_factor_errors() {
+        let code = r#"spec units_a
+data duration: quantity
+  -> unit hour 1
+
+spec units_b
+data duration: quantity
+  -> unit hour 60
+
+spec consumer
+uses a: units_a
+uses b: units_b
+rule smoke: true
+"#;
+        let (resolver, spec_arcs) = resolver_for_code(code);
+        let units_a_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "units_a")
+            .cloned()
+            .expect("units_a spec");
+        let units_b_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "units_b")
+            .cloned()
+            .expect("units_b spec");
+        let consumer_arc = spec_arcs
+            .iter()
+            .find(|spec| spec.name == "consumer")
+            .cloned()
+            .expect("consumer spec");
+        let (context, _) = test_context_and_effective(&spec_arcs);
+        let repository = context.workspace();
+
+        let mut already_resolved = ResolvedTypesMap::new();
+        for units_arc in [units_a_arc, units_b_arc] {
+            let units_types = resolver
+                .resolve_and_validate(&units_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("units spec resolves");
+            already_resolved.push((Arc::clone(&repository), units_arc, units_types));
+        }
+
+        let result =
+            resolver.resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved);
+        assert!(
+            result.is_err(),
+            "conflicting hour factors in same family must error"
+        );
+        let error_msg = result
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_msg.contains("hour") && error_msg.contains("conflicting factors"),
+            "expected conflicting factor error for hour, got: {error_msg}"
+        );
     }
 
     #[test]
@@ -9273,31 +9793,57 @@ data my_money: money
     }
 
     #[test]
-    fn test_value_copy_quantity_binding_overwrites_unit_factor() {
+    fn binding_unit_factor_override_errors() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
 data source_quantity: quantity
   -> unit usd 1.00
-
 data z: source_quantity
   -> unit usd 0.84"#,
         );
 
-        let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let z = resolved.resolved.get("z").unwrap();
-        match &z.specifications {
-            TypeSpecification::Quantity { units, .. } => {
-                assert_eq!(units.len(), 1);
-                let usd = units.iter().find(|u| u.name == "usd").unwrap();
-                assert_eq!(
-                    crate::computation::rational::commit_rational_to_decimal(&usd.factor).unwrap(),
-                    Decimal::from_str_exact("0.84").unwrap()
-                );
-            }
-            other => panic!("Expected Quantity type specifications, got {:?}", other),
-        }
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        assert!(
+            result.is_err(),
+            "binding row must not override inherited unit factor"
+        );
+        let error_msg = result
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_msg.contains("usd"),
+            "error must name unit usd, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn ratio_extension_unit_factor_override_errors() {
+        let (resolver, spec_arc) = resolver_single_spec(
+            r#"spec test
+data parent: ratio
+  -> unit basis 1
+data child: parent
+  -> unit basis 100"#,
+        );
+
+        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        assert!(
+            result.is_err(),
+            "ratio extension must not override inherited unit factor"
+        );
+        let error_msg = result
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_msg.contains("basis"),
+            "error must name unit basis, got: {error_msg}"
+        );
     }
 
     #[test]
@@ -10508,5 +11054,176 @@ mod validation_tests {
             "got: {}",
             errors[0]
         );
+    }
+}
+
+#[cfg(test)]
+mod decomposition_promotion_tests {
+    use super::*;
+    use crate::engine::Context;
+    use crate::parse;
+    use crate::ResourceLimits;
+    use std::sync::Arc;
+
+    fn insert_parsed_repos(ctx: &mut Context, code: &str) -> Vec<Arc<LemmaSpec>> {
+        let result = parse(
+            code,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .expect("parse");
+        let mut spec_arcs = Vec::new();
+        for (repo_arc, specs) in &result.repositories {
+            for spec in specs {
+                let arc = Arc::new(spec.clone());
+                ctx.insert_spec(Arc::clone(repo_arc), Arc::clone(&arc))
+                    .expect("insert spec");
+                spec_arcs.push(arc);
+            }
+        }
+        spec_arcs
+    }
+
+    fn repo_by_name(ctx: &Context, name: &str) -> Arc<LemmaRepository> {
+        ctx.repositories()
+            .keys()
+            .find(|r| r.name.as_deref() == Some(name))
+            .cloned()
+            .expect("repository must exist after insert")
+    }
+
+    fn resolve_specs_in_order(
+        resolver: &TypeResolver<'_>,
+        repo: &Arc<LemmaRepository>,
+        spec_arcs: &[Arc<LemmaSpec>],
+        local_types: &mut ResolvedTypesMap,
+    ) {
+        for spec_arc in spec_arcs {
+            let types = resolver
+                .resolve_and_validate(spec_arc, &EffectiveDate::Origin, local_types)
+                .unwrap_or_else(|e| panic!("resolve {} failed: {:?}", spec_arc.name, e));
+            local_types.push((Arc::clone(repo), Arc::clone(spec_arc), types));
+        }
+    }
+
+    fn worker_torque_fixture() -> (
+        ResolvedTypesMap,
+        Arc<LemmaSpec>,
+        BaseQuantityVector,
+        Arc<LemmaType>,
+    ) {
+        let mut ctx = Context::new();
+        insert_parsed_repos(&mut ctx, crate::stdlib::UNITS_LEMMA);
+        let alpha_code = r#"repo alpha
+spec units
+data force: quantity
+  -> unit newton 1
+data length: quantity
+  -> unit metre 1
+data torque: quantity
+  -> unit nm newton*metre
+
+spec worker
+uses u: alpha units
+data f: 3 newton
+data d: 4 metre
+rule t: f * d
+"#;
+        let alpha_specs = insert_parsed_repos(&mut ctx, alpha_code);
+        let alpha_repo = repo_by_name(&ctx, "alpha");
+        let worker_arc = alpha_specs
+            .iter()
+            .find(|s| s.name == "worker")
+            .expect("worker spec")
+            .clone();
+        let units_arc = alpha_specs
+            .iter()
+            .find(|s| s.name == "units")
+            .expect("alpha units spec")
+            .clone();
+        let lemma_repo = repo_by_name(&ctx, crate::engine::EMBEDDED_STDLIB_REPOSITORY);
+        let lemma_units = ctx
+            .spec_set(&lemma_repo, "units")
+            .expect("lemma repo")
+            .get_exact(None)
+            .expect("lemma units spec")
+            .clone();
+
+        let mut resolver = TypeResolver::new(&ctx);
+        for spec in &alpha_specs {
+            resolver
+                .register_all(&alpha_repo, spec)
+                .into_iter()
+                .for_each(|e| panic!("register alpha: {e:?}"));
+        }
+        resolver
+            .register_all(&lemma_repo, &lemma_units)
+            .into_iter()
+            .for_each(|e| panic!("register lemma units: {e:?}"));
+
+        let mut local_types = ResolvedTypesMap::new();
+        resolve_specs_in_order(
+            &resolver,
+            &lemma_repo,
+            std::slice::from_ref(&lemma_units),
+            &mut local_types,
+        );
+        resolve_specs_in_order(
+            &resolver,
+            &alpha_repo,
+            std::slice::from_ref(&units_arc),
+            &mut local_types,
+        );
+        resolve_specs_in_order(
+            &resolver,
+            &alpha_repo,
+            std::slice::from_ref(&worker_arc),
+            &mut local_types,
+        );
+
+        let alpha_torque = local_types
+            .iter()
+            .find(|(_, s, _)| Arc::ptr_eq(s, &units_arc))
+            .and_then(|(_, _, t)| t.resolved.get("torque"))
+            .expect("alpha torque type")
+            .clone();
+        let decomp = alpha_torque
+            .quantity_type_decomposition()
+            .expect("torque decomposition")
+            .clone();
+
+        (local_types, worker_arc, decomp, alpha_torque)
+    }
+
+    #[test]
+    fn unique_decomposition_carries_matching_arc() {
+        let (map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
+        let unique = find_unique_quantity_type_by_decomposition(&map, &worker_spec, &decomp);
+        match unique {
+            DecompositionMatch::Unique(arc) => {
+                assert_eq!(*arc, *alpha_torque);
+                assert_eq!(arc.name.as_deref(), Some("torque"));
+            }
+            other => panic!("expected Unique(Arc) torque match, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn find_unique_ignores_polluted_resolved_map() {
+        let (mut map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
+        map.iter_mut()
+            .find(|(_, s, _)| Arc::ptr_eq(s, &worker_spec))
+            .expect("worker must be in resolved map")
+            .2
+            .resolved = HashMap::new();
+
+        let unique = find_unique_quantity_type_by_decomposition(&map, &worker_spec, &decomp);
+        match unique {
+            DecompositionMatch::Unique(arc) => {
+                assert_eq!(*arc, *alpha_torque);
+                assert_eq!(arc.name.as_deref(), Some("torque"));
+            }
+            other => panic!("expected Unique(alpha torque) via unit_index, got {other:?}"),
+        }
     }
 }
