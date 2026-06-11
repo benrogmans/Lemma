@@ -1,5 +1,7 @@
+use crate::computation::rational::NumericFailure;
 use crate::evaluation::explanations::Explanation;
 use crate::evaluation::operations::{OperationResult, VetoType};
+use crate::evaluation::DECIMAL_VALUE_LIMIT_VETO_MESSAGE;
 use crate::parsing::ast::DateTimeValue;
 use crate::planning::semantics::{
     range_element_type_specification, DataPath, LemmaType, LiteralValue, RulePath,
@@ -152,58 +154,66 @@ impl RuleResult {
                 range: None,
                 explanation,
             },
-            OperationResult::Value(literal) => {
-                let mut result = Self {
-                    rule,
-                    veto_detail: None,
-                    vetoed: false,
-                    display: None,
-                    veto_reason: None,
-                    rule_type: rule_type_name,
-                    quantity: None,
-                    ratio: None,
-                    number: None,
-                    boolean: None,
-                    text: None,
-                    date: None,
-                    time: None,
-                    calendar: None,
-                    range: None,
-                    explanation,
-                };
-                match &literal.value {
-                    ValueKind::Range(from, to) => {
-                        let endpoint_type = element_type_from_range_rule(rule_type)
-                            .unwrap_or_else(|| rule_type.clone());
-                        result.range = Some(RangeResult {
-                            from: materialize_payload(
-                                from,
-                                &endpoint_materialization_type(from, &endpoint_type),
-                                expression_units,
-                            ),
-                            to: materialize_payload(
-                                to,
-                                &endpoint_materialization_type(to, &endpoint_type),
-                                expression_units,
-                            ),
-                        });
-                        result.display = Some(literal.to_string());
-                    }
-                    _ => {
-                        let payload = materialize_payload(&literal, rule_type, expression_units);
-                        result.quantity = payload.quantity;
-                        result.ratio = payload.ratio;
-                        result.number = payload.number;
-                        result.boolean = payload.boolean;
-                        result.text = payload.text;
-                        result.date = payload.date;
-                        result.time = payload.time;
-                        result.calendar = payload.calendar;
-                        result.display = Some(literal.to_string());
+            OperationResult::Value(literal) => match &literal.value {
+                ValueKind::Range(from, to) => {
+                    let endpoint_type = element_type_from_range_rule(rule_type)
+                        .unwrap_or_else(|| rule_type.clone());
+                    let from_type = endpoint_materialization_type(from, &endpoint_type);
+                    let to_type = endpoint_materialization_type(to, &endpoint_type);
+                    match (
+                        materialize_payload(from, &from_type, expression_units),
+                        materialize_payload(to, &to_type, expression_units),
+                    ) {
+                        (Ok(from_payload), Ok(to_payload)) => Self {
+                            rule,
+                            veto_detail: None,
+                            vetoed: false,
+                            display: Some(literal.to_string()),
+                            veto_reason: None,
+                            rule_type: rule_type_name,
+                            quantity: None,
+                            ratio: None,
+                            number: None,
+                            boolean: None,
+                            text: None,
+                            date: None,
+                            time: None,
+                            calendar: None,
+                            range: Some(RangeResult {
+                                from: from_payload,
+                                to: to_payload,
+                            }),
+                            explanation,
+                        },
+                        _ => {
+                            vetoed_rule_result_for_decimal_limit(rule, rule_type_name, explanation)
+                        }
                     }
                 }
-                result
-            }
+                _ => match materialize_payload(&literal, rule_type, expression_units) {
+                    Ok(payload) => Self {
+                        rule,
+                        veto_detail: None,
+                        vetoed: false,
+                        display: Some(literal.to_string()),
+                        veto_reason: None,
+                        rule_type: rule_type_name,
+                        quantity: payload.quantity,
+                        ratio: payload.ratio,
+                        number: payload.number,
+                        boolean: payload.boolean,
+                        text: payload.text,
+                        date: payload.date,
+                        time: payload.time,
+                        calendar: payload.calendar,
+                        range: None,
+                        explanation,
+                    },
+                    Err(_) => {
+                        vetoed_rule_result_for_decimal_limit(rule, rule_type_name, explanation)
+                    }
+                },
+            },
         }
     }
 
@@ -420,68 +430,89 @@ fn endpoint_materialization_type(
     }
 }
 
+fn vetoed_rule_result_for_decimal_limit(
+    rule: EvaluatedRule,
+    rule_type_name: String,
+    explanation: Option<Explanation>,
+) -> RuleResult {
+    let veto = VetoType::computation(DECIMAL_VALUE_LIMIT_VETO_MESSAGE);
+    RuleResult {
+        rule,
+        veto_detail: Some(veto.clone()),
+        vetoed: true,
+        display: None,
+        veto_reason: Some(veto.to_string()),
+        rule_type: rule_type_name,
+        quantity: None,
+        ratio: None,
+        number: None,
+        boolean: None,
+        text: None,
+        date: None,
+        time: None,
+        calendar: None,
+        range: None,
+        explanation,
+    }
+}
+
 fn materialize_payload(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
     _expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
-) -> RuleResultPayload {
+) -> Result<RuleResultPayload, NumericFailure> {
     match &literal.value {
         ValueKind::Quantity(rational, sig) if literal.lemma_type.is_calendar_like() => {
             let unit =
                 crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
-            RuleResultPayload {
+            Ok(RuleResultPayload {
                 calendar: Some(CalendarResult {
-                    value: rational_to_decimal_string(rational),
+                    value: literal
+                        .lemma_type
+                        .try_materialize_rational_as_decimal_string(rational)?,
                     unit: unit.to_string(),
                 }),
                 ..RuleResultPayload::default()
-            }
+            })
         }
-        ValueKind::Quantity(_, _) => RuleResultPayload {
-            quantity: Some(quantity_to_unit_map(literal, result_type)),
+        ValueKind::Quantity(_, _) => Ok(RuleResultPayload {
+            quantity: Some(quantity_to_unit_map(literal, result_type)?),
             ..RuleResultPayload::default()
-        },
-        ValueKind::Ratio(_, _) => RuleResultPayload {
-            ratio: Some(ratio_to_unit_map(literal, result_type)),
+        }),
+        ValueKind::Ratio(_, _) => Ok(RuleResultPayload {
+            ratio: Some(ratio_to_unit_map(literal, result_type)?),
             ..RuleResultPayload::default()
-        },
-        ValueKind::Number(rational) => RuleResultPayload {
-            number: Some(rational_to_decimal_string(rational)),
+        }),
+        ValueKind::Number(rational) => Ok(RuleResultPayload {
+            number: Some(result_type.try_materialize_rational_as_decimal_string(rational)?),
             ..RuleResultPayload::default()
-        },
-        ValueKind::Boolean(b) => RuleResultPayload {
+        }),
+        ValueKind::Boolean(b) => Ok(RuleResultPayload {
             boolean: Some(*b),
             ..RuleResultPayload::default()
-        },
-        ValueKind::Text(s) => RuleResultPayload {
+        }),
+        ValueKind::Text(s) => Ok(RuleResultPayload {
             text: Some(s.clone()),
             ..RuleResultPayload::default()
-        },
-        ValueKind::Date(d) => RuleResultPayload {
+        }),
+        ValueKind::Date(d) => Ok(RuleResultPayload {
             date: Some(d.clone()),
             ..RuleResultPayload::default()
-        },
-        ValueKind::Time(t) => RuleResultPayload {
+        }),
+        ValueKind::Time(t) => Ok(RuleResultPayload {
             time: Some(t.clone()),
             ..RuleResultPayload::default()
-        },
+        }),
         ValueKind::Range(_, _) => {
             panic!("BUG: range payload must be built at RuleResult level, not RuleResultPayload")
         }
     }
 }
 
-fn rational_to_decimal_string(rational: &crate::computation::rational::RationalInteger) -> String {
-    crate::literals::rational_to_serialized_str(rational)
-        .expect("BUG: rule result magnitude must serialize to decimal string")
-}
-
 fn quantity_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
-) -> BTreeMap<String, String> {
-    use crate::computation::rational::checked_div;
-
+) -> Result<BTreeMap<String, String>, NumericFailure> {
     let unit_names = result_type
         .quantity_unit_names()
         .expect("BUG: rule result quantity must have declared units");
@@ -490,33 +521,26 @@ fn quantity_to_unit_map(
     };
     let mut map = BTreeMap::new();
     for unit_name in unit_names {
-        let to_factor = result_type.quantity_unit_factor(unit_name);
-        let converted = checked_div(magnitude, to_factor).unwrap_or_else(|failure| {
-            panic!(
-                "BUG: quantity unit conversion to '{}' failed at rule result materialization: {}",
-                unit_name, failure
-            )
-        });
-        map.insert(
-            unit_name.to_string(),
-            rational_to_decimal_string(&converted),
-        );
+        let materialized =
+            result_type.try_materialize_quantity_canonical_in_unit(magnitude, unit_name)?;
+        map.insert(unit_name.to_string(), materialized);
     }
-    map
+    Ok(map)
 }
 
 fn ratio_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
-) -> BTreeMap<String, String> {
-    use crate::computation::rational::checked_mul;
-
-    let units = match &result_type.specifications {
-        TypeSpecification::Ratio { units, .. } => units,
+) -> Result<BTreeMap<String, String>, NumericFailure> {
+    let materialization_type = match &result_type.specifications {
+        TypeSpecification::Ratio { .. } => result_type,
         TypeSpecification::RatioRange { .. } => {
             let element = range_element_type_specification(&result_type.specifications)
                 .expect("BUG: ratio range rule type must have ratio element specification");
-            let TypeSpecification::Ratio { units, .. } = element else {
+            let TypeSpecification::Ratio {
+                units, decimals, ..
+            } = element
+            else {
                 panic!("BUG: ratio range element spec must be Ratio");
             };
             return ratio_to_unit_map(
@@ -524,7 +548,7 @@ fn ratio_to_unit_map(
                 &LemmaType::primitive(TypeSpecification::Ratio {
                     minimum: None,
                     maximum: None,
-                    decimals: None,
+                    decimals,
                     units,
                     help: String::new(),
                 }),
@@ -537,6 +561,10 @@ fn ratio_to_unit_map(
             );
         }
     };
+    let units = match &materialization_type.specifications {
+        TypeSpecification::Ratio { units, .. } => units,
+        _ => unreachable!("BUG: ratio materialization type must be Ratio"),
+    };
     let ValueKind::Ratio(canonical, _) = &literal.value else {
         panic!("BUG: ratio_to_unit_map called with non-ratio value");
     };
@@ -548,15 +576,11 @@ fn ratio_to_unit_map(
     }
     let mut map = BTreeMap::new();
     for unit in units.iter() {
-        let display = checked_mul(canonical, &unit.value).unwrap_or_else(|failure| {
-            panic!(
-                "BUG: ratio unit conversion to '{}' failed at rule result materialization: {}",
-                unit.name, failure
-            )
-        });
-        map.insert(unit.name.clone(), rational_to_decimal_string(&display));
+        let materialized =
+            materialization_type.try_materialize_ratio_canonical_in_unit(canonical, &unit.name)?;
+        map.insert(unit.name.clone(), materialized);
     }
-    map
+    Ok(map)
 }
 
 impl Response {
@@ -796,7 +820,7 @@ mod tests {
             None,
         );
         let quantity = result.quantity.expect("quantity map");
-        assert_eq!(quantity.get("usd"), Some(&"10".to_string()));
+        assert_eq!(quantity.get("usd"), Some(&"10.00".to_string()));
         assert!(quantity.contains_key("eur"));
     }
 
@@ -819,9 +843,65 @@ mod tests {
             None,
         );
         let quantity = result.quantity.expect("quantity map");
-        assert_eq!(quantity.get("eur"), Some(&"10".to_string()));
-        assert!(quantity.contains_key("usd"));
-        assert!(quantity["usd"].starts_with("10.9"));
+        assert_eq!(quantity.get("eur"), Some(&"10.00".to_string()));
+        assert_eq!(quantity.get("usd"), Some(&"10.99".to_string()));
+    }
+
+    #[test]
+    fn quantity_materialization_respects_decimals_on_unit_conversion() {
+        let money = LemmaType::new(
+            "money".to_string(),
+            TypeSpecification::Quantity {
+                minimum: None,
+                maximum: None,
+                decimals: Some(2),
+                units: QuantityUnits::from(vec![
+                    QuantityUnit {
+                        name: "eur".to_string(),
+                        factor: crate::computation::rational::rational_one(),
+                        derived_quantity_factors: Vec::new(),
+                        decomposition: BaseQuantityVector::new(),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                    },
+                    QuantityUnit {
+                        name: "usd".to_string(),
+                        factor: crate::computation::rational::decimal_to_rational(Decimal::new(
+                            84, 2,
+                        ))
+                        .expect("usd factor"),
+                        derived_quantity_factors: Vec::new(),
+                        decomposition: BaseQuantityVector::new(),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                    },
+                ]),
+                traits: Vec::new(),
+                decomposition: Some(BaseQuantityVector::new()),
+                help: String::new(),
+            },
+            TypeExtends::Primitive,
+        );
+        let three_twelve_eur = LiteralValue {
+            value: ValueKind::Quantity(
+                crate::computation::rational::decimal_to_rational(Decimal::new(312, 2))
+                    .expect("3.12 eur canonical"),
+                vec![],
+            ),
+            lemma_type: Arc::new(money.clone()),
+        };
+        let result = RuleResult::from_operation_result(
+            dummy_evaluated_rule("delivery_cost", &money),
+            OperationResult::Value(three_twelve_eur),
+            &money,
+            &HashMap::new(),
+            None,
+        );
+        let quantity = result.quantity.expect("quantity map");
+        assert_eq!(quantity.get("eur"), Some(&"3.12".to_string()));
+        assert_eq!(quantity.get("usd"), Some(&"3.71".to_string()));
     }
 
     #[test]

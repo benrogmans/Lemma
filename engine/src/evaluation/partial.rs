@@ -70,11 +70,7 @@ pub(crate) fn try_resolve_value(
 
         ExpressionKind::UnitConversion(inner_expr, target) => {
             let inner_value = try_resolve_value(inner_expr, known_values, plan)?;
-            match convert_unit(
-                &inner_value,
-                target,
-                UnitResolutionContext::WithIndex(unit_index),
-            ) {
+            match convert_unit(&inner_value, target) {
                 OperationResult::Value(result) => Some(result),
                 OperationResult::Veto(_) => None,
             }

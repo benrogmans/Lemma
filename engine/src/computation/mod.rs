@@ -3,9 +3,12 @@ pub mod bigint;
 pub mod comparison;
 pub mod datetime;
 pub mod decimal_math;
+pub mod quantity_math;
 pub mod range;
 pub mod rational;
 pub mod units;
+
+pub use quantity_math::mathematical_computation_preserves_quantity_magnitude;
 
 pub use arithmetic::arithmetic_operation;
 pub use comparison::comparison_operation;

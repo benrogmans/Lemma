@@ -693,7 +693,7 @@ rule r: sqrt true
 "#,
     );
     assert!(
-        joined.contains("Mathematical function requires number operand"),
+        joined.contains("Mathematical function 'sqrt' requires number operand, got boolean"),
         "expected math-function operand error: {joined}"
     );
     assert_lowercase_type_in_errors(&joined, &["boolean"], &["Boolean"]);

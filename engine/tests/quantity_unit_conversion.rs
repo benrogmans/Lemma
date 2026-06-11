@@ -1252,9 +1252,10 @@ rule quotient: ten / zero
     );
 }
 
-/// Regression: stale deserialized `unit_index` must return Error, not panic at eval.
+/// Regression: stripping expression-scope unit_index from a serialized plan must
+/// not invalidate unit conversions that carry their owning type at plan time.
 #[test]
-fn eval_stale_unit_index_returns_error_not_internal_panic() {
+fn eval_stripped_plan_unit_index_still_plans_and_runs() {
     let code = r#"
 spec t
 uses lemma units
@@ -1275,22 +1276,118 @@ rule r: x as minutes
         .as_object_mut()
         .expect("unit_index object");
     assert!(
-        unit_index.contains_key("minutes") || unit_index.contains_key("minute"),
-        "plan must contain minutes/minute in unit_index before tampering; keys: {:?}",
+        unit_index.contains_key("minutes"),
+        "x as minutes must register minutes in unit_index before tampering; keys: {:?}",
         unit_index.keys().collect::<Vec<_>>()
     );
     unit_index.remove("minutes");
-    unit_index.remove("minute");
 
     let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
-    let tampered_plan: ExecutionPlan = ExecutionPlan::try_from(serialized).unwrap();
+    let reconstructed = ExecutionPlan::try_from(serialized)
+        .expect("carried owning_type must not need plan unit_index");
+    let response = engine
+        .run_plan(&reconstructed, Some(&now), HashMap::new(), false, None)
+        .expect("evaluation must succeed with carried conversion types");
+    let display = response
+        .results
+        .get("r")
+        .expect("rule r must be present")
+        .display
+        .clone()
+        .expect("rule r must have display");
+    assert_eq!(display, "5 minutes");
+}
 
-    let result = engine.run_plan(&tampered_plan, Some(&now), HashMap::new(), true, None);
-    assert!(
-        result.is_err(),
-        "stale unit_index must surface as Error, not Ok: {:?}",
-        result.ok()
+/// Regression: tampered unit conversion target rejected at TryFrom, not at eval.
+#[test]
+fn eval_tampered_unit_conversion_target_rejected_at_try_from() {
+    let code = r#"
+spec t
+uses lemma units
+data duration: units.duration
+data x: number -> default 5
+rule r: x as minutes
+"#;
+
+    let mut engine = Engine::new();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+
+    let plan = engine.get_plan(None, "t", Some(&now)).unwrap();
+
+    let mut json: serde_json::Value =
+        serde_json::to_value(lemma::ExecutionPlanSerialized::from(plan)).unwrap();
+    let code_array = json["rules"][0]["instructions"]["code"]
+        .as_array_mut()
+        .expect("instruction code array");
+    let conversion = code_array
+        .iter_mut()
+        .find(|insn| insn.get("unit_conversion").is_some())
+        .expect("plan must contain a unit_conversion instruction");
+    let target = conversion
+        .get_mut("unit_conversion")
+        .expect("unit_conversion object")
+        .get_mut("target")
+        .expect("conversion target");
+    let unit = target
+        .get_mut("unit")
+        .expect("unit conversion target must be unit variant");
+    unit["unit_name"] = serde_json::Value::String("tampered_unit".to_string());
+
+    let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
+    let result = ExecutionPlan::try_from(serialized);
+    let err = result.expect_err("tampered conversion target must fail TryFrom");
+    assert_eq!(
+        err.message(),
+        "Serialized execution plan for spec 't' is invalid: Unit conversion target 'tampered_unit' is not declared on owning type 'duration'"
     );
+}
+
+#[test]
+fn shadowed_duration_rejects_minutes_alias_at_load() {
+    let code = r#"
+spec s
+uses lemma units
+data duration: quantity
+  -> unit minute 60
+rule r: 5 as minutes
+"#;
+
+    let mut engine = Engine::new();
+    let err = engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect_err("shadowed duration must reject minutes alias at load");
+    let msg = format!("{err:?}");
+    assert!(
+        msg.contains("minutes"),
+        "expected unknown minutes at load, got: {msg}"
+    );
+}
+
+#[test]
+fn stdlib_duration_minutes_loads_and_runs() {
+    let code = r#"
+spec t
+uses lemma units
+data duration: units.duration
+data x: number -> default 5
+rule r: x as minutes
+"#;
+
+    let mut engine = Engine::new();
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "t", Some(&now), HashMap::new(), true, None)
+        .expect("stdlib duration with minutes must run");
+    let display = response
+        .results
+        .get("r")
+        .expect("rule r")
+        .display
+        .as_deref()
+        .expect("display");
+    assert_eq!(display, "5 minutes");
 }
 
 // ═══════════════════════════════════════════════════════════════════
