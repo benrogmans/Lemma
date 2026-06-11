@@ -468,6 +468,9 @@ fn collect_repository_qualifiers_from_spec_ref(
     let Some(qualifier) = spec_ref.repository.as_ref() else {
         return;
     };
+    if !qualifier.is_registry() {
+        return;
+    }
     if ctx.find_repository(&qualifier.name).is_some() {
         return;
     }
@@ -520,7 +523,7 @@ fn find_missing_repositories(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::Engine;
+    use crate::engine::{Context, Engine};
     use crate::literals::DateGranularity;
 
     /// A test Registry that returns predefined bundles keyed by name.
@@ -608,6 +611,48 @@ data price: 100"#;
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "example"));
         assert!(names.iter().any(|n| n == "units"));
+    }
+
+    /// Mirrors `lemma fetch --all`: bare `Context::new()` without embedded stdlib.
+    #[tokio::test]
+    async fn resolve_does_not_fetch_non_at_qualified_repositories() {
+        let local_source = r#"spec burn_baby_burn
+uses lemma units
+rule x: 1 hour"#;
+        let local_specs = crate::parse(
+            local_source,
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        )
+        .unwrap()
+        .into_flattened_specs();
+        let mut store = Context::new();
+        let local_repository = store.workspace();
+        for spec in local_specs {
+            store
+                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .unwrap();
+        }
+        let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
+        sources.insert(
+            crate::parsing::source::SourceType::Volatile,
+            local_source.to_string(),
+        );
+
+        let registry = TestRegistry::new();
+        let result = resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "non-@ repository qualifiers must not be sent to the registry, got: {:?}",
+            result.err()
+        );
     }
 
     #[tokio::test]
