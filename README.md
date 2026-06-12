@@ -80,7 +80,7 @@ data money: quantity
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
-  -> minimum 0
+  -> minimum 0 eur
 
 data weight: quantity
   -> unit kilogram 1
