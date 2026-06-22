@@ -758,28 +758,28 @@ mod tests {
         )
     }
 
-    fn registry_std_repository() -> Arc<LemmaRepository> {
+    fn registry_iso_repository() -> Arc<LemmaRepository> {
         Arc::new(LemmaRepository {
-            name: Some("@lemma/std".to_string()),
-            dependency: Some("@lemma/std".to_string()),
+            name: Some("@iso/countries".to_string()),
+            dependency: Some("@iso/countries".to_string()),
             start_line: 1,
             source_type: Some(crate::parsing::source::SourceType::Volatile),
         })
     }
 
-    fn finance_slice_2024() -> Arc<LemmaSpec> {
-        let mut s = LemmaSpec::new("finance".to_string());
+    fn alpha2_slice_2024() -> Arc<LemmaSpec> {
+        let mut s = LemmaSpec::new("alpha2".to_string());
         s.effective_from = EffectiveDate::from_option(Some(date(2024, 1, 1)));
         Arc::new(s)
     }
 
-    fn consumer_alias_from_finance() -> LemmaSpec {
+    fn consumer_alias_from_alpha2() -> LemmaSpec {
         let mut s = LemmaSpec::new("with_alias".to_string());
         s.data.push(LemmaData::new(
-            Reference::local("f".to_string()),
+            Reference::local("iso".to_string()),
             AstDataValue::Import(SpecRef {
-                name: "finance".to_string(),
-                repository: Some(RepositoryQualifier::new("@lemma/std")),
+                name: "alpha2".to_string(),
+                repository: Some(RepositoryQualifier::new("@iso/countries")),
                 effective: Some(date(2024, 1, 1)),
                 repository_span: None,
                 target_span: None,
@@ -790,8 +790,10 @@ mod tests {
             Reference::local("y".to_string()),
             AstDataValue::Definition {
                 base: Some(ParentType::Qualified {
-                    spec_alias: "f".into(),
-                    inner: Box::new(ParentType::Custom { name: "z".into() }),
+                    spec_alias: "iso".into(),
+                    inner: Box::new(ParentType::Custom {
+                        name: "code".into(),
+                    }),
                 }),
                 constraints: None,
                 value: None,
@@ -959,11 +961,11 @@ mod tests {
     #[test]
     fn resolve_spec_ref_expands_bare_from_uses_alias() {
         let mut ctx = Context::new();
-        let std_repo = registry_std_repository();
+        let iso_repo = registry_iso_repository();
         let workspace = ctx.workspace();
-        ctx.insert_spec(Arc::clone(&std_repo), finance_slice_2024())
+        ctx.insert_spec(Arc::clone(&iso_repo), alpha2_slice_2024())
             .unwrap();
-        let consumer = Arc::new(consumer_alias_from_finance());
+        let consumer = Arc::new(consumer_alias_from_alpha2());
         ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
             .unwrap();
 
@@ -971,7 +973,7 @@ mod tests {
         let resolved = resolve_spec_ref(
             &ctx,
             &SpecRef {
-                name: "f".into(),
+                name: "iso".into(),
                 repository: None,
                 effective: None,
                 repository_span: None,
@@ -982,9 +984,9 @@ mod tests {
             &effective,
             None,
         )
-        .expect("finance via uses alias");
+        .expect("alpha2 via uses alias");
 
-        assert_eq!(resolved.1.name, "finance");
+        assert_eq!(resolved.1.name, "alpha2");
     }
 
     #[test]
@@ -1092,11 +1094,11 @@ mod tests {
 
     #[test]
     fn resolve_spec_ref_rejects_effective_on_bare_from_uses_alias() {
-        let consumer = Arc::new(consumer_alias_from_finance());
+        let consumer = Arc::new(consumer_alias_from_alpha2());
         let mut ctx = Context::new();
-        let std_repo = registry_std_repository();
+        let iso_repo = registry_iso_repository();
         let workspace = ctx.workspace();
-        ctx.insert_spec(Arc::clone(&std_repo), finance_slice_2024())
+        ctx.insert_spec(Arc::clone(&iso_repo), alpha2_slice_2024())
             .unwrap();
         ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
             .unwrap();
@@ -1105,7 +1107,7 @@ mod tests {
         let err = resolve_spec_ref(
             &ctx,
             &SpecRef {
-                name: "f".into(),
+                name: "iso".into(),
                 repository: None,
                 effective: Some(date(2026, 1, 1)),
                 repository_span: None,
@@ -1125,11 +1127,11 @@ mod tests {
     #[test]
     fn dependency_edges_from_uses_alias_has_registry_qualifier() {
         let mut ctx = Context::new();
-        let std_repo = registry_std_repository();
+        let iso_repo = registry_iso_repository();
         let workspace = ctx.workspace();
-        ctx.insert_spec(Arc::clone(&std_repo), finance_slice_2024())
+        ctx.insert_spec(Arc::clone(&iso_repo), alpha2_slice_2024())
             .unwrap();
-        let consumer = Arc::new(consumer_alias_from_finance());
+        let consumer = Arc::new(consumer_alias_from_alpha2());
         ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
             .unwrap();
 
@@ -1137,14 +1139,14 @@ mod tests {
         let from_y = edges
             .iter()
             .find(|e| {
-                e.dep_name == "finance"
+                e.dep_name == "alpha2"
                     && e.explicit_repository_qualifier
                         .as_ref()
-                        .is_some_and(|q| q.name == "@lemma/std")
+                        .is_some_and(|q| q.name == "@iso/countries")
                     && e.source == consumer.data[1].source_location
             })
             .expect("edge from data y binding");
-        assert_eq!(from_y.dep_name, "finance");
+        assert_eq!(from_y.dep_name, "alpha2");
     }
 
     #[test]

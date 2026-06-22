@@ -98,22 +98,30 @@ Specs published on [LemmaBase.com](https://lemmabase.com) can be imported into y
 ```lemma
 spec invoicing
 """
-Invoice lines using a shared finance library from LemmaBase.
+Invoice lines using ISO country codes from LemmaBase.
 """
 
-uses fin: @lemma/std finance 2026-01-01
+uses lemma units
 
-data subtotal: 250 eur
+uses iso: @iso/countries alpha2 2026-01-01
 
-rule tax_amount: subtotal * fin.tax_rate
+data price: quantity
+  -> unit eur 1
+
+data country: iso.code
+
+rule tariff: 0 eur
+  unless country is "NL" then price * 5%
+
+rule total: price + tariff
 ```
 
 Forms:
 - `uses @user/repo spec_name` — import a registry spec (implicit alias = spec name)
-- `uses alias: @user/repo spec_name` — import with alias (`fin.field`, `fin.rule_name`)
+- `uses alias: @user/repo spec_name` — import with alias (`iso.field`, `iso.rule_name`)
 - `uses @user/repo spec_name 2026-01-01` — pin to an effective date
 
-Reference imported members through the alias: `fin.tax_rate`, `fin.Money`, etc. See [Registry](https://github.com/lemma/lemma/blob/main/documentation/registry.md) for fetch/resolution details.
+Reference imported members through the alias: `iso.code`, `iso.name`, etc. See [Registry](https://github.com/lemma/lemma/blob/main/documentation/registry.md) for fetch/resolution details.
 
 `repo` blocks namespace specs across bounded contexts (e.g. `repo accounting` / `repo billing`). Skip them in LLM-authored output unless the user asks. See [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/spec_composability.md) for cross-repo `uses` and temporal pins.
 
@@ -216,16 +224,22 @@ data has_loyalty_card: boolean
 
 Input slot:
 ```lemma
+spec intake
+
 data customer_age: number -> minimum 0 -> maximum 120
 ```
 
 Fixed policy constant:
 ```lemma
+spec fiscal_policy
+
 data tax_rate: 21%
 ```
 
 Text enumeration:
 ```lemma
+spec membership
+
 data status: text
   -> option "active"
   -> option "inactive"
@@ -233,11 +247,17 @@ data status: text
 
 Typed alias:
 ```lemma
+spec accounts
+
+data money: quantity -> unit eur 1.00
+
 data wallet: money -> minimum 0 eur
 ```
 
 With help text:
 ```lemma
+spec payroll
+
 data pay_period: text
   -> option "month"
   -> option "week"
@@ -310,15 +330,16 @@ rule span_years: (1990-05-20...2024-06-15) as years
 
 At the upper bound, `in` is false: `67 years` is not inside `18 years...67 years`. Declare range slots on `data` when a band is reused; use inline `value in lo...hi` for one-off checks.
 
-Quantity range with a custom unit family (no SI import needed for the band type):
+Range over a custom quantity type (no SI import needed):
 
 ```lemma
+spec freight
+
 data weight: quantity
   -> unit gram 1
   -> unit kilogram 1000
 
-data load_band: quantity range
-  -> unit kilogram 1
+data load_band: weight range
   -> default 30 kilogram...80 kilogram
 
 rule inside_band: 45 kilogram in load_band
@@ -375,6 +396,11 @@ Use **snake_case** rule names. Boolean rules read as predicates: `is_eligible`, 
 **Example F — overlapping unless (last wins)**
 
 ```lemma
+spec vip_discount
+
+data quantity: number
+data is_vip:   boolean
+
 rule discount: 0%
   unless quantity >= 10  then 10%
   unless quantity >= 50  then 20%
@@ -517,6 +543,10 @@ Place veto unless clauses **last** so they override other branches.
 **Example I — enumeration with default veto**
 
 ```lemma
+spec choice_mapping
+
+data choice_field: number
+
 rule selected: veto
   unless choice_field is 1 then true
   unless choice_field is 2 then false
@@ -528,6 +558,15 @@ Default `veto` means cannot answer for unlisted values. Each `unless` maps a kno
 **Example J — veto lookup + propagation**
 
 ```lemma
+spec coffee_pricing
+
+data money: quantity
+  -> unit eur 1.00
+  -> decimals 2
+
+data product: text
+data size:    text
+
 rule base_price: veto "Unknown type of coffee"
   unless product is "espresso"   then 2.5 eur
   unless product is "latte"      then 3.5 eur
@@ -547,13 +586,22 @@ If `base_price` vetoes, `price_per_cup` vetoes too because it needs that value.
 **Example K — veto vs boolean**
 
 WRONG — veto for a business decision:
-```lemma
+```lemma-skip
 rule can_checkout: veto
   unless fee <= 10 eur then true
 ```
 
 RIGHT — veto for invalid input, boolean for business logic:
 ```lemma
+spec checkout_policy
+
+data money: quantity
+  -> unit eur 1.00
+  -> decimals 2
+
+data customer_age: number
+data fee:          money
+
 rule age_validation:
   true
   unless customer_age < 18  then veto "Customer must be 18 or older"
@@ -567,6 +615,11 @@ rule can_checkout: yes
 **Example L — veto propagation with unless fallback**
 
 ```lemma
+spec scoring
+
+data score:       number
+data use_default: boolean
+
 rule validated_score: score
   unless score < 0 then veto "Invalid score"
 
@@ -594,7 +647,7 @@ If `validated_score` vetoes but `use_default` is true, `result = 50` because the
 **Anti-patterns**
 
 Inline comments (WRONG — `#` is not comment syntax; this fails to parse):
-```lemma
+```lemma-skip
 data customer_age: number -> minimum 0 -> maximum 120  # input slot
 data tax_rate: 21%  # fixed policy constant
 rule discount: 0%  # default: no discount
@@ -602,7 +655,7 @@ rule discount: 0%  # default: no discount
 ```
 
 Commentary after `uses` (WRONG — a frequent LLM mistake; fails to parse):
-```lemma
+```lemma-skip
 spec wholesale_nuts_pricing
 uses lemma units
 """
@@ -614,7 +667,7 @@ data base_price: number
 ```
 
 Commentary after `data` (WRONG — also fails to parse):
-```lemma
+```lemma-skip
 spec pricing
 
 data quantity: number
@@ -647,13 +700,14 @@ Customer age is an input; tax_rate is a fixed policy constant.
 
 data customer_age: number -> minimum 0 -> maximum 120
 data tax_rate: 21%
+data quantity: number
 
 rule discount: 0%
   unless quantity >= 10 then 10%
 ```
 
 Mega-rule (WRONG):
-```lemma
+```lemma-skip
 rule final_total:
   base_price * quantity
   - base_price * quantity * (0% unless quantity >= 10 then 10% unless is_premium then 20%)
@@ -662,6 +716,11 @@ rule final_total:
 
 Decomposed pipeline (RIGHT):
 ```lemma
+spec order_pricing
+
+data base_price: number -> minimum 0
+data quantity:   number -> minimum 0
+
 rule subtotal:             base_price * quantity
 rule discount_percentage:  0% unless quantity >= 10 then 10%
 rule discount_amount:      subtotal * discount_percentage
@@ -671,18 +730,20 @@ rule final_total:          total_after_discount + shipping_cost
 ```
 
 Hardcoded input (WRONG):
-```lemma
+```lemma-skip
 rule discount: 10 * 0.1
 ```
 
 Input as data (RIGHT):
 ```lemma
+spec bulk_discount
+
 data quantity: number -> minimum 0
 rule discount: quantity * 0.1
 ```
 
 Wrong unless order (WRONG — VIP gets 20%, not 25%):
-```lemma
+```lemma-skip
 rule discount: 0%
   unless is_vip          then 25%
   unless quantity >= 50  then 20%
@@ -690,35 +751,50 @@ rule discount: 0%
 
 Correct order (RIGHT):
 ```lemma
+spec tiered_discount
+
+data quantity: number
+data is_vip:   boolean
+
 rule discount: 0%
   unless quantity >= 50  then 20%
   unless is_vip          then 25%
 ```
 
 Placeholder (WRONG):
-```lemma
+```lemma-skip
 data customer_name: "TODO"
 ```
 
 Type-only input (RIGHT):
 ```lemma
+spec customer_record
+
 data customer_name: text
 ```
 
 Error vs Veto: `5 and "text"` is a **planning Error** (invalid Lemma). `unless age > 120 then veto "Invalid age"` is a runtime **Veto** (valid spec, domain no-value). Do not confuse them.
 
 Unnecessary repo (WRONG):
-```lemma
+```lemma-skip
 repo default
 
 spec pricing
-...
+
+data quantity: number
+
+rule discount: 0%
+  unless quantity >= 10 then 10%
 ```
 
 Single-file spec (RIGHT):
 ```lemma
 spec pricing
-...
+
+data quantity: number
+
+rule discount: 0%
+  unless quantity >= 10 then 10%
 ```
 
 ---

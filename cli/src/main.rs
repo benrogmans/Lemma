@@ -43,7 +43,7 @@ enum Commands {
     ///   lemma run calculator income=85000
     ///   lemma run --prefix tax.lemma calculator income=85000
     ///   lemma run --prefix ./project calculator income=85000
-    ///   lemma run @lemma/std finance
+    ///   lemma run @iso/countries alpha2
     Run {
         /// [repo] [spec] [name=value ...] — optional repository qualifier (e.g. `@org/pkg`), then spec name
         args: Vec<String>,
@@ -71,9 +71,9 @@ enum Commands {
     /// Examples:
     ///   lemma schema --prefix tax.lemma
     ///   lemma schema calculator
-    ///   lemma schema '@lemma/std' finance
+    ///   lemma schema '@iso/countries' alpha2
     Schema {
-        /// Repository qualifier (e.g. `@lemma/std`)
+        /// Repository qualifier (e.g. `@iso/countries`)
         repo: Option<String>,
         /// Spec name
         spec: Option<String>,

@@ -2,6 +2,25 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `cli-v{version}` (for example `cli-v0.8.5`). Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest `cli-v*` tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.20] - 2026-06-19
+
+0.8.20 CI-gates every ```lemma fence in the repo and adds offline registry fixtures for tests.
+
+### Added
+
+- **`documentation_fences` integration test**: parses, loads, and runs every ```lemma fence in repo `*.md` / `*.txt` files.
+- **`LemmaBase::test()` / `with_fixture_dir`**: offline registry backed by bundled fixtures in `engine/tests/registry_fixtures/` (no network).
+- **`lemma lsp` in CLI docs**: documents the language server command.
+
+### Changed
+
+- **Documentation overhaul**: registry examples and test fixtures migrated from `@lemma/std` to `@iso/countries`; embedded stdlib remains `uses lemma units`.
+- **README direction**: inversion listed as planned work rather than already exposed.
+
+### Removed
+
+- **Internal plan documents** under `documentation/plans/` (5 files).
+
 ## [0.8.19] - 2026-06-11
 
 0.8.19 fixes registry resolution and quantity planning/materialization bugs; removes a redundant SDK method.
@@ -88,8 +107,19 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 0.8.16 makes unit math smarter and the API simpler. Quantity arithmetic now flows across types — `rule wage: rate * hours` resolves to a money amount on its own — and every quantity or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (years, months) are now ordinary quantity units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
 
 ```lemma
+spec employment_contract
+
+data salary: quantity 
+  -> unit eur 1
+
+rule net: salary * 1.3
+
+
+spec employment
+
 uses contract: employment_contract
 with contract.salary: 5000 eur
+
 rule net_salary: contract.net
 ```
 
@@ -136,7 +166,7 @@ rule net_salary: contract.net
 
 - **Per-quantity-type unit normalisation removed**: the engine no longer rescales a quantity's natural-factor units to a per-type canonical at planning. Stored magnitudes follow the unit declarations as written; cross-type arithmetic combines natural factors directly, so `1 ce_per_minute * 1 minute` now lands on `1 ce` rather than going through an opaque per-type scale. Specs that relied on hidden rescaling for derived types lacking a factor-1 unit must add one (e.g. declare the canonical base unit explicitly) so that result magnitudes remain anchored to a known unit. No user-visible value change for specs whose canonical unit was already factor 1.
 - **Case-insensitive logical identifiers**: spec, data, rule, unit, and repo names are canonicalised to lowercase at parse. `repo` blocks that differ only by case are merged. API surfaces (spec lookup, data override keys, `rule_result_units` keys) lowercase inputs at the boundary; internal `eq_ignore_ascii_case` lookups are replaced with exact match on canonical names. The formatter emits identifiers in lowercase.
-- Test registry references and the `12_registry_references` integration example modernised to `uses lemma units` plus reformatted `uses @lemma/std finance` blocks.
+- Test registry references and the `12_registry_references` integration example modernised to `uses lemma units` plus reformatted `uses @iso/countries alpha2` blocks.
 - Quality CI workflow declares an explicit `contents: read` permission.
 
 ### Fixed

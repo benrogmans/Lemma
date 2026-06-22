@@ -65,8 +65,8 @@ mod tests {
     fn dependency_cache_file_resolves_under_lemma_deps() {
         let root = Path::new("/tmp/workspace");
         assert_eq!(
-            dependency_cache_file(root, "@lemma/std"),
-            root.join("lemma_deps").join("@lemma").join("std.lemma"),
+            dependency_cache_file(root, "@iso/countries"),
+            root.join("lemma_deps").join("@iso").join("countries.lemma"),
         );
         assert_eq!(
             dependency_cache_file(root, "@org/project/bundle"),
@@ -80,10 +80,10 @@ mod tests {
     #[test]
     fn dependency_identifier_round_trips_through_lemma_deps() {
         let root = Path::new("/tmp/workspace");
-        let dep_file = dependency_cache_file(root, "@lemma/std");
+        let dep_file = dependency_cache_file(root, "@iso/countries");
         assert_eq!(
             dependency_identifier_from_dependency_path(root, &dep_file),
-            "@lemma/std",
+            "@iso/countries",
         );
     }
 }

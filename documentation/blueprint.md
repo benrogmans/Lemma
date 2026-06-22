@@ -41,7 +41,7 @@ These are the outcomes Lemma is designed to enable—not a feature checklist, bu
 
 ### 1.6 Analysis beyond forward evaluation (direction)
 
-- **As an analyst**, I want to ask **constraint-style** questions (e.g. what inputs would satisfy a target outcome) where the engine supports it, complementing forward rule evaluation—aligned with Lemma's ongoing **inversion** and **explainability** direction (see [README](../README.md) "Direction").
+- **As an analyst**, I want to ask **constraint-style** questions (e.g. what inputs would satisfy a target outcome), complementing forward rule evaluation—part of Lemma's planned **inversion** direction (see [README](../README.md) "Direction"). Forward **explanations** are available today.
 
 ---
 
@@ -96,7 +96,7 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
   **Example (coverage vs interface):** Suppose `app` is effective from **2025-01-01** and references `dep`:
 
-  ```lemma
+  ```lemma-skip
   spec app 2025-01-01
 
   uses d: dep
@@ -143,8 +143,8 @@ When the consumer uses **unqualified** spec or type references, planning may see
 
 ### 2.7 Implementation stack (codebase)
 
-- **Core engine (Rust):** parsing, planning, evaluation, formatting, serialization, **inversion** APIs, WASM surface.
-- **CLI:** `run`, `schema`, `list`, `fetch`, `format`, `server`, `mcp`, etc. ([CLI.md](CLI.md)).
+- **Core engine (Rust):** parsing, planning, evaluation, formatting, serialization, WASM surface.
+- **CLI:** `run`, `schema`, `list`, `fetch`, `format`, `server`, `mcp`, `lsp`, etc. ([CLI.md](CLI.md)).
 - **OpenAPI** for HTTP evaluation and discovery.
 - **LSP** for diagnostics, formatting, and workspace-aware validation.
 - **npm / WASM** package for browser and Node ([wasm.md](wasm.md)).
@@ -157,7 +157,7 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 
 ### 3.1 Language: data and rules
 
-- **Data** with literals or **type annotations** only (`data x: type`).
+- **Data** with a literal value or a type (with optional `->` constraints); see [reference.md -- Data](reference.md#data).
 - **Rules** as expressions; **rule references** and **data references** unified by name resolution.
 - **`unless` / `then`** chains with **last matching wins**.
 - **`veto`** and optional veto messages for domain-level failure.
@@ -210,9 +210,9 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 - **Veto** as first-class outcome with propagation rules documented under [veto_semantics.md](veto_semantics.md).
 - **Explanations** (operation traces) when requested (`-x` / API flags as supported).
 
-### 3.9 Inversion (constraint solving)
+### 3.9 Inversion (direction)
 
-- Engine exposes **inversion** (`invert`, `Target`, `Domain`, `InversionResponse`—see `lemma` crate and Hex `Lemma.invert/3`). Supported expression shapes return candidate inputs; unsupported shapes error clearly. End-user guides and CLI coverage are still limited.
+- **Inversion** (constraint-style "what inputs satisfy this outcome?") is planned. An experimental API (`Engine::invert`, Hex `Lemma.invert/3`) shipped earlier but was removed in 0.8.17 as unfinished; it will return in a future release (see [CHANGELOG](../CHANGELOG.md)).
 
 ### 3.10 Formatting
 
@@ -221,9 +221,10 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 ### 3.11 CLI
 
 - **run** with data, rule filters, JSON output, interactive mode, effective time.
-- **schema**, **list** (including `lemma list lemma` for embedded stdlib), **fetch** (registry deps), **format**, **mcp**.
+- **schema**, **list** (including `lemma list lemma` for embedded stdlib), **fetch** (registry deps), **format**.
 - **server** with OpenAPI, docs route, watch mode.
 - **mcp** for assistant integration.
+- **lsp** for editor language support (built into the `lemma` binary).
 
 ### 3.12 Embeddings
 
@@ -239,7 +240,7 @@ This section is the **extensive** inventory of capabilities—language, engine, 
 
 ### 3.14 Direction (not exhaustive; see README)
 
-- Deeper **inversion** coverage and UX.
+- **Inversion** (constraint solving) returning as a supported API.
 - **Tables** as a first-class type for data-heavy rules.
 - **Performance** work to stay competitive with hand-tuned code paths.
 

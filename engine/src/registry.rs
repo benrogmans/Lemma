@@ -15,6 +15,9 @@ use std::fmt;
 use std::sync::Arc;
 
 #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+use std::path::{Path, PathBuf};
+
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 use {
     crate::engine::Context,
     crate::error::Error,
@@ -202,6 +205,90 @@ impl HttpFetcher for WasmHttpFetcher {
 
 // ---------------------------------------------------------------------------
 
+/// Parse `{base}/{identifier}.lemma` URLs into registry identifiers (e.g. `@iso/countries`).
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+fn registry_identifier_from_source_url(url: &str) -> Option<String> {
+    let without_suffix = url.strip_suffix(".lemma")?;
+    let path = without_suffix
+        .split_once("://")
+        .map_or(without_suffix, |(_, rest)| {
+            rest.split_once('/').map_or(rest, |(_, p)| p)
+        });
+    if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    }
+}
+
+/// Serves registry bundles from a `lemma_deps/`-shaped fixture directory (no network).
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+struct FixtureDirFetcher {
+    fixtures: std::collections::HashMap<String, String>,
+}
+
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+impl FixtureDirFetcher {
+    fn from_dir(dir: &Path) -> Self {
+        let mut fixtures = std::collections::HashMap::new();
+        collect_fixture_files(dir, dir, &mut fixtures);
+        Self { fixtures }
+    }
+}
+
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+fn collect_fixture_files(
+    dir: &Path,
+    base: &Path,
+    fixtures: &mut std::collections::HashMap<String, String>,
+) {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("BUG: read fixture dir {}: {e}", dir.display()));
+    for entry in entries {
+        let entry =
+            entry.unwrap_or_else(|e| panic!("BUG: fixture dir entry in {}: {e}", dir.display()));
+        let path = entry.path();
+        if path.is_dir() {
+            collect_fixture_files(&path, base, fixtures);
+            continue;
+        }
+        if path.extension().is_none_or(|e| e != "lemma") {
+            continue;
+        }
+        let relative = path
+            .strip_prefix(base)
+            .unwrap_or_else(|_| panic!("BUG: fixture path not under base: {}", path.display()));
+        let identifier = relative
+            .with_extension("")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("BUG: read fixture {}: {e}", path.display()));
+        fixtures.insert(identifier, content);
+    }
+}
+
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
+#[async_trait::async_trait]
+impl HttpFetcher for FixtureDirFetcher {
+    async fn get(&self, url: &str) -> Result<String, HttpFetchError> {
+        let identifier =
+            registry_identifier_from_source_url(url).ok_or_else(|| HttpFetchError {
+                status_code: None,
+                message: format!("fixture URL must end with .lemma: {url}"),
+            })?;
+        self.fixtures
+            .get(&identifier)
+            .cloned()
+            .ok_or_else(|| HttpFetchError {
+                status_code: Some(404),
+                message: format!("no fixture for \"{identifier}\" (url {url})"),
+            })
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 /// The LemmaBase registry fetches Lemma source text from LemmaBase.
 ///
 /// This is the default registry for the Lemma engine. It resolves `@...` identifiers
@@ -241,7 +328,30 @@ impl LemmaBase {
         }
     }
 
-    /// Create a LemmaBase registry with a custom HTTP fetcher (for testing).
+    /// Offline registry backed by [`Self::test_fixtures_dir`] (no network).
+    ///
+    /// Integration tests and local runs use bundled fixtures under
+    /// `engine/tests/registry_fixtures/` (`@iso/countries`, …).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn test() -> Self {
+        Self::with_fixture_dir(Self::test_fixtures_dir())
+    }
+
+    /// Directory of bundled registry fixtures shipped with `lemma-engine`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn test_fixtures_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/registry_fixtures")
+    }
+
+    /// Offline registry reading `lemma_deps/`-shaped `.lemma` files from `dir`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_fixture_dir(dir: impl AsRef<Path>) -> Self {
+        Self {
+            fetcher: Box::new(FixtureDirFetcher::from_dir(dir.as_ref())),
+        }
+    }
+
+    /// Create a LemmaBase registry with a custom HTTP fetcher (for unit tests in this crate).
     #[cfg(test)]
     fn with_fetcher(fetcher: Box<dyn HttpFetcher>) -> Self {
         Self { fetcher }
@@ -956,8 +1066,8 @@ uses external: @org/project missing"#;
     async fn resolve_returns_all_registry_errors_when_multiple_repositorys_fail() {
         let local_source = r#"spec main_spec
 uses @org/example helper
-uses @lemma/std finance
-data money: finance.money"#;
+uses @iso/countries alpha2
+data country: alpha2.code"#;
         let local_specs = crate::parse(
             local_source,
             crate::parsing::source::SourceType::Volatile,
@@ -1003,7 +1113,7 @@ data money: finance.money"#;
             identifiers
         );
         assert!(
-            identifiers.contains(&"@lemma/std"),
+            identifiers.contains(&"@iso/countries"),
             "Should include data import repository error: {:?}",
             identifiers
         );
@@ -1058,9 +1168,9 @@ data value: 1"#,
     #[tokio::test]
     async fn resolve_handles_data_import_from_registry() {
         let local_source = r#"spec main_spec
-uses @lemma/std finance
-data money: finance.money
-data price: money"#;
+uses @iso/countries alpha2
+data country: alpha2.code
+data home: country"#;
         let local_specs = crate::parse(
             local_source,
             crate::parsing::source::SourceType::Volatile,
@@ -1084,13 +1194,11 @@ data price: money"#;
 
         let mut registry = TestRegistry::new();
         registry.add_spec_bundle(
-            "@lemma/std",
-            r#"repo @lemma/std
-spec finance
-data money: quantity
- -> unit eur 1.00
- -> unit usd 0.91
- -> decimals 2"#,
+            "@iso/countries",
+            r#"repo @iso/countries
+spec alpha2
+data code: text
+ -> option "NL""#,
         );
 
         resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
@@ -1100,7 +1208,7 @@ data money: quantity
         assert_eq!(store.len(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
-        assert!(names.iter().any(|n| n == "finance"));
+        assert!(names.iter().any(|n| n == "alpha2"));
         assert!(names.iter().any(|n| n == "units"));
     }
 
@@ -1295,16 +1403,23 @@ data money: quantity
         #[test]
         fn url_for_id_returns_navigation_url_for_nested_path() {
             let registry = LemmaBase::new();
-            let url = registry.url_for_id("@lemma/std/finance", None);
+            let url = registry.url_for_id("@iso/countries/alpha2", None);
             assert_eq!(
                 url,
-                Some(format!("{}/@lemma/std/finance", LemmaBase::BASE_URL))
+                Some(format!("{}/@iso/countries/alpha2", LemmaBase::BASE_URL))
             );
         }
 
         // -------------------------------------------------------------------
         // fetch_source tests (mock-based, no real HTTP calls)
         // -------------------------------------------------------------------
+
+        #[tokio::test]
+        async fn test_mode_serves_bundled_fixtures() {
+            let registry = LemmaBase::test();
+            let iso = registry.get("@iso/countries").await.unwrap();
+            assert!(iso.lemma_source.contains("spec alpha2"));
+        }
 
         #[tokio::test]
         async fn fetch_source_returns_bundle_on_success() {

@@ -63,7 +63,7 @@ pub enum Error {
     /// qualifier that has not been added to the workspace.
     MissingRepository {
         details: Box<ErrorDetails>,
-        /// Full repository qualifier as written (e.g. `"@lemma/std"`).
+        /// Full repository qualifier as written (e.g. `"@iso/countries"`).
         repository: String,
     },
 

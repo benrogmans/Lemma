@@ -130,7 +130,7 @@ Specs that reference `uses … @org/pkg` need that package available. `fetch` on
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
-const { source, id } = await engine.fetch('@lemma/std');
+const { source, id } = await engine.fetch('@iso/countries');
 await engine.load_batch({ '': source }, id);
 await engine.load(sourceThatUsesStd, 'app.lemma');
 ```

@@ -60,60 +60,61 @@ fn wasm_style_instants() -> [DateTimeValue; 4] {
 fn dependency_batch_get_plan_and_schema_via_repo_qualifier() {
     let mut engine = Engine::new();
     let bundle = r#"
-spec finance
-data money: ratio -> decimals 2
+spec alpha2
+data code: text
+  -> option "NL"
 
 spec cashier
-uses F: finance
-with F.money: 10%
-rule total: F.money
+uses C: alpha2
+with C.code: "NL"
+rule country: C.code
 "#;
     engine
         .load_batch(
             HashMap::from([(SourceType::Volatile, bundle.to_string())]),
-            Some("@lemma/std"),
+            Some("@iso/countries"),
         )
         .expect("dependency-tag load_batch should parse and plan");
 
     for instant in wasm_style_instants() {
         let plan = engine
-            .get_plan(Some("@lemma/std"), "cashier", Some(&instant))
+            .get_plan(Some("@iso/countries"), "cashier", Some(&instant))
             .expect("get_plan(Some(dep), cashier) mirrors wasm.schema with repository set");
         let _ = plan.schema(&lemma::DataOverlay::default());
 
         engine
-            .schema(Some("@lemma/std"), "cashier", Some(&instant))
+            .schema(Some("@iso/countries"), "cashier", Some(&instant))
             .expect("Engine::schema same path as WasmEngine.schema");
         engine
-            .schema(Some("@lemma/std"), "finance", Some(&instant))
-            .expect("finance exposes schema inside dependency-qualified repository");
+            .schema(Some("@iso/countries"), "alpha2", Some(&instant))
+            .expect("alpha2 exposes schema inside dependency-qualified repository");
     }
 }
 
 #[test]
-fn workspace_consumer_after_dependency_batch_resolves_money_type() {
+fn workspace_consumer_after_dependency_batch_resolves_country_type() {
     let mut engine = Engine::new();
     engine
         .load_batch(
             HashMap::from([(
-                path_source("deps/stdlib.lemma"),
-                r#"spec finance
-data money: quantity
-  -> unit eur 1
-  -> decimals 2
+                path_source("deps/countries.lemma"),
+                r#"spec alpha2
+data code: text
+  -> option "NL"
+  -> option "BE"
 "#
                 .to_string(),
             )]),
-            Some("@lemma/std"),
+            Some("@iso/countries"),
         )
-        .expect("registry dependency bundle loads under @lemma/std");
+        .expect("registry dependency bundle loads under @iso/countries");
 
     engine
         .load(
             r#"spec kiosk
-uses @lemma/std finance
-data drawer: finance.money
-rule tally: drawer
+uses @iso/countries alpha2
+data country: alpha2.code
+rule tally: country
 "#,
             path_source("kiosk.lemma"),
         )

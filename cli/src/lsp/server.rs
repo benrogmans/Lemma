@@ -444,7 +444,7 @@ fn spec_ref_hit_range(spec_ref: &SpecRef, text: &str, position: Position) -> Opt
 }
 
 /// Return one LSP `Range` covering the full `uses` reference from the qualifier
-/// (e.g. `@lemma/std` or `lemma`) through the target span (`finance 2026-01-01`,
+/// (e.g. `@iso/countries` or `lemma`) through the target span (`alpha2 2026-01-01`,
 /// `units`). Used by `document_link` so the entire reference is a single clickable
 /// region, instead of two separate hot spots on `repository_span` and
 /// `target_span`. Falls back to whichever span is present if one is missing.
@@ -875,7 +875,7 @@ mod tests {
     fn hover_on_registry_ref_emits_only_repository_lemmabase_link() {
         let workspace = test_workspace();
         let workspace_root = workspace.as_path();
-        let source = "spec consumer\nuses @lemma/std finance\n";
+        let source = "spec consumer\nuses @iso/countries alpha2\n";
 
         let parse_result = lemma::parse(
             source,
@@ -899,9 +899,12 @@ mod tests {
             })
             .expect("consumer must contain a uses import");
         let repo_qual = spec_ref.repository.as_ref().expect("qualified import");
-        assert!(repo_qual.is_registry(), "@lemma/std must be a registry id");
+        assert!(
+            repo_qual.is_registry(),
+            "@iso/countries must be a registry id"
+        );
         let qualifier_name = repo_qual.name.as_str();
-        assert_eq!(qualifier_name, "@lemma/std");
+        assert_eq!(qualifier_name, "@iso/countries");
 
         let qualifier_span = spec_ref
             .repository_span
@@ -941,7 +944,7 @@ mod tests {
 
         assert_eq!(
             markdown,
-            format!("[Open `@lemma/std` in LemmaBase]({repo_url})"),
+            format!("[Open `@iso/countries` in LemmaBase]({repo_url})"),
         );
         assert_eq!(
             markdown.matches("](").count(),
@@ -967,7 +970,7 @@ mod tests {
             diagnostics::span_to_range(source, qualifier_span.start, target_span.end);
         assert_eq!(
             full, expected_full,
-            "DocumentLink range must cover `@lemma/std finance` as one region",
+            "DocumentLink range must cover `@iso/countries alpha2` as one region",
         );
         assert!(
             full.start.line < full.end.line
@@ -981,19 +984,23 @@ mod tests {
     }
 
     /// End-to-end exercise of the `document_link` body for the canonical user scenario:
-    /// a consumer file with `uses @lemma/std finance 2026-01-01` plus a matching
-    /// `lemma_deps/@lemma/std.lemma` dependency file. Asserts `build_uses_document_link`
-    /// emits exactly one `DocumentLink` whose range spans from the start of `@lemma/std`
-    /// to the end of `finance 2026-01-01` (one clickable region) and whose target is
+    /// a consumer file with `uses @iso/countries alpha2 2026-01-01` plus a matching
+    /// `lemma_deps/@iso/countries.lemma` dependency file. Asserts `build_uses_document_link`
+    /// emits exactly one `DocumentLink` whose range spans from the start of `@iso/countries`
+    /// to the end of `alpha2 2026-01-01` (one clickable region) and whose target is
     /// the on-disk path of the dependency file with a `#L<line>` fragment.
     #[test]
     fn registry_uses_emits_single_unified_document_link() {
         let root = test_workspace();
-        let dep_path = lemma::deps::dependency_cache_file(&root, "@lemma/std");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@iso/countries");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
-        std::fs::write(&dep_path, "spec finance\ndata z: 1\n").expect("write dep");
+        std::fs::write(
+            &dep_path,
+            "spec alpha2\ndata code: text\n -> option \"NL\"\n",
+        )
+        .expect("write dep");
         let consumer_path = root.join("consumer.lemma");
-        let consumer_source = "spec demo\nuses @lemma/std finance 2026-01-01\n".to_string();
+        let consumer_source = "spec demo\nuses @iso/countries alpha2 2026-01-01\n".to_string();
         std::fs::write(&consumer_path, &consumer_source).expect("write consumer");
 
         let mut workspace_model = WorkspaceModel::new();
@@ -1013,8 +1020,8 @@ mod tests {
             "workspace must insert both files cleanly, got: {insert_errors:?}",
         );
         assert!(
-            ctx.find_repository("@lemma/std").is_some(),
-            "ctx must contain @lemma/std after inserting lemma_deps/@lemma/std.lemma",
+            ctx.find_repository("@iso/countries").is_some(),
+            "ctx must contain @iso/countries after inserting lemma_deps/@iso/countries.lemma",
         );
 
         let parse_result = workspace_model
@@ -1050,7 +1057,7 @@ mod tests {
         let link = &links[0];
 
         let qualifier_start = consumer_source
-            .find("@lemma/std")
+            .find("@iso/countries")
             .expect("qualifier present");
         let target_end =
             consumer_source.find("2026-01-01").expect("date present") + "2026-01-01".len();
@@ -1058,7 +1065,7 @@ mod tests {
             diagnostics::span_to_range(&consumer_source, qualifier_start, target_end);
         assert_eq!(
             link.range, expected_range,
-            "DocumentLink range must cover `@lemma/std finance 2026-01-01` as one region",
+            "DocumentLink range must cover `@iso/countries alpha2 2026-01-01` as one region",
         );
 
         let target = link.target.as_ref().expect("link must have a target");
@@ -1066,7 +1073,7 @@ mod tests {
         let target_path = target.to_file_path().expect("target must be a file path");
         assert_eq!(
             target_path, dep_path,
-            "DocumentLink must point at the on-disk lemma_deps/@lemma/std.lemma",
+            "DocumentLink must point at the on-disk lemma_deps/@iso/countries.lemma",
         );
         assert_eq!(
             target.fragment(),

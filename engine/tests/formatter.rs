@@ -397,10 +397,10 @@ fn round_trip_qualified_type_import_with_effective_on_uses() {
 #[test]
 fn round_trip_qualified_type_import_registry_with_effective_on_uses() {
     let source =
-        "spec consumer uses @lemma/std finance 2026-01-15 data money: finance.money data p: money";
+        "spec consumer uses @iso/countries alpha2 2026-01-15 data country: alpha2.code data c: country";
     let formatted = format_source(source, lemma::SourceType::Volatile).unwrap();
     assert!(
-        formatted.contains("finance.money") && formatted.contains("@lemma/std"),
+        formatted.contains("alpha2.code") && formatted.contains("@iso/countries"),
         "expected registry uses + qualified type in formatted output: {}",
         formatted
     );

@@ -1,0 +1,7 @@
+repo @iso/countries
+
+spec alpha2
+
+data code: text
+  -> option "NL"
+  -> option "BE"

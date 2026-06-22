@@ -71,7 +71,7 @@ mod tests {
     #[test]
     fn repository_qualifier_rejected() {
         assert!(parse_spec_set_id("nl/tax pricing").is_err());
-        assert!(parse_spec_set_id("@lemma/std pricing").is_err());
+        assert!(parse_spec_set_id("@iso/countries alpha2").is_err());
     }
 
     #[test]

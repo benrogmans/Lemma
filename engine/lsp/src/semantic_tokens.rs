@@ -349,7 +349,7 @@ mod tests {
     fn repo_keyword_and_qualifier_same_colour() {
         // repo → NAMESPACE, @lemma → NAMESPACE (At + Identifier), / transparent, std → NAMESPACE
         assert_eq!(
-            token_types("repo @lemma/std"),
+            token_types("repo @iso/countries"),
             vec![IDX_NAMESPACE, IDX_NAMESPACE, IDX_NAMESPACE, IDX_NAMESPACE]
         );
     }

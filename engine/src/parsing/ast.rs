@@ -229,7 +229,7 @@ impl Hash for LemmaRepository {
     }
 }
 
-/// Textual repository qualifier as written in source (for example `@lemma/std`).
+/// Textual repository qualifier as written in source (for example `@iso/countries`).
 /// `name` stores the qualifier verbatim, including a leading `@` when present. The planner
 /// resolves a [`RepositoryQualifier`] to an `Arc<LemmaRepository>` against the active context.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]

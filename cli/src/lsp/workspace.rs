@@ -461,13 +461,17 @@ mod tests {
     fn deps_lemma_files_use_registry_identity_like_cli_load_batch() {
         let root = std::env::temp_dir().join("lemma_lsp_deps_workspace_test");
         let _ = std::fs::remove_dir_all(&root);
-        let dep_path = lemma::deps::dependency_cache_file(&root, "@lemma/std");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@iso/countries");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
-        std::fs::write(&dep_path, "spec finance 2024\ndata z: 1\n").expect("write dep");
+        std::fs::write(
+            &dep_path,
+            "spec alpha2 2024\ndata code: text\n -> option \"NL\"\n",
+        )
+        .expect("write dep");
         let main_path = root.join("main.lemma");
         std::fs::write(
             &main_path,
-            "spec demo\nuses fin: @lemma/std finance 2026\nwith fin.z: 1\n",
+            "spec demo\nuses iso: @iso/countries alpha2 2026\nwith iso.code: \"NL\"\n",
         )
         .expect("write main");
 
@@ -502,7 +506,7 @@ mod tests {
     fn inline_registry_repo_spec_keeps_host_file_as_source_type() {
         let root = std::env::temp_dir().join("lemma_lsp_inline_registry_repo_test");
         let _ = std::fs::remove_dir_all(&root);
-        let dep_path = lemma::deps::dependency_cache_file(&root, "@lemma/std");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@iso/countries");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
         let src = "spec consumer\nuses @user/somedep some_spec\ndata x: 1\n\nrepo @user/somedep\nspec some_spec\ndata y: 2\n";
         std::fs::write(&dep_path, src).expect("write dep");
