@@ -92,32 +92,32 @@ Spec names cannot contain a period. Versioning is **temporal only** — multiple
 The same spec **name** may appear several times with different effective datetimes. Each row is immutable; you add a new row on the timeline instead of editing history in place.
 
 ```lemma
-spec pricing
+spec points
 
-data base_price: 100 eur
+data base_points: 100
 
 
-spec pricing 2025-01-01
+spec points 2025-01-01
 
-data base_price: 120 eur
+data base_points: 120
 
 
 spec order
 
-uses p: pricing
+uses p: points
 
-rule total: p.base_price
+rule total: p.base_points
 ```
 
-Evaluating **`order`** before 2025-01-01 uses `base_price: 100`; from 2025-01-01 onward, `120`. See [Composing specs](spec_composability.md) for unpinned vs pinned imports.
+Evaluating **`order`** before 2025-01-01 uses `base_points: 100`; from 2025-01-01 onward, `120`. See [Composing specs](spec_composability.md) for unpinned vs pinned imports.
 
 ### Pinning and evaluation instant
 
 | Mechanism | Syntax | Effect |
 |-----------|--------|--------|
-| **Spec row** | `spec pricing 2025-01-01` | Declares a body effective from that datetime |
+| **Spec row** | `spec points 2025-01-01` | Declares a body effective from that datetime |
 | **Pinned import** | `uses f: finance 2025-06-01` or `uses f: finance 2025` | Locks the dependency (and its transitive imports) to that instant |
-| **Run instant** | `lemma run pricing --effective 2025-03-01` (CLI) or **Accept-Datetime** (HTTP) | Picks which temporal row of the **root spec** is active |
+| **Run instant** | `lemma run points --effective 2025-03-01` (CLI) or **Accept-Datetime** (HTTP) | Picks which temporal row of the **root spec** is active |
 
 Bare year on a pin (`2025`) means that year's Jan 1 00:00, same as datetime literals.
 
@@ -152,9 +152,9 @@ Registry references use the `@` prefix:
 ```lemma
 spec ledger_spec
 
-uses fin: @lemma/std finance
+uses iso: @iso/countries alpha2
 
-data ledger: fin.Money
+data country: iso.code
 ```
 
 ## Primitive types
@@ -181,6 +181,8 @@ Numbers are stored and computed as **exact rationals** (ℚ); API output is a **
 Ranges express **half-open** intervals: **lower inclusive, upper exclusive**. Containment uses `in`:
 
 ```lemma
+spec membership_bands
+
 uses lemma units
 
 data age:   25 years
@@ -215,6 +217,8 @@ Any **rangeable named quantity type** can also be declared with a `range` suffix
 Declare range slots on `data`:
 
 ```lemma
+spec range_slots
+
 uses lemma units
 
 data band: units.calendar
@@ -230,13 +234,15 @@ data tier: number range
   -> default 0...100
 ```
 
-**Type commands** on range types: `help`, `default`; **`quantity range`** also accepts `unit` rows like `quantity`.
+**Data commands** on range types: `help`, `default`; **`quantity range`** also accepts `unit` rows like `quantity`.
 
 ### Span: `(lo...hi) as <unit>`
 
 Parentheses around a range literal or expression, then **`as`**, yield the **width** of the interval in the target unit (a scalar), not another range:
 
 ```lemma
+spec range_spans
+
 uses lemma units
 
 rule days_between: (2024-06-01...2024-06-15) as days
@@ -260,6 +266,10 @@ rule span_years: (1990-05-20...2024-06-15) as years
 Ranges support comparison and arithmetic consistent with their kind (see engine tests `date_range`, `calendar_range`, `range_generic`):
 
 ```lemma
+spec range_arithmetic
+
+uses lemma units
+
 rule long_enough: 2024-06-01...2024-06-15 >= 7 days
 
 rule shifted: 18 years...67 years + 2 years
@@ -271,34 +281,112 @@ Date endpoints can be built from separate `date` values: `hire_date...today`.
 
 For **trait-duration** quantities, import SI types with `uses lemma units` so literals like `25 years` and `18 years...67 years` resolve (`units.duration`).
 
-## User-Defined Types
+## Data
 
-Data can define custom types with units, constraints, and validation. The `data` keyword is used for both value declarations and type definitions.
+Every input slot and every named type is declared with **`data`**. The right-hand side is either a **literal value** or a **type** (a primitive like `number`, or another data name as parent type). Constraints chain with `->`.
 
-### Data Type Definitions
+### Values
+
+A literal fixes the value; Lemma infers the type:
 
 ```lemma
+spec employment
+
+uses lemma units
+
+data name:       "Alice"
+data age:        35
+data start_date: 2024-01-15
+data tax_rate:   15%
+data is_manager: true
+data workweek:   40 hours
+data salary:     75_000
+```
+
+### Open inputs
+
+Declare a type without a value to request input at evaluation time (`lemma run`, HTTP, `with`). Add constraints on the same declaration:
+
+```lemma
+spec loan_application
+
+data birth_date: date
+
+data rating: number
+  -> minimum 0
+  -> maximum 100
+
+data status: text
+  -> option "active"
+  -> option "inactive"
+
+data amount: quantity
+  -> unit eur 1.00
+  -> unit usd 1.19
+  -> decimals 2
+```
+
+`lemma schema` lists which open inputs a spec requires. Constraints include `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> default`, `-> help`, and more depending on the primitive (see [Data commands](#data-commands) below).
+
+### Named types
+
+When the right-hand side is a primitive or another data name — not a literal — the declaration defines a **named data definition** that other data can extend:
+
+```lemma
+spec warehouse
+
+data mass: quantity
+  -> unit kilogram 1.0
+  -> unit pound 0.453592
+
+data elapsed: quantity
+  -> unit second 1
+  -> unit minute 60
+  -> unit hour 3600
+  -> trait duration
+
+data weight:         mass
+data package_weight: 75 kilogram
+```
+
+`data weight: mass` is an open input whose parent is `mass`. `data package_weight: 75 kilogram` is a value whose parent is inferred as `mass`.
+
+## Extending data
+
+A `data` declaration whose right-hand side is a primitive or another data name can carry `->` constraints. Other data extend it by naming it on the right-hand side.
+
+### Example: money
+
+```lemma
+spec money_type
+
 data money: quantity
   -> unit eur 1.00
   -> unit usd 0.91
   -> decimals 2
-  -> minimum 0
+  -> minimum 0 eur
 ```
 
-Data can also extend other data' types:
+A data declaration can also extend another data name:
 
 ```lemma
+spec extended_types
+
+data money: quantity
+  -> unit eur 1.00
+  -> unit usd 0.91
+
 data price: money
-  -> minimum 0
+  -> minimum 0 eur
 ```
 
-On `quantity` types, `-> unit` **replaces** conversion factors for units already defined on the parent type (same as `ratio`). Add new units with `-> unit` as usual.
+On `quantity` parents, `-> unit` **replaces** conversion factors for units already defined on the parent (same as `ratio`). Add new units with `-> unit` as usual.
 
-### Type Commands
+### Data commands
 
-Built-in primitives ship default `help` text that describes what the value represents (for example, the start and end date of a date range). Literal syntax and examples are shown separately via type examples and the sections below; override with `-> help "…"` when you need spec-specific wording.
+Each `->` row on a `data` declaration is a **data command**. Built-in primitives ship default `help` text that describes what the value represents (for example, the start and end date of a date range). Literal syntax and examples are shown separately in the sections below; override with `-> help "…"` when you need spec-specific wording.
 
-**For `quantity` and `number` types:**
+**For `quantity` and `number`:**
 - `unit <name> <value>` - Define a unit (quantity only)
 - `decimals <n>` - Set decimal precision (0-255)
 - `minimum <value>` - Set minimum value
@@ -306,7 +394,7 @@ Built-in primitives ship default `help` text that describes what the value repre
 - `help "<text>"` - Add help text
 - `default <value>` - Set default value
 
-**For `ratio` type:**
+**For `ratio`:**
 - `unit <name> <value>` - Define custom ratio units
 - `minimum <value>` - Set minimum value
 - `maximum <value>` - Set maximum value
@@ -315,14 +403,14 @@ Built-in primitives ship default `help` text that describes what the value repre
 
 In execution-plan **schema JSON**, `quantity` and `ratio` types expose type-level `minimum` / `maximum` in **canonical** form (same as evaluation). Each `units[]` entry may also include `minimum`, `maximum`, and `default` as magnitudes in that unit (for UI bindings without client-side conversion).
 
-**For `text` type:**
+**For `text`:**
 - `option "<value>"` - Add a single allowed option
 - `options "<value1>" "<value2>" ...` - Add multiple allowed options
 - `length <n>` - Exact string length
 - `help "<text>"` - Add help text
 - `default "<value>"` - Set default value
 
-**For `date` and `time` types:**
+**For `date` and `time`:**
 - `minimum <value>` - Minimum date/time
 - `maximum <value>` - Maximum date/time
 - `help "<text>"` - Add help text
@@ -334,92 +422,64 @@ In execution-plan **schema JSON**, `quantity` and `ratio` types expose type-leve
 
 **For `quantity range` only:** `unit <name> <value>` — same as `quantity` (endpoints must share one unit family).
 
-**For `quantity` types with `-> trait duration` (time periods):**
+**For `quantity` with `-> trait duration` (time periods):**
 - `trait duration` (after canonical `second` unit) — see embedded `spec units` (`uses lemma units`, type `units.duration`)
 - `minimum <value>` / `maximum <value>` / `default <value>` use the same quantity literal rules as other quantities
 
-**For `quantity` types with `-> trait calendar` (calendar periods):**
+**For `quantity` with `-> trait calendar` (calendar periods):**
 - `trait calendar` (after canonical `month` unit) — see `units.calendar` in `uses lemma units`, or `units.calendar` via `uses lemma units`
 - `default <lo>...<hi>` with calendar units specializes the slot to `quantity range` at planning
 
-**For `boolean` type:**
+**For `boolean`:**
 - `help "<text>"` - Add help text
 - `default <value>` - Set default value
 
-### `uses` and qualified parent types
+### `uses` and qualified parents
 
-Bring another spec into scope with `uses <alias>: <target>` (optional effective datetime on the target). Reference a type defined there with a qualified parent: `data x: alias.TypeName`. Temporal pins belong on the `uses` line.
+Bring another spec into scope with `uses <alias>: <target>` (optional effective datetime on the target). Reference data defined there with a qualified parent: `data x: alias.name`. Temporal pins belong on the `uses` line.
 
 ```lemma
+spec base_types
+
+data currency: text
+  -> option "EUR"
+  -> option "USD"
+
+
+spec pricing
+
+data rate: ratio
+  -> maximum 100%
+
+
+spec product_pricing
+
 uses base: base_types
 
 uses rates: pricing
 
-data currency: base.Currency
-data discount_rate: rates.Rate
-  -> maximum 0.5
+data currency: base.currency
+data discount_rate: rates.rate
+  -> maximum 50%
 ```
 
 Pin which temporal version of a dependency applies for that edge:
 
 ```lemma
+spec finance 2026-01-01
+
+data money: quantity
+  -> unit eur 1.00
+
+
+spec accounts
+
 uses fin: finance 2026-01-15
 
-data wallet: fin.Money
+data wallet: fin.money
 ```
 
 These edges participate in temporal slicing: the engine creates slice boundaries when a dependency has multiple temporal versions and the consumer references it without a per-edge pin.
-
-### Inline Type Constraints
-
-Define type constraints directly in data declarations:
-
-```lemma
-data age: number
-  -> minimum 0
-  -> maximum 120
-
-data price: quantity
-  -> unit eur 1.00
-  -> unit usd 0.91
-
-data status: text
-  -> option "active"
-  -> option "inactive"
-```
-
-## Type Annotations
-
-Declare expected types without specifying values:
-
-```lemma
-data mass: quantity
-  -> unit kilogram 1.0
-  -> unit pound 0.453592
-
-data unknown_date:   date
-data optional_field: text
-data user_age:       number
-data is_active:      boolean
-data weight:         mass
-data elapsed: quantity
-  -> unit second 1
-  -> unit minute 60
-  -> unit hour 3600
-  -> trait duration
-```
-
-You can also add inline type constraints:
-
-```lemma
-data age: number
-  -> minimum 0
-  -> maximum 120
-
-data price: quantity
-  -> unit eur 1.00
-  -> decimals 2
-```
 
 ## Setting data on an imported spec (`with`)
 
@@ -443,6 +503,9 @@ rule employee_summary: employee.name
 Read imported data or rules in expressions without `with` when you do not need to override values:
 
 ```lemma
+spec inner
+data x: 1
+
 spec outer
 uses i: inner
 rule r: i.x
@@ -485,20 +548,17 @@ with i.slot: src
 rule r: i.slot
 ```
 
-`data x: someident` (local LHS, non-dotted RHS) declares a slot or parent type; `someident` is a typedef name, not a value copy.
+`data x: someident` (local LHS, non-dotted RHS) declares a slot or parent data name; `someident` names another `data` declaration, not a value copy.
 
 ## Boolean Literals
 
-Multiple aliases for readability:
-
-```lemma
-true = yes = accept
-false = no = reject
-```
+Multiple aliases for readability: `true` = `yes` = `accept` and `false` = `no` = `reject`.
 
 All are interchangeable:
 
 ```lemma
+spec boolean_examples
+
 data is_active:   true
 data is_approved: yes
 data can_proceed: accept
@@ -510,8 +570,13 @@ data can_proceed: accept
 Blocks the rule entirely (no valid result):
 
 ```lemma
+spec veto_example
+
+data value:               number
+data constraint_violated: boolean
+
 rule result: value
-  unless constraint_violated then veto "Error message"
+  unless constraint_violated then veto "Constraint violated"
 ```
 
 Not a boolean - prevents any valid verdict from the rule.
@@ -521,6 +586,8 @@ Not a boolean - prevents any valid verdict from the rule.
 ISO 8601 format:
 
 ```lemma
+spec date_formats
+
 data date_only:     2024-01-15
 data date_time:     2024-01-15T14:30:00Z
 data with_timezone: 2024-01-15T14:30:00+01:00
@@ -535,6 +602,8 @@ Ratio values represent proportions. The `ratio` type includes `percent` and `per
 - `5 permille` or `5%%` — 5 permille (canonical multiplier 0.005)
 
 ```lemma
+spec ratio_literals
+
 data tax_rate:   15%
 data discount:   20%
 data completion: 87.5%
@@ -544,6 +613,8 @@ data error_rate: 2%%
 **Custom ratio types:**
 
 ```lemma
+spec custom_ratios
+
 data discount_ratio: ratio
   -> minimum 0%
   -> maximum 100%
@@ -554,6 +625,11 @@ data discount: 25%
 **Use in calculations:**
 
 ```lemma
+spec ratio_math
+
+data price:         100
+data discount_rate: 20%
+
 rule discount_amount: price * discount_rate
 
 rule after_discount: price * (1 - discount_rate)
@@ -562,5 +638,7 @@ rule after_discount: price * (1 - discount_rate)
 **Number to ratio conversion:**
 
 ```lemma
+spec number_to_ratio
+
 rule discount_as_percent: 0.25 as percent
 ```

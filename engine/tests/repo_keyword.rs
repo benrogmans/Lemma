@@ -222,18 +222,18 @@ fn anonymous_dependency_bundle_does_not_collide_with_workspace_main() {
                 SourceType::Volatile,
                 "spec dep_spec\ndata b: 2\nrule r: b".to_string(),
             )]),
-            Some("@lemma/std"),
+            Some("@iso/countries"),
         )
         .expect("dependency without `repo` uses dependency id as repository name; no (main) clash");
 
     let repos = engine.list();
     let dep_repo = repos.iter().find(|r| {
-        r.repository.name.as_deref() == Some("@lemma/std")
-            && r.repository.dependency.as_deref() == Some("@lemma/std")
+        r.repository.name.as_deref() == Some("@iso/countries")
+            && r.repository.dependency.as_deref() == Some("@iso/countries")
     });
     assert!(
         dep_repo.is_some(),
-        "expected specs from anonymous dep file under repo @lemma/std, got: {:?}",
+        "expected specs from anonymous dep file under repo @iso/countries, got: {:?}",
         repos
             .iter()
             .map(|r| (r.repository.name.clone(), r.repository.dependency.clone()))

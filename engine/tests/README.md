@@ -139,6 +139,7 @@ cargo nextest run -p lemma-engine --tests
 | `integration_comprehensive.rs` | Broad integration scenarios |
 | `integration_examples.rs` | CLI example `.lemma` files |
 | `documentation_examples.rs` | `documentation/examples/` |
+| `documentation_fences.rs` | `` ```lemma `` fences in repo `*.md` / `*.txt` |
 | `coffee_order.rs` | Coffee order example |
 
 ### Registry, WASM, limits
@@ -245,7 +246,7 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 | Spec graph | `nested_spec_references`, `cross_spec_references`, `required_data_names_nested_spec`, `inline_type_imports` |
 | Temporal | `temporal_slicing`, `type_import_temporal`, `temporal_range_references`, `temporal_type_resolver_instant`, `temporal_timezone_ordering`, `temporal_interface_deep_slice`, `temporal_boundary_explosion` |
 | Registry / plan identity | `spec_name_repository_plan_collision`, `repro_finance_dual_slice_registry_uses`, `load_batch_wasm_planning_parity` |
-| Example E2E | `coffee_order`, `documentation_examples`, `integration_examples`, `integration_comprehensive` |
+| Example E2E | `coffee_order`, `documentation_examples`, `documentation_fences`, `integration_examples`, `integration_comprehensive` |
 | Data QA matrix | `data_literals_coverage`, `data_type_declarations_coverage`, `data_binding_type_validation`, `data_with_values_contract`, `data_nested_bindings_coverage`, `data_references` |
 
 ### Regression guards and intentional reds

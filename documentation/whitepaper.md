@@ -98,6 +98,11 @@ Lemma's syntax is designed to mirror how people naturally express business rules
 Lemma encodes this exactly as stated:
 
 ```lemma
+spec shipping_policy
+
+data destination: text
+data order_total: number
+
 rule shipping: 12.99
   unless destination is "CA" then 25
   unless order_total >= 100  then 0
@@ -119,6 +124,8 @@ Lemma is purely declarative. You describe *what* should be true, not *how* to co
 Programming languages typically require verbose type annotations. Lemma infers types from literals while providing a rich type system:
 
 ```lemma
+spec inferred_types
+
 uses lemma units
 
 data mass: quantity
@@ -137,6 +144,8 @@ data tax_rate: 22%
 The type system prevents nonsensical operations (you can't add a date to a weight) while enabling automatic unit conversions within the same type:
 
 ```lemma
+spec weights
+
 data mass: quantity
   -> unit kilogram 1.0
   -> unit pound 0.453592
@@ -178,6 +187,8 @@ This compositional design enables reusable rule libraries and reduces duplicatio
 Data are named values of a certain type. They represent inputs to the system:
 
 ```lemma
+spec employee_record
+
 data name:       "Alice"
 data age:        35
 data start_date: 2024-01-15
@@ -185,9 +196,11 @@ data salary:     75_000
 data is_manager: true
 ```
 
-Data can also be type annotations, declaring expected inputs without values:
+Data without a literal declares an open input — the type and constraints are known, the value is supplied at evaluation:
 
 ```lemma
+spec open_inputs
+
 data birth_date:     date
 data employee_count: number
 data location:       text
@@ -198,6 +211,11 @@ data location:       text
 Rules compute values based on data and other rules. A rule has a name, a default value, and optional "unless" clauses:
 
 ```lemma
+spec order_discount
+
+data quantity: number
+data is_vip:   boolean
+
 rule discount: 0%
   unless quantity >= 10  then 10%
   unless quantity >= 50  then 20%
@@ -207,6 +225,11 @@ rule discount: 0%
 Rules can reference other rules by name (the engine resolves whether a name is a data or a rule during planning):
 
 ```lemma
+spec driving
+
+data age:            number
+data license_status: text
+
 rule is_adult: age >= 18
 
 rule has_license: license_status is "valid"
@@ -219,6 +242,10 @@ rule can_drive: is_adult and has_license
 The "unless" clause is Lemma's primary conditional construct. Unlike if-else chains that stop at the first match, unless clauses use "last matching wins" semantics:
 
 ```lemma
+spec grading
+
+data score: number
+
 rule status: "standard"
   unless score >= 70 then "good"
   unless score >= 90 then "excellent"
@@ -231,6 +258,12 @@ If `score` is 95, the result is "excellent" (not "good"), because the last match
 While "unless" clauses override values, sometimes you need to block a rule entirely. The `veto` keyword does this:
 
 ```lemma
+spec lending
+
+data credit_score:    number
+data age:             number
+data bankruptcy_flag: boolean
+
 rule loan_approval: reject
   unless credit_score >= 600 then accept
   unless age < 18
@@ -248,24 +281,45 @@ Lemma provides comprehensive operators for arithmetic, comparison, logical opera
 **Arithmetic**: `+`, `-`, `*`, `/`, `%`, `^`
 
 ```lemma
+spec interest
+
+data principal: 1_000
+data rate:      0.05
+data years:     10
+
 rule compound: principal * (1 + rate) ^ years
 ```
 
 **Comparison**: `>`, `<`, `>=`, `<=`, `is`, `is not`
 
 ```lemma
+spec eligibility
+
+data age:    number
+data income: number
+
 rule is_eligible: age >= 18 and income > 30_000
 ```
 
 **Logical**: `and`, `not`
 
 ```lemma
+spec approvals
+
+data is_manager:   boolean
+data is_suspended: boolean
+
 rule can_approve: is_manager and not is_suspended
 ```
 
 **Mathematical**: `sqrt`, `sin`, `cos`, `tan`, `log`, `exp`, `abs`, `floor`, `ceil`, `round`
 
 ```lemma
+spec geometry
+
+data a: 3
+data b: 4
+
 rule hypotenuse: sqrt (a ^ 2 + b ^ 2)
 ```
 
@@ -274,6 +328,8 @@ rule hypotenuse: sqrt (a ^ 2 + b ^ 2)
 Lemma intelligently handles arithmetic between different types. When you write:
 
 ```lemma
+spec sale
+
 rule discounted_price: 200 - 25%
 ```
 
@@ -296,6 +352,8 @@ Lemma provides several primitive types:
 - **Ratio**: Proportional values (percent, permille)
 
 ```lemma
+spec primitive_examples
+
 uses lemma units
 
 data count:     42
@@ -308,18 +366,20 @@ data workweek: units.duration
 data tax_rate: 15%
 ```
 
-### 4.2 User-defined types
+### 4.2 Extending data
 
-Lemma allows users to define custom types using the `data` keyword with type commands. This provides flexibility while maintaining type safety.
+Lemma defines reusable data with the `data` keyword and data commands (`-> unit`, `-> minimum`, …). This provides flexibility while maintaining type safety.
 
-**Defining a typed data:**
+**Defining money:**
 
 ```lemma
+spec warehouse_types
+
 data money: quantity
   -> unit eur 1.00
   -> unit usd 1.10
   -> decimals 2
-  -> minimum 0
+  -> minimum 0 eur
 
 data mass: quantity
   -> unit kilogram 1.0
@@ -330,7 +390,7 @@ data price:  100 eur
 data weight: 75 kilogram
 ```
 
-**Type commands** allow fine-grained control:
+**Data commands** allow fine-grained control:
 
 - `unit <name> <value>` - Define units (for `quantity` and `ratio` types)
 - `decimals <n>` - Set decimal precision
@@ -339,28 +399,51 @@ data weight: 75 kilogram
 - `help "<text>"` - Add documentation
 - `default <value>` - Set default values
 
-Data can also extend another data's type:
+Data can also extend another data name:
 
 ```lemma
+spec extended_types
+
+data money: quantity
+  -> unit eur 1.00
+  -> unit usd 1.10
+
 data price: money
-  -> minimum 0
+  -> minimum 0 eur
 ```
 
 **Cross-spec types** — `uses` plus qualified parent types:
 
 ```lemma
+spec base_types
+
+data Currency: text
+  -> option "EUR"
+  -> option "USD"
+
+
+spec rate_card
+
+data Rate: ratio
+  -> maximum 100%
+
+
+spec product_pricing
+
 uses base: base_types
 
-uses rates: pricing
+uses rates: rate_card
 
 data currency: base.Currency
 data discount_rate: rates.Rate
-  -> maximum 0.5
+  -> maximum 50%
 ```
 
 **Inline type constraints** in data declarations:
 
 ```lemma
+spec constrained_inputs
+
 data age: number
   -> minimum 0
   -> maximum 120
@@ -375,6 +458,8 @@ data price: quantity
 Unit conversions work within the same type definition. This ensures type safety while allowing flexible unit systems.
 
 ```lemma
+spec currency_conversion
+
 data money: quantity
   -> unit eur 1.00
   -> unit usd 1.10
@@ -387,6 +472,8 @@ rule price_usd: price as usd
 **Trait-duration quantities** (stdlib `units.duration` or your own `quantity` + `trait duration`) use the same `as` conversion rules as other quantities:
 
 ```lemma
+spec schedule
+
 uses lemma units
 
 data workweek: units.duration
@@ -398,6 +485,8 @@ rule workweek_days: workweek as days
 **Number to ratio conversion:**
 
 ```lemma
+spec number_to_ratio
+
 rule discount_as_percent: 0.25 as percent
 ```
 
@@ -408,6 +497,8 @@ This design eliminates manual conversion logic while maintaining clear type boun
 Ratios represent proportional values. The `ratio` type includes `percent` and `permille` units by default.
 
 ```lemma
+spec ratio_literals
+
 data tax_rate:   15%
 data discount:   25%
 data error_rate: 2%%
@@ -417,6 +508,8 @@ data completion: 87.5%
 **Custom ratio types:**
 
 ```lemma
+spec custom_ratios
+
 data discount_ratio: ratio
   -> minimum 0%
   -> maximum 100%
@@ -536,67 +629,68 @@ Lemma's implementation follows a multi-stage pipeline:
 ```
 .lemma source
     ↓
-[Parser] (Pest grammar)
+[Lexer + Parser] (hand-written)
     ↓
 Abstract Syntax Tree
     ↓
-[Semantic Validator]
+[Planning] (validation, dependency graph, compilation)
     ↓
-Semantic Model
+Execution Plan (register-based instruction streams)
     ↓
-[Pure Rust Evaluator]
+[Virtual Machine]
     ↓
-Typed Values
+Values and Vetoes (+ explanations on demand)
 ```
 
 ### 6.2 Parser
 
-The parser is built using Pest, a parsing expression grammar (PEG) parser generator for Rust. The grammar (`lemma.pest`) defines the complete syntax of Lemma, including:
+The lexer and parser are hand-written Rust, covering:
 
 - Token recognition (numbers, strings, dates, units)
 - Expression parsing with correct operator precedence
 - Spec structure and statements
-- Error recovery and reporting
+- Error reporting with source locations and suggestions
 
 The parser produces an Abstract Syntax Tree (AST) that captures the structure of the source spec.
 
-### 6.3 Semantic validation
+### 6.3 Planning
 
-After parsing, the semantic validator performs several checks:
+After parsing, planning fully validates the spec before any evaluation:
 
 1. **Type Checking**: Ensures operations are performed on compatible types
-2. **Reference Resolution**: Verifies that all data and rule references are valid
-3. **Scope Checking**: Ensures identifiers are used in appropriate scopes
+2. **Reference Resolution**: Verifies that all data, rule, and spec references are valid
+3. **Temporal Resolution**: Resolves effective-dated spec versions, builds temporal slices, and checks coverage and interface compatibility of dependencies
 4. **Circular Dependency Detection**: Identifies and reports circular rule references
+5. **Resource Limits**: Bounds expression count, depth, and instruction-stream size
 
-The validator produces a semantic model that captures the meaning of the spec, independent of its syntactic representation.
+Planning compiles each rule into a register-based instruction stream and produces an immutable **execution plan**. Type mismatches and invalid operations are plan-time errors, never surprise runtime failures: after planning succeeds, evaluation is guaranteed to complete.
 
-### 6.4 Pure Rust Evaluator
+### 6.4 Virtual machine evaluation
 
-The evaluator processes the semantic model directly in Rust, providing fast and deterministic execution without external dependencies.
+A register-based virtual machine executes the compiled instruction streams. Compilation happens once per plan; evaluation dispatches flat instructions over a register file, computing only the requested rules in topological dependency order. One immutable plan serves concurrent requests, with per-request data carried in an overlay.
 
-The evaluator handles:
+The VM handles:
 
 - **Data resolution**: Direct lookup of data and rule references
-- **Rule evaluation**: Recursive evaluation of expressions with proper dependency ordering
-- **Unless clauses**: "Last match wins" semantics implemented through conditional evaluation
+- **Unless clauses**: "Last matching wins" semantics
 - **Unit conversions**: Conversion between units within the same type definition
-- **Type-aware operations**: Automatic type checking and conversion for arithmetic and comparisons
+- **Type-aware operations**: Arithmetic and comparisons across numbers, quantities, ratios, dates, and ranges
 
-Example evaluation:
+Rule results are **values or vetoes**. When explanations are requested, the engine executes a second, source-shaped instruction stream and records what happened (branch decisions, the winning arm, operand values); the explanation is rendered from that recording, so it can never disagree with the result it explains.
+
+Example:
 
 ```lemma
+spec evaluation_example
+
+data quantity: number
+
 rule discount: 0%
   unless quantity >= 10  then 10%
   unless quantity >= 50  then 20%
 ```
 
-The evaluator processes this by:
-1. Evaluating the condition `quantity >= 50`
-2. If true, returning `20%`
-3. Otherwise, evaluating `quantity >= 10`
-4. If true, returning `10%`
-5. Otherwise, returning `0%`
+Semantically, the bottommost matching condition wins: if `quantity >= 50` holds the result is `20%`; otherwise if `quantity >= 10` holds it is `10%`; otherwise `0%`.
 
 ### 6.5 Type System
 
@@ -605,24 +699,23 @@ Lemma's type system provides:
 - **Automatic conversions**: Between units within the same type definition
 - **Type safety**: Prevents invalid operations (e.g., adding different quantity types)
 - **User-defined types**: Custom types with units, constraints, and validation
-- **Validation**: Compile-time checking of type compatibility
+- **Validation**: Plan-time checking of type compatibility
 
 ### 6.6 Error Handling
 
-The evaluator provides comprehensive error handling:
+Lemma distinguishes three failure modes (see [veto_semantics.md](veto_semantics.md)):
 
-- **Parse errors**: Clear syntax error messages with source locations
-- **Semantic errors**: Type mismatches and invalid references
-- **Runtime errors**: Division by zero, invalid operations
-- **Circular dependencies**: Detection and reporting of rule cycles
+- **Parse and planning errors**: Invalid Lemma is rejected with source locations before evaluation
+- **Vetoes**: Domain-level "no value" at runtime — missing data, division by zero from data, constraint violations, user `veto "reason"`
+- **Panics**: Engine bugs crash immediately rather than producing a wrong value
 
 ### 6.7 Technology stack
 
 - **Language**: Rust (for performance, safety, and modern tooling)
-- **Parser**: Pest (for maintainable, readable grammar)
-- **Runtime**: Pure Rust evaluator (for logical inference)
+- **Parser**: Hand-written lexer and recursive parser
+- **Runtime**: Register-based virtual machine executing compiled instruction streams
 - **CLI**: Clap (for command-line interface)
-- **Testing**: Built-in Rust testing + property-based testing with Proptest
+- **Testing**: cargo-nextest suites, including differential tests pinning optimized and source instruction streams to identical results
 - **Fuzzing**: cargo-fuzz for robustness testing
 
 ---
@@ -813,6 +906,11 @@ Issues:
 Lemma equivalent is clearer and matches natural language:
 
 ```lemma
+spec pricing
+
+data quantity: number
+data is_vip:   boolean
+
 rule discount: 0%
   unless quantity >= 10  then 10%
   unless quantity >= 50  then 20%
@@ -894,7 +992,7 @@ Issues:
 - Requires understanding of unification and backtracking
 - Debugging can be difficult
 
-Lemma provides a natural language syntax while leveraging logical inference through its pure Rust evaluator.
+Lemma provides a natural language syntax while remaining deterministic and statically validated.
 
 ### 8.5 Spreadsheets
 
@@ -925,7 +1023,7 @@ Lemma provides better readability, version control, testing, and composition.
 
 ### 9.2 Language Server Protocol (LSP)
 
-**Available today** — LSP server, VS Code/Cursor extension, diagnostics, formatting, semantic tokens, registry links. See [`engine/lsp/`](../engine/lsp/) and the marketplace extension "Lemma Language".
+**Available today** — the language server is built into the CLI (`lemma lsp`), with a VS Code/Cursor extension, diagnostics, formatting, semantic tokens, and registry links. Installing the `lemma` CLI is the only requirement for editor support.
 
 Further work: richer completion, go-to-definition, refactoring.
 
@@ -1135,8 +1233,8 @@ Literals:
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: October 2025
+**Document Version**: 1.1
+**Last Updated**: June 2026
 **License**: Apache 2.0
 **Authors**: Ben Rogmans
 **Contact**: https://github.com/lemma/lemma

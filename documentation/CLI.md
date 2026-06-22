@@ -20,7 +20,7 @@ lemma run [[repo] spec] [name=value ...] [--prefix PATH] [--rules=RULES] [option
 ```
 
 **Syntax:**
-- Positionals: optional repository qualifier (e.g. `@lemma/std`), then spec name (see `lemma run --help`)
+- Positionals: optional repository qualifier (e.g. `@iso/countries`), then spec name (see `lemma run --help`)
 - `spec --rules=rule` -- evaluate one rule
 - `spec --rules=rule1,rule2` -- evaluate specific rules (comma-separated)
 - No arguments with `-i` -- interactive mode
@@ -44,7 +44,7 @@ lemma run pricing --json
 lemma run pricing -x
 lemma run pricing --effective 2025-01-01
 lemma run -i
-lemma run '@lemma/std' finance
+lemma run '@iso/countries' alpha2
 ```
 
 ### `lemma schema` -- spec schema (data types, constraints, and rules)
@@ -56,7 +56,7 @@ lemma schema [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]
 ```
 
 **Options:**
-- `[repo]` -- optional repository qualifier (e.g. `@lemma/std`)
+- `[repo]` -- optional repository qualifier (e.g. `@iso/countries`)
 - `[spec]` -- spec name (omit when workspace has a single spec)
 - `--prefix <path>` -- workspace directory or `.lemma` file (default: current directory)
 - `--effective <datetime>` -- effective datetime for temporal specs
@@ -68,7 +68,7 @@ lemma schema [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]
 lemma schema pricing
 lemma schema --prefix ./policies net_salary
 lemma schema --prefix tax.lemma calculator
-lemma schema '@lemma/std' finance
+lemma schema '@iso/countries' alpha2
 lemma schema pricing --json
 ```
 
@@ -151,6 +151,14 @@ curl "http://localhost:8012/pricing?quantity=10&is_member=true"
 curl -X POST http://localhost:8012/pricing \
   -H "Content-Type: application/json" \
   -d '{"quantity": 10, "is_member": true}'
+```
+
+### `lemma lsp` -- start language server
+
+Starts the Language Server Protocol server over stdio for editor integration (diagnostics, formatting, semantic tokens). The VS Code/Cursor extension invokes this automatically; a globally installed `lemma` CLI is the only requirement.
+
+```bash
+lemma lsp
 ```
 
 ### `lemma mcp` -- start MCP server

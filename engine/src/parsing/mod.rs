@@ -923,7 +923,7 @@ uses a: spec_a"#;
 
     #[test]
     fn parse_uses_registry_spec_ref_records_repository_and_target_spans() {
-        let input = "spec consumer\nuses @lemma/std finance 2026";
+        let input = "spec consumer\nuses @iso/countries alpha2 2026";
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -943,8 +943,8 @@ uses a: spec_a"#;
             .target_span
             .as_ref()
             .expect("target_span should cover spec name and effective");
-        assert_eq!(&input[rs.start..rs.end], "@lemma/std");
-        assert_eq!(&input[ts.start..ts.end], "finance 2026");
+        assert_eq!(&input[rs.start..rs.end], "@iso/countries");
+        assert_eq!(&input[ts.start..ts.end], "alpha2 2026");
     }
 
     #[test]
@@ -973,7 +973,7 @@ uses a: spec_a"#;
 
     #[test]
     fn parse_data_qualified_type_with_effective_and_repository_on_uses() {
-        let input = "spec consumer\nuses @lemma/std finance 2026-06-01\ndata price: finance.number -> minimum 0";
+        let input = "spec consumer\nuses @iso/countries alpha2 2026-06-01\ndata country: alpha2.code -> option \"NL\"";
         let result = parse(
             input,
             crate::parsing::source::SourceType::Volatile,
@@ -985,7 +985,7 @@ uses a: spec_a"#;
             crate::parsing::ast::DataValue::Import(sr) => sr,
             other => panic!("expected Import on uses row, got: {:?}", other),
         };
-        assert_eq!(spec_ref.name, "finance");
+        assert_eq!(spec_ref.name, "alpha2");
 
         let eff = spec_ref
             .effective
@@ -998,7 +998,7 @@ uses a: spec_a"#;
             .repository
             .as_ref()
             .expect("expected repository qualifier");
-        assert_eq!(qualifier.name, "@lemma/std");
+        assert_eq!(qualifier.name, "@iso/countries");
 
         match &result[0].data[1].value {
             crate::parsing::ast::DataValue::Definition {
@@ -1010,9 +1010,9 @@ uses a: spec_a"#;
                 assert_eq!(
                     base.as_ref().expect("expected base"),
                     &crate::parsing::ast::ParentType::Qualified {
-                        spec_alias: "finance".into(),
-                        inner: Box::new(crate::parsing::ast::ParentType::Primitive {
-                            primitive: crate::parsing::ast::PrimitiveKind::Number,
+                        spec_alias: "alpha2".into(),
+                        inner: Box::new(crate::parsing::ast::ParentType::Custom {
+                            name: "code".into(),
                         }),
                     }
                 );

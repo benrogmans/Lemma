@@ -15,6 +15,10 @@ Common cases:
 - **Constraint violations at runtime** — a data override breaks a bound or type constraint.
 
 ```lemma
+spec age_validation
+
+data age: number
+
 rule validated_age: age
   unless age < 0   then veto "Age cannot be negative"
   unless age > 120 then veto "Invalid age value"
@@ -29,6 +33,11 @@ If a rule references a vetoed rule and needs its value, the veto applies to the 
 ### Veto applies to dependent rule
 
 ```lemma
+spec order_total
+
+data price:    number
+data quantity: number
+
 rule validated_price: price
   unless price < 0 then veto "Price cannot be negative"
 
@@ -40,6 +49,11 @@ If `validated_price` is vetoed, `total` is also vetoed because we need the price
 ### Veto does not apply to dependent rule
 
 ```lemma
+spec shipping_estimate
+
+data weight:        number
+data use_estimated: boolean
+
 rule validated_weight: weight
   unless weight < 0 then veto "Weight cannot be negative"
 
@@ -54,6 +68,12 @@ If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weig
 When a data field has no value (not provided and no default), rules that depend on it veto with a "Missing data" reason. This propagates through rule references:
 
 ```lemma
+spec coffee_prices
+
+data money: quantity
+  -> unit eur 1.00
+  -> decimals 2
+
 data product: text
   -> option "latte"
 
@@ -70,6 +90,11 @@ If `product` is not provided, `base_price` vetoes with "Missing data: product" �
 Test whether an expression produced **no value** (`Veto`) and branch on a **boolean** — without propagating the operand’s veto through the test:
 
 ```lemma
+spec fallback_total
+
+data price:    number
+data quantity: number
+
 rule validated_price: price
   unless price < 0 then veto "Price cannot be negative"
 

@@ -446,10 +446,10 @@ impl Engine {
         if repository.name.as_deref() == Some(EMBEDDED_STDLIB_REPOSITORY) {
             Some(Error::validation_with_context(
                 format!(
-                    "Repository '{EMBEDDED_STDLIB_REPOSITORY}' is reserved for the embedded standard library and cannot be loaded via load or load_batch; use '@lemma/std' for registry packages such as finance"
+                    "Repository '{EMBEDDED_STDLIB_REPOSITORY}' is reserved for the embedded standard library and cannot be loaded via load or load_batch; use @owner/repo qualifiers (e.g. '@iso/countries'), not the reserved 'lemma' repository"
                 ),
                 None,
-                Some("Load registry dependencies as '@lemma/std', not the reserved 'lemma' stdlib repository".to_string()),
+                Some("Load registry dependencies with @owner/repo qualifiers, not the reserved 'lemma' stdlib repository".to_string()),
                 None,
                 None,
             ))
@@ -1641,21 +1641,21 @@ rule value: external.quantity"#,
             .load_batch(
                 HashMap::from([(
                     SourceType::Volatile,
-                    "repo @lemma/std\nspec finance\ndata money: quantity\n -> unit eur 1.00\n -> decimals 2".to_string(),
+                    "repo @iso/countries\nspec alpha2\ndata code: text\n -> option \"NL\"\n -> option \"BE\"".to_string(),
                 )]),
-                Some("@lemma/std"),
+                Some("@iso/countries"),
             )
-            .expect("should load finance file");
+            .expect("should load alpha2 file");
 
         engine
             .load(
                 r#"spec registry_demo
-uses @lemma/std finance
-data money: finance.money
-data unit_price: 5 eur
+uses @iso/countries alpha2
+data country: alpha2.code
+data unit_count: 5
 uses @org/example helper
 rule helper_value: helper.value
-rule line_total: unit_price * 2
+rule line_total: unit_count * 2
 rule formatted: helper_value + 0"#,
                 SourceType::Path(Arc::new(std::path::PathBuf::from("main.lemma"))),
             )
@@ -1690,10 +1690,7 @@ rule formatted: helper_value + 0"#,
             .display
             .clone()
             .expect("display");
-        assert!(
-            line.contains("10") && line.to_lowercase().contains("eur"),
-            "5 eur * 2 => ~10 eur, got {line}"
-        );
+        assert_eq!(line, "10");
         assert_eq!(
             response
                 .results

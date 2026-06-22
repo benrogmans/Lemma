@@ -82,7 +82,7 @@ After loading, the engine enforces **dependency isolation**: repos loaded as a d
 
 1. **Spec names are normal identifiers.** Write `spec billing`, `spec rates`, and so on — the same surface syntax as local files.
 
-2. **Cross-bundle references use `@` on `uses` targets.** To depend on another registry identifier, qualify the target (`uses x: @org/rates`, `uses finance: @lemma/std finance`, …). Unqualified references (`uses x: rates`) resolve only within **the same** repository as the importing spec.
+2. **Cross-bundle references use `@` on `uses` targets.** To depend on another registry identifier, qualify the target (`uses x: @org/rates`, `uses iso: @iso/countries alpha2`, …). Unqualified references (`uses x: rates`) resolve only within **the same** repository as the importing spec.
 
 3. **Transitive loads.** The resolver fetches every unresolved repository reference until all qualifiers are satisfied. A single `.lemma` response per identifier is enough; you do not need to paste transitive dependencies into one megabundle unless your registry chooses to.
 
@@ -92,4 +92,6 @@ Registries may let authors edit friendlier forms on the server side, but what th
 
 ## LemmaBase (default registry)
 
-When the `registry` feature is enabled, **LemmaBase** is available. It resolves identifiers via `GET https://lemmabase.com/{identifier}.lemma` (identifier already contains the `@` prefix). The LSP uses `url_for_id` to turn the repository qualifier (e.g. `@lemma/std`) into a LemmaBase URL; the spec name (e.g. `finance`) links to the locally fetched bundle under `<workspace>/lemma_deps/`.
+When the `registry` feature is enabled, **LemmaBase** is available. It resolves identifiers via `GET https://lemmabase.com/{identifier}.lemma` (identifier already contains the `@` prefix). The LSP uses `url_for_id` to turn the repository qualifier (e.g. `@iso/countries`) into a LemmaBase URL; the spec name (e.g. `alpha2`) links to the locally fetched bundle under `<workspace>/lemma_deps/`.
+
+**Test mode:** `LemmaBase::test()` serves bundled fixtures from `engine/tests/registry_fixtures/` (no network). Integration tests that exercise doc fences with `@…` references use this instead of LemmaBase.com.

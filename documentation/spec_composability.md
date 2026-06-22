@@ -186,7 +186,7 @@ rule ok: f26.rate
 
 Planning **rejects** a `uses` edge that resolves to the **same** spec body (self-reference):
 
-```lemma
+```lemma-skip
 spec finance
 
 uses finance
@@ -234,7 +234,7 @@ To read import data without overriding it, reference the path in a rule: `rule r
 
 ## Registry and shared libraries
 
-External packages use **`@org/path`** qualifiers ([registry.md](registry.md)). The engine does not fetch the network; load sources with `lemma fetch` (or your embedder), then `uses fin: @lemma/std finance` resolves like any other repo-qualified import.
+External packages use **`@org/path`** qualifiers ([registry.md](registry.md)). The engine does not fetch the network; load sources with `lemma fetch` (or your embedder), then `uses iso: @iso/countries alpha2` resolves like any other repo-qualified import.
 
 ---
 
@@ -261,7 +261,7 @@ Use **`lemma schema`** with the same `--effective` to see required inputs for th
 | Track compatible dependency rows across the consumer’s lifetime | `uses dep` (unpinned) |
 | Lock a regulation / tariff / schema at a known date | `uses dep 2025-06-01` |
 | Import an earlier row of the same spec name | `uses prev: finance 2026-01-01` |
-| Shared types from a library | `uses fin: @lemma/std finance` and `data x: fin.Money` |
+| Shared types from a library | `uses iso: @iso/countries alpha2` and `data x: iso.code` |
 | Set data on an imported spec | `with alias.field: value` |
 | Read import data in a rule | `rule r: alias.field` |
 

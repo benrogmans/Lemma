@@ -39,7 +39,7 @@ This allows you to implement policy changes rapidly without compromising complia
 
 ### Direction
 
-Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). The engine already exposes **inversion** (constraint-style “what inputs satisfy this outcome?”) via the Rust and Hex APIs; CLI and user docs for inversion are still evolving. Planned work includes **tables** as a first-class data type for data-driven rules and **performance** competitive with high performance programming languages.
+Lemma aims to combine **deterministic evaluation**, **transparent explanations**, **temporal versioning** (rules that evolve on a timeline, separate from how you deploy code), **registry-style sharing** of specs, and **interop** (CLI, HTTP, WASM, MCP, and stable language bindings). Planned work includes **inversion** (constraint-style “what inputs satisfy this outcome?”), **tables** as a first-class data type for data-driven rules and **performance** competitive with high performance programming languages.
 
 ### What about AI?
 
@@ -114,8 +114,15 @@ $ lemma run shipping
 
 Override data from the command line:
 
-```bash
-lemma run shipping is_express=false package_weight=6.0
+```
+$ lemma run shipping is_express=false package_weight="6.0 kilogram"
+┌───────────────┬───────────┐
+│ base_shipping ┆ 15.99 eur │
+├───────────────┼───────────┤
+│ express_fee   ┆ 0.00 eur  │
+├───────────────┼───────────┤
+│ total_cost    ┆ 15.99 eur │
+└───────────────┴───────────┘
 ```
 
 ## Key features
@@ -131,7 +138,7 @@ data money: quantity
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
-  -> minimum 0
+  -> minimum 0 eur
 
 data status: text
   -> option "active"
@@ -229,19 +236,22 @@ Reference shared specs from a registry with `@`:
 ```lemma
 spec invoicing
 
-uses fin: @lemma/std finance
+uses @iso/countries alpha2
 
-data subtotal: 250 eur
-data tax_rate: 21%
+data price: quantity 
+  -> unit eur 1
 
-rule tax: subtotal * tax_rate
+data country: alpha2.code
 
-rule total: subtotal + tax
+rule tariff: 0 eur
+  unless country is "NL" then price * 5%
+
+rule total: price + tariff
 ```
 
 ```bash
 lemma fetch --all           # fetch all @... dependencies
-lemma fetch @lemma/std -f   # force re-fetch if content changed
+lemma fetch @iso/countries -f   # force re-fetch if content changed
 ```
 
 ## CLI
@@ -259,7 +269,8 @@ lemma run pricing -x                      # show reasoning
 lemma schema pricing                      # spec schema
 lemma list                                # list all specs
 lemma format                               # format .lemma files
-lemma fetch                                 # fetch registry dependencies
+lemma fetch                               # fetch registry dependencies
+lemma lsp                                 # language server (stdio)
 ```
 
 ### HTTP Server
