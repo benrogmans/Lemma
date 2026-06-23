@@ -1,6 +1,6 @@
 # Lemma Engine
 
-> **A language that means business.**
+> **A pure, declarative language for business rules.**
 
 Lemma Engine is the Rust crate behind the Lemma language. It lets you parse, validate, and evaluate Lemma docs from your own applications while keeping the same natural, auditable semantics that the CLI exposes.
 

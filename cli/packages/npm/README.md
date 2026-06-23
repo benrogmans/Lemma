@@ -1,6 +1,6 @@
 # lemma
 
-> **A language that means business.** Command-line interface for [Lemma](https://github.com/lemma/lemma).
+> **A pure, declarative language for business rules.** Command-line interface for [Lemma](https://github.com/lemma/lemma).
 
 Run Lemma without installing anything globally:
 

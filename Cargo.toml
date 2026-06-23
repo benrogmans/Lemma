@@ -15,7 +15,7 @@ exclude = ["engine/fuzz"]
 version = "0.8.20"
 edition = "2021"
 authors = ["Ben Rogmans <ben@amrai.nl>"]
-description = "A language that means business."
+description = "A pure, declarative language for business rules."
 license = "Apache-2.0"
 repository = "https://github.com/lemma/lemma"
 

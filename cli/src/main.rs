@@ -23,7 +23,7 @@ use walkdir::WalkDir;
 
 #[derive(Parser)]
 #[command(name = "lemma")]
-#[command(about = "A language that means business.")]
+#[command(about = "A pure, declarative language for business rules.")]
 #[command(
     long_about = "Lemma is a declarative programming language for business logic, expressed simply and clearly.\nThe CLI lets you evaluate rules from .lemma files, run Lemma as an HTTP server, or integrate with AI tools via MCP."
 )]

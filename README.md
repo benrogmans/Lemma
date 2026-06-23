@@ -6,11 +6,9 @@
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> **A language that means business.**
+> **A pure, declarative language for business rules.**
 
-Lemma is a pure, declarative language for business rules. It flows like natural language and encodes pricing rules, tax calculations, eligibility criteria, contracts, policies and law. Stakeholders can read them, systems can evaluate them.
-
-Rules in Lemma are transparent, deterministic, logically consistent, temporally bound and explainable. So with the same data for the same spec and the same effective point in time, you will get the same result. Lemma can also tell you why you got that result. Audits and tracing become trivial, even as time passes and rules change.
+Lemma reads like the documents people already write — pricing, tax, eligibility, contracts, policies, law. Stakeholders read the specs; systems evaluate them deterministically. Same spec, same data, same instant: same result, with an explanation trace you can audit.
 
 ```lemma
 spec pricing 2026-01-01

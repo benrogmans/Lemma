@@ -33,7 +33,7 @@ const IIFE_ENTRY_JS = 'lemma.iife.js';
  * @lemmabase/lemma-engine — npm-only (not workspace.description / not lsp crate).
  */
 const NPM_BRANDING = {
-  description: 'A language that means business. Also in the browser.',
+  description: 'A pure, declarative language for business rules.',
   homepage: 'https://github.com/lemma/lemma',
   keywords: [
     'lemma',

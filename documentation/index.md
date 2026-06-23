@@ -5,7 +5,7 @@ title: Lemma Documentation
 
 # Lemma Documentation
 
-**A language that means business.**
+**A pure, declarative language for business rules.**
 
 Lemma is a declarative language for business rules. Rules are written in **specs** that humans can read and systems can evaluate deterministically: same spec, same data, same effective instant, same result. Planning validates a spec before evaluation ever runs; results are values or **vetoes**, and every result can carry an explanation.
 
