@@ -5,7 +5,7 @@ defmodule Lemma.Native do
   use RustlerPrecompiled,
     otp_app: :lemma_engine,
     crate: "lemma_hex",
-    base_url: "https://github.com/lemma/lemma/releases/download/cli-v#{version}",
+    base_url: "https://github.com/lemma/lemma/releases/download/lemma-v#{version}",
     force_build: not File.exists?("checksum-Elixir.Lemma.Native.exs"),
     version: version,
     targets: ~w(

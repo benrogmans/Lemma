@@ -37,8 +37,8 @@ jobs:
           fi
 
           # Get the latest tag (last published version)
-          LATEST_TAG=$(git describe --tags --abbrev=0 --match "cli-v*" 2>/dev/null || echo "cli-v0.0.0")
-          TAG_VERSION=${LATEST_TAG#cli-v}
+          LATEST_TAG=$(git describe --tags --abbrev=0 --match "lemma-v*" 2>/dev/null || echo "lemma-v0.0.0")
+          TAG_VERSION=${LATEST_TAG#lemma-v}
 
           echo "Current version: $CURRENT_VERSION"
           echo "Latest tag version: $TAG_VERSION"
@@ -63,7 +63,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           VERSION="${{ needs.detect-version-changes.outputs.version }}"
-          for prefix in lemma-engine openapi wasm cli; do
+          for prefix in lemma-engine openapi wasm lemma; do
             git tag "${prefix}-v${VERSION}" 2>/dev/null || echo "Tag ${prefix}-v${VERSION} already exists"
             git push origin "${prefix}-v${VERSION}" 2>/dev/null || echo "Tag ${prefix}-v${VERSION} already pushed"
           done
@@ -71,7 +71,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: cli-v${{ needs.detect-version-changes.outputs.version }}
+          tag_name: lemma-v${{ needs.detect-version-changes.outputs.version }}
           name: Lemma v${{ needs.detect-version-changes.outputs.version }}
           body: |
             ## Installation
@@ -176,7 +176,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: cli-v${{ needs.detect-version-changes.outputs.version }}
+          tag_name: lemma-v${{ needs.detect-version-changes.outputs.version }}
           files: lemma-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -249,7 +249,7 @@ jobs:
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: cli-v${{ needs.detect-version-changes.outputs.version }}
+          tag_name: lemma-v${{ needs.detect-version-changes.outputs.version }}
           files: "*lemma_hex-*.tar.gz"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -371,7 +371,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${{ needs.detect-version-changes.outputs.version }}"
-          TAG="cli-v${VERSION}"
+          TAG="lemma-v${VERSION}"
           ROOT=/tmp/lemma-binaries
           mkdir -p \
             "$ROOT/linux-x64" \
@@ -521,7 +521,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${{ needs.detect-version-changes.outputs.version }}"
-          TAG="cli-v${VERSION}"
+          TAG="lemma-v${VERSION}"
           mkdir -p binaries/amd64 binaries/arm64
           gh release download "$TAG" -p "lemma-x86_64-unknown-linux-musl.tar.gz" -D /tmp
           gh release download "$TAG" -p "lemma-aarch64-unknown-linux-musl.tar.gz" -D /tmp

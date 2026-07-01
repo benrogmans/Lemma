@@ -1,13 +1,16 @@
-//! `git diff` / `git log` between `cli-v*` release tags.
+//! `git diff` / `git log` between release tags.
+//!
+//! The umbrella GitHub release tag is `lemma-v{version}`. Releases before the rename used
+//! `cli-v{version}`; both prefixes are accepted so version-diffing spans the transition.
 //!
 //! Runs `git fetch --tags` first so local tag refs match the remote (e.g. CI-created release tags)
 //! before resolving tags.
 //!
-//! **No version argument:** `git diff` / `git diff --stat` compare the latest `cli-v*` tag to the
+//! **No version argument:** `git diff` / `git diff --stat` compare the latest release tag to the
 //! **working tree** (including uncommitted changes). `git log` is still `tag..HEAD` (commits only).
 //!
-//! **`versions-diff <semver>`:** compares the previous `cli-v*` tag to `cli-v{semver}` on history
-//! (two commits; no working tree).
+//! **`versions-diff <semver>`:** compares the previous release tag to the requested version's tag
+//! on history (two commits; no working tree).
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -15,9 +18,16 @@ use std::process::Command;
 
 use semver::Version;
 
-/// `cli-v` + semver, e.g. `cli-v0.8.4`.
-pub(crate) fn parse_cli_v_version(tag: &str) -> Option<Version> {
-    tag.strip_prefix("cli-v")?.parse().ok()
+/// Release tag prefixes, newest convention first. `cli-v` is the legacy prefix kept for history.
+const RELEASE_TAG_PREFIXES: [&str; 2] = ["lemma-v", "cli-v"];
+
+/// Parse the semver from a release tag, e.g. `lemma-v0.8.20` or `cli-v0.8.4`.
+pub(crate) fn parse_release_tag_version(tag: &str) -> Option<Version> {
+    RELEASE_TAG_PREFIXES
+        .iter()
+        .find_map(|prefix| tag.strip_prefix(prefix))?
+        .parse()
+        .ok()
 }
 
 fn git_fetch_tags(root: &Path) -> Result<(), String> {
@@ -54,16 +64,24 @@ fn git_output(args: &[&str], cwd: &Path) -> Result<Vec<u8>, String> {
     Ok(o.stdout)
 }
 
-fn list_cli_v_tags_sorted(root: &Path) -> Result<Vec<(Version, String)>, String> {
-    let out = git_output(&["tag", "-l", "cli-v*"], root)?;
-    let mut tags: Vec<(Version, String)> = String::from_utf8_lossy(&out)
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(|line| {
-            let ver = parse_cli_v_version(line)?;
-            Some((ver, line.to_string()))
-        })
-        .collect();
+fn list_release_tags_sorted(root: &Path) -> Result<Vec<(Version, String)>, String> {
+    let mut tags: Vec<(Version, String)> = Vec::new();
+    for prefix in RELEASE_TAG_PREFIXES {
+        let out = git_output(&["tag", "-l", &format!("{prefix}*")], root)?;
+        for line in String::from_utf8_lossy(&out).lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let Some(ver) = parse_release_tag_version(line) else {
+                continue;
+            };
+            // Prefer the newest-convention tag when a version exists under multiple prefixes.
+            if tags.iter().any(|(v, _)| v == &ver) {
+                continue;
+            }
+            tags.push((ver, line.to_string()));
+        }
+    }
     tags.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(tags)
 }
@@ -86,9 +104,9 @@ fn worktree_differs_from_head(root: &Path) -> bool {
 /// Print `git diff --stat`, `git log`, then `git diff` for the resolved range or tag → worktree.
 pub fn run_versions_diff(root: &Path, version_arg: Option<&str>) -> Result<(), String> {
     git_fetch_tags(root)?;
-    let tags = list_cli_v_tags_sorted(root)?;
+    let tags = list_release_tags_sorted(root)?;
     if tags.is_empty() {
-        return Err("no cli-v* tags found".into());
+        return Err("no release tags found (lemma-v* or cli-v*)".into());
     }
 
     match version_arg {
@@ -117,9 +135,9 @@ pub fn run_versions_diff(root: &Path, version_arg: Option<&str>) -> Result<(), S
             let idx = tags
                 .iter()
                 .position(|(ver, _)| ver == &want)
-                .ok_or_else(|| format!("no tag cli-v{want}"))?;
+                .ok_or_else(|| format!("no release tag for version {want}"))?;
             if idx == 0 {
-                return Err(format!("no previous cli-v* tag before cli-v{want}"));
+                return Err(format!("no previous release tag before version {want}"));
             }
             let prev = tags[idx - 1].1.clone();
             let end = tags[idx].1.clone();
@@ -146,11 +164,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_cli_v_version_accepts() {
+    fn parse_release_tag_version_accepts() {
         assert_eq!(
-            parse_cli_v_version("cli-v0.8.4"),
+            parse_release_tag_version("lemma-v0.8.20"),
+            Some(Version::new(0, 8, 20))
+        );
+        assert_eq!(
+            parse_release_tag_version("cli-v0.8.4"),
             Some(Version::new(0, 8, 4))
         );
-        assert_eq!(parse_cli_v_version("v0.8.4"), None);
+        assert_eq!(parse_release_tag_version("v0.8.4"), None);
+        assert_eq!(parse_release_tag_version("lemma-engine-v0.8.4"), None);
     }
 }

@@ -175,7 +175,9 @@ jobs:
           toolchain: 1.92.0
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.0
 
       - name: Run cargo-deny
         run: cargo deny check --config .cargo/deny.toml

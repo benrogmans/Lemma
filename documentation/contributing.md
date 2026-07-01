@@ -109,9 +109,7 @@ node test.js
 2. Open PR and merge to main
 3. CI automatically detects version changes and publishes to crates.io
 
-Releases are independent:
-- `lemma-engine` tagged as `lemma-v{version}`
-- `lemma` tagged as `v{version}` with GitHub release
+All artifacts share one version (`[workspace.package] version` in the root `Cargo.toml`). CI tags each published package (`lemma-engine-v{version}`, `openapi-v{version}`, `wasm-v{version}`) and creates the umbrella GitHub release on the `lemma-v{version}` tag.
 
 ## License
 
