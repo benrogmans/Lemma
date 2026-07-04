@@ -19,7 +19,13 @@ pub fn json_value_to_data_input(value: Value) -> Result<DataValueInput, String> 
     match value {
         Value::String(s) => Ok(DataValueInput::Convenience(s)),
         Value::Bool(b) => Ok(DataValueInput::Boolean(b)),
-        Value::Number(n) => Ok(DataValueInput::Convenience(n.to_string())),
+        Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                Ok(DataValueInput::Convenience(n.to_string()))
+            } else {
+                Err("decimal values must be passed as strings to preserve exactness".to_string())
+            }
+        }
         Value::Object(obj) => {
             if obj.is_empty() {
                 return Err("data value object must not be empty".to_string());
@@ -42,7 +48,7 @@ pub fn json_value_to_data_input(value: Value) -> Result<DataValueInput, String> 
                         )
                     })
                     .collect();
-                return Ok(DataValueInput::QuantityMap(map));
+                return Ok(DataValueInput::MeasureMap(map));
             }
             Err("data value object must be a unit map with string magnitudes".to_string())
         }
@@ -68,10 +74,10 @@ mod tests {
         map.insert("eur_per_hour".to_string(), Value::String("85".to_string()));
         let input = json_value_to_data_input(Value::Object(map)).unwrap();
         match input {
-            DataValueInput::QuantityMap(m) => {
+            DataValueInput::MeasureMap(m) => {
                 assert_eq!(m.get("eur_per_hour"), Some(&"85".to_string()));
             }
-            other => panic!("expected quantity map, got {:?}", other),
+            other => panic!("expected measure map, got {:?}", other),
         }
     }
 
@@ -92,14 +98,38 @@ mod tests {
     }
 
     #[test]
+    fn json_integer_accepted() {
+        let input = json_value_to_data_input(serde_json::json!(42)).unwrap();
+        assert_eq!(input, DataValueInput::Convenience("42".to_string()));
+    }
+
+    #[test]
+    fn json_negative_integer_accepted() {
+        let input = json_value_to_data_input(serde_json::json!(-7)).unwrap();
+        assert_eq!(input, DataValueInput::Convenience("-7".to_string()));
+    }
+
+    #[test]
+    fn json_float_rejected() {
+        let err = json_value_to_data_input(serde_json::json!(0.1)).unwrap_err();
+        assert!(err.contains("decimal values must be passed as strings"));
+    }
+
+    #[test]
+    fn json_decimal_string_accepted() {
+        let input = json_value_to_data_input(Value::String("0.1".to_string())).unwrap();
+        assert_eq!(input, DataValueInput::Convenience("0.1".to_string()));
+    }
+
+    #[test]
     fn form_urlencoded_parsed_as_convenience() {
-        let map = form_urlencoded_to_data_values(b"code=AD&qty=3").unwrap();
+        let map = form_urlencoded_to_data_values(b"code=AD&quantity=3").unwrap();
         assert_eq!(
             map.get("code"),
             Some(&DataValueInput::Convenience("AD".to_string()))
         );
         assert_eq!(
-            map.get("qty"),
+            map.get("quantity"),
             Some(&DataValueInput::Convenience("3".to_string()))
         );
     }

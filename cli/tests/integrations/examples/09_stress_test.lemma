@@ -25,7 +25,7 @@ data base_price              : number -> minimum 0
 data delivery_distance       : number -> minimum 0
 data loyalty_points          : number -> minimum 0
 data package_weight          : number -> minimum 0
-data quantity                : number -> minimum 0
+data quantity                     : number -> minimum 0
 
 rule is_standard:
   customer_tier is "standard"
@@ -36,7 +36,7 @@ rule is_premium:
 rule is_vip:
   customer_tier is "vip"
 
-rule quantity_discount_rate:
+rule measure_discount_rate:
   0%
   unless quantity >= 10 then 5%
   unless quantity >= 50 then 10%
@@ -48,8 +48,8 @@ rule tier_discount_rate:
   unless is_vip then 30%
 
 rule combined_discount_rate:
-  quantity_discount_rate
-  unless tier_discount_rate > quantity_discount_rate
+  measure_discount_rate
+  unless tier_discount_rate > measure_discount_rate
     then tier_discount_rate
 
 rule subtotal:

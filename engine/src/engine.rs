@@ -390,6 +390,9 @@ impl Engine {
     fn apply_planning_result(&mut self, pr: crate::planning::PlanningResult) {
         self.plan_sets.clear();
         for r in &pr.results {
+            if r.errors().next().is_some() {
+                continue;
+            }
             self.plan_sets
                 .entry(Arc::clone(&r.repository))
                 .or_default()

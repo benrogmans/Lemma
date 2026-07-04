@@ -75,6 +75,41 @@ defmodule LemmaTest do
     end
   end
 
+  describe "new/1 max_normalized_expression_nodes" do
+    test "accepts max_normalized_expression_nodes limit" do
+      assert {:ok, engine} = Lemma.new(%{"max_normalized_expression_nodes" => 1000})
+      assert is_reference(engine)
+    end
+
+    test "enforces max_normalized_expression_nodes during planning" do
+      # A self-referencing rule chain that grows exponentially
+      chain =
+        """
+        spec exponential
+        data x: number
+        rule r0: x
+        rule r1: r0 * 2 + r0
+        rule r2: r1 * 2 + r1
+        rule r3: r2 * 2 + r2
+        rule r4: r3 * 2 + r3
+        rule r5: r4 * 2 + r4
+        rule r6: r5 * 2 + r5
+        rule r7: r6 * 2 + r6
+        rule r8: r7 * 2 + r7
+        """
+
+      # With very low limit, the exponentially growing rule chain should exceed it
+      {:ok, engine} = Lemma.new(%{"max_normalized_expression_nodes" => 100})
+      result = Lemma.load(engine, chain, "chain.lemma")
+      assert {:error, errors} = result
+      assert is_list(errors)
+
+      error = hd(errors)
+      assert error[:kind] == "resource_limit"
+      assert error[:message] =~ "expression nodes"
+    end
+  end
+
   describe "load/3" do
     test "loads a valid spec" do
       {:ok, engine} = Lemma.new()
@@ -238,7 +273,7 @@ defmodule LemmaTest do
       assert total["number"] == "50"
     end
 
-    test "runs spec with quantity triggering unless clause" do
+    test "runs spec with measure triggering unless clause" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
       {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "10"})

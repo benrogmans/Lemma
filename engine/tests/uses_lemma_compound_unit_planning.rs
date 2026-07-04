@@ -1,4 +1,4 @@
-//! Derived quantity unit planning: `uses lemma units` duration units, compound-of-compound
+//! Derived measure unit planning: `uses lemma units` duration units, compound-of-compound
 //! resolution, topological ordering, and conversion-factor normalization.
 
 use lemma::Engine;
@@ -43,10 +43,10 @@ fn uses_lemma_compound_wage_rate_units_plan_without_unknown_unit_error() {
     let code = r#"spec contractor
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data wage_rate: quantity
+data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 
@@ -60,23 +60,23 @@ rule smoke: true
 }
 
 /// Fleet motor: EUR/hour premium rate, then EUR/hour per insured vehicle. Exercises compound
-/// factors that name a unit from another derived quantity (`eur_per_hour`) plus `vehicle`.
+/// factors that name a unit from another derived measure (`eur_per_hour`) plus `vehicle`.
 #[test]
 fn uses_lemma_insurance_premium_per_vehicle_compound_plans() {
     let code = r#"spec fleet_motor_quote
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data fleet_unit: quantity
+data fleet_unit: measure
   -> unit vehicle 1.00
 
-data premium_rate: quantity
+data premium_rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 
-data premium_per_vehicle: quantity
+data premium_per_vehicle: measure
   -> unit eur_hour_per_vehicle eur_per_hour/vehicle
 
 rule smoke: true
@@ -84,7 +84,7 @@ rule smoke: true
     load_ok(
         code,
         "fleet_motor_quote.lemma",
-        "compound unit may name derived units from an earlier derived quantity (eur_per_hour/vehicle)",
+        "compound unit may name derived units from an earlier derived measure (eur_per_hour/vehicle)",
     );
 }
 
@@ -94,18 +94,18 @@ fn compound_newton_force_unit_plans() {
     let code = r#"spec mechanics
 uses lemma units
 
-data mass: quantity
+data mass: measure
   -> unit kg 1
   -> unit gram 0.001
 
-data length: quantity
+data length: measure
   -> unit meter 1
   -> unit km 1000
 
-data acceleration: quantity
+data acceleration: measure
   -> unit mps2 meter/second^2
 
-data force: quantity
+data force: measure
   -> unit newton kg * mps2
 
 rule smoke: true
@@ -123,22 +123,22 @@ fn compound_pascal_pressure_unit_plans() {
     let code = r#"spec mechanics_pressure
 uses lemma units
 
-data mass: quantity
+data mass: measure
   -> unit kg 1
 
-data length: quantity
+data length: measure
   -> unit meter 1
 
-data acceleration: quantity
+data acceleration: measure
   -> unit mps2 meter/second^2
 
-data force: quantity
+data force: measure
   -> unit newton kg * mps2
 
-data area: quantity
+data area: measure
   -> unit sqm meter^2
 
-data pressure: quantity
+data pressure: measure
   -> unit pascal newton/sqm
 
 rule smoke: true
@@ -146,7 +146,7 @@ rule smoke: true
     load_ok(
         code,
         "mechanics_pascal.lemma",
-        "pascal = newton/sqm must plan across three derived quantity layers",
+        "pascal = newton/sqm must plan across three derived measure layers",
     );
 }
 
@@ -156,18 +156,18 @@ fn compound_population_density_multi_unit_plans() {
     let code = r#"spec demography
 uses lemma units
 
-data population: quantity
+data population: measure
   -> unit person 1
 
-data length: quantity
+data length: measure
   -> unit meter 1
   -> unit km 1000
 
-data area: quantity
+data area: measure
   -> unit sqm meter^2
   -> unit sqkm km^2
 
-data density: quantity
+data density: measure
   -> unit per_sqm person/sqm
   -> unit per_sqkm person/sqkm
 
@@ -186,14 +186,14 @@ fn compound_annual_growth_rate_multi_unit_plans() {
     let code = r#"spec growth
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1
 
-data rate: quantity
+data rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 
-data annual_growth: quantity
+data annual_growth: measure
   -> unit growth_per_hour eur_per_hour/eur
   -> unit growth_per_second eur_per_second/eur
 
@@ -212,16 +212,16 @@ fn compound_three_level_chain_plans() {
     let code = r#"spec chain
 uses lemma units
 
-data a: quantity
+data a: measure
   -> unit au 1
 
-data b: quantity
+data b: measure
   -> unit bu au/second
 
-data c: quantity
+data c: measure
   -> unit cu bu/au
 
-data d: quantity
+data d: measure
   -> unit du cu/au
 
 rule smoke: true
@@ -233,16 +233,16 @@ rule smoke: true
     );
 }
 
-/// Circular derived quantity dependency must be rejected at plan time.
+/// Circular derived measure dependency must be rejected at plan time.
 #[test]
-fn compound_cycle_between_quantity_types_rejected() {
+fn compound_cycle_between_measure_types_rejected() {
     let code = r#"spec cycle
 uses lemma units
 
-data x: quantity
+data x: measure
   -> unit xu yu/second
 
-data y: quantity
+data y: measure
   -> unit yu xu/second
 
 rule smoke: true
@@ -250,7 +250,7 @@ rule smoke: true
     expect_plan_error(
         code,
         "compound_cycle.lemma",
-        "circular compound quantity type dependency",
+        "circular compound measure type dependency",
     );
 }
 
@@ -260,19 +260,19 @@ fn compound_kilonewton_with_prefix_plans() {
     let code = r#"spec force_prefix
 uses lemma units
 
-data mass: quantity
+data mass: measure
   -> unit kg 1
   -> unit gram 0.001
 
-data length: quantity
+data length: measure
   -> unit meter 1
   -> unit km 1000
 
-data acceleration: quantity
+data acceleration: measure
   -> unit mps2 meter/second^2
   -> unit kmh2 km/hour^2
 
-data force: quantity
+data force: measure
   -> unit newton kg * mps2
   -> unit kilonewton 1000 kg * meter/second^2
 
@@ -295,19 +295,19 @@ fn compound_kilonewton_to_gram_kmh2_conversion() {
     let code = r#"spec force_conv
 uses lemma units
 
-data mass: quantity
+data mass: measure
   -> unit kg 1
   -> unit gram 0.001
 
-data length: quantity
+data length: measure
   -> unit meter 1
   -> unit km 1000
 
-data acceleration: quantity
+data acceleration: measure
   -> unit mps2 meter/second^2
   -> unit kmh2 km/hour^2
 
-data force: quantity
+data force: measure
   -> unit newton kg * mps2
   -> unit kilonewton 1000 kg * meter/second^2
   -> unit gram_kmh2 gram * kmh2
@@ -336,7 +336,7 @@ rule converted: f as gram_kmh2
         .expect("rule 'converted' not found");
     assert_eq!(
         result
-            .quantity
+            .measure
             .as_ref()
             .and_then(|m| m.get("gram_kmh2"))
             .map(String::as_str),
@@ -350,11 +350,11 @@ fn compound_volume_liter_and_cubic_meter_plans() {
     let code = r#"spec volume
 uses lemma units
 
-data length: quantity
+data length: measure
   -> unit meter 1
   -> unit km 1000
 
-data volume: quantity
+data volume: measure
   -> unit cubic_meter meter^3
   -> unit liter 0.001 meter^3
 

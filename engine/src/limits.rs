@@ -5,10 +5,6 @@ pub const MAX_SPEC_NAME_LENGTH: usize = 128;
 pub const MAX_DATA_NAME_LENGTH: usize = 256;
 pub const MAX_RULE_NAME_LENGTH: usize = 256;
 
-/// Maximum significant digits in a number string. rust_decimal supports at most 28;
-/// more can panic or overflow in parse or arithmetic.
-pub const MAX_NUMBER_DIGITS: usize = 28;
-
 /// Maximum character length for a text value (data/runtime input).
 pub const MAX_TEXT_VALUE_LENGTH: usize = 1024;
 
@@ -79,6 +75,15 @@ pub struct ResourceLimits {
     /// grow the tree by at most a small constant factor, so 30,000 nodes
     /// stays well below the 65,535 register ceiling.
     pub max_normalized_expression_nodes: usize,
+
+    /// Maximum depth of the spec dependency chain (`uses` imports) from the
+    /// root spec. Bounds recursion in dependency discovery and graph building.
+    /// Real usage: ~3 levels, Limit: 32 (10x).
+    pub max_spec_dependency_depth: usize,
+
+    /// Maximum number of specs in one dependency DAG (the root spec plus all
+    /// transitive dependencies). Bounds per-plan memory and planning work.
+    pub max_dag_specs: usize,
 }
 
 impl Default for ResourceLimits {
@@ -92,6 +97,8 @@ impl Default for ResourceLimits {
             max_loaded_bytes: 50 * 1024 * 1024, // 50 MB
             max_sources: 4096,
             max_normalized_expression_nodes: 30_000,
+            max_spec_dependency_depth: 32,
+            max_dag_specs: 4096,
         }
     }
 }

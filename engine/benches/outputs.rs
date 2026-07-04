@@ -84,10 +84,10 @@ fn normalize_value_kind(value: &lemma::ValueKind) -> Output {
                 unit: Some(unit),
             }
         }
-        "quantity" => {
-            let (value, unit) = take_value_unit(&payload, "quantity");
+        "measure" => {
+            let (value, unit) = take_value_unit(&payload, "measure");
             Output {
-                kind: "quantity",
+                kind: "measure",
                 value,
                 unit: Some(unit),
             }

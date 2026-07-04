@@ -46,8 +46,8 @@ pub fn datetime_arithmetic(
     right: &LiteralValue,
 ) -> OperationResult {
     match (&left.value, &right.value, op) {
-        (ValueKind::Date(date), ValueKind::Quantity(_, _), ArithmeticComputation::Add)
-            if right.lemma_type.is_duration_like_quantity() =>
+        (ValueKind::Date(date), ValueKind::Measure(_, _), ArithmeticComputation::Add)
+            if right.lemma_type.is_duration_like_measure() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
@@ -68,7 +68,7 @@ pub fn datetime_arithmetic(
             ))
         }
 
-        (ValueKind::Date(date), ValueKind::Quantity(_, _), ArithmeticComputation::Add)
+        (ValueKind::Date(date), ValueKind::Measure(_, _), ArithmeticComputation::Add)
             if right.lemma_type.is_calendar_like() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
@@ -89,9 +89,9 @@ pub fn datetime_arithmetic(
 
         (
             ValueKind::Date(date),
-            ValueKind::Quantity(_, _),
+            ValueKind::Measure(_, _),
             ArithmeticComputation::Subtract,
-        ) if right.lemma_type.is_duration_like_quantity() => {
+        ) if right.lemma_type.is_duration_like_measure() => {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
@@ -113,7 +113,7 @@ pub fn datetime_arithmetic(
 
         (
             ValueKind::Date(date),
-            ValueKind::Quantity(_, _),
+            ValueKind::Measure(_, _),
             ArithmeticComputation::Subtract,
         ) if right.lemma_type.is_calendar_like() => {
             let dt = match semantic_datetime_to_chrono(date) {
@@ -132,8 +132,8 @@ pub fn datetime_arithmetic(
             ))
         }
 
-        (ValueKind::Quantity(_, _), ValueKind::Date(date), ArithmeticComputation::Add)
-            if left.lemma_type.is_duration_like_quantity() =>
+        (ValueKind::Measure(_, _), ValueKind::Date(date), ArithmeticComputation::Add)
+            if left.lemma_type.is_duration_like_measure() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
                 Ok(d) => d,
@@ -154,7 +154,7 @@ pub fn datetime_arithmetic(
             ))
         }
 
-        (ValueKind::Quantity(_, _), ValueKind::Date(date), ArithmeticComputation::Add)
+        (ValueKind::Measure(_, _), ValueKind::Date(date), ArithmeticComputation::Add)
             if left.lemma_type.is_calendar_like() =>
         {
             let dt = match semantic_datetime_to_chrono(date) {
@@ -227,7 +227,7 @@ pub fn datetime_arithmetic(
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
             OperationResult::Value(LiteralValue {
-                value: ValueKind::Quantity(seconds, vec![("second".to_string(), 1)]),
+                value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
                 lemma_type: std::sync::Arc::new(
                     crate::planning::semantics::LemmaType::anonymous_for_decomposition(
                         crate::planning::semantics::duration_decomposition(),
@@ -535,8 +535,8 @@ pub fn time_arithmetic(
     right: &LiteralValue,
 ) -> OperationResult {
     match (&left.value, &right.value, op) {
-        (ValueKind::Time(time), ValueKind::Quantity(_, _), ArithmeticComputation::Add)
-            if right.lemma_type.is_duration_like_quantity() =>
+        (ValueKind::Time(time), ValueKind::Measure(_, _), ArithmeticComputation::Add)
+            if right.lemma_type.is_duration_like_measure() =>
         {
             let seconds = right.duration_canonical_seconds();
             let time_aware = match semantic_time_to_chrono_datetime(time) {
@@ -547,7 +547,10 @@ pub fn time_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let result_dt = time_aware + duration;
+            let result_dt = match time_aware.checked_add_signed(duration) {
+                Some(d) => d,
+                None => return OperationResult::Veto(VetoType::computation("Time overflow")),
+            };
             OperationResult::Value(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
                 left.lemma_type.clone(),
@@ -556,9 +559,9 @@ pub fn time_arithmetic(
 
         (
             ValueKind::Time(time),
-            ValueKind::Quantity(_, _),
+            ValueKind::Measure(_, _),
             ArithmeticComputation::Subtract,
-        ) if right.lemma_type.is_duration_like_quantity() => {
+        ) if right.lemma_type.is_duration_like_measure() => {
             let seconds = right.duration_canonical_seconds();
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
@@ -568,15 +571,18 @@ pub fn time_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let result_dt = time_aware - duration;
+            let result_dt = match time_aware.checked_sub_signed(duration) {
+                Some(d) => d,
+                None => return OperationResult::Veto(VetoType::computation("Time overflow")),
+            };
             OperationResult::Value(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
                 left.lemma_type.clone(),
             ))
         }
 
-        (ValueKind::Quantity(_, _), ValueKind::Time(time), ArithmeticComputation::Add)
-            if left.lemma_type.is_duration_like_quantity() =>
+        (ValueKind::Measure(_, _), ValueKind::Time(time), ArithmeticComputation::Add)
+            if left.lemma_type.is_duration_like_measure() =>
         {
             let seconds = left.duration_canonical_seconds();
             let time_aware = match semantic_time_to_chrono_datetime(time) {
@@ -587,7 +593,10 @@ pub fn time_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let result_dt = time_aware + duration;
+            let result_dt = match time_aware.checked_add_signed(duration) {
+                Some(d) => d,
+                None => return OperationResult::Veto(VetoType::computation("Time overflow")),
+            };
             OperationResult::Value(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
                 right.lemma_type.clone(),
@@ -649,7 +658,7 @@ pub fn time_arithmetic(
             };
 
             OperationResult::Value(LiteralValue {
-                value: ValueKind::Quantity(seconds, vec![("second".to_string(), 1)]),
+                value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
                 lemma_type: std::sync::Arc::new(
                     crate::planning::semantics::LemmaType::anonymous_for_decomposition(
                         crate::planning::semantics::duration_decomposition(),
@@ -812,20 +821,19 @@ fn calendar_boundaries(
             Ok((start_dt, end_dt))
         }
         CalendarPeriodUnit::Week => {
-            let iso_week = now.iso_week();
-            let target_week = iso_week.week() as i32 + offset;
-            let target_year = iso_week.year();
-            let monday = NaiveDate::from_isoywd_opt(
-                target_year,
-                target_week.max(1) as u32,
+            let current_monday = NaiveDate::from_isoywd_opt(
+                now.iso_week().year(),
+                now.iso_week().week(),
                 chrono::Weekday::Mon,
             )
             .ok_or_else(|| {
                 format!(
                     "Invalid ISO week: year={}, week={}",
-                    target_year, target_week
+                    now.iso_week().year(),
+                    now.iso_week().week()
                 )
             })?;
+            let monday = current_monday + ChronoDuration::weeks(offset as i64);
             let sunday = monday + ChronoDuration::days(6);
             let start = monday.and_hms_opt(0, 0, 0).ok_or("Invalid start time")?;
             let end = sunday
@@ -1432,5 +1440,49 @@ mod tests {
         assert_eq!(end.year(), 2027);
         assert_eq!(end.month(), 1);
         assert_eq!(end.day(), 31);
+    }
+
+    #[test]
+    fn calendar_boundaries_past_week_from_iso_week_1_rolls_to_prior_year() {
+        // 2025-12-29 is Monday of ISO week 1 of 2026; now in week 1
+        let now = semantic_datetime_to_chrono(&utc_datetime(2025, 12, 31, 12, 0, 0)).unwrap();
+        assert_eq!(now.iso_week().week(), 1);
+        let (start, end) = calendar_boundaries(&now, &CalendarPeriodUnit::Week, -1).unwrap();
+        // Past week = ISO week 52 of 2025: Mon 2025-12-22 through Sun 2025-12-28
+        assert_eq!(start.year(), 2025);
+        assert_eq!(start.month(), 12);
+        assert_eq!(start.day(), 22);
+        assert_eq!(start.weekday(), chrono::Weekday::Mon);
+        assert_eq!(end.day(), 28);
+        assert_eq!(end.weekday(), chrono::Weekday::Sun);
+    }
+
+    #[test]
+    fn calendar_boundaries_future_week_from_iso_week_52_rolls_to_next_year() {
+        // 2025-12-22 is Monday of ISO week 52 of 2025
+        let now = semantic_datetime_to_chrono(&utc_datetime(2025, 12, 24, 12, 0, 0)).unwrap();
+        assert_eq!(now.iso_week().week(), 52);
+        let (start, end) = calendar_boundaries(&now, &CalendarPeriodUnit::Week, 1).unwrap();
+        // Future week = ISO week 1 of 2026: Mon 2025-12-29 through Sun 2026-01-04
+        assert_eq!(start.month(), 12);
+        assert_eq!(start.day(), 29);
+        assert_eq!(start.weekday(), chrono::Weekday::Mon);
+        assert_eq!(end.year(), 2026);
+        assert_eq!(end.month(), 1);
+        assert_eq!(end.day(), 4);
+        assert_eq!(end.weekday(), chrono::Weekday::Sun);
+    }
+
+    #[test]
+    fn calendar_boundaries_past_week_from_iso_week_53_year() {
+        // 2026 has 53 ISO weeks. 2026-12-28 is Monday of ISO week 53.
+        let now = semantic_datetime_to_chrono(&utc_datetime(2026, 12, 30, 12, 0, 0)).unwrap();
+        assert_eq!(now.iso_week().week(), 53);
+        let (start, end) = calendar_boundaries(&now, &CalendarPeriodUnit::Week, -1).unwrap();
+        // Past week = ISO week 52: Mon 2026-12-21 through Sun 2026-12-27
+        assert_eq!(start.day(), 21);
+        assert_eq!(start.weekday(), chrono::Weekday::Mon);
+        assert_eq!(end.day(), 27);
+        assert_eq!(end.weekday(), chrono::Weekday::Sun);
     }
 }

@@ -90,7 +90,7 @@ fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput
                         )
                     })
                     .collect();
-                return Ok(DataValueInput::QuantityMap(map));
+                return Ok(DataValueInput::MeasureMap(map));
             }
             Err("data value object must be a unit map with string magnitudes".to_string())
         }

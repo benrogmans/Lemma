@@ -694,7 +694,7 @@ rule out_of_band: 5% in allowed_band
 }
 
 #[test]
-fn ratio_range_default_endpoints_must_be_ratio_not_quantity() {
+fn ratio_range_default_endpoints_must_be_ratio_not_measure() {
     let code = r#"
 spec policy
 data allowed_band: ratio range -> default 10%...50%
@@ -719,9 +719,9 @@ rule band: allowed_band
         assert!(
             !matches!(
                 &endpoint.lemma_type.specifications,
-                TypeSpecification::Quantity { .. }
+                TypeSpecification::Measure { .. }
             ),
-            "{label} endpoint must not be lifted as Quantity for a percent literal in a ratio range default",
+            "{label} endpoint must not be lifted as Measure for a percent literal in a ratio range default",
         );
         assert!(
             matches!(&endpoint.value, ValueKind::Ratio(_, _)),
@@ -847,8 +847,8 @@ data discount: ratio -> default 10%
 data surcharge: ratio -> default 5%
 data base: 100
 
-rule after_discount: base * (1 - discount)
-rule after_surcharge: base * (1 + surcharge)
+rule after_discount: base * (100% - discount)
+rule after_surcharge: base * (100% + surcharge)
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code, "pricing_mix.lemma");

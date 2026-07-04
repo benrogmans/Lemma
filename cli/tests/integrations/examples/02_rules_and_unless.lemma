@@ -3,7 +3,7 @@ spec rules_and_unless
 data is_premium   : yes
 data base_price   : number -> minimum 0
 data customer_age : number -> minimum 0 -> maximum 120
-data quantity     : number -> minimum 0
+data quantity          : number -> minimum 0
 
 rule total_before_discount:
   base_price * quantity
@@ -14,8 +14,11 @@ rule discount_percentage:
   unless quantity >= 20 then 15%
   unless is_premium then 20%
 
+rule discount_amount:
+  total_before_discount * discount_percentage
+
 rule total_after_discount:
-  total_before_discount - discount_percentage
+  total_before_discount - discount_amount
 
 rule shipping_cost:
   15

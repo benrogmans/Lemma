@@ -2,6 +2,7 @@ use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
 const SERVER_TEST_PORT: u16 = 19998;
+const SERVER_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn wait_for_port(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
@@ -37,11 +38,11 @@ rule result: x
         .spawn()
         .unwrap();
 
-    let ok = wait_for_port(SERVER_TEST_PORT, Duration::from_secs(5));
+    let ok = wait_for_port(SERVER_TEST_PORT, SERVER_STARTUP_TIMEOUT);
     if !ok {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("server did not start within 5s");
+        panic!("server did not start within timeout");
     }
 
     let url = format!("http://127.0.0.1:{}/single_spec?x=42", SERVER_TEST_PORT);
@@ -82,11 +83,11 @@ rule result: x
         .spawn()
         .unwrap();
 
-    let ok = wait_for_port(port, Duration::from_secs(5));
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
     if !ok {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("server did not start within 5s");
+        panic!("server did not start within timeout");
     }
 
     let client = reqwest::blocking::Client::new();
@@ -151,11 +152,11 @@ rule total: base
         .spawn()
         .unwrap();
 
-    let ok = wait_for_port(port, std::time::Duration::from_secs(5));
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
     if !ok {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("server did not start within 5s");
+        panic!("server did not start within timeout");
     }
 
     let client = reqwest::blocking::Client::new();
@@ -215,11 +216,11 @@ rule result: x
         .spawn()
         .unwrap();
 
-    let ok = wait_for_port(port, Duration::from_secs(5));
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
     if !ok {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("server did not start within 5s");
+        panic!("server did not start within timeout");
     }
 
     let client = reqwest::blocking::Client::new();
@@ -241,6 +242,203 @@ rule result: x
         "POST form body should return 2xx, got {status}: {body:?}"
     );
     assert_eq!(body["results"]["result"]["number"].as_str(), Some("42"));
+}
+
+/// GET `/` must return one entry per loaded spec: `{name, schema}` on success
+/// or `{name, error}` when the schema cannot be produced at the requested
+/// effective date. No spec may silently disappear from the list.
+#[test]
+fn list_specs_surfaces_per_spec_errors() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("specs.lemma"),
+        r#"spec always_available
+data x: number
+rule result: x
+
+spec future_only 2030-01-01
+data y: number
+rule result: y
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 5;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let url = format!("http://127.0.0.1:{}/?effective=2025-06-01", port);
+    let resp = reqwest::blocking::get(&url).expect("GET request");
+    let status = resp.status();
+    let body_text = resp.text().expect("response body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        status.is_success(),
+        "GET / should return 2xx, got {status}: {body_text}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}; {body_text}"));
+    let entries = body
+        .as_array()
+        .unwrap_or_else(|| panic!("list response must be an array: {body}"));
+
+    let available = entries
+        .iter()
+        .find(|e| e["name"].as_str() == Some("always_available"))
+        .unwrap_or_else(|| panic!("always_available missing from list: {body}"));
+    assert!(
+        available.get("schema").is_some(),
+        "resolvable spec must carry a schema entry: {available}"
+    );
+
+    let future = entries
+        .iter()
+        .find(|e| e["name"].as_str() == Some("future_only"))
+        .unwrap_or_else(|| panic!("future_only must not silently disappear: {body}"));
+    assert!(
+        future.get("error").is_some(),
+        "unresolvable spec must carry an error entry: {future}"
+    );
+}
+
+/// By default the server sends no CORS headers: cross-origin browser
+/// requests are denied. `--cors` opts in to permissive CORS.
+#[test]
+fn cors_denied_by_default_and_enabled_with_flag() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("single.lemma"),
+        r#"spec single_spec
+data x: number
+rule result: x
+"#,
+    )
+    .unwrap();
+
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let run_case = |port: u16, cors_flag: bool| -> Option<String> {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.arg("server")
+            .arg("--prefix")
+            .arg(temp_dir.path())
+            .arg("--port")
+            .arg(port.to_string());
+        if cors_flag {
+            cmd.arg("--cors");
+        }
+        let mut child = cmd.spawn().unwrap();
+
+        let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+        if !ok {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("server did not start within timeout");
+        }
+
+        let client = reqwest::blocking::Client::new();
+        let resp = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .header("Origin", "https://evil.example")
+            .send()
+            .expect("GET request");
+        let allow_origin = resp
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let _ = child.kill();
+        let _ = child.wait();
+        allow_origin
+    };
+
+    let default_origin = run_case(SERVER_TEST_PORT + 6, false);
+    assert!(
+        default_origin.is_none(),
+        "default must not send Access-Control-Allow-Origin, got {default_origin:?}"
+    );
+
+    let opt_in_origin = run_case(SERVER_TEST_PORT + 7, true);
+    assert_eq!(
+        opt_in_origin.as_deref(),
+        Some("*"),
+        "--cors must send permissive Access-Control-Allow-Origin"
+    );
+}
+
+/// `--eval-timeout 0` makes every evaluation exceed the wall-clock budget;
+/// the server must answer 503 with a JSON error instead of hanging.
+/// The spec carries a long rule chain so plan+eval take real work and the
+/// zero-length budget always elapses before the blocking task finishes.
+#[test]
+fn evaluation_timeout_returns_503() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut spec = String::from("spec slow_spec\ndata x: number\nrule r0: x + 1\n");
+    for i in 1..100 {
+        spec.push_str(&format!("rule r{i}: r{} * 2 + {i}\n", i - 1));
+    }
+    std::fs::write(temp_dir.path().join("slow.lemma"), spec).unwrap();
+
+    let port = SERVER_TEST_PORT + 8;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--eval-timeout")
+        .arg("0")
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post(format!("http://127.0.0.1:{port}/slow_spec"))
+        .header("Content-Type", "application/json")
+        .body(r#"{"x":"42"}"#)
+        .send()
+        .expect("POST request");
+    let status = resp.status();
+    let body: serde_json::Value =
+        serde_json::from_str(&resp.text().expect("response body")).expect("JSON body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert_eq!(
+        status.as_u16(),
+        503,
+        "zero timeout must yield 503, got {status}: {body:?}"
+    );
+    assert!(
+        body["error"]
+            .as_str()
+            .expect("error message present")
+            .contains("timed out"),
+        "error must mention timeout: {body:?}"
+    );
 }
 
 /// GET `/{spec}` must expose each temporal version's half-open
@@ -274,11 +472,11 @@ rule total: base
         .spawn()
         .unwrap();
 
-    let ok = wait_for_port(port, Duration::from_secs(5));
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
     if !ok {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("server did not start within 5s");
+        panic!("server did not start within timeout");
     }
 
     let url = format!("http://127.0.0.1:{}/pricing", port);

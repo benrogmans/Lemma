@@ -1,5 +1,5 @@
 use crate::engine::Context;
-use crate::literals::{QuantityUnit, QuantityUnits};
+use crate::literals::{MeasureUnit, MeasureUnits};
 use crate::parsing::ast::{
     self as ast, CommandArg, Constraint, EffectiveDate, LemmaData, LemmaRepository, LemmaRule,
     LemmaSpec, MetaValue, ParentType, PrimitiveKind, TypeConstraintCommand, Value, WithRhs,
@@ -12,7 +12,7 @@ use crate::planning::semantics::{
     number_with_unit_to_value_kind, parser_value_to_value_kind, primitive_boolean_arc,
     primitive_date_arc, primitive_date_range_arc, primitive_number_arc, primitive_text_arc,
     primitive_time_arc, range_type_specification_from_endpoints, value_kind_matches_spec,
-    value_to_semantic, ArithmeticComputation, BaseQuantityVector, ComparisonComputation,
+    value_to_semantic, ArithmeticComputation, BaseMeasureVector, ComparisonComputation,
     DataDefinition, DataPath, Expression, ExpressionKind, LemmaType, LiteralValue, PathSegment,
     RawDefault, ReferenceTarget, RulePath, SemanticConversionTarget, TypeDefiningSpec, TypeExtends,
     TypeSpecification, ValueKind,
@@ -98,7 +98,7 @@ impl Graph {
     pub(crate) fn build_data(
         &self,
         resolved_by_type_name: &HashMap<String, Arc<LemmaType>>,
-    ) -> IndexMap<DataPath, DataDefinition> {
+    ) -> Result<IndexMap<DataPath, DataDefinition>, Vec<Error>> {
         struct PendingReference {
             target: ReferenceTarget,
             resolved_type: Arc<LemmaType>,
@@ -109,13 +109,15 @@ impl Graph {
         let mut schema: HashMap<DataPath, Arc<LemmaType>> = HashMap::new();
         let mut declared_defaults: HashMap<DataPath, ValueKind> = HashMap::new();
         let mut values: HashMap<DataPath, LiteralValue> = HashMap::new();
+        let mut value_sources: HashMap<DataPath, Source> = HashMap::new();
         let mut spec_arcs: HashMap<DataPath, Arc<LemmaSpec>> = HashMap::new();
         let mut references: HashMap<DataPath, PendingReference> = HashMap::new();
 
         for (path, rfv) in self.data.iter() {
             match rfv {
-                DataDefinition::Value { value, .. } => {
+                DataDefinition::Value { value, source } => {
                     values.insert(path.clone(), value.clone());
+                    value_sources.insert(path.clone(), source.clone());
                     schema.insert(path.clone(), value.lemma_type.clone());
                 }
                 DataDefinition::TypeDeclaration {
@@ -152,10 +154,11 @@ impl Graph {
             }
         }
 
+        let mut coercion_errors: Vec<Error> = Vec::new();
         for (path, value) in values.iter_mut() {
             if let Some(type_name) = value.lemma_type.name.as_deref() {
                 if let Some(resolved) = resolved_by_type_name.get(type_name) {
-                    semantics::refresh_quantity_literal_canonical_magnitude(
+                    semantics::refresh_measure_literal_canonical_magnitude(
                         value,
                         resolved.as_ref(),
                     );
@@ -166,8 +169,17 @@ impl Graph {
             };
             match Self::coerce_literal_to_schema_type(value, schema_type) {
                 Ok(coerced) => *value = coerced,
-                Err(msg) => unreachable!("Data {} incompatible: {}", path, msg),
+                Err(msg) => {
+                    coercion_errors.push(Error::validation(
+                        format!("Data '{path}' incompatible with declared type: {msg}"),
+                        value_sources.get(path).cloned(),
+                        None::<String>,
+                    ));
+                }
             }
+        }
+        if !coercion_errors.is_empty() {
+            return Err(coercion_errors);
         }
 
         let mut data = IndexMap::new();
@@ -210,7 +222,7 @@ impl Graph {
                 );
             }
         }
-        data
+        Ok(data)
     }
 
     pub(crate) fn coerce_literal_to_schema_type(
@@ -237,21 +249,19 @@ impl Graph {
                         help: String::new(),
                     })))
                 }
-                TypeSpecification::QuantityRange {
+                TypeSpecification::MeasureRange {
                     units,
                     decomposition,
                     ..
-                } => Some(Arc::new(LemmaType::primitive(
-                    TypeSpecification::Quantity {
-                        minimum: None,
-                        maximum: None,
-                        decimals: None,
-                        units: units.clone(),
-                        traits: Vec::new(),
-                        decomposition: decomposition.clone(),
-                        help: String::new(),
-                    },
-                ))),
+                } => Some(Arc::new(LemmaType::primitive(TypeSpecification::Measure {
+                    minimum: None,
+                    maximum: None,
+                    decimals: None,
+                    units: units.clone(),
+                    traits: Vec::new(),
+                    decomposition: decomposition.clone(),
+                    help: String::new(),
+                }))),
                 _ => None,
             }
         }
@@ -264,19 +274,19 @@ impl Graph {
                     lit.value, lit.lemma_type.specifications
                 );
             }
-            if let ValueKind::Quantity(_, signature) = &lit.value {
+            if let ValueKind::Measure(_, signature) = &lit.value {
                 let unit_name = signature
                     .first()
                     .map(|(name, _)| name.as_str())
                     .filter(|name| !name.is_empty())
                     .ok_or_else(|| {
                         format!(
-                            "value {} cannot be used as type {}: quantity literal has empty unit name",
+                            "value {} cannot be used as type {}: measure literal has empty unit name",
                             lit,
                             schema_ref.name()
                         )
                     })?;
-                if let TypeSpecification::Quantity { units, .. } = &schema_ref.specifications {
+                if let TypeSpecification::Measure { units, .. } = &schema_ref.specifications {
                     if !units.iter().any(|u| u.name == unit_name) {
                         return Err(format!(
                             "value {} cannot be used as type {}: unknown unit '{}'",
@@ -301,14 +311,14 @@ impl Graph {
                 out.lemma_type = Arc::clone(schema_type);
                 Ok(out)
             }
-            (TypeSpecification::Quantity { units, .. }, ValueKind::Quantity(_, signature)) => {
+            (TypeSpecification::Measure { units, .. }, ValueKind::Measure(_, signature)) => {
                 let unit_name = signature
                     .first()
                     .map(|(name, _)| name.as_str())
                     .filter(|name| !name.is_empty())
                     .ok_or_else(|| {
                         format!(
-                            "value {} cannot be used as type {}: quantity literal has empty unit name",
+                            "value {} cannot be used as type {}: measure literal has empty unit name",
                             lit,
                             schema_ref.name()
                         )
@@ -345,7 +355,7 @@ impl Graph {
                 | TypeSpecification::DateRange { .. }
                 | TypeSpecification::TimeRange { .. }
                 | TypeSpecification::RatioRange { .. }
-                | TypeSpecification::QuantityRange { .. },
+                | TypeSpecification::MeasureRange { .. },
                 ValueKind::Range(left, right),
             ) => {
                 let endpoint_schema_type =
@@ -979,10 +989,7 @@ struct GraphBuilder<'a> {
     errors: Vec<Error>,
     main_spec: Arc<LemmaSpec>,
     main_repository: Arc<ast::LemmaRepository>,
-    /// Degraded planning: dependency discovery failed and the DAG was
-    /// reduced to the root spec, so unregistered nested specs are expected
-    /// (their discovery errors were already reported).
-    dependency_discovery_failed: bool,
+    limits: &'a crate::limits::ResourceLimits,
 }
 
 struct RuleExpressionConversion<'a> {
@@ -1009,13 +1016,13 @@ fn reference_error(main_spec: &Arc<LemmaSpec>, source: &Source, message: String)
 /// describing the mismatch otherwise.
 ///
 /// "Same kind" requires:
-/// 1. matching base type spec (number / quantity / text / ratio / …) — see
+/// 1. matching base type spec (number / measure / text / ratio / …) — see
 ///    [`LemmaType::has_same_base_type`]; and
-/// 2. for quantity types, matching quantity family — see
-///    [`LemmaType::same_quantity_family`]. Two quantities in different families
-///    (e.g. `eur` vs `celsius`) share the `Quantity` discriminant but are not
+/// 2. for measure types, matching measure family — see
+///    [`LemmaType::same_measure_family`]. Two quantities in different families
+///    (e.g. `eur` vs `celsius`) share the `Measure` discriminant but are not
 ///    interchangeable values; copying one into the other would silently
-///    propagate a wrong-domain quantity.
+///    propagate a wrong-domain measure.
 ///
 /// `target_kind_label` distinguishes the two callers ("target" for data
 /// references, "target rule" for rule references) so the message reads
@@ -1037,19 +1044,19 @@ fn reference_kind_mismatch_message<P: fmt::Display>(
             target_type.name(),
         ));
     }
-    if lhs.is_quantity() && !lhs.same_quantity_family(target_type) {
-        let lhs_family = lhs.quantity_family_name().expect(
-            "BUG: declared quantity data must carry a family name; \
-             anonymous quantity types only arise from runtime synthesis \
+    if lhs.is_measure() && !lhs.same_measure_family(target_type) {
+        let lhs_family = lhs.measure_family_name().expect(
+            "BUG: declared measure data must carry a family name; \
+             anonymous measure types only arise from runtime synthesis \
              and never appear as a reference's LHS-declared type",
         );
-        let target_family = target_type.quantity_family_name().expect(
-            "BUG: declared quantity data must carry a family name; \
-             anonymous quantity types only arise from runtime synthesis \
+        let target_family = target_type.measure_family_name().expect(
+            "BUG: declared measure data must carry a family name; \
+             anonymous measure types only arise from runtime synthesis \
              and never appear as a reference target's schema type",
         );
         return Some(format!(
-            "Data reference '{}' quantity family mismatch: declared as '{}' (family '{}') but {} '{}' is '{}' (family '{}')",
+            "Data reference '{}' measure family mismatch: declared as '{}' (family '{}') but {} '{}' is '{}' (family '{}')",
             reference_path,
             lhs.name(),
             lhs_family,
@@ -1154,22 +1161,91 @@ fn apply_constraints_to_spec(
     Ok(specs)
 }
 
+/// Whether `expr` and every nested sub-expression carry a `source_location`.
+///
+/// ASTs produced by the parser always carry locations; this guards the
+/// programmatic-AST boundary (external consumers constructing ASTs directly).
+fn expression_has_source_locations(expr: &ast::Expression) -> bool {
+    if expr.source_location.is_none() {
+        return false;
+    }
+    match &expr.kind {
+        ast::ExpressionKind::Literal(_)
+        | ast::ExpressionKind::Reference(_)
+        | ast::ExpressionKind::Now
+        | ast::ExpressionKind::Veto(_) => true,
+        ast::ExpressionKind::DateRelative(_, e)
+        | ast::ExpressionKind::DateCalendar(_, _, e)
+        | ast::ExpressionKind::PastFutureRange(_, e)
+        | ast::ExpressionKind::UnitConversion(e, _)
+        | ast::ExpressionKind::LogicalNegation(e, _)
+        | ast::ExpressionKind::MathematicalComputation(_, e)
+        | ast::ExpressionKind::ResultIsVeto(e) => expression_has_source_locations(e),
+        ast::ExpressionKind::RangeLiteral(l, r)
+        | ast::ExpressionKind::RangeContainment(l, r)
+        | ast::ExpressionKind::LogicalAnd(l, r)
+        | ast::ExpressionKind::Arithmetic(l, _, r)
+        | ast::ExpressionKind::Comparison(l, _, r) => {
+            expression_has_source_locations(l) && expression_has_source_locations(r)
+        }
+    }
+}
+
+/// Boundary validation for programmatically constructed ASTs: every expression
+/// in every spec of the DAG must carry a `source_location`. Parser output always
+/// does; a miss means an external consumer built an invalid AST, which is an
+/// `Err(Error)` at this system boundary (not a panic).
+fn validate_ast_source_locations(dag: &[(Arc<LemmaRepository>, Arc<LemmaSpec>)]) -> Vec<Error> {
+    let mut errors = Vec::new();
+    for (_, spec) in dag {
+        for rule in &spec.rules {
+            if !expression_has_source_locations(&rule.expression) {
+                errors.push(Error::validation(
+                    format!(
+                        "In spec '{}': rule '{}' contains an expression without a source location; \
+                         programmatically constructed ASTs must set source_location on every expression",
+                        spec.name, rule.name
+                    ),
+                    Some(rule.source_location.clone()),
+                    None::<String>,
+                ));
+            }
+            for clause in &rule.unless_clauses {
+                if !expression_has_source_locations(&clause.condition)
+                    || !expression_has_source_locations(&clause.result)
+                {
+                    errors.push(Error::validation(
+                        format!(
+                            "In spec '{}': rule '{}' has an unless clause with an expression without \
+                             a source location; programmatically constructed ASTs must set \
+                             source_location on every expression",
+                            spec.name, rule.name
+                        ),
+                        Some(clause.source_location.clone()),
+                        None::<String>,
+                    ));
+                }
+            }
+        }
+    }
+    errors
+}
+
 impl Graph {
     /// Build the dependency graph for a single spec within a pre-resolved DAG slice.
-    ///
-    /// `dependency_discovery_failed` marks degraded planning: discovery
-    /// already reported errors and the DAG was reduced to the root spec, so
-    /// nested specs are expected to be unregistered and their subtrees are
-    /// skipped quietly. Outside degraded planning, reaching an unregistered
-    /// spec is an engine bug and crashes.
     pub(crate) fn build(
         context: &Context,
         repository: &Arc<LemmaRepository>,
         main_spec: &Arc<LemmaSpec>,
         dag: &[(Arc<LemmaRepository>, Arc<LemmaSpec>)],
         effective: &EffectiveDate,
-        dependency_discovery_failed: bool,
+        limits: &crate::limits::ResourceLimits,
     ) -> Result<(Graph, ResolvedTypesMap), Vec<Error>> {
+        let boundary_errors = validate_ast_source_locations(dag);
+        if !boundary_errors.is_empty() {
+            return Err(boundary_errors);
+        }
+
         let mut type_resolver = TypeResolver::new(context);
 
         let mut type_errors: Vec<Error> = Vec::new();
@@ -1186,7 +1262,7 @@ impl Graph {
                 errors: Vec::new(),
                 main_spec: Arc::clone(main_spec),
                 main_repository: Arc::clone(repository),
-                dependency_discovery_failed,
+                limits,
             };
 
             builder.build_spec(
@@ -1867,26 +1943,24 @@ impl<'a> GraphBuilder<'a> {
                 });
                 let mut declared_default = original_declared_default;
 
-                let is_generic_quantity_range = matches!(
+                let is_generic_measure_range = matches!(
                     &resolved_type.specifications,
-                    TypeSpecification::QuantityRange {
+                    TypeSpecification::MeasureRange {
                         units,
                         decomposition,
                         ..
                     } if units.0.is_empty() && decomposition.is_none()
                 );
-                let is_calendar_quantity = matches!(
+                let is_calendar_measure = matches!(
                     &resolved_type.specifications,
-                    TypeSpecification::Quantity { traits, .. }
-                        if traits.contains(&semantics::QuantityTrait::Calendar)
+                    TypeSpecification::Measure { traits, .. }
+                        if traits.contains(&semantics::MeasureTrait::Calendar)
                 );
 
-                if is_generic_quantity_range || is_calendar_quantity {
+                if is_generic_measure_range || is_calendar_measure {
                     if let Some(ValueKind::Range(left, right)) = &declared_default {
-                        if let (
-                            ValueKind::Quantity(_, left_sig),
-                            ValueKind::Quantity(_, right_sig),
-                        ) = (&left.value, &right.value)
+                        if let (ValueKind::Measure(_, left_sig), ValueKind::Measure(_, right_sig)) =
+                            (&left.value, &right.value)
                         {
                             let left_unit = left_sig.first().map(|(n, _)| n.as_str()).unwrap_or("");
                             let right_unit =
@@ -1898,37 +1972,37 @@ impl<'a> GraphBuilder<'a> {
                                 .map(|(_, _, t)| t)
                                 .expect("BUG: no resolved types for spec during add_local_data");
 
-                            let left_quantity_type = resolved.unit_index.get(left_unit).cloned();
-                            let right_quantity_type = resolved.unit_index.get(right_unit).cloned();
+                            let left_measure_type = resolved.unit_index.get(left_unit).cloned();
+                            let right_measure_type = resolved.unit_index.get(right_unit).cloned();
 
-                            match (&left_quantity_type, &right_quantity_type) {
-                                (Some(left_quantity_type), Some(right_quantity_type))
-                                    if left_quantity_type
+                            match (&left_measure_type, &right_measure_type) {
+                                (Some(left_measure_type), Some(right_measure_type))
+                                    if left_measure_type
                                         .as_ref()
-                                        .same_quantity_family(right_quantity_type.as_ref()) =>
+                                        .same_measure_family(right_measure_type.as_ref()) =>
                                 {
                                     let specialized_range_type =
                                         infer_range_type_from_endpoint_types(
-                                            left_quantity_type.as_ref(),
-                                            right_quantity_type.as_ref(),
+                                            left_measure_type.as_ref(),
+                                            right_measure_type.as_ref(),
                                         );
                                     let coerced_left = Graph::coerce_literal_to_schema_type(
                                         left.as_ref(),
-                                        left_quantity_type,
+                                        left_measure_type,
                                     )
                                     .unwrap_or_else(|message| {
                                         unreachable!(
-                                            "BUG: coercing quantity range default left endpoint failed: {}",
+                                            "BUG: coercing measure range default left endpoint failed: {}",
                                             message
                                         )
                                     });
                                     let coerced_right = Graph::coerce_literal_to_schema_type(
                                         right.as_ref(),
-                                        right_quantity_type,
+                                        right_measure_type,
                                     )
                                     .unwrap_or_else(|message| {
                                         unreachable!(
-                                            "BUG: coercing quantity range default right endpoint failed: {}",
+                                            "BUG: coercing measure range default right endpoint failed: {}",
                                             message
                                         )
                                     });
@@ -1944,7 +2018,7 @@ impl<'a> GraphBuilder<'a> {
                                     )
                                     .unwrap_or_else(|message| {
                                         unreachable!(
-                                            "BUG: specializing generic quantity range default failed: {}",
+                                            "BUG: specializing generic measure range default failed: {}",
                                             message
                                         )
                                     });
@@ -1954,7 +2028,7 @@ impl<'a> GraphBuilder<'a> {
                                 _ => {
                                     self.errors.push(self.engine_error(
                                         format!(
-                                            "Generic quantity range default must use units from one concrete local quantity family, got '{}' and '{}'",
+                                            "Generic measure range default must use units from one concrete local measure family, got '{}' and '{}'",
                                             left_unit, right_unit
                                         ),
                                         &effective_source,
@@ -2289,13 +2363,6 @@ impl<'a> GraphBuilder<'a> {
             return true;
         }
         if !type_resolver.is_registered(spec_arc) {
-            if self.dependency_discovery_failed {
-                // Degraded planning: discovery already reported why this
-                // spec's dependencies could not be resolved, and the DAG was
-                // reduced to the root spec. Skip the unregistered subtree
-                // quietly — the planning result already carries the errors.
-                return false;
-            }
             panic!(
                 "BUG: spec '{}' reachable from spec '{}' was not registered during dependency discovery",
                 spec_arc.name, self.main_spec.name
@@ -2377,6 +2444,21 @@ impl<'a> GraphBuilder<'a> {
         type_resolver: &TypeResolver<'a>,
     ) -> Result<(), Vec<Error>> {
         let spec = spec_arc.as_ref();
+
+        if current_segments.len() > self.limits.max_spec_dependency_depth {
+            return Err(vec![Error::resource_limit_exceeded(
+                "max_spec_dependency_depth",
+                self.limits.max_spec_dependency_depth.to_string(),
+                current_segments.len().to_string(),
+                format!(
+                    "Spec '{}' exceeds the maximum import nesting depth; flatten the import chain",
+                    spec.name
+                ),
+                None,
+                Some(Arc::clone(spec_arc)),
+                None,
+            )]);
+        }
 
         if current_segments.is_empty() {
             self.process_meta_fields(spec);
@@ -3016,23 +3098,23 @@ fn find_types_by_spec<'b>(
 /// rule-boundary check (to produce precise error messages naming candidate types).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecompositionMatch {
-    /// No declared quantity type in scope has this decomposition.
+    /// No declared measure type in scope has this decomposition.
     None,
-    /// Exactly one declared quantity type in scope has this decomposition.
+    /// Exactly one declared measure type in scope has this decomposition.
     Unique(Arc<LemmaType>),
-    /// Multiple quantity families in scope share this decomposition; family names are
+    /// Multiple measure families in scope share this decomposition; family names are
     /// sorted for stable diagnostic ordering.
     Multiple(Vec<String>),
 }
 
-/// Find the quantity family (ies) in scope whose decomposition matches `decomposition` exactly.
+/// Find the measure family (ies) in scope whose decomposition matches `decomposition` exactly.
 ///
 /// Uses the consumer spec's `unit_index` only. Units belong to families; binding aliases in
 /// `resolved` are ignored. Imports are already merged into `unit_index` during resolution.
-pub fn find_unique_quantity_type_by_decomposition(
+pub fn find_unique_measure_type_by_decomposition(
     resolved_types: &ResolvedTypesMap,
     spec_arc: &Arc<LemmaSpec>,
-    decomposition: &BaseQuantityVector,
+    decomposition: &BaseMeasureVector,
 ) -> DecompositionMatch {
     let mut seen: HashMap<String, Arc<LemmaType>> = HashMap::new();
 
@@ -3042,22 +3124,19 @@ pub fn find_unique_quantity_type_by_decomposition(
 
     for arc in spec_types.unit_index.values() {
         let lemma_type = arc.as_ref();
-        if !matches!(
-            lemma_type.specifications,
-            TypeSpecification::Quantity { .. }
-        ) {
+        if !matches!(lemma_type.specifications, TypeSpecification::Measure { .. }) {
             continue;
         }
         if lemma_type
-            .quantity_type_decomposition()
+            .measure_type_decomposition()
             .is_none_or(|decomposition_vector| decomposition_vector != decomposition)
         {
             continue;
         }
-        let quantity_family = lemma_type
-            .quantity_family_name()
-            .expect("BUG: unit_index quantity type must carry a family name");
-        seen.entry(quantity_family.to_string())
+        let measure_family = lemma_type
+            .measure_family_name()
+            .expect("BUG: unit_index measure type must carry a family name");
+        seen.entry(measure_family.to_string())
             .or_insert_with(|| Arc::clone(arc));
     }
 
@@ -3076,16 +3155,16 @@ pub fn find_unique_quantity_type_by_decomposition(
     }
 }
 
-/// True iff an anonymous quantity at the rule boundary must be rejected.
+/// True iff an anonymous measure at the rule boundary must be rejected.
 ///
 /// Planning promotes anonymous intermediates to named types when a unique in-scope type
-/// shares the decomposition. Any anonymous quantity that still reaches a rule boundary
+/// shares the decomposition. Any anonymous measure that still reaches a rule boundary
 /// cannot be serialized on the API (no declared unit map to emit).
 fn anonymous_rule_boundary_requires_rejection() -> bool {
     true
 }
 
-/// Build a precise error message for an anonymous quantity that survives to a rule boundary.
+/// Build a precise error message for an anonymous measure that survives to a rule boundary.
 ///
 /// The boundary check rejects such intermediates: a rule must produce a named type so its
 /// result is unambiguous. If multiple in-scope types share the decomposition, the message
@@ -3094,16 +3173,16 @@ fn anonymous_rule_boundary_error(
     rule_path: &RulePath,
     spec_arc: &Arc<LemmaSpec>,
     resolved_types: &ResolvedTypesMap,
-    decomposition: &BaseQuantityVector,
+    decomposition: &BaseMeasureVector,
     branch_index: Option<usize>,
 ) -> String {
-    let candidates_hint = match find_unique_quantity_type_by_decomposition(
+    let candidates_hint = match find_unique_measure_type_by_decomposition(
         resolved_types,
         spec_arc,
         decomposition,
     ) {
         DecompositionMatch::Multiple(family_names) => format!(
-            " Multiple quantity families in scope share these dimensions: {}. Give the rule an explicit named type.",
+            " Multiple measure families in scope share these dimensions: {}. Give the rule an explicit named type.",
             family_names.join(", ")
         ),
         _ => String::new(),
@@ -3111,13 +3190,13 @@ fn anonymous_rule_boundary_error(
     match branch_index {
         Some(index) => format!(
             "Unless clause {} in rule '{}' (spec '{}') returns an anonymous intermediate with \
-             unresolved dimensions {:?}. Give the rule a named quantity or ratio type with \
+             unresolved dimensions {:?}. Give the rule a named measure or ratio type with \
              declared units, or rewrite the expression so dimensions resolve to a named type in scope.{}",
             index, rule_path.rule, spec_arc.name, decomposition, candidates_hint
         ),
         None => format!(
             "Rule '{}' in spec '{}' returns an anonymous intermediate with unresolved \
-             dimensions {:?}. Give the rule a named quantity or ratio type with declared units, \
+             dimensions {:?}. Give the rule a named measure or ratio type with declared units, \
              or rewrite the expression so dimensions resolve to a named type in scope.{}",
             rule_path.rule, spec_arc.name, decomposition, candidates_hint
         ),
@@ -3148,13 +3227,13 @@ fn compute_arithmetic_result_type_recursive(
             LemmaType::anonymous_for_decomposition(duration_decomposition()),
         ),
 
-        // Quantity pairs must fall through to operator-specific arms below.
+        // Measure pairs must fall through to operator-specific arms below.
         // The general equal-type guard must not short-circuit those.
         _ if *left_type == *right_type
             && !matches!(
                 &left_type.specifications,
-                TypeSpecification::Quantity { .. }
-                    | TypeSpecification::QuantityRange { .. }
+                TypeSpecification::Measure { .. }
+                    | TypeSpecification::MeasureRange { .. }
                     | TypeSpecification::NumberRange { .. }
                     | TypeSpecification::DateRange { .. }
                     | TypeSpecification::TimeRange { .. }
@@ -3164,31 +3243,31 @@ fn compute_arithmetic_result_type_recursive(
             Arc::clone(&left_type)
         }
 
-        (TypeSpecification::Date { .. }, TypeSpecification::Quantity { .. })
-            if right_type.is_duration_like_quantity() =>
+        (TypeSpecification::Date { .. }, TypeSpecification::Measure { .. })
+            if right_type.is_duration_like_measure() =>
         {
             Arc::clone(&left_type)
         }
-        (TypeSpecification::Date { .. }, TypeSpecification::Quantity { .. })
-            if right_type.is_calendar_like_quantity() =>
+        (TypeSpecification::Date { .. }, TypeSpecification::Measure { .. })
+            if right_type.is_calendar_like_measure() =>
         {
             Arc::clone(&left_type)
         }
-        (TypeSpecification::Quantity { .. }, TypeSpecification::Date { .. })
-            if left_type.is_calendar_like_quantity() =>
+        (TypeSpecification::Measure { .. }, TypeSpecification::Date { .. })
+            if left_type.is_calendar_like_measure() =>
         {
             Arc::clone(&right_type)
         }
-        (TypeSpecification::Time { .. }, TypeSpecification::Quantity { .. })
-            if right_type.is_duration_like_quantity() =>
+        (TypeSpecification::Time { .. }, TypeSpecification::Measure { .. })
+            if right_type.is_duration_like_measure() =>
         {
             Arc::clone(&left_type)
         }
 
-        (TypeSpecification::Quantity { .. }, TypeSpecification::Ratio { .. }) => {
+        (TypeSpecification::Measure { .. }, TypeSpecification::Ratio { .. }) => {
             Arc::clone(&left_type)
         }
-        (TypeSpecification::Quantity { .. }, TypeSpecification::Number { .. }) => match op {
+        (TypeSpecification::Measure { .. }, TypeSpecification::Number { .. }) => match op {
             ArithmeticComputation::Multiply
             | ArithmeticComputation::Divide
             | ArithmeticComputation::Modulo
@@ -3196,21 +3275,21 @@ fn compute_arithmetic_result_type_recursive(
             _ => Arc::new(LemmaType::undetermined_type()),
         },
         (
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 decomposition: l_decomp_opt,
                 ..
             },
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 decomposition: r_decomp_opt,
                 ..
             },
         ) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                if left_type.compatible_with_anonymous_quantity(&right_type)
-                    || right_type.compatible_with_anonymous_quantity(&left_type)
+                if left_type.compatible_with_anonymous_measure(&right_type)
+                    || right_type.compatible_with_anonymous_measure(&left_type)
                 {
-                    let left_decomp = left_type.quantity_type_decomposition();
-                    let right_decomp = right_type.quantity_type_decomposition();
+                    let left_decomp = left_type.measure_type_decomposition();
+                    let right_decomp = right_type.measure_type_decomposition();
                     if let (Some(ld), Some(rd)) = (left_decomp, right_decomp) {
                         if ld == rd {
                             if *ld == duration_decomposition() {
@@ -3220,8 +3299,8 @@ fn compute_arithmetic_result_type_recursive(
                             } else {
                                 Arc::new(LemmaType::anonymous_for_decomposition(ld.clone()))
                             }
-                        } else if left_type.is_duration_like_quantity()
-                            && right_type.is_duration_like_quantity()
+                        } else if left_type.is_duration_like_measure()
+                            && right_type.is_duration_like_measure()
                         {
                             Arc::new(LemmaType::anonymous_for_decomposition(
                                 duration_decomposition(),
@@ -3233,8 +3312,8 @@ fn compute_arithmetic_result_type_recursive(
                         } else {
                             Arc::clone(&left_type)
                         }
-                    } else if left_type.is_duration_like_quantity()
-                        && right_type.is_duration_like_quantity()
+                    } else if left_type.is_duration_like_measure()
+                        && right_type.is_duration_like_measure()
                     {
                         Arc::new(LemmaType::anonymous_for_decomposition(
                             duration_decomposition(),
@@ -3272,7 +3351,7 @@ fn compute_arithmetic_result_type_recursive(
 
         (
             TypeSpecification::Number { .. },
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 decomposition: r_decomp_opt,
                 ..
             },
@@ -3280,7 +3359,7 @@ fn compute_arithmetic_result_type_recursive(
             ArithmeticComputation::Multiply => Arc::clone(&right_type),
             ArithmeticComputation::Divide => match r_decomp_opt {
                 Some(r_decomp) if !r_decomp.is_empty() => {
-                    let negated: BaseQuantityVector =
+                    let negated: BaseMeasureVector =
                         r_decomp.iter().map(|(k, &e)| (k.clone(), -e)).collect();
                     Arc::new(LemmaType::anonymous_for_decomposition(negated))
                 }
@@ -3292,6 +3371,10 @@ fn compute_arithmetic_result_type_recursive(
         (TypeSpecification::Number { .. }, TypeSpecification::Ratio { .. }) => {
             primitive_number_arc().clone()
         }
+        (TypeSpecification::Ratio { .. }, TypeSpecification::Number { .. }) => match op {
+            ArithmeticComputation::Multiply => primitive_number_arc().clone(),
+            _ => Arc::clone(&left_type),
+        },
         (TypeSpecification::Number { .. }, TypeSpecification::Number { .. }) => {
             primitive_number_arc().clone()
         }
@@ -3313,10 +3396,10 @@ fn compute_arithmetic_result_type_recursive(
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
         }
-        (TypeSpecification::QuantityRange { .. }, TypeSpecification::QuantityRange { .. }) => {
+        (TypeSpecification::MeasureRange { .. }, TypeSpecification::MeasureRange { .. }) => {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract
-                    if range_matches_range_quantity(&left_type, &right_type) =>
+                    if range_matches_range_measure(&left_type, &right_type) =>
                 {
                     range_span_type(&left_type)
                 }
@@ -3332,74 +3415,74 @@ fn compute_arithmetic_result_type_recursive(
         (TypeSpecification::NumberRange { .. }, TypeSpecification::Number { .. })
         | (TypeSpecification::RatioRange { .. }, TypeSpecification::Ratio { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                range_quantity_type_for_operand(&left_type, &right_type)
+                range_measure_type_for_operand(&left_type, &right_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
-        (TypeSpecification::QuantityRange { .. }, TypeSpecification::Quantity { .. }) => match op {
+        (TypeSpecification::MeasureRange { .. }, TypeSpecification::Measure { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
-                if range_matches_quantity_type(&left_type, &right_type) =>
+                if range_matches_measure_type(&left_type, &right_type) =>
             {
-                range_quantity_type_for_operand(&left_type, &right_type)
+                range_measure_type_for_operand(&left_type, &right_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
         (TypeSpecification::Number { .. }, TypeSpecification::NumberRange { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                range_quantity_type_for_operand(&right_type, &left_type)
+                range_measure_type_for_operand(&right_type, &left_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
-        (TypeSpecification::Quantity { .. }, TypeSpecification::QuantityRange { .. }) => match op {
+        (TypeSpecification::Measure { .. }, TypeSpecification::MeasureRange { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
-                if range_matches_quantity_type(&right_type, &left_type) =>
+                if range_matches_measure_type(&right_type, &left_type) =>
             {
-                range_quantity_type_for_operand(&right_type, &left_type)
+                range_measure_type_for_operand(&right_type, &left_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
         (TypeSpecification::Ratio { .. }, TypeSpecification::RatioRange { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                range_quantity_type_for_operand(&right_type, &left_type)
+                range_measure_type_for_operand(&right_type, &left_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
-        (TypeSpecification::DateRange { .. }, TypeSpecification::Quantity { .. })
-            if right_type.is_duration_like_quantity() =>
+        (TypeSpecification::DateRange { .. }, TypeSpecification::Measure { .. })
+            if right_type.is_duration_like_measure() =>
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_quantity_type_for_operand(&left_type, &right_type)
+                    range_measure_type_for_operand(&left_type, &right_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
         }
-        (TypeSpecification::DateRange { .. }, TypeSpecification::Quantity { .. })
-            if right_type.is_calendar_like_quantity() =>
+        (TypeSpecification::DateRange { .. }, TypeSpecification::Measure { .. })
+            if right_type.is_calendar_like_measure() =>
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_quantity_type_for_operand(&left_type, &right_type)
+                    range_measure_type_for_operand(&left_type, &right_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
         }
-        (TypeSpecification::Quantity { .. }, TypeSpecification::DateRange { .. })
-            if left_type.is_duration_like_quantity() =>
+        (TypeSpecification::Measure { .. }, TypeSpecification::DateRange { .. })
+            if left_type.is_duration_like_measure() =>
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_quantity_type_for_operand(&right_type, &left_type)
+                    range_measure_type_for_operand(&right_type, &left_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
         }
-        (TypeSpecification::Quantity { .. }, TypeSpecification::DateRange { .. })
-            if left_type.is_calendar_like_quantity() =>
+        (TypeSpecification::Measure { .. }, TypeSpecification::DateRange { .. })
+            if left_type.is_calendar_like_measure() =>
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_quantity_type_for_operand(&right_type, &left_type)
+                    range_measure_type_for_operand(&right_type, &left_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
@@ -3432,8 +3515,8 @@ fn range_span_type(range_type: &LemmaType) -> Arc<LemmaType> {
             duration_decomposition(),
         )),
         TypeSpecification::NumberRange { .. } => primitive_number_arc().clone(),
-        TypeSpecification::QuantityRange { units, .. } => {
-            Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
+        TypeSpecification::MeasureRange { units, .. } => {
+            Arc::new(LemmaType::primitive(TypeSpecification::Measure {
                 minimum: None,
                 maximum: None,
                 decimals: None,
@@ -3456,7 +3539,7 @@ fn range_span_type(range_type: &LemmaType) -> Arc<LemmaType> {
     }
 }
 
-fn range_quantity_type_for_operand(
+fn range_measure_type_for_operand(
     range_type: &LemmaType,
     other_type: &LemmaType,
 ) -> Arc<LemmaType> {
@@ -3468,38 +3551,38 @@ fn range_quantity_type_for_operand(
     }
 }
 
-fn range_matches_quantity_type(range_type: &LemmaType, measure_type: &LemmaType) -> bool {
+fn range_matches_measure_type(range_type: &LemmaType, measure_type: &LemmaType) -> bool {
     match &range_type.specifications {
         TypeSpecification::DateRange { .. } => {
             measure_type.is_duration_like() || measure_type.is_calendar_like()
         }
         TypeSpecification::TimeRange { .. } => measure_type.is_duration_like(),
         TypeSpecification::NumberRange { .. } => measure_type.is_number(),
-        TypeSpecification::QuantityRange { .. } => {
-            measure_type.is_quantity() && quantity_range_matches_quantity(range_type, measure_type)
+        TypeSpecification::MeasureRange { .. } => {
+            measure_type.is_measure() && measure_range_matches_measure(range_type, measure_type)
         }
         TypeSpecification::RatioRange { .. } => measure_type.is_ratio(),
         _ => false,
     }
 }
 
-fn range_matches_range_quantity(left_range: &LemmaType, right_range: &LemmaType) -> bool {
+fn range_matches_range_measure(left_range: &LemmaType, right_range: &LemmaType) -> bool {
     let right_measure_type = range_span_type(right_range);
     !right_measure_type.is_undetermined()
-        && range_matches_quantity_type(left_range, &right_measure_type)
+        && range_matches_measure_type(left_range, &right_measure_type)
 }
 
-fn quantity_range_matches_quantity(range_type: &LemmaType, quantity_type: &LemmaType) -> bool {
-    if !quantity_type.is_quantity() {
+fn measure_range_matches_measure(range_type: &LemmaType, measure_type: &LemmaType) -> bool {
+    if !measure_type.is_measure() {
         return false;
     }
-    if let Some(TypeSpecification::Quantity {
+    if let Some(TypeSpecification::Measure {
         units,
         decomposition,
         ..
     }) = range_type.specifications.element_from_range()
     {
-        let endpoint_type = LemmaType::primitive(TypeSpecification::Quantity {
+        let endpoint_type = LemmaType::primitive(TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
@@ -3508,32 +3591,32 @@ fn quantity_range_matches_quantity(range_type: &LemmaType, quantity_type: &Lemma
             decomposition,
             help: String::new(),
         });
-        if endpoint_type.same_quantity_family(quantity_type)
-            || endpoint_type.compatible_with_anonymous_quantity(quantity_type)
-            || quantity_type.compatible_with_anonymous_quantity(&endpoint_type)
+        if endpoint_type.same_measure_family(measure_type)
+            || endpoint_type.compatible_with_anonymous_measure(measure_type)
+            || measure_type.compatible_with_anonymous_measure(&endpoint_type)
         {
             return true;
         }
     }
-    match (&range_type.specifications, &quantity_type.specifications) {
+    match (&range_type.specifications, &measure_type.specifications) {
         (
-            TypeSpecification::QuantityRange {
+            TypeSpecification::MeasureRange {
                 units: range_units,
                 decomposition: range_decomposition,
                 ..
             },
-            TypeSpecification::Quantity {
-                units: quantity_units,
-                decomposition: quantity_decomposition,
+            TypeSpecification::Measure {
+                units: measure_units,
+                decomposition: measure_decomposition,
                 ..
             },
         ) => {
             if range_units.0.is_empty() && range_decomposition.is_none() {
                 true
-            } else if quantity_decomposition.is_none() {
-                range_units == quantity_units
+            } else if measure_decomposition.is_none() {
+                range_units == measure_units
             } else {
-                range_units == quantity_units && range_decomposition == quantity_decomposition
+                range_units == measure_units && range_decomposition == measure_decomposition
             }
         }
         _ => false,
@@ -3647,11 +3730,11 @@ fn infer_expression_type(
                 operator,
                 Arc::clone(&right_type),
             );
-            if result.is_anonymous_quantity() {
-                if let Some(decomp) = result.quantity_type_decomposition() {
+            if result.is_anonymous_measure() {
+                if let Some(decomp) = result.measure_type_decomposition() {
                     if !decomp.is_empty() {
                         if let DecompositionMatch::Unique(lemma_type) =
-                            find_unique_quantity_type_by_decomposition(
+                            find_unique_measure_type_by_decomposition(
                                 resolved_types,
                                 spec_arc,
                                 decomp,
@@ -3664,8 +3747,8 @@ fn infer_expression_type(
             }
             if matches!(operator, ArithmeticComputation::Divide)
                 && left_type.is_number()
-                && right_type.is_quantity()
-                && result.is_anonymous_quantity()
+                && right_type.is_measure()
+                && result.is_anonymous_measure()
             {
                 result = primitive_number_arc().clone();
             }
@@ -3712,8 +3795,8 @@ fn infer_expression_type(
             if operand_type.is_undetermined() {
                 return Arc::new(LemmaType::undetermined_type());
             }
-            if crate::computation::mathematical_computation_preserves_quantity_magnitude(op)
-                && operand_type.is_quantity()
+            if crate::computation::mathematical_computation_preserves_measure_magnitude(op)
+                && operand_type.is_measure()
             {
                 return operand_type;
             }
@@ -3990,7 +4073,7 @@ fn check_comparison_types(
     let is_equality_only = matches!(op, ComparisonComputation::Is | ComparisonComputation::IsNot);
 
     if left_type.is_range() {
-        if range_matches_quantity_type(left_type, right_type) {
+        if range_matches_measure_type(left_type, right_type) {
             return Ok(());
         }
         return Err(vec![engine_error_at_graph(
@@ -4038,23 +4121,23 @@ fn check_comparison_types(
         return Ok(());
     }
 
-    if left_type.is_quantity() && right_type.is_quantity() {
+    if left_type.is_measure() && right_type.is_measure() {
         let same_decomposition = match (
-            left_type.quantity_type_decomposition(),
-            right_type.quantity_type_decomposition(),
+            left_type.measure_type_decomposition(),
+            right_type.measure_type_decomposition(),
         ) {
             (Some(ld), Some(rd)) => ld == rd,
             _ => false,
         };
-        if !left_type.same_quantity_family(right_type)
-            && !left_type.compatible_with_anonymous_quantity(right_type)
+        if !left_type.same_measure_family(right_type)
+            && !left_type.compatible_with_anonymous_measure(right_type)
             && !same_decomposition
         {
             return Err(vec![engine_error_at_graph(
                 graph,
                 source,
                 format!(
-                    "Cannot compare unrelated quantity types: {} and {}",
+                    "Cannot compare unrelated measure types: {} and {}",
                     left_type.name(),
                     right_type.name()
                 ),
@@ -4124,9 +4207,9 @@ fn arithmetic_power_exponent_planning_errors(
     if *operator != ArithmeticComputation::Power {
         return Ok(());
     }
-    // Quantity ^ non-integer-literal is rejected: fractional dimensions are undefined,
+    // Measure ^ non-integer-literal is rejected: fractional dimensions are undefined,
     // and variable exponents cannot be statically verified to be integers at plan time.
-    if left_type.is_quantity() || left_type.is_duration_like() {
+    if left_type.is_measure() || left_type.is_duration_like() {
         let is_integer_literal = if let ExpressionKind::Literal(lit) = &right.kind {
             if let crate::planning::semantics::ValueKind::Number(n) = &lit.value {
                 n.denom() == &crate::computation::bigint::BigInt::one()
@@ -4140,7 +4223,7 @@ fn arithmetic_power_exponent_planning_errors(
             return Err(vec![engine_error_at_graph(
                 graph,
                 source,
-                "Cannot raise a quantity value to a fractional or variable exponent. Use a positive integer literal.".to_string(),
+                "Cannot raise a measure value to a fractional or variable exponent. Use a positive integer literal.".to_string(),
             )]);
         }
     }
@@ -4207,13 +4290,13 @@ fn check_arithmetic_types(
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
         ) && ((left_type.is_range()
             && right_type.is_range()
-            && range_matches_range_quantity(left_type, right_type))
+            && range_matches_range_measure(left_type, right_type))
             || (left_type.is_range()
                 && !right_type.is_range()
-                && range_matches_quantity_type(left_type, right_type))
+                && range_matches_measure_type(left_type, right_type))
             || (right_type.is_range()
                 && !left_type.is_range()
-                && range_matches_quantity_type(right_type, left_type)));
+                && range_matches_measure_type(right_type, left_type)));
         if range_measure_allowed {
             return Ok(());
         }
@@ -4323,16 +4406,16 @@ fn check_arithmetic_types(
         return Ok(());
     }
 
-    // Quantity/Quantity rules:
-    //   +/- requires same quantity family (dimensionless addition is not meaningful otherwise).
-    //   *   requires different quantity families (same-family quantity*quantity is rejected; use `as number`).
-    //   /   is allowed for all families (same-family → scalar Number; cross-family → anonymous Quantity).
+    // Measure/Measure rules:
+    //   +/- requires same measure family (dimensionless addition is not meaningful otherwise).
+    //   *   requires different measure families (same-family measure*measure is rejected; use `as number`).
+    //   /   is allowed for all families (same-family → scalar Number; cross-family → anonymous measure).
     //   %   and ^ on two Quantities are always rejected.
-    if left_type.is_quantity() && right_type.is_quantity() {
+    if left_type.is_measure() && right_type.is_measure() {
         return match operator {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                if left_type.same_quantity_family(right_type)
-                    || left_type.compatible_with_anonymous_quantity(right_type)
+                if left_type.same_measure_family(right_type)
+                    || left_type.compatible_with_anonymous_measure(right_type)
                 {
                     Ok(())
                 } else {
@@ -4340,7 +4423,7 @@ fn check_arithmetic_types(
                         graph,
                         source,
                         format!(
-                            "Cannot {} unrelated quantity types: {} and {}.",
+                            "Cannot {} unrelated measure types: {} and {}.",
                             if matches!(operator, ArithmeticComputation::Add) {
                                 "add"
                             } else {
@@ -4353,12 +4436,12 @@ fn check_arithmetic_types(
                 }
             }
             ArithmeticComputation::Multiply => {
-                // Quantity * Quantity (same or cross family) → anonymous intermediate when
+                // Measure * Measure (same or cross family) → anonymous intermediate when
                 // dimensions combine; promotion resolves a unique named type when possible.
                 Ok(())
             }
             ArithmeticComputation::Divide => {
-                // Quantity / Quantity (any family) → scalar Number or anonymous intermediate. Allowed.
+                // Measure / Measure (any family) → scalar Number or anonymous intermediate. Allowed.
                 Ok(())
             }
             ArithmeticComputation::Modulo | ArithmeticComputation::Power => {
@@ -4366,7 +4449,7 @@ fn check_arithmetic_types(
                     graph,
                     source,
                     format!(
-                        "Cannot apply '{}' to two quantity values ({} and {}).",
+                        "Cannot apply '{}' to two measure values ({} and {}).",
                         operator,
                         left_type.name(),
                         right_type.name()
@@ -4418,13 +4501,13 @@ fn check_arithmetic_types(
         )]);
     }
 
-    // Only Quantity, Number, Ratio, Duration, and Calendar can participate in arithmetic
-    let left_valid = left_type.is_quantity()
+    // Only Measure, Number, Ratio, Duration, and Calendar can participate in arithmetic
+    let left_valid = left_type.is_measure()
         || left_type.is_number()
         || left_type.is_duration_like()
         || left_type.is_calendar_like()
         || left_type.is_ratio();
-    let right_valid = right_type.is_quantity()
+    let right_valid = right_type.is_measure()
         || right_type.is_number()
         || right_type.is_duration_like()
         || right_type.is_calendar_like()
@@ -4454,21 +4537,21 @@ fn check_arithmetic_types(
 
     let allowed = match operator {
         ArithmeticComputation::Multiply => {
-            pair(LemmaType::is_quantity, LemmaType::is_number)
-                || pair(LemmaType::is_quantity, LemmaType::is_ratio)
-                || pair(LemmaType::is_quantity, LemmaType::is_duration_like_quantity)
-                || pair(LemmaType::is_quantity, LemmaType::is_calendar_like)
-                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_number)
-                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_ratio)
+            pair(LemmaType::is_measure, LemmaType::is_number)
+                || pair(LemmaType::is_measure, LemmaType::is_ratio)
+                || pair(LemmaType::is_measure, LemmaType::is_duration_like_measure)
+                || pair(LemmaType::is_measure, LemmaType::is_calendar_like)
+                || pair(LemmaType::is_duration_like_measure, LemmaType::is_number)
+                || pair(LemmaType::is_duration_like_measure, LemmaType::is_ratio)
                 || pair(LemmaType::is_calendar_like, LemmaType::is_number)
                 || pair(LemmaType::is_calendar_like, LemmaType::is_ratio)
                 || pair(LemmaType::is_number, LemmaType::is_ratio)
         }
         ArithmeticComputation::Divide => {
-            pair(LemmaType::is_quantity, LemmaType::is_number)
-                || pair(LemmaType::is_quantity, LemmaType::is_ratio)
-                || pair(LemmaType::is_quantity, LemmaType::is_duration_like_quantity)
-                || pair(LemmaType::is_quantity, LemmaType::is_calendar_like)
+            pair(LemmaType::is_measure, LemmaType::is_number)
+                || (left_type.is_measure() && right_type.is_ratio())
+                || pair(LemmaType::is_measure, LemmaType::is_duration_like_measure)
+                || pair(LemmaType::is_measure, LemmaType::is_calendar_like)
                 || (left_type.is_duration_like() && right_type.is_number())
                 || (left_type.is_duration_like() && right_type.is_ratio())
                 || (left_type.is_calendar_like() && right_type.is_number())
@@ -4478,20 +4561,34 @@ fn check_arithmetic_types(
                 || pair(LemmaType::is_number, LemmaType::is_ratio)
         }
         ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-            pair(LemmaType::is_quantity, LemmaType::is_ratio)
-                || pair(LemmaType::is_duration_like_quantity, LemmaType::is_ratio)
-                || pair(LemmaType::is_calendar_like, LemmaType::is_ratio)
-                || pair(LemmaType::is_number, LemmaType::is_ratio)
+            if pair(LemmaType::is_ratio, |t: &LemmaType| {
+                t.is_number() || t.is_measure() || t.is_duration_like() || t.is_calendar_like()
+            }) {
+                return Err(vec![engine_error_at_graph(
+                    graph,
+                    source,
+                    format!(
+                        "Cannot apply '{}' to {} and {}. \
+                         Adding or subtracting a ratio is ambiguous; \
+                         scale explicitly, e.g. 'price - discount * price' \
+                         or 'price * (100% - discount)'.",
+                        operator,
+                        left_type.name(),
+                        right_type.name(),
+                    ),
+                )]);
+            }
+            false
         }
         ArithmeticComputation::Power => {
-            // Exponent must be a dimensionless integer for quantity left (enforced separately
-            // in arithmetic_power_exponent_planning_errors). Quantity ^ Ratio is rejected here.
+            // Exponent must be a dimensionless integer for measure left (enforced separately
+            // in arithmetic_power_exponent_planning_errors). Measure ^ Ratio is rejected here.
             // number ^ (number | ratio) is allowed; exact rational result or runtime Veto.
             let left_ok = left_type.is_number()
-                || left_type.is_quantity()
+                || left_type.is_measure()
                 || left_type.is_ratio()
                 || left_type.is_duration_like();
-            let right_ok = if left_type.is_quantity() || left_type.is_duration_like() {
+            let right_ok = if left_type.is_measure() || left_type.is_duration_like() {
                 right_type.is_number()
             } else {
                 right_type.is_number() || right_type.is_ratio()
@@ -4499,9 +4596,9 @@ fn check_arithmetic_types(
             left_ok && right_ok
         }
         ArithmeticComputation::Modulo => {
-            // Quantity % Ratio is rejected: ratio is dimensionless-fractional, not a meaningful
+            // Measure % Ratio is rejected: ratio is dimensionless-fractional, not a meaningful
             // modulus for a dimensioned value.
-            if left_type.is_quantity() && right_type.is_ratio() {
+            if left_type.is_measure() && right_type.is_ratio() {
                 return Err(vec![engine_error_at_graph(
                     graph,
                     source,
@@ -4534,7 +4631,7 @@ fn check_arithmetic_types(
 fn has_explicit_unit(source: &Expression) -> bool {
     match &source.kind {
         ExpressionKind::Literal(lit) => match &lit.value {
-            ValueKind::Quantity(_, sig) => sig.len() == 1 && sig[0].1 == 1 && !sig[0].0.is_empty(),
+            ValueKind::Measure(_, sig) => sig.len() == 1 && sig[0].1 == 1 && !sig[0].0.is_empty(),
             ValueKind::Ratio(_, unit) => unit.is_some(),
             _ => false,
         },
@@ -4568,7 +4665,7 @@ fn expression_suggestion_label(expression: &Expression) -> String {
 
 fn first_unit_suggestion(source_type: &LemmaType) -> String {
     source_type
-        .quantity_unit_names()
+        .measure_unit_names()
         .and_then(|names| names.first().map(|u| (*u).to_string()))
         .unwrap_or_else(|| "<unit>".to_string())
 }
@@ -4597,23 +4694,23 @@ fn is_valid_range_span_unit(
     if source_type.is_time_range() {
         return target_type.is_duration_like();
     }
-    if source_type.is_quantity_range() {
+    if source_type.is_measure_range() {
         if source_type
-            .quantity_unit_names()
+            .measure_unit_names()
             .is_some_and(|names| names.contains(&unit_name))
         {
-            return target_type.is_quantity();
+            return target_type.is_measure();
         }
-        let TypeSpecification::QuantityRange { decomposition, .. } = &source_type.specifications
+        let TypeSpecification::MeasureRange { decomposition, .. } = &source_type.specifications
         else {
-            unreachable!("BUG: is_quantity_range without QuantityRange spec");
+            unreachable!("BUG: is_measure_range without MeasureRange spec");
         };
         let Some(source_decomp) = decomposition else {
             return false;
         };
-        return target_type.is_quantity()
+        return target_type.is_measure()
             && target_type
-                .quantity_type_decomposition()
+                .measure_type_decomposition()
                 .is_some_and(|td| td == source_decomp);
     }
     if source_type.is_ratio_range() {
@@ -4668,11 +4765,11 @@ fn check_unit_conversion_types(
                     format!("Unknown unit '{unit_name}' in spec '{}'.", spec_arc.name),
                 )]);
             }
-            if source_type.is_quantity() {
+            if source_type.is_measure() {
                 let target_type = owning_type.as_ref();
-                if source_type.same_quantity_family(target_type)
-                    || source_type.compatible_with_anonymous_quantity(target_type)
-                    || target_type.compatible_with_anonymous_quantity(source_type)
+                if source_type.same_measure_family(target_type)
+                    || source_type.compatible_with_anonymous_measure(target_type)
+                    || target_type.compatible_with_anonymous_measure(source_type)
                 {
                     return Ok(());
                 }
@@ -4683,7 +4780,7 @@ fn check_unit_conversion_types(
                         graph,
                         source_loc,
                         format!(
-                            "Cannot convert '{}' to '{unit_name}' (different quantity families). \
+                            "Cannot convert '{}' to '{unit_name}' (different measure families). \
                              Express the source unit first, for example '{expr_label} as {first_unit} as {unit_name}'.",
                             source_type.name()
                         ),
@@ -4693,7 +4790,7 @@ fn check_unit_conversion_types(
             }
             if source_type.is_date_range()
                 || source_type.is_time_range()
-                || source_type.is_quantity_range()
+                || source_type.is_measure_range()
                 || source_type.is_ratio_range()
             {
                 if is_valid_range_span_unit(source_type, unit_name, unit_index) {
@@ -4755,7 +4852,7 @@ fn check_unit_conversion_types(
         SemanticConversionTarget::Type(PrimitiveKind::Number) => {
             if source_type.is_date_range()
                 || source_type.is_time_range()
-                || source_type.is_quantity_range()
+                || source_type.is_measure_range()
             {
                 return Err(vec![engine_error_at_graph(
                     graph,
@@ -4777,8 +4874,8 @@ fn check_unit_conversion_types(
                     format!("Cannot convert {} to number.", source_type.name()),
                 )]);
             }
-            if source_type.is_anonymous_quantity() {
-                if let Some(decomp) = source_type.quantity_type_decomposition() {
+            if source_type.is_anonymous_measure() {
+                if let Some(decomp) = source_type.measure_type_decomposition() {
                     if !decomp.is_empty() {
                         return Err(vec![engine_error_at_graph(
                             graph,
@@ -4792,7 +4889,7 @@ fn check_unit_conversion_types(
                     }
                 }
             }
-            if source_type.is_quantity() && !source_type.is_anonymous_quantity() {
+            if source_type.is_measure() && !source_type.is_anonymous_measure() {
                 if !has_explicit_unit(source) {
                     let expr_label = expression_suggestion_label(source);
                     let first_unit = first_unit_suggestion(source_type);
@@ -4800,7 +4897,7 @@ fn check_unit_conversion_types(
                         graph,
                         source_loc,
                         format!(
-                            "Cannot use 'as number' on quantity '{}' without a unit. \
+                            "Cannot use 'as number' on measure '{}' without a unit. \
                              Express it in a unit first, for example '{expr_label} as {first_unit} as number'.",
                             source_type.name()
                         ),
@@ -4808,7 +4905,7 @@ fn check_unit_conversion_types(
                 }
                 return Ok(());
             }
-            if source_type.is_quantity()
+            if source_type.is_measure()
                 || source_type.is_number()
                 || source_type.is_duration_like()
                 || source_type.is_calendar_like()
@@ -4851,12 +4948,12 @@ fn check_mathematical_operand(
     if operand_type.is_number() {
         return Ok(());
     }
-    if operand_type.is_quantity()
-        && crate::computation::mathematical_computation_preserves_quantity_magnitude(op)
+    if operand_type.is_measure()
+        && crate::computation::mathematical_computation_preserves_measure_magnitude(op)
     {
         return Ok(());
     }
-    let message = if operand_type.is_quantity() {
+    let message = if operand_type.is_measure() {
         format!(
             "Mathematical function '{op}' cannot be applied to {operand_type}; use 'as number' first"
         )
@@ -5083,7 +5180,7 @@ fn check_expression(
             // the `as Unit` was meant to convert the operand or the result of the arithmetic.
             // When the operand conversion is invalid but the result conversion would be valid,
             // emit a targeted error with a parenthesized suggestion instead of the generic
-            // "different quantity families" message that `check_unit_conversion_types` would emit.
+            // "different measure families" message that `check_unit_conversion_types` would emit.
             //
             // Three outcomes:
             //   CheckedInlineConversionValid   — conversion on operand is valid; right was
@@ -5139,10 +5236,10 @@ fn check_expression(
                     let target_type_opt = lookup_unit_type(resolved_types, spec_arc, unit_name);
 
                     if let Some(target_type) = &target_type_opt {
-                        let inner_is_valid_conversion_source = inner_type.is_quantity()
-                            && (inner_type.same_quantity_family(target_type)
-                                || inner_type.compatible_with_anonymous_quantity(target_type)
-                                || target_type.compatible_with_anonymous_quantity(&inner_type));
+                        let inner_is_valid_conversion_source = inner_type.is_measure()
+                            && (inner_type.same_measure_family(target_type)
+                                || inner_type.compatible_with_anonymous_measure(target_type)
+                                || target_type.compatible_with_anonymous_measure(&inner_type));
 
                         if inner_is_valid_conversion_source {
                             // The parse tree is correct: `left OP (inner as unit)`.
@@ -5161,7 +5258,7 @@ fn check_expression(
                                 &mut errors,
                             );
                             InlineConversionOutcome::CheckedInlineConversionValid
-                        } else if inner_type.is_quantity() || inner_type.is_number() {
+                        } else if inner_type.is_measure() || inner_type.is_number() {
                             // Conversion on the operand fails. Check whether converting the
                             // result of the whole arithmetic expression would be valid instead.
                             let left_type = infer_expression_type(
@@ -5176,12 +5273,12 @@ fn check_expression(
                                 operator,
                                 Arc::clone(&inner_type),
                             );
-                            let combined_is_valid_conversion_source = combined_type.is_quantity()
-                                && (combined_type.same_quantity_family(target_type)
+                            let combined_is_valid_conversion_source = combined_type.is_measure()
+                                && (combined_type.same_measure_family(target_type)
                                     || combined_type
-                                        .compatible_with_anonymous_quantity(target_type)
+                                        .compatible_with_anonymous_measure(target_type)
                                     || target_type
-                                        .compatible_with_anonymous_quantity(&combined_type));
+                                        .compatible_with_anonymous_measure(&combined_type));
 
                             if combined_is_valid_conversion_source {
                                 let inner_label = expression_suggestion_label(inner_source);
@@ -5214,7 +5311,7 @@ fn check_expression(
                             }
                             InlineConversionOutcome::CheckedConversionErrorEmitted
                         } else {
-                            // Inner is not quantity/number (e.g. text, boolean, date). Fall through
+                            // Inner is not measure/number (e.g. text, boolean, date). Fall through
                             // to standard path so check_expression(right) runs normally.
                             InlineConversionOutcome::NotHandledInline
                         }
@@ -5496,9 +5593,9 @@ fn check_expression(
                 let compatible = (range_type.is_date_range() && value_type.is_date())
                     || (range_type.is_time_range() && value_type.is_time())
                     || (range_type.is_number_range() && value_type.is_number())
-                    || (range_type.is_quantity_range()
-                        && value_type.is_quantity()
-                        && quantity_range_matches_quantity(&range_type, &value_type))
+                    || (range_type.is_measure_range()
+                        && value_type.is_measure()
+                        && measure_range_matches_measure(&range_type, &value_type))
                     || (range_type.is_ratio_range() && value_type.is_ratio())
                     || (range_type.is_calendar_like_range() && value_type.is_calendar_like());
                 if !compatible {
@@ -5577,10 +5674,10 @@ fn check_rule_types(
     };
 
     for rule_path in execution_order {
-        let rule_node = match graph.rules().get(rule_path) {
-            Some(node) => node,
-            None => continue,
-        };
+        let rule_node = graph
+            .rules()
+            .get(rule_path)
+            .expect("BUG: rule from topological sort not in graph");
         let branches = &rule_node.branches;
         let spec_arc = &rule_node.spec_arc;
 
@@ -5607,8 +5704,8 @@ fn check_rule_types(
             spec_arc,
         );
 
-        if default_type.is_anonymous_quantity() {
-            if let Some(decomp) = default_type.quantity_type_decomposition() {
+        if default_type.is_anonymous_measure() {
+            if let Some(decomp) = default_type.measure_type_decomposition() {
                 if !decomp.is_empty() && anonymous_rule_boundary_requires_rejection() {
                     let default_source = default_result
                         .source_location
@@ -5676,8 +5773,8 @@ fn check_rule_types(
             let result_type =
                 infer_expression_type(result, graph, inferred_types, resolved_types, spec_arc);
 
-            if result_type.is_anonymous_quantity() {
-                if let Some(decomp) = result_type.quantity_type_decomposition() {
+            if result_type.is_anonymous_measure() {
+                if let Some(decomp) = result_type.measure_type_decomposition() {
                     if !decomp.is_empty() && anonymous_rule_boundary_requires_rejection() {
                         let branch_source = result
                             .source_location
@@ -5782,10 +5879,10 @@ fn infer_rule_types(
     let mut computed_types: HashMap<RulePath, Arc<LemmaType>> = HashMap::new();
 
     for rule_path in execution_order {
-        let rule_node = match graph.rules().get(rule_path) {
-            Some(node) => node,
-            None => continue,
-        };
+        let rule_node = graph
+            .rules()
+            .get(rule_path)
+            .expect("BUG: rule from topological sort not in graph");
         let branches = &rule_node.branches;
         let spec_arc = &rule_node.spec_arc;
 
@@ -5826,26 +5923,26 @@ type UnitDecompLookup = HashMap<
     String,
     (
         String,
-        BaseQuantityVector,
+        BaseMeasureVector,
         crate::computation::rational::RationalInteger,
     ),
 >;
 
-fn declared_quantity_decomposition(type_name: &str, lemma_type: &LemmaType) -> BaseQuantityVector {
+fn declared_measure_decomposition(type_name: &str, lemma_type: &LemmaType) -> BaseMeasureVector {
     match &lemma_type.specifications {
-        TypeSpecification::Quantity { traits, .. }
-            if traits.contains(&semantics::QuantityTrait::Duration) =>
+        TypeSpecification::Measure { traits, .. }
+            if traits.contains(&semantics::MeasureTrait::Duration) =>
         {
             duration_decomposition()
         }
-        TypeSpecification::Quantity { traits, .. }
-            if traits.contains(&semantics::QuantityTrait::Calendar) =>
+        TypeSpecification::Measure { traits, .. }
+            if traits.contains(&semantics::MeasureTrait::Calendar) =>
         {
             calendar_decomposition()
         }
         _ => {
             let dimension_key = lemma_type
-                .quantity_family_name()
+                .measure_family_name()
                 .unwrap_or(type_name)
                 .to_string();
             [(dimension_key, 1i32)].into_iter().collect()
@@ -5864,7 +5961,7 @@ fn arc_unwrap(arc: Arc<LemmaType>) -> LemmaType {
 
 fn unit_index_arc_declares_unit(lemma_type: &LemmaType, unit_name: &str) -> bool {
     match &lemma_type.specifications {
-        TypeSpecification::Quantity { units, .. } => units.get(unit_name).is_ok(),
+        TypeSpecification::Measure { units, .. } => units.get(unit_name).is_ok(),
         TypeSpecification::Ratio { units, .. } => units.get(unit_name).is_ok(),
         _ => false,
     }
@@ -5880,25 +5977,25 @@ fn sync_unit_index_from_resolved(
             let lookup_name = pre_decomp_type
                 .name
                 .as_deref()
-                .or_else(|| pre_decomp_type.quantity_family_name());
-            let post = if pre_decomp_type.is_quantity() {
+                .or_else(|| pre_decomp_type.measure_family_name());
+            let post = if pre_decomp_type.is_measure() {
                 let type_name = lookup_name.expect(
-                    "BUG: quantity arc in unit_index must carry name or family for sync",
+                    "BUG: measure arc in unit_index must carry name or family for sync",
                 );
                 if let Some(synced) = resolved
                     .get(type_name)
                     .or_else(|| {
                         pre_decomp_type
-                            .quantity_family_name()
+                            .measure_family_name()
                             .and_then(|family| resolved.get(family))
                     })
                 {
                     Arc::clone(synced)
-                } else if pre_decomp_type.quantity_type_decomposition().is_some() {
+                } else if pre_decomp_type.measure_type_decomposition().is_some() {
                     pre_decomp_type
                 } else {
                     panic!(
-                        "BUG: quantity unit_index unit '{}' type '{}' must exist in resolved or carry decomposition after import merge",
+                        "BUG: measure unit_index unit '{}' type '{}' must exist in resolved or carry decomposition after import merge",
                         unit_name, type_name
                     )
                 }
@@ -5907,7 +6004,7 @@ fn sync_unit_index_from_resolved(
                     .and_then(|type_name| {
                         resolved.get(type_name).or_else(|| {
                             pre_decomp_type
-                                .quantity_family_name()
+                                .measure_family_name()
                                 .and_then(|family| resolved.get(family))
                         })
                     })
@@ -5921,20 +6018,20 @@ fn sync_unit_index_from_resolved(
             }
         })
         .collect();
-    merge_family_root_quantity_units_into_index(resolved, synced)
+    merge_family_root_measure_units_into_index(resolved, synced)
 }
 
-/// Ensure every unit declared on a family-root quantity type in `resolved` has an index entry.
-fn merge_family_root_quantity_units_into_index(
+/// Ensure every unit declared on a family-root measure type in `resolved` has an index entry.
+fn merge_family_root_measure_units_into_index(
     resolved: &HashMap<String, Arc<LemmaType>>,
     mut unit_index: HashMap<String, Arc<LemmaType>>,
 ) -> HashMap<String, Arc<LemmaType>> {
     for (type_name, lemma_type) in resolved {
-        let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications else {
+        let TypeSpecification::Measure { units, .. } = &lemma_type.specifications else {
             continue;
         };
         let is_family_root = lemma_type
-            .quantity_family_name()
+            .measure_family_name()
             .is_some_and(|family| family == type_name.as_str());
         if !is_family_root {
             continue;
@@ -5948,10 +6045,10 @@ fn merge_family_root_quantity_units_into_index(
     unit_index
 }
 
-/// `uses`-merged quantity rows in `unit_index` can still have empty `decomposition` until synced from
-/// `resolved`. Compound unit resolution consults `unit_index` first; fill simple base quantitys here
+/// `uses`-merged measure rows in `unit_index` can still have empty `decomposition` until synced from
+/// `resolved`. Compound unit resolution consults `unit_index` first; fill simple base measures here
 /// before building [`UnitDecompLookup`].
-fn repair_empty_simple_quantity_decomposition_in_unit_index(
+fn repair_empty_simple_measure_decomposition_in_unit_index(
     unit_index: HashMap<String, Arc<LemmaType>>,
 ) -> HashMap<String, Arc<LemmaType>> {
     unit_index
@@ -5959,24 +6056,24 @@ fn repair_empty_simple_quantity_decomposition_in_unit_index(
         .map(|(unit_key, arc)| {
             (
                 unit_key,
-                Arc::new(repair_simple_quantity_decomposition(arc_unwrap(arc))),
+                Arc::new(repair_simple_measure_decomposition(arc_unwrap(arc))),
             )
         })
         .collect()
 }
 
-fn repair_simple_quantity_decomposition(lemma_type: LemmaType) -> LemmaType {
-    let Some(base_decomp) = simple_quantity_repair_decomposition(&lemma_type) else {
+fn repair_simple_measure_decomposition(lemma_type: LemmaType) -> LemmaType {
+    let Some(base_decomp) = simple_measure_repair_decomposition(&lemma_type) else {
         return lemma_type;
     };
-    lemma_type.map_quantity(|units, _decomposition| {
+    lemma_type.map_measure(|units, _decomposition| {
         let units = units.map(|u| u.with_decomposition(base_decomp.clone()));
         (units, Some(base_decomp))
     })
 }
 
-fn simple_quantity_repair_decomposition(lemma_type: &LemmaType) -> Option<BaseQuantityVector> {
-    let TypeSpecification::Quantity {
+fn simple_measure_repair_decomposition(lemma_type: &LemmaType) -> Option<BaseMeasureVector> {
+    let TypeSpecification::Measure {
         units,
         decomposition,
         ..
@@ -5987,68 +6084,68 @@ fn simple_quantity_repair_decomposition(lemma_type: &LemmaType) -> Option<BaseQu
     if decomposition.is_some() {
         return None;
     }
-    if units.is_empty() || units.iter().any(|u| !quantity_unit_is_simple(u)) {
+    if units.is_empty() || units.iter().any(|u| !measure_unit_is_simple(u)) {
         return None;
     }
     let type_name = lemma_type.name.as_deref()?;
     if type_name.is_empty() {
         return None;
     }
-    let candidate = declared_quantity_decomposition(type_name, lemma_type);
+    let candidate = declared_measure_decomposition(type_name, lemma_type);
     (!candidate.is_empty()).then_some(candidate)
 }
 
-fn owning_quantity_type_name_for_unit(
+fn owning_measure_type_name_for_unit(
     unit_name: &str,
     lookup: &UnitDecompLookup,
     unit_index: &HashMap<String, Arc<LemmaType>>,
 ) -> Option<String> {
-    if let Some((owning_quantity_name, _, _)) = lookup.get(unit_name) {
-        return Some(owning_quantity_name.clone());
+    if let Some((owning_measure_name, _, _)) = lookup.get(unit_name) {
+        return Some(owning_measure_name.clone());
     }
     unit_index.get(unit_name).and_then(|lemma_type| {
         lemma_type
             .name
             .clone()
-            .or_else(|| lemma_type.quantity_family_name().map(str::to_string))
+            .or_else(|| lemma_type.measure_family_name().map(str::to_string))
     })
 }
 
-/// Order compound quantity types so every referenced unit from another compound type is resolved first.
-fn sort_derived_quantity_types_for_resolution(
+/// Order compound measure types so every referenced unit from another compound type is resolved first.
+fn sort_derived_measure_types_for_resolution(
     spec_name: &str,
-    derived_quantity_type_names: Vec<String>,
+    derived_measure_type_names: Vec<String>,
     resolved: &HashMap<String, Arc<LemmaType>>,
     lookup: &UnitDecompLookup,
     unit_index: &HashMap<String, Arc<LemmaType>>,
     source_for: &dyn Fn(&str) -> Option<Source>,
 ) -> Result<Vec<String>, Error> {
-    let derived_quantity_type_count = derived_quantity_type_names.len();
-    if derived_quantity_type_count == 0 {
-        return Ok(derived_quantity_type_names);
+    let derived_measure_type_count = derived_measure_type_names.len();
+    if derived_measure_type_count == 0 {
+        return Ok(derived_measure_type_names);
     }
 
-    let type_index: HashMap<&str, usize> = derived_quantity_type_names
+    let type_index: HashMap<&str, usize> = derived_measure_type_names
         .iter()
         .enumerate()
         .map(|(index, name)| (name.as_str(), index))
         .collect();
 
-    let mut dependency_sets: Vec<HashSet<usize>> =
-        vec![HashSet::new(); derived_quantity_type_count];
+    let mut dependency_sets: Vec<BTreeSet<usize>> =
+        vec![BTreeSet::new(); derived_measure_type_count];
 
-    for (dependent_index, type_name) in derived_quantity_type_names.iter().enumerate() {
-        let TypeSpecification::Quantity { units, .. } = &resolved[type_name].specifications else {
+    for (dependent_index, type_name) in derived_measure_type_names.iter().enumerate() {
+        let TypeSpecification::Measure { units, .. } = &resolved[type_name].specifications else {
             continue;
         };
         for unit in units.iter() {
-            for (factor_unit_name, _) in &unit.derived_quantity_factors {
-                let Some(owning_quantity_name) =
-                    owning_quantity_type_name_for_unit(factor_unit_name, lookup, unit_index)
+            for (factor_unit_name, _) in &unit.derived_measure_factors {
+                let Some(owning_measure_name) =
+                    owning_measure_type_name_for_unit(factor_unit_name, lookup, unit_index)
                 else {
                     continue;
                 };
-                let Some(dependency_index) = type_index.get(owning_quantity_name.as_str()).copied()
+                let Some(dependency_index) = type_index.get(owning_measure_name.as_str()).copied()
                 else {
                     continue;
                 };
@@ -6060,8 +6157,8 @@ fn sort_derived_quantity_types_for_resolution(
         }
     }
 
-    let mut in_degree = vec![0usize; derived_quantity_type_count];
-    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); derived_quantity_type_count];
+    let mut in_degree = vec![0usize; derived_measure_type_count];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); derived_measure_type_count];
 
     for (dependent_index, dependencies) in dependency_sets.iter().enumerate() {
         for &dependency_index in dependencies {
@@ -6070,10 +6167,10 @@ fn sort_derived_quantity_types_for_resolution(
         }
     }
 
-    let mut queue: VecDeque<usize> = (0..derived_quantity_type_count)
+    let mut queue: VecDeque<usize> = (0..derived_measure_type_count)
         .filter(|&index| in_degree[index] == 0)
         .collect();
-    let mut sorted_indices: Vec<usize> = Vec::with_capacity(derived_quantity_type_count);
+    let mut sorted_indices: Vec<usize> = Vec::with_capacity(derived_measure_type_count);
 
     while let Some(index) = queue.pop_front() {
         sorted_indices.push(index);
@@ -6085,15 +6182,15 @@ fn sort_derived_quantity_types_for_resolution(
         }
     }
 
-    if sorted_indices.len() != derived_quantity_type_count {
-        let mut cycle_type_names: Vec<String> = (0..derived_quantity_type_count)
+    if sorted_indices.len() != derived_measure_type_count {
+        let mut cycle_type_names: Vec<String> = (0..derived_measure_type_count)
             .filter(|&index| in_degree[index] > 0)
-            .map(|index| derived_quantity_type_names[index].clone())
+            .map(|index| derived_measure_type_names[index].clone())
             .collect();
         cycle_type_names.sort();
         return Err(Error::validation(
             format!(
-                "In spec '{}': circular compound quantity type dependency among: {}",
+                "In spec '{}': circular compound measure type dependency among: {}",
                 spec_name,
                 cycle_type_names.join(", ")
             ),
@@ -6104,12 +6201,12 @@ fn sort_derived_quantity_types_for_resolution(
 
     Ok(sorted_indices
         .into_iter()
-        .map(|index| derived_quantity_type_names[index].clone())
+        .map(|index| derived_measure_type_names[index].clone())
         .collect())
 }
 
-/// Build the reverse signature index over every named-quantity-type unit in the spec.
-/// Each unit's canonical-form `derived_quantity_factors` becomes a key; the value is the
+/// Build the reverse signature index over every named-measure-type unit in the spec.
+/// Each unit's canonical-form `derived_measure_factors` becomes a key; the value is the
 /// owning unit name and type. An ambiguity (the same canonical key matched by two units in
 /// distinct types) is a planning error: the spec must rename one of the units or change
 /// its factor decomposition so it is unique.
@@ -6119,14 +6216,16 @@ pub(crate) fn build_signature_index(
 ) -> Result<crate::computation::arithmetic::SignatureIndex, Error> {
     use crate::computation::arithmetic::SignatureIndex;
     let mut signature_index: SignatureIndex = SignatureIndex::new();
-    for (unit_name, lemma_type) in unit_index.iter() {
-        let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications else {
+    let mut sorted_units: Vec<_> = unit_index.iter().collect();
+    sorted_units.sort_by_key(|(name, _)| (*name).clone());
+    for (unit_name, lemma_type) in sorted_units {
+        let TypeSpecification::Measure { units, .. } = &lemma_type.specifications else {
             continue;
         };
         let unit = units.get(unit_name).map_err(|_| {
             Error::validation(
                 format!(
-                    "In spec '{}': unit_index entry '{}' is not declared on quantity type '{}'",
+                    "In spec '{}': unit_index entry '{}' is not declared on measure type '{}'",
                     spec_name,
                     unit_name,
                     lemma_type.name()
@@ -6135,11 +6234,11 @@ pub(crate) fn build_signature_index(
                 None::<String>,
             )
         })?;
-        if unit.derived_quantity_factors.is_empty() {
+        if unit.derived_measure_factors.is_empty() {
             continue;
         }
         let owning_type_name = lemma_type.name.clone().unwrap_or_default();
-        let signature = unit.derived_quantity_factors.clone();
+        let signature = unit.derived_measure_factors.clone();
         match signature_index.get(&signature) {
             Some((existing_unit_name, existing_owning_type))
                 if existing_owning_type.name() != lemma_type.name() =>
@@ -6168,8 +6267,8 @@ pub(crate) fn build_signature_index(
     Ok(signature_index)
 }
 
-/// Rebuild [`QuantityRange`] (and other range) specs for `ParentType::Ranged` declarations
-/// after the decomposition pass has populated parent quantity types.
+/// Rebuild [`MeasureRange`] (and other range) specs for `ParentType::Ranged` declarations
+/// after the decomposition pass has populated parent measure types.
 fn refresh_named_range_specs(
     spec: &Arc<LemmaSpec>,
     data_defs: &HashMap<String, DataTypeDef>,
@@ -6271,7 +6370,7 @@ fn refresh_named_range_specs(
 
 type TypeMap = HashMap<String, Arc<LemmaType>>;
 
-fn resolve_quantity_decompositions(
+fn resolve_measure_decompositions(
     spec_name: &str,
     mut resolved: TypeMap,
     mut unit_index: TypeMap,
@@ -6284,8 +6383,8 @@ fn resolve_quantity_decompositions(
     let base_type_names: Vec<String> = resolved
         .iter()
         .filter_map(|(name, lt)| {
-            if let TypeSpecification::Quantity { units, .. } = &lt.specifications {
-                if units.iter().all(quantity_unit_is_simple) {
+            if let TypeSpecification::Measure { units, .. } = &lt.specifications {
+                if units.iter().all(measure_unit_is_simple) {
                     return Some(name.clone());
                 }
             }
@@ -6299,13 +6398,13 @@ fn resolve_quantity_decompositions(
                 .remove(type_name)
                 .expect("BUG: type_name comes from resolved's own keys"),
         );
-        let base_decomp = declared_quantity_decomposition(type_name, &owned);
+        let base_decomp = declared_measure_decomposition(type_name, &owned);
 
-        let reserved_collision = reserved_calendar_units_in_quantity(&owned);
+        let reserved_collision = reserved_calendar_units_in_measure(&owned);
         if !reserved_collision.is_empty() && !owned.has_trait_calendar() {
             errors.push(Error::validation(
                 format!(
-                    "In spec '{}': quantity type '{}' declares unit(s) {:?} which are reserved calendar unit names.",
+                    "In spec '{}': measure type '{}' declares unit(s) {:?} which are reserved calendar unit names.",
                     spec_name, type_name, reserved_collision
                 ),
                 source_for(type_name),
@@ -6315,25 +6414,25 @@ fn resolve_quantity_decompositions(
             continue;
         }
 
-        let updated = owned.map_quantity(|units, _decomposition| {
+        let updated = owned.map_measure(|units, _decomposition| {
             let units = units.map(|u| u.with_decomposition(base_decomp.clone()));
             (units, Some(base_decomp.clone()))
         });
         resolved.insert(type_name.clone(), Arc::new(updated));
     }
 
-    unit_index = repair_empty_simple_quantity_decomposition_in_unit_index(unit_index);
+    unit_index = repair_empty_simple_measure_decomposition_in_unit_index(unit_index);
 
     let mut lookup = UnitDecompLookup::new();
 
     for (unit_name, lemma_type) in unit_index.iter() {
-        if let TypeSpecification::Quantity {
+        if let TypeSpecification::Measure {
             decomposition: Some(decomposition),
             units,
             ..
         } = &lemma_type.specifications
         {
-            let quantity_name = lemma_type.name.clone().unwrap_or_default();
+            let measure_name = lemma_type.name.clone().unwrap_or_default();
             let factor = units
                 .iter()
                 .find(|u| &u.name == unit_name)
@@ -6347,20 +6446,20 @@ fn resolve_quantity_decompositions(
                 .clone();
             lookup.insert(
                 unit_name.clone(),
-                (quantity_name, decomposition.clone(), factor),
+                (measure_name, decomposition.clone(), factor),
             );
         }
     }
 
     for (type_name, lemma_type) in resolved.iter() {
-        if let TypeSpecification::Quantity {
+        if let TypeSpecification::Measure {
             units,
             decomposition: Some(decomposition),
             ..
         } = &lemma_type.specifications
         {
             let is_defining_type = lemma_type
-                .quantity_family_name()
+                .measure_family_name()
                 .map(|family| family == type_name.as_str())
                 .unwrap_or(false);
             if !is_defining_type {
@@ -6379,11 +6478,11 @@ fn resolve_quantity_decompositions(
         }
     }
 
-    let derived_quantity_type_names_unsorted: Vec<String> = resolved
+    let derived_measure_type_names_unsorted: Vec<String> = resolved
         .iter()
         .filter_map(|(name, lemma_type)| {
-            if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
-                if units.iter().any(|unit| !quantity_unit_is_simple(unit)) {
+            if let TypeSpecification::Measure { units, .. } = &lemma_type.specifications {
+                if units.iter().any(|unit| !measure_unit_is_simple(unit)) {
                     return Some(name.clone());
                 }
             }
@@ -6391,9 +6490,9 @@ fn resolve_quantity_decompositions(
         })
         .collect();
 
-    let derived_quantity_type_names = match sort_derived_quantity_types_for_resolution(
+    let derived_measure_type_names = match sort_derived_measure_types_for_resolution(
         spec_name,
-        derived_quantity_type_names_unsorted,
+        derived_measure_type_names_unsorted,
         &resolved,
         &lookup,
         &unit_index,
@@ -6406,15 +6505,15 @@ fn resolve_quantity_decompositions(
         }
     };
 
-    for type_name in &derived_quantity_type_names {
+    for type_name in &derived_measure_type_names {
         let type_source = source_for(type_name);
 
         let units_snapshot = match &resolved[type_name].specifications {
-            TypeSpecification::Quantity { units, .. } => units.clone(),
+            TypeSpecification::Measure { units, .. } => units.clone(),
             _ => continue,
         };
 
-        let mut resolved_type_decomp: Option<BaseQuantityVector> = None;
+        let mut resolved_type_decomp: Option<BaseMeasureVector> = None;
         let mut unit_errors: Vec<Error> = Vec::new();
         let mut resolved_unit_factors: Vec<Option<crate::computation::rational::RationalInteger>> =
             vec![None; units_snapshot.len()];
@@ -6425,7 +6524,7 @@ fn resolve_quantity_decompositions(
             {
                 unit_errors.push(Error::validation(
                     format!(
-                        "In spec '{}': quantity type '{}' declares unit '{}' which is a reserved calendar unit name.",
+                        "In spec '{}': measure type '{}' declares unit '{}' which is a reserved calendar unit name.",
                         spec_name, type_name, unit.name
                     ),
                     type_source.clone(),
@@ -6433,15 +6532,14 @@ fn resolve_quantity_decompositions(
                 ));
                 continue;
             }
-            if quantity_unit_is_simple(unit) {
-                let simple_decomp =
-                    declared_quantity_decomposition(type_name, &resolved[type_name]);
+            if measure_unit_is_simple(unit) {
+                let simple_decomp = declared_measure_decomposition(type_name, &resolved[type_name]);
 
                 if let Some(existing) = &resolved_type_decomp {
                     if existing != &simple_decomp {
                         unit_errors.push(Error::validation(
                             format!(
-                                "In spec '{}': quantity type '{}' has inconsistent unit decompositions. \
+                                "In spec '{}': measure type '{}' has inconsistent unit decompositions. \
                                  Unit '{}' is a simple unit (decomposition {{{}: 1}}) but other units \
                                  have decomposition {:?}.",
                                 spec_name, type_name, unit.name, type_name, existing
@@ -6463,7 +6561,7 @@ fn resolve_quantity_decompositions(
                 type_name,
                 &unit.name,
                 unit.factor.clone(),
-                &unit.derived_quantity_factors,
+                &unit.derived_measure_factors,
                 &lookup,
                 type_source.as_ref(),
             ) {
@@ -6472,10 +6570,10 @@ fn resolve_quantity_decompositions(
                         if existing != &unit_decomp {
                             unit_errors.push(Error::validation(
                                 format!(
-                                    "In spec '{}': quantity type '{}' has inconsistent unit \
+                                    "In spec '{}': measure type '{}' has inconsistent unit \
                                      decompositions. Unit '{}' resolved to {:?} but other units \
-                                     resolved to {:?}. All units of a quantity must measure the same \
-                                     physical quantity.",
+                                     resolved to {:?}. All units of a measure must measure the same \
+                                     physical measure.",
                                     spec_name, type_name, unit.name, unit_decomp, existing
                                 ),
                                 type_source.clone(),
@@ -6508,8 +6606,8 @@ fn resolve_quantity_decompositions(
                 .expect("BUG: type_name comes from resolved's own keys"),
         );
 
-        let updated = owned.map_quantity(|units, _decomposition| {
-            let units = QuantityUnits(
+        let updated = owned.map_measure(|units, _decomposition| {
+            let units = MeasureUnits(
                 units
                     .0
                     .into_iter()
@@ -6526,7 +6624,7 @@ fn resolve_quantity_decompositions(
             (units, Some(type_decomp.clone()))
         });
 
-        if let TypeSpecification::Quantity { units, .. } = &updated.specifications {
+        if let TypeSpecification::Measure { units, .. } = &updated.specifications {
             for unit in units.iter() {
                 lookup.insert(
                     unit.name.clone(),
@@ -6539,17 +6637,17 @@ fn resolve_quantity_decompositions(
 
     let resolved = canonicalize_unit_signatures(resolved);
     let unit_index = sync_unit_index_from_resolved(&resolved, unit_index);
-    let unit_index = repair_empty_simple_quantity_decomposition_in_unit_index(unit_index);
+    let unit_index = repair_empty_simple_measure_decomposition_in_unit_index(unit_index);
     let unit_index = canonicalize_unit_signatures(unit_index);
 
     (resolved, unit_index, errors)
 }
 
 /// Functional wrapper around the still-`&mut`-based
-/// [`semantics::finalize_quantity_unit_constraint_magnitudes`]. Consumes the
+/// [`semantics::finalize_measure_unit_constraint_magnitudes`]. Consumes the
 /// `LemmaType`, performs the validation, and returns either the updated value
 /// or an error message (the type is dropped on failure).
-fn finalize_lemma_quantity_magnitudes(
+fn finalize_lemma_measure_magnitudes(
     lemma_type: LemmaType,
     declared_default: Option<&ValueKind>,
     type_name: &str,
@@ -6559,7 +6657,7 @@ fn finalize_lemma_quantity_magnitudes(
         mut specifications,
         extends,
     } = lemma_type;
-    semantics::finalize_quantity_unit_constraint_magnitudes(
+    semantics::finalize_measure_unit_constraint_magnitudes(
         &mut specifications,
         declared_default,
         type_name,
@@ -6571,7 +6669,7 @@ fn finalize_lemma_quantity_magnitudes(
     })
 }
 
-fn finalize_quantity_magnitudes_in_resolved(
+fn finalize_measure_magnitudes_in_resolved(
     resolved: HashMap<String, Arc<LemmaType>>,
     declared_defaults: &HashMap<String, ValueKind>,
     type_sources: &HashMap<String, Source>,
@@ -6588,7 +6686,7 @@ fn finalize_quantity_magnitudes_in_resolved(
                 )
             });
             let fallback = (*arc).clone();
-            let lemma_type = match finalize_lemma_quantity_magnitudes(
+            let lemma_type = match finalize_lemma_measure_magnitudes(
                 arc_unwrap(arc),
                 declared_defaults.get(&type_name),
                 &type_name,
@@ -6597,7 +6695,7 @@ fn finalize_quantity_magnitudes_in_resolved(
                 Err(message) => {
                     errors.push(Error::validation_with_context(
                         format!(
-                            "Type '{}' has invalid quantity unit constraints: {}",
+                            "Type '{}' has invalid measure unit constraints: {}",
                             type_name, message
                         ),
                         Some(source),
@@ -6614,7 +6712,7 @@ fn finalize_quantity_magnitudes_in_resolved(
     )
 }
 
-fn finalize_quantity_magnitudes_in_unit_index(
+fn finalize_measure_magnitudes_in_unit_index(
     unit_index: HashMap<String, Arc<LemmaType>>,
     declared_defaults: &HashMap<String, ValueKind>,
     type_sources: &HashMap<String, Source>,
@@ -6627,18 +6725,18 @@ fn finalize_quantity_magnitudes_in_unit_index(
             let type_name_opt = arc
                 .name
                 .as_deref()
-                .or_else(|| arc.quantity_family_name())
+                .or_else(|| arc.measure_family_name())
                 .map(str::to_string);
             let Some(type_name) = type_name_opt else {
                 acc.insert(unit_name, arc);
                 return (acc, errors);
             };
-            if !arc.is_quantity() {
+            if !arc.is_measure() {
                 acc.insert(unit_name, arc);
                 return (acc, errors);
             }
             let fallback = (*arc).clone();
-            let lemma_type = match finalize_lemma_quantity_magnitudes(
+            let lemma_type = match finalize_lemma_measure_magnitudes(
                 arc_unwrap(arc),
                 declared_defaults.get(type_name.as_str()),
                 type_name.as_str(),
@@ -6655,13 +6753,13 @@ fn finalize_quantity_magnitudes_in_unit_index(
                         })
                         .unwrap_or_else(|| {
                             unreachable!(
-                                "BUG: quantity type '{}' in unit_index has no DataTypeDef source",
+                                "BUG: measure type '{}' in unit_index has no DataTypeDef source",
                                 type_name
                             )
                         });
                     errors.push(Error::validation_with_context(
                         format!(
-                            "Type '{}' has invalid quantity unit constraints: {}",
+                            "Type '{}' has invalid measure unit constraints: {}",
                             type_name, message
                         ),
                         Some(source),
@@ -6678,10 +6776,10 @@ fn finalize_quantity_magnitudes_in_unit_index(
     )
 }
 
-/// Populate every unit's `derived_quantity_factors` to its canonical symbolic signature.
+/// Populate every unit's `derived_measure_factors` to its canonical symbolic signature.
 ///
 /// - Compound declarations keep their parsed factors, canonicalized.
-/// - Simple units (empty `derived_quantity_factors`) get `[(unit.name, 1)]`.
+/// - Simple units (empty `derived_measure_factors`) get `[(unit.name, 1)]`.
 ///
 /// After this pass every unit carries a non-empty, canonical-form signature so cross-type
 /// arithmetic can combine them deterministically and `signature_index` can be built.
@@ -6700,14 +6798,14 @@ fn canonicalize_unit_signatures(
 }
 
 fn canonicalize_lemma_unit_signatures(lemma_type: LemmaType) -> LemmaType {
-    lemma_type.map_quantity(|units, decomposition| {
-        let units = units.map(canonicalize_unit_for_quantity);
+    lemma_type.map_measure(|units, decomposition| {
+        let units = units.map(canonicalize_unit_for_measure);
         (units, decomposition)
     })
 }
 
-fn reserved_calendar_units_in_quantity(lemma_type: &LemmaType) -> Vec<String> {
-    let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications else {
+fn reserved_calendar_units_in_measure(lemma_type: &LemmaType) -> Vec<String> {
+    let TypeSpecification::Measure { units, .. } = &lemma_type.specifications else {
         return Vec::new();
     };
     units
@@ -6717,20 +6815,20 @@ fn reserved_calendar_units_in_quantity(lemma_type: &LemmaType) -> Vec<String> {
         .collect()
 }
 
-fn quantity_unit_is_simple(unit: &QuantityUnit) -> bool {
-    unit.derived_quantity_factors.is_empty()
-        || (unit.derived_quantity_factors.len() == 1
-            && unit.derived_quantity_factors[0].0 == unit.name
-            && unit.derived_quantity_factors[0].1 == 1)
+fn measure_unit_is_simple(unit: &MeasureUnit) -> bool {
+    unit.derived_measure_factors.is_empty()
+        || (unit.derived_measure_factors.len() == 1
+            && unit.derived_measure_factors[0].0 == unit.name
+            && unit.derived_measure_factors[0].1 == 1)
 }
 
-fn canonicalize_unit_for_quantity(unit: QuantityUnit) -> QuantityUnit {
-    let factors = if quantity_unit_is_simple(&unit) {
+fn canonicalize_unit_for_measure(unit: MeasureUnit) -> MeasureUnit {
+    let factors = if measure_unit_is_simple(&unit) {
         vec![(unit.name.clone(), 1)]
     } else {
-        canonicalize_signature(&unit.derived_quantity_factors)
+        canonicalize_signature(&unit.derived_measure_factors)
     };
-    unit.with_derived_quantity_factors(factors)
+    unit.with_derived_measure_factors(factors)
 }
 
 fn resolve_compound_unit(
@@ -6743,38 +6841,38 @@ fn resolve_compound_unit(
     source: Option<&Source>,
 ) -> Result<
     (
-        BaseQuantityVector,
+        BaseMeasureVector,
         crate::computation::rational::RationalInteger,
     ),
     Error,
 > {
     use crate::computation::rational::{checked_mul, checked_pow_i32};
 
-    let mut result: BaseQuantityVector = BaseQuantityVector::new();
+    let mut result: BaseMeasureVector = BaseMeasureVector::new();
     let mut derived_factor = prefix;
 
-    for (quantity_ref, exponent) in factors {
-        let (owning_quantity_name, owning_decomp, unit_factor) =
-            lookup.get(quantity_ref.as_str()).ok_or_else(|| {
+    for (measure_ref, exponent) in factors {
+        let (owning_measure_name, owning_decomp, unit_factor) =
+            lookup.get(measure_ref.as_str()).ok_or_else(|| {
                 Error::validation(
                     format!(
-                        "In spec '{}': unit '{}' in quantity type '{}' references '{}' which is not a \
-                         known unit of any in-scope quantity type. Add `uses <spec>` (or declare the \
-                         owning quantity type in this spec) so its units are in scope.",
-                        spec_name, unit_name, declaring_type_name, quantity_ref
+                        "In spec '{}': unit '{}' in measure type '{}' references '{}' which is not a \
+                         known unit of any in-scope measure type. Add `uses <spec>` (or declare the \
+                         owning measure type in this spec) so its units are in scope.",
+                        spec_name, unit_name, declaring_type_name, measure_ref
                     ),
                     source.cloned(),
                     None::<String>,
                 )
             })?;
 
-        if owning_quantity_name == declaring_type_name {
+        if owning_measure_name == declaring_type_name {
             return Err(Error::validation(
                 format!(
-                    "In spec '{}': unit '{}' in quantity type '{}' references unit '{}' which \
-                     belongs to the same quantity type. A quantity cannot reference its own units \
+                    "In spec '{}': unit '{}' in measure type '{}' references unit '{}' which \
+                     belongs to the same measure type. A measure cannot reference its own units \
                      in a compound expression.",
-                    spec_name, unit_name, declaring_type_name, quantity_ref
+                    spec_name, unit_name, declaring_type_name, measure_ref
                 ),
                 source.cloned(),
                 None::<String>,
@@ -6790,7 +6888,7 @@ fn resolve_compound_unit(
                 spec_name,
                 unit_name,
                 declaring_type_name,
-                quantity_ref,
+                measure_ref,
                 error,
                 source,
             )
@@ -6801,7 +6899,7 @@ fn resolve_compound_unit(
                     spec_name,
                     unit_name,
                     declaring_type_name,
-                    quantity_ref,
+                    measure_ref,
                     error,
                     source,
                 )
@@ -6815,21 +6913,21 @@ fn overflow_to_validation_error(
     spec_name: &str,
     unit_name: &str,
     declaring_type_name: &str,
-    quantity_ref: &str,
+    measure_ref: &str,
     failure: crate::computation::rational::NumericFailure,
     source: Option<&Source>,
 ) -> Error {
     Error::validation(
         format!(
-            "In spec '{}': unit '{}' in quantity type '{}' overflowed while combining '{}': {}",
-            spec_name, unit_name, declaring_type_name, quantity_ref, failure
+            "In spec '{}': unit '{}' in measure type '{}' overflowed while combining '{}': {}",
+            spec_name, unit_name, declaring_type_name, measure_ref, failure
         ),
         source.cloned(),
         None::<String>,
     )
 }
 
-fn accumulate(result: &mut BaseQuantityVector, dim: &str, value: i32) {
+fn accumulate(result: &mut BaseMeasureVector, dim: &str, value: i32) {
     let entry = result.entry(dim.to_string()).or_insert(0);
     *entry += value;
     if *entry == 0 {
@@ -6871,13 +6969,12 @@ mod tests {
             .spec_set(&repository, main_spec.name.as_str())
             .and_then(|ss| ss.get_exact(main_spec.effective_from()).cloned())
             .expect("main_spec must be in all_specs");
-        let dag =
-            discovery::build_dag_for_spec(&ctx, &main_spec_arc, &effective).map_err(
-                |e| match e {
-                    discovery::DagError::Cycle(es) | discovery::DagError::Other(es) => es,
-                },
-            )?;
-        match Graph::build(&ctx, &repository, &main_spec_arc, &dag, &effective, false) {
+        let limits = crate::ResourceLimits::default();
+        let dag = discovery::build_dag_for_spec(&ctx, &main_spec_arc, &effective, &limits)
+            .map_err(|e| match e {
+                discovery::DagError::Cycle(es) | discovery::DagError::Other(es) => es,
+            })?;
+        match Graph::build(&ctx, &repository, &main_spec_arc, &dag, &effective, &limits) {
             Ok((graph, _types)) => Ok(graph),
             Err(errors) => Err(errors),
         }
@@ -6933,6 +7030,61 @@ mod tests {
         assert!(
             result.is_err(),
             "Overriding x.y must fail when x is not a spec reference"
+        );
+    }
+
+    #[test]
+    fn programmatic_ast_without_source_location_is_validation_error() {
+        let mut spec = create_test_spec("test");
+        spec = spec.add_rule(LemmaRule {
+            name: "no_location".to_string(),
+            expression: ast::Expression {
+                kind: ast::ExpressionKind::Literal(Value::Number(1.into())),
+                source_location: None,
+            },
+            unless_clauses: Vec::new(),
+            source_location: test_source(),
+        });
+
+        let result = build_graph(&spec, &[spec.clone()]);
+        let errors = result.expect_err("missing source_location must be a planning error");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("source location")),
+            "expected source-location boundary error, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn programmatic_ast_nested_expression_without_source_location_is_validation_error() {
+        let inner = ast::Expression {
+            kind: ast::ExpressionKind::Literal(Value::Number(1.into())),
+            source_location: None,
+        };
+        let outer = ast::Expression {
+            kind: ast::ExpressionKind::Arithmetic(
+                Arc::new(create_literal_expr(Value::Number(2.into()))),
+                ast::ArithmeticComputation::Add,
+                Arc::new(inner),
+            ),
+            source_location: Some(test_source()),
+        };
+        let mut spec = create_test_spec("test");
+        spec = spec.add_rule(LemmaRule {
+            name: "nested_no_location".to_string(),
+            expression: outer,
+            unless_clauses: Vec::new(),
+            source_location: test_source(),
+        });
+
+        let result = build_graph(&spec, &[spec.clone()]);
+        let errors = result.expect_err("nested missing source_location must be a planning error");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.to_string().contains("source location")),
+            "expected source-location boundary error, got: {errors:?}"
         );
     }
 
@@ -7545,7 +7697,7 @@ rule r: i.x
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedSpecTypes {
     /// Resolved [`LemmaType`] for each **data type row name** declared in this spec (`data name: …`).
-    /// Planning-only: includes quantity units and post-`resolve_quantity_decompositions` decomposition.
+    /// Planning-only: includes measure units and post-`resolve_measure_decompositions` decomposition.
     pub resolved: HashMap<String, Arc<LemmaType>>,
 
     /// Declared default per named type (e.g. `type rate: ratio -> default 50%`).
@@ -7555,13 +7707,13 @@ pub struct ResolvedSpecTypes {
     /// Populated after [`RawDefault`] materialization (post-decomposition).
     pub declared_defaults: HashMap<String, ValueKind>,
 
-    /// Defaults captured during type resolution, before quantity unit factors are final.
+    /// Defaults captured during type resolution, before measure unit factors are final.
     pub(crate) raw_defaults: Vec<(String, RawDefault)>,
 
     /// Raw defaults retained after materialization for cross-spec parent lookup during later specs.
     pub(crate) source_defaults: HashMap<String, RawDefault>,
 
-    /// Unit index: unit_name -> family-root quantity type for that unit's family.
+    /// Unit index: unit_name -> family-root measure type for that unit's family.
     /// Binding aliases never appear; cross-family duplicate unit names fail at resolution.
     pub unit_index: HashMap<String, Arc<LemmaType>>,
 }
@@ -7592,7 +7744,7 @@ pub(crate) struct TypeResolver<'a> {
     specs_with_failed_registration: Vec<Arc<LemmaSpec>>,
 }
 
-/// Parent type used for quantity-family lookup, unwrapping [`ParentType::Ranged`].
+/// Parent type used for measure-family lookup, unwrapping [`ParentType::Ranged`].
 fn element_parent_type(parent: &ParentType) -> &ParentType {
     match parent {
         ParentType::Ranged { inner } => element_parent_type(inner),
@@ -7626,7 +7778,7 @@ fn parser_value_base_type_display_name(value: &ast::Value) -> &'static str {
         ast::Value::Time(_) => "time",
         ast::Value::NumberWithUnit(_, unit) => match unit.as_str() {
             "percent" | "permille" => "ratio",
-            _ => "quantity",
+            _ => "measure",
         },
         ast::Value::Range(_, _) => "range",
     }
@@ -7654,7 +7806,7 @@ fn inferred_parent_type_from_literal(value: &ast::Value) -> Result<ParentType, S
             primitive: PrimitiveKind::Time,
         },
         ast::Value::NumberWithUnit(_, _) => ParentType::Primitive {
-            primitive: PrimitiveKind::Quantity,
+            primitive: PrimitiveKind::Measure,
         },
         ast::Value::Range(left, right) => {
             let primitive = match (left.as_ref(), right.as_ref()) {
@@ -7667,7 +7819,7 @@ fn inferred_parent_type_from_literal(value: &ast::Value) -> Result<ParentType, S
                     PrimitiveKind::RatioRange
                 }
                 (ast::Value::NumberWithUnit(_, _), ast::Value::NumberWithUnit(_, _)) => {
-                    PrimitiveKind::QuantityRange
+                    PrimitiveKind::MeasureRange
                 }
                 (left_value, right_value) => {
                     return Err(format!(
@@ -7856,9 +8008,9 @@ impl<'a> TypeResolver<'a> {
             })
             .collect();
 
-        // Run the decomposition pass to populate `BaseQuantityVector` on all Quantity types.
+        // Run the decomposition pass to populate `BaseMeasureVector` on all Measure types.
         // The pass also syncs `unit_index` with the post-decomp types as its final phase.
-        let (new_resolved, new_unit_index, decomp_errors) = resolve_quantity_decompositions(
+        let (new_resolved, new_unit_index, decomp_errors) = resolve_measure_decompositions(
             &spec.name,
             std::mem::take(&mut resolved_types.resolved),
             std::mem::take(&mut resolved_types.unit_index),
@@ -7908,7 +8060,7 @@ impl<'a> TypeResolver<'a> {
             errors.push(error);
         }
 
-        let (new_resolved, resolved_errors) = finalize_quantity_magnitudes_in_resolved(
+        let (new_resolved, resolved_errors) = finalize_measure_magnitudes_in_resolved(
             std::mem::take(&mut resolved_types.resolved),
             &resolved_types.declared_defaults,
             &type_sources,
@@ -7922,7 +8074,7 @@ impl<'a> TypeResolver<'a> {
             std::mem::take(&mut resolved_types.unit_index),
         );
 
-        let (new_unit_index, unit_index_errors) = finalize_quantity_magnitudes_in_unit_index(
+        let (new_unit_index, unit_index_errors) = finalize_measure_magnitudes_in_unit_index(
             std::mem::take(&mut resolved_types.unit_index),
             &resolved_types.declared_defaults,
             &type_sources,
@@ -7939,19 +8091,19 @@ impl<'a> TypeResolver<'a> {
 
         let mut validated_in_unit_index: HashSet<String> = HashSet::new();
         for lemma_type in resolved_types.unit_index.values() {
-            let Some(quantity_family) = lemma_type.quantity_family_name() else {
+            let Some(measure_family) = lemma_type.measure_family_name() else {
                 continue;
             };
-            if !lemma_type.is_quantity()
-                || !validated_in_unit_index.insert(quantity_family.to_string())
+            if !lemma_type.is_measure()
+                || !validated_in_unit_index.insert(measure_family.to_string())
             {
                 continue;
             }
             let type_name = lemma_type
                 .name
                 .as_deref()
-                .filter(|name| *name == quantity_family)
-                .unwrap_or(quantity_family);
+                .filter(|name| *name == measure_family)
+                .unwrap_or(measure_family);
             let source = type_sources
                 .get(type_name)
                 .cloned()
@@ -7962,7 +8114,7 @@ impl<'a> TypeResolver<'a> {
                 })
                 .unwrap_or_else(|| {
                     unreachable!(
-                        "BUG: quantity type '{}' in unit_index has no DataTypeDef source",
+                        "BUG: measure type '{}' in unit_index has no DataTypeDef source",
                         type_name
                     )
                 });
@@ -8017,7 +8169,8 @@ impl<'a> TypeResolver<'a> {
             .cloned()
             .unwrap_or_default();
 
-        let type_names: Vec<String> = data_defs.keys().cloned().collect();
+        let mut type_names: Vec<String> = data_defs.keys().cloned().collect();
+        type_names.sort();
         let sorted_type_names = if type_names.is_empty() {
             type_names
         } else {
@@ -8107,7 +8260,7 @@ impl<'a> TypeResolver<'a> {
                     let range_spec = element_specs.range_from_element().ok_or_else(|| {
                         vec![Error::validation_with_context(
                             format!(
-                                "'{inner}' is not rangeable: only quantity, number, ratio, date, and time types support ranges"
+                                "'{inner}' is not rangeable: only measure, number, ratio, date, and time types support ranges"
                             ),
                             Some(source.clone()),
                             None::<String>,
@@ -8155,7 +8308,7 @@ impl<'a> TypeResolver<'a> {
                         }
                         return Err(vec![Error::validation_with_context(
                             format!(
-                                "Unknown parent '{parent}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, quantity, number, ratio, text, date, time, duration, percent"
+                                "Unknown parent '{parent}' for data definition. Parent must be defined before use. Valid primitive types are: boolean, measure, number, ratio, text, date, time"
                             ),
                             Some(source.clone()),
                             None::<String>,
@@ -8313,7 +8466,7 @@ impl<'a> TypeResolver<'a> {
             let family = match element_parent_type(&parent) {
                 ParentType::Primitive { .. } => type_name.clone(),
                 _ => parent_type
-                    .quantity_family_name()
+                    .measure_family_name()
                     .map(String::from)
                     .unwrap_or_else(|| type_name.clone()),
             };
@@ -8365,11 +8518,11 @@ impl<'a> TypeResolver<'a> {
             let data_type_def = data_defs
                 .get(type_name.as_str())
                 .expect("BUG: type was resolved but not in registry");
-            let merge_result = if type_arc.is_quantity() {
+            let merge_result = if type_arc.is_measure() {
                 if matches!(data_type_def.parent, ParentType::Qualified { .. }) {
                     Ok(())
                 } else {
-                    Self::add_quantity_units_to_index(
+                    Self::add_measure_units_to_index(
                         spec,
                         &mut unit_index_tmp,
                         type_arc,
@@ -8426,7 +8579,7 @@ impl<'a> TypeResolver<'a> {
                             imported_type_name, imported_spec.name
                         )
                     });
-                let merge_result = if type_arc.is_quantity() {
+                let merge_result = if type_arc.is_measure() {
                     let consumer_owns_type_locally = data_defs
                         .get(imported_type_name.as_str())
                         .is_some_and(|local_def| {
@@ -8435,7 +8588,7 @@ impl<'a> TypeResolver<'a> {
                     if consumer_owns_type_locally {
                         Ok(())
                     } else {
-                        Self::add_quantity_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                        Self::add_measure_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
                     }
                 } else if type_arc.is_ratio() {
                     Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
@@ -8502,7 +8655,7 @@ impl<'a> TypeResolver<'a> {
     // Static helpers (no &self)
     // =========================================================================
 
-    fn add_quantity_units_to_index(
+    fn add_measure_units_to_index(
         spec: &Arc<LemmaSpec>,
         unit_index: &mut HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)>,
         resolved_type: &Arc<LemmaType>,
@@ -8512,9 +8665,9 @@ impl<'a> TypeResolver<'a> {
         if matches!(defined_by.parent, ParentType::Qualified { .. }) {
             unreachable!("BUG: qualified import alias rows must not register units");
         }
-        let quantity_family = resolved_ref
-            .quantity_family_name()
-            .expect("BUG: add_quantity_units_to_index requires quantity type with family");
+        let measure_family = resolved_ref
+            .measure_family_name()
+            .expect("BUG: add_measure_units_to_index requires measure type with family");
         let units = Self::extract_units_from_type(&resolved_ref.specifications);
         for unit in units {
             if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
@@ -8539,7 +8692,7 @@ impl<'a> TypeResolver<'a> {
 
                 // Defining-type extension chains only (family-root rows); binding aliases never
                 // reach this function.
-                if existing_type.is_quantity()
+                if existing_type.is_measure()
                     && (current_extends_existing || existing_extends_current)
                 {
                     if current_extends_existing {
@@ -8549,13 +8702,13 @@ impl<'a> TypeResolver<'a> {
                     continue;
                 }
 
-                if existing_type.is_quantity() && existing_type.same_quantity_family(resolved_ref) {
+                if existing_type.is_measure() && existing_type.same_measure_family(resolved_ref) {
                     if let (
-                        TypeSpecification::Quantity {
+                        TypeSpecification::Measure {
                             units: existing_units,
                             ..
                         },
-                        TypeSpecification::Quantity {
+                        TypeSpecification::Measure {
                             units: new_units, ..
                         },
                     ) = (&existing_type.specifications, &resolved_ref.specifications)
@@ -8572,8 +8725,8 @@ impl<'a> TypeResolver<'a> {
                         }
                         return Err(Error::validation_with_context(
                             format!(
-                                "Unit '{}' in quantity family '{}' is defined with conflicting factors",
-                                unit, quantity_family
+                                "Unit '{}' in measure family '{}' is defined with conflicting factors",
+                                unit, measure_family
                             ),
                             Some(defined_by.source.clone()),
                             None::<String>,
@@ -8676,7 +8829,7 @@ impl<'a> TypeResolver<'a> {
 
     fn extract_units_from_type(specs: &TypeSpecification) -> Vec<String> {
         match specs {
-            TypeSpecification::Quantity { units, .. } => {
+            TypeSpecification::Measure { units, .. } => {
                 units.iter().map(|unit| unit.name.clone()).collect()
             }
             TypeSpecification::Ratio { units, .. } => {
@@ -8752,11 +8905,10 @@ mod type_resolution_tests {
 
         for kind in [
             PrimitiveKind::Boolean,
-            PrimitiveKind::Quantity,
-            PrimitiveKind::QuantityRange,
+            PrimitiveKind::Measure,
+            PrimitiveKind::MeasureRange,
             PrimitiveKind::Number,
             PrimitiveKind::NumberRange,
-            PrimitiveKind::Percent,
             PrimitiveKind::Ratio,
             PrimitiveKind::RatioRange,
             PrimitiveKind::Text,
@@ -8882,10 +9034,10 @@ mod type_resolution_tests {
     }
 
     #[test]
-    fn test_child_quantity_type_keeps_declared_name_and_child_units() {
+    fn test_child_measure_type_keeps_declared_name_and_child_units() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data length: quantity
+data length: measure
   -> unit meter 1
 data road_length: length
   -> unit kilometer 1000"#,
@@ -8899,10 +9051,10 @@ data road_length: length
         assert_eq!(road_length_type.name.as_deref(), Some("road_length"));
 
         match &road_length_type.specifications {
-            TypeSpecification::Quantity { units, .. } => {
+            TypeSpecification::Measure { units, .. } => {
                 assert!(units.iter().any(|unit| unit.name == "kilometer"));
             }
-            _ => panic!("Expected Quantity type specifications"),
+            _ => panic!("Expected Measure type specifications"),
         }
 
         let kilometer_owner = resolved_types.unit_index.get("kilometer").unwrap();
@@ -8936,7 +9088,7 @@ data dice: number -> minimum 0 -> maximum 6"#,
     fn test_type_definition_with_multiple_commands() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
+data money: measure -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
         );
 
         let resolved_types = resolver
@@ -8945,7 +9097,7 @@ data money: quantity -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
         let money_type = resolved_types.resolved.get("money").unwrap();
 
         match &money_type.specifications {
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 decimals, units, ..
             } => {
                 assert_eq!(*decimals, Some(2));
@@ -8953,7 +9105,7 @@ data money: quantity -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
                 assert!(units.iter().any(|u| u.name == "eur"));
                 assert!(units.iter().any(|u| u.name == "usd"));
             }
-            _ => panic!("Expected Quantity type specifications"),
+            _ => panic!("Expected Measure type specifications"),
         }
     }
 
@@ -9001,10 +9153,10 @@ data precise_number: number -> decimals 4"#,
     }
 
     #[test]
-    fn test_quantity_type_decimals_only() {
+    fn test_measure_type_decimals_only() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data weight: quantity -> unit kg 1 -> decimals 3"#,
+data weight: measure -> unit kg 1 -> decimals 3"#,
         );
 
         let resolved_types = resolver
@@ -9013,10 +9165,10 @@ data weight: quantity -> unit kg 1 -> decimals 3"#,
         let weight_type = resolved_types.resolved.get("weight").unwrap();
 
         match &weight_type.specifications {
-            TypeSpecification::Quantity { decimals, .. } => {
+            TypeSpecification::Measure { decimals, .. } => {
                 assert_eq!(*decimals, Some(3));
             }
-            _ => panic!("Expected Quantity type with decimals 3"),
+            _ => panic!("Expected Measure type with decimals 3"),
         }
     }
 
@@ -9048,7 +9200,7 @@ data ratio_type: ratio -> decimals 2"#,
     fn typedef_default_inherits_through_extension_chain() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity -> unit eur 1 -> default 4 eur
+data money: measure -> unit eur 1 -> default 4 eur
 data price: money
 data final_price: price"#,
         );
@@ -9111,17 +9263,17 @@ data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
     }
 
     #[test]
-    fn test_quantity_extension_chain_same_family_units_allowed() {
+    fn test_measure_extension_chain_same_family_units_allowed() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity -> unit eur 1
+data money: measure -> unit eur 1
 data money2: money -> unit usd 1.24"#,
         );
 
         let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_ok(),
-            "Quantity extension chain should resolve: {:?}",
+            "Measure extension chain should resolve: {:?}",
             result.err()
         );
 
@@ -9192,7 +9344,7 @@ data invalid: choice -> option "a""#,
     fn extension_unit_factor_override_errors() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity
+data money: measure
   -> unit eur 1
 data money2: money
   -> unit eur 1.10"#,
@@ -9223,7 +9375,7 @@ data money2: money
     fn inherited_unit_idempotent_redeclare_ok() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity
+data money: measure
   -> unit eur 1
 data money2: money
   -> unit eur 1"#,
@@ -9234,7 +9386,7 @@ data money2: money
             .expect("idempotent inherited unit redeclare must resolve");
         let money2 = resolved.resolved.get("money2").expect("money2");
         match &money2.specifications {
-            TypeSpecification::Quantity { units, .. } => {
+            TypeSpecification::Measure { units, .. } => {
                 let eur = units.iter().find(|u| u.name == "eur").expect("eur");
                 assert_eq!(
                     crate::computation::rational::commit_rational_to_decimal(&eur.factor).unwrap(),
@@ -9242,7 +9394,7 @@ data money2: money
                     "eur factor must remain 1"
                 );
             }
-            other => panic!("expected Quantity, got {other:?}"),
+            other => panic!("expected Measure, got {other:?}"),
         }
     }
 
@@ -9250,7 +9402,7 @@ data money2: money
     fn extension_additive_unit_registers_in_unit_index() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity
+data money: measure
   -> unit eur 1
 data money2: money
   -> unit usd 1.24"#,
@@ -9291,14 +9443,14 @@ data money2: money
     #[test]
     fn find_unique_reports_multiple_families_with_same_decomposition() {
         let code = r#"spec units
-data money: quantity
+data money: measure
   -> unit eur 1
   -> unit usd 0.86
-data mass: quantity
+data mass: measure
   -> unit kg 1
-data price_eur_per_kg: quantity
+data price_eur_per_kg: measure
   -> unit eur_per_kg eur/kg
-data price_usd_per_kg: quantity
+data price_usd_per_kg: measure
   -> unit usd_per_kg usd/kg
 "#;
         let (resolver, spec_arcs) = resolver_for_code(code);
@@ -9316,12 +9468,12 @@ data price_usd_per_kg: quantity
             .unit_index
             .get("eur_per_kg")
             .expect("eur_per_kg")
-            .quantity_type_decomposition()
+            .measure_type_decomposition()
             .expect("eur_per_kg decomposition")
             .clone();
         let map = vec![(repository, units_arc.clone(), resolved)];
 
-        let unique = find_unique_quantity_type_by_decomposition(&map, &units_arc, &eur_decomp);
+        let unique = find_unique_measure_type_by_decomposition(&map, &units_arc, &eur_decomp);
         match unique {
             DecompositionMatch::Multiple(families) => {
                 assert_eq!(families.len(), 2);
@@ -9335,11 +9487,11 @@ data price_usd_per_kg: quantity
     #[test]
     fn unit_index_maps_family_root_not_binding_alias() {
         let code = r#"spec units
-data money: quantity
+data money: measure
   -> unit eur 1
-data mass: quantity
+data mass: measure
   -> unit kg 1
-data price_per_weight: quantity
+data price_per_weight: measure
   -> unit eur_per_kg eur/kg
 
 spec consumer
@@ -9388,7 +9540,7 @@ data amortization_per_kg: u.price_per_weight
             "unit must belong to family root, not binding alias row name"
         );
         assert_eq!(
-            eur_per_kg_owner.quantity_family_name(),
+            eur_per_kg_owner.measure_family_name(),
             Some("price_per_weight")
         );
         assert_eq!(eur_per_kg_owner.as_ref(), units_price_per_weight.as_ref());
@@ -9406,14 +9558,14 @@ data amortization_per_kg: u.price_per_weight
     #[test]
     fn import_merge_skips_locally_owned_family_root() {
         let code = r#"spec std_units
-data mass: quantity
+data mass: measure
   -> unit kilogram 1
   -> unit kilograms 1
   -> unit gram 0.001
 
 spec s
 uses u: std_units
-data mass: quantity
+data mass: measure
   -> unit kg 1
   -> unit tonne 1000
 rule smoke: true
@@ -9478,7 +9630,7 @@ rule smoke: true
     #[test]
     fn same_family_same_unit_same_factor_is_idempotent() {
         let code = r#"spec units_a
-data duration: quantity
+data duration: measure
   -> unit hour 1
 
 spec consumer
@@ -9519,11 +9671,11 @@ rule smoke: true
     #[test]
     fn same_family_same_unit_different_factor_errors() {
         let code = r#"spec units_a
-data duration: quantity
+data duration: measure
   -> unit hour 1
 
 spec units_b
-data duration: quantity
+data duration: measure
   -> unit hour 60
 
 spec consumer
@@ -9580,18 +9732,18 @@ rule smoke: true
     fn test_spec_level_unit_ambiguity_errors_are_reported() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money_a: quantity
+data money_a: measure
   -> unit eur 1.00
   -> unit usd 0.84
 
-data money_b: quantity
+data money_b: measure
   -> unit eur 1.00
   -> unit usd 1.20
 
-data length_a: quantity
+data length_a: measure
   -> unit meter 1.0
 
-data length_b: quantity
+data length_b: measure
   -> unit meter 1.0"#,
         );
 
@@ -9619,7 +9771,7 @@ data length_b: quantity
     fn test_ratio_unit_cross_family_collision_errors() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data q: quantity
+data q: measure
   -> unit foo 1
 
 data r: ratio
@@ -9629,7 +9781,7 @@ data r: ratio
         let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
-            "quantity and ratio must not share a unit name"
+            "measure and ratio must not share a unit name"
         );
         let error_msg = result
             .unwrap_err()
@@ -9768,7 +9920,7 @@ data price: number
     fn test_extending_type_inherits_units() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 0.84
 
@@ -9782,13 +9934,13 @@ data my_money: money
         let my_money_type = resolved.resolved.get("my_money").unwrap();
 
         match &my_money_type.specifications {
-            TypeSpecification::Quantity { units, .. } => {
+            TypeSpecification::Measure { units, .. } => {
                 assert_eq!(units.len(), 3);
                 assert!(units.iter().any(|u| u.name == "eur"));
                 assert!(units.iter().any(|u| u.name == "usd"));
                 assert!(units.iter().any(|u| u.name == "gbp"));
             }
-            other => panic!("Expected Quantity type specifications, got {:?}", other),
+            other => panic!("Expected Measure type specifications, got {:?}", other),
         }
     }
 
@@ -9796,9 +9948,9 @@ data my_money: money
     fn binding_unit_factor_override_errors() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data source_quantity: quantity
+data source_measure: measure
   -> unit usd 1.00
-data z: source_quantity
+data z: source_measure
   -> unit usd 0.84"#,
         );
 
@@ -9850,7 +10002,7 @@ data child: parent
     fn test_duplicate_unit_name_in_same_type_is_error() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit eur 1.19"#,
         );
@@ -9870,14 +10022,14 @@ data money: quantity
     fn test_duplicate_unit_name_compound_is_error() {
         let (resolver, spec_arc) = resolver_single_spec(
             r#"spec test
-data currency: quantity
+data currency: measure
   -> unit usd 1.00
   -> unit eur 0.92
 
-data time_period: quantity
+data time_period: measure
   -> unit year 1
 
-data run_rate: quantity
+data run_rate: measure
   -> unit arr usd/year
   -> unit arr eur/year"#,
         );
@@ -9942,7 +10094,7 @@ pub fn validate_type_specifications(
     let mut errors = Vec::new();
 
     match specs {
-        TypeSpecification::Quantity {
+        TypeSpecification::Measure {
             minimum,
             maximum,
             decimals,
@@ -9952,8 +10104,8 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 match (
-                    semantics::quantity_declared_bound_canonical(min, units, type_name, "minimum"),
-                    semantics::quantity_declared_bound_canonical(max, units, type_name, "maximum"),
+                    semantics::measure_declared_bound_canonical(min, units, type_name, "minimum"),
+                    semantics::measure_declared_bound_canonical(max, units, type_name, "maximum"),
                 ) {
                     (Ok(min_canonical), Ok(max_canonical)) => {
                         if min_canonical > max_canonical {
@@ -9976,7 +10128,7 @@ pub fn validate_type_specifications(
                     (Err(message), _) | (_, Err(message)) => {
                         errors.push(Error::validation_with_context(
                             format!(
-                                "Type '{}' has invalid quantity bound: {}",
+                                "Type '{}' has invalid measure bound: {}",
                                 type_name, message
                             ),
                             Some(source.clone()),
@@ -10057,7 +10209,7 @@ pub fn validate_type_specifications(
                 }
             }
 
-            if let Some(ValueKind::Quantity(_def_value, def_signature)) = declared_default {
+            if let Some(ValueKind::Measure(_def_value, def_signature)) = declared_default {
                 let def_unit = def_signature
                     .first()
                     .map(|(n, _)| n.as_str())
@@ -10082,11 +10234,11 @@ pub fn validate_type_specifications(
                 }
             }
 
-            // Quantity types must have at least one unit (required for parsing and conversion)
+            // Measure types must have at least one unit (required for parsing and conversion)
             if units.is_empty() {
                 errors.push(Error::validation_with_context(
                     format!(
-                        "Type '{}' is a quantity type but has no units. Quantity types must define at least one unit (e.g. -> unit eur 1).",
+                        "Type '{}' is a measure type but has no units. Measure types must define at least one unit (e.g. -> unit eur 1).",
                         type_name
                     ),
                     Some(source.clone()),
@@ -10549,7 +10701,7 @@ pub fn validate_type_specifications(
         TypeSpecification::NumberRange { .. }
         | TypeSpecification::DateRange { .. }
         | TypeSpecification::TimeRange { .. }
-        | TypeSpecification::QuantityRange { .. }
+        | TypeSpecification::MeasureRange { .. }
         | TypeSpecification::RatioRange { .. }
         | TypeSpecification::Boolean { .. } => {
             // No constraint validation needed for these types
@@ -10809,7 +10961,7 @@ mod validation_tests {
     #[test]
     fn uncommittable_minimum_rejected_at_planning() {
         use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
-        use crate::literals::QuantityUnits;
+        use crate::literals::MeasureUnits;
         use crate::planning::semantics::TypeSpecification;
 
         let too_large = uncommittable_out_of_decimal_commit_range();
@@ -10818,14 +10970,14 @@ mod validation_tests {
             "test setup: bound must be valid in Q but not committable to decimal"
         );
 
-        let spec = TypeSpecification::Quantity {
+        let spec = TypeSpecification::Measure {
             minimum: Some((too_large, "eur".to_string())),
             maximum: None,
             decimals: None,
-            units: QuantityUnits(vec![crate::literals::QuantityUnit {
+            units: MeasureUnits(vec![crate::literals::MeasureUnit {
                 name: "eur".to_string(),
                 factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
-                derived_quantity_factors: Default::default(),
+                derived_measure_factors: Default::default(),
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
@@ -10836,8 +10988,8 @@ mod validation_tests {
             help: String::new(),
         };
 
-        let TypeSpecification::Quantity { minimum, .. } = &spec else {
-            panic!("BUG: test constructs Quantity spec");
+        let TypeSpecification::Measure { minimum, .. } = &spec else {
+            panic!("BUG: test constructs Measure spec");
         };
         assert!(
             minimum.is_some(),
@@ -10863,20 +11015,20 @@ mod validation_tests {
     #[test]
     fn uncommittable_maximum_rejected_at_planning() {
         use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
-        use crate::literals::QuantityUnits;
+        use crate::literals::MeasureUnits;
         use crate::planning::semantics::TypeSpecification;
 
         let too_large = uncommittable_out_of_decimal_commit_range();
         assert!(commit_rational_to_decimal(&too_large).is_err());
 
-        let spec = TypeSpecification::Quantity {
+        let spec = TypeSpecification::Measure {
             minimum: None,
             maximum: Some((too_large, "eur".to_string())),
             decimals: None,
-            units: QuantityUnits(vec![crate::literals::QuantityUnit {
+            units: MeasureUnits(vec![crate::literals::MeasureUnit {
                 name: "eur".to_string(),
                 factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
-                derived_quantity_factors: Default::default(),
+                derived_measure_factors: Default::default(),
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
@@ -10907,20 +11059,20 @@ mod validation_tests {
     #[test]
     fn uncommittable_default_magnitude_rejected_at_planning() {
         use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
-        use crate::literals::QuantityUnits;
+        use crate::literals::MeasureUnits;
         use crate::planning::semantics::TypeSpecification;
 
         let too_large = uncommittable_out_of_decimal_commit_range();
         assert!(commit_rational_to_decimal(&too_large).is_err());
 
-        let spec = TypeSpecification::Quantity {
+        let spec = TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
-            units: QuantityUnits(vec![crate::literals::QuantityUnit {
+            units: MeasureUnits(vec![crate::literals::MeasureUnit {
                 name: "eur".to_string(),
                 factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
-                derived_quantity_factors: Default::default(),
+                derived_measure_factors: Default::default(),
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
@@ -10960,22 +11112,22 @@ mod validation_tests {
     }
 
     #[test]
-    fn empty_quantity_signature_unit_must_not_coerce_as_unknown_empty_string() {
+    fn empty_measure_signature_unit_must_not_coerce_as_unknown_empty_string() {
         use crate::computation::rational::rational_new;
-        use crate::literals::QuantityUnits;
+        use crate::literals::MeasureUnits;
         use crate::planning::semantics::{LemmaType, LiteralValue, TypeSpecification, ValueKind};
 
         let schema_type = Arc::new(LemmaType {
             name: Some("money".to_string()),
             extends: TypeExtends::Primitive,
-            specifications: TypeSpecification::Quantity {
+            specifications: TypeSpecification::Measure {
                 minimum: None,
                 maximum: None,
                 decimals: None,
-                units: QuantityUnits(vec![crate::literals::QuantityUnit {
+                units: MeasureUnits(vec![crate::literals::MeasureUnit {
                     name: "eur".to_string(),
                     factor: rational_new(1, 1),
-                    derived_quantity_factors: Default::default(),
+                    derived_measure_factors: Default::default(),
                     decomposition: Default::default(),
                     minimum: None,
                     maximum: None,
@@ -10988,7 +11140,7 @@ mod validation_tests {
         });
 
         let literal = LiteralValue {
-            value: ValueKind::Quantity(rational_new(1, 1), vec![("".to_string(), 1)]),
+            value: ValueKind::Measure(rational_new(1, 1), vec![("".to_string(), 1)]),
             lemma_type: Arc::clone(&schema_type),
         };
 
@@ -10996,7 +11148,7 @@ mod validation_tests {
 
         assert!(
             result.is_err(),
-            "empty unit name in quantity signature must not coerce successfully"
+            "empty unit name in measure signature must not coerce successfully"
         );
         if let Err(message) = result {
             assert!(
@@ -11007,10 +11159,10 @@ mod validation_tests {
     }
 
     #[test]
-    fn refresh_named_range_specs_missing_element_must_not_leave_unconverted_quantity() {
+    fn refresh_named_range_specs_missing_element_must_not_leave_unconverted_measure() {
         use crate::parsing::ast::{LemmaSpec, ParentType, Span};
         use crate::parsing::source::{Source, SourceType};
-        use crate::planning::semantics::primitive_quantity_arc;
+        use crate::planning::semantics::primitive_measure_arc;
 
         let spec = Arc::new(LemmaSpec::new("t".to_string()));
         let source = Source::new(
@@ -11038,7 +11190,7 @@ mod validation_tests {
             },
         );
         let mut resolved = HashMap::new();
-        resolved.insert("band".to_string(), primitive_quantity_arc().clone());
+        resolved.insert("band".to_string(), primitive_measure_arc().clone());
         let mut defaults = HashMap::new();
 
         let errors = refresh_named_range_specs(&spec, &data_defs, &mut resolved, &mut defaults);
@@ -11109,18 +11261,18 @@ mod decomposition_promotion_tests {
     fn worker_torque_fixture() -> (
         ResolvedTypesMap,
         Arc<LemmaSpec>,
-        BaseQuantityVector,
+        BaseMeasureVector,
         Arc<LemmaType>,
     ) {
         let mut ctx = Context::new();
         insert_parsed_repos(&mut ctx, crate::stdlib::UNITS_LEMMA);
         let alpha_code = r#"repo alpha
 spec units
-data force: quantity
+data force: measure
   -> unit newton 1
-data length: quantity
+data length: measure
   -> unit metre 1
-data torque: quantity
+data torque: measure
   -> unit nm newton*metre
 
 spec worker
@@ -11188,7 +11340,7 @@ rule t: f * d
             .expect("alpha torque type")
             .clone();
         let decomp = alpha_torque
-            .quantity_type_decomposition()
+            .measure_type_decomposition()
             .expect("torque decomposition")
             .clone();
 
@@ -11198,7 +11350,7 @@ rule t: f * d
     #[test]
     fn unique_decomposition_carries_matching_arc() {
         let (map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
-        let unique = find_unique_quantity_type_by_decomposition(&map, &worker_spec, &decomp);
+        let unique = find_unique_measure_type_by_decomposition(&map, &worker_spec, &decomp);
         match unique {
             DecompositionMatch::Unique(arc) => {
                 assert_eq!(*arc, *alpha_torque);
@@ -11217,7 +11369,7 @@ rule t: f * d
             .2
             .resolved = HashMap::new();
 
-        let unique = find_unique_quantity_type_by_decomposition(&map, &worker_spec, &decomp);
+        let unique = find_unique_measure_type_by_decomposition(&map, &worker_spec, &decomp);
         match unique {
             DecompositionMatch::Unique(arc) => {
                 assert_eq!(*arc, *alpha_torque);

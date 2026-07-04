@@ -1,10 +1,9 @@
 use lemma::DateTimeValue;
 use lemma::{ValueKind, *};
-use rust_decimal::Decimal;
 use std::collections::HashMap;
 
 #[test]
-fn test_percentage_arithmetic() {
+fn test_percentage_subtract_rejected() {
     let code = r#"
 spec pricing
 data discount: 25%
@@ -12,35 +11,22 @@ rule net_multiplier: 1 - discount
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
-        .unwrap();
-    let result = response
-        .results
-        .get("net_multiplier")
-        .unwrap()
-        .explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .expect("value");
-
-    match result {
-        LiteralValue {
-            value: ValueKind::Number(n),
-            ..
-        } => assert_eq!(
-            lemma::ValueKind::Number(n.clone())
-                .as_decimal_magnitude()
-                .unwrap(),
-            Decimal::new(75, 2)
-        ),
-        _ => panic!("Expected Number, got {:?}", result),
-    }
+    let result = engine.load(code, lemma::SourceType::Volatile);
+    assert!(
+        result.is_err(),
+        "number - ratio should be rejected at planning"
+    );
+    let msg = result
+        .unwrap_err()
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        msg.contains("scale explicitly"),
+        "expected hint, got: {}",
+        msg
+    );
 }
 
 #[test]
@@ -60,9 +46,9 @@ rule double_meeting: meeting_length * 2
         .run(None, "scheduling", Some(&now), HashMap::new(), true, None)
         .unwrap();
     let rule = response.results.get("double_meeting").unwrap();
-    let quantity = rule.quantity.as_ref().expect("quantity map");
+    let measure = rule.measure.as_ref().expect("measure map");
     assert_eq!(
-        quantity.get("minutes").map(String::as_str),
+        measure.get("minutes").map(String::as_str),
         Some("60"),
         "30 minutes * 2 = 60 minutes"
     );

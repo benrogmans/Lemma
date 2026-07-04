@@ -35,9 +35,9 @@ fn eval_display(code: &str, repository: Option<&str>, spec_name: &str, rule_name
 
 const AREA_CALC_SPEC: &str = r#"repo alpha
 spec units
-data length: quantity
+data length: measure
   -> unit widget 1
-data area: quantity
+data area: measure
   -> unit sqwidget widget*widget
 
 spec worker

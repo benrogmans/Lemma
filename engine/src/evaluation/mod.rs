@@ -37,7 +37,7 @@ fn literal_value_committable_to_decimal(value: &LiteralValue) -> bool {
     match &value.value {
         ValueKind::Number(rational)
         | ValueKind::Ratio(rational, _)
-        | ValueKind::Quantity(rational, _) => commit_rational_to_decimal(rational).is_ok(),
+        | ValueKind::Measure(rational, _) => commit_rational_to_decimal(rational).is_ok(),
         ValueKind::Range(left, right) => {
             literal_value_committable_to_decimal(left)
                 && literal_value_committable_to_decimal(right)
@@ -502,7 +502,7 @@ pub(crate) fn execute_instructions(
                 }
                 let value_literal = unwrap_literal(value, "value operand");
                 let range_literal = unwrap_literal(range, "range operand");
-                let contained = match &range_literal.value {
+                let result = match &range_literal.value {
                     ValueKind::Range(range_left, range_right) => {
                         crate::computation::range::check_containment(
                             &value_literal,
@@ -512,10 +512,7 @@ pub(crate) fn execute_instructions(
                     }
                     other => panic!("BUG: range containment expected range operand, got {other:?}"),
                 };
-                context.write_register(
-                    *destination_register,
-                    OperationResult::Value(LiteralValue::from_bool(contained)),
-                );
+                context.write_register(*destination_register, result);
             }
             Instruction::ResultIsVeto {
                 destination_register,

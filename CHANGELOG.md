@@ -2,6 +2,43 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.8.21] - 2026-07-04
+
+0.8.21 renames `quantity` to `measure` throughout the language and API, hardens all server boundaries against resource exhaustion, fixes the ISO-week rollover bug, guarantees deterministic planning order, and adds granular LSP semantic tokens.
+
+### Added
+
+- **`declarationKeyword` semantic token type**: `spec`, `data`, `with`, `rule`, `repo`, `uses`, and `meta` keywords now emit as `declarationKeyword` (index 12), allowing editors to style structural keywords independently from the names they introduce.
+- **Granular data-body tokenization**: type keywords (`number`, `measure`, `text`, etc.) and constraint words (`minimum`, `unit`, `option`, etc.) after `->` now emit as `keyword` instead of `dataBody`.
+- **Colored dots in reference paths**: dots within identifiers like `units.mass` now emit as `reference` tokens.
+- **Legend sync test**: validates `monaco.js` and VS Code `package.json` semantic token definitions match the Rust legend.
+- **Parse-time limits**: `MAX_NUMBER_DIGITS` and `MAX_TEXT_VALUE_LENGTH` enforced in the lexer with source-located errors.
+- **Spec-dependency limits**: new `ResourceLimits` fields `max_spec_dependency_depth` (default 32) and `max_dag_specs` (default 4096); exceeded → planning error.
+- **HTTP wall-clock timeout**: `--eval-timeout` flag; zero-budget requests return 503 with a JSON error.
+- **MCP request timeout and line-length cap**: `--request-timeout` flag; oversized stdin lines rejected with JSON-RPC error.
+- **Restrictive CORS default**: permissive CORS requires `--cors` flag; non-localhost bind logs a warning.
+- **Plan determinism test**: repeated loads in one process assert byte-identical serialized plans.
+- **NIF `max_normalized_expression_nodes`**: exposed in `Lemma.new/1` limits map.
+- **NIF DirtyCpu scheduling**: `lemma_load`, `lemma_load_from_paths`, `lemma_load_batch`, `lemma_run` no longer block BEAM scheduler threads.
+
+### Changed
+
+- **`quantity` → `measure`** throughout the language, engine API, tests, and documentation. The keyword `measure` replaces `quantity` in specs; existing type semantics are unchanged.
+- **HTTP server lock scope**: `Arc<RwLock<Engine>>` → `RwLock<Arc<Engine>>`; evaluation runs on a cloned Arc inside `spawn_blocking` so the lock is never held during work.
+- **HTTP schema list surfaces errors**: per-spec `{name, error}` entries instead of silently dropping broken specs.
+- **MCP `get_schema` propagates real errors** instead of mapping all failures to "spec not found".
+- **NIF `lemma_list` error style**: plan/schema failures return `{:error, map}` instead of raising.
+- **Documentation restructured**: learn guide, reference, tools sections; removed whitepaper, blueprint, old CLI docs.
+- **Fuzz targets strengthened**: property assertions, depth range crossing limits, corpus rename.
+
+### Fixed
+
+- **ISO-week boundary rollover**: `calendar_boundaries` now uses `NaiveDate::from_isoywd_opt` with shifted weeks, handling year rollover (week 1 → prior year week 52/53) and 53-week years.
+- **Deterministic planning order**: `sort_derived_measure_types_for_resolution` sorts type-name vecs; `TypeResolver::resolve_types_internal` sorts `data_defs.keys()` before Kahn queue; `HashSet` dependency sets replaced with `BTreeSet`.
+- **Invariant enforcement**: soft-skip `continue` → `expect("BUG: ...")` in `check_rule_types` and `infer_rule_types`; dead `cast_ratio_to_unit` measure-family branch removed; AST `source_location` validated at `Graph::build` entry.
+- **BigInt allocation**: removed `unsafe` block; uses safe fallible allocation.
+- **Explanation causes**: flipped conditions state the true form; implicit unit reconciliation shown as equivalence facts.
+
 ## [0.8.20] - 2026-06-19
 
 0.8.20 CI-gates every ```lemma fence in the repo and adds offline registry fixtures for tests.
@@ -23,16 +60,16 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.8.19] - 2026-06-11
 
-0.8.19 fixes registry resolution and quantity planning/materialization bugs; removes a redundant SDK method.
+0.8.19 fixes registry resolution and measure planning/materialization bugs; removes a redundant SDK method.
 
 ### Added
 
-- **Quantity ceil/floor/round/abs**: preserve operand unit.
+- **Measure ceil/floor/round/abs**: preserve operand unit.
 
 ### Fixed
 
 - **Registry resolve skips non-`@` repository qualifiers**: workspace-local repository references no longer trigger registry fetches.
-- **Decomposition promotion**: binding aliases no longer collide across quantity families.
+- **Decomposition promotion**: binding aliases no longer collide across measure families.
 - **Materialization**: converted quantities honor type `decimals`; decimal overflow vetoes the rule.
 - **Inherited units**: conflicting inherited unit definitions rejected at planning.
 - **Unit-index validation**: structural plan checks run at planning and deserialize, not first `run`.
@@ -73,7 +110,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.8.17] - 2026-06-10
 
-0.8.17 replaces tree-walking evaluation with a compiled virtual machine, makes exact math hold at any magnitude and gives every result a machine-readable explanation. Planning now compiles each rule into a validated instruction stream that a register-based VM executes, so evaluation costs only what the requested rules cost: the engine skips unrequested rules and builds explanations only on demand. Execution plans are no longer cloned per request. Larger calculations whose intermediate values exceed machine-integer range stay exact instead of switching to approximation. Current measured performance is published in [`documentation/benchmarks/`](documentation/benchmarks/).
+0.8.17 replaces tree-walking evaluation with a compiled virtual machine, makes exact math hold at any magnitude and gives every result a machine-readable explanation. Planning now compiles each rule into a validated instruction stream that a register-based VM executes, so evaluation costs only what the requested rules cost: the engine skips unrequested rules and builds explanations only on demand. Execution plans are no longer cloned per request. Larger calculations whose intermediate values exceed machine-integer range stay exact instead of switching to approximation. Current measured performance is published in [`documentation/reference/benchmarks/`](documentation/reference/benchmarks/).
 
 ### Added
 
@@ -82,13 +119,13 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - **Explanations state causes as facts**: evaluated unless conditions appear as true statements — a failed `distance < 5 mile` is stated as `distance >= 5 mile` — with the data values that drove them as children. Causes render at the rule level (they explain branch selection, not the body computation), literal operands are no longer repeated below expressions that already display them, embedded rule references show `name: result` and carry their full explanation tree wherever they appear. Implicit unit reconciliation inside arithmetic and comparisons is stated as an equivalence fact (`1 mile is 1.60934 kilometer`, decimal when exact) so cross-unit math is followable without external lookup tables; identity conversions and steps that would restate an already-visible value are omitted. JSON consumers: `causes[].condition` now holds the true-form condition expression instead of a datum name, `causes[].children`, rule-node `result`, and the `unit_equivalence` node are new, and the wrapping `compose` node duplicating the rule body is gone (operands are direct children).
 - **One-binary editor setup**: installing the `lemma` CLI is now the only requirement for editor support — the new `lemma lsp` subcommand starts the language server over stdio. This removes the separate language-server binary and the version skew it allowed.
 - **A shared server survives bad specs**: a service evaluating specs it did not author can no longer be hung or crashed by them. Self-doubling rule chains are rejected at planning with a resource-limit error (`ResourceLimits::max_normalized_expression_nodes`, default 30,000) instead of exhausting memory; tampered or stale serialized execution plans are rejected at load by full instruction validation instead of crashing the virtual machine; a step budget halts instruction streams that loop.
-- **Reproducible performance reports**: `cargo benchmarks <engine|cli|all>` regenerates the engine and CLI benchmark reports in [`documentation/benchmarks/`](documentation/benchmarks/), so the published numbers can be independently re-measured from the repository.
+- **Reproducible performance reports**: `cargo benchmarks <engine|cli|all>` regenerates the engine and CLI benchmark reports in [`documentation/reference/benchmarks/`](documentation/reference/benchmarks/), so the published numbers can be independently re-measured from the repository.
 
 ### Changed
 
 - **Compiled virtual machine**: rules are compiled at planning into register-based instruction streams that the engine executes directly, replacing per-request tree-walking of the expression graph. Compilation happens once per plan; evaluation then dispatches flat instructions over a register file. Run output is unchanged.
-- **Greater precision for math with large numbers**: financial and scientific calculations whose intermediate values grow very large now stay exact end to end. Previously, magnitudes were bounded by `i128` (~1.7×10³⁸) and arithmetic beyond that bound fell back to decimal approximation; that fallback is gone. A calculation that genuinely exhausts memory vetoes the affected rule with `out of memory` rather than taking the process down. Transcendental functions (`sqrt`, `sin`, `log`, …) compute in decimal as before; see [`documentation/numeric_precision.md`](documentation/numeric_precision.md).
-- **Improved performance**: callers that need one answer no longer pay for the whole spec. Evaluation computes only the requested rules (`rules: Option<&[String]>` on `Engine::run` / `Engine::run_plan`), explanations are built only when `explain` is set, and immutable plans (`DataOverlay`) remove the per-request plan clone; the VM (above) removes per-request expression-tree walking. On the benchmark specs, a single-rule evaluation measures 20–169 µs where 0.8.16 measured 285 µs–6.2 ms evaluating every rule with per-call JSON parsing — methodology and numbers in [`documentation/benchmarks/engine.md`](documentation/benchmarks/engine.md). API: `None` means all local rules, and `lemma::plan(context)` is now `lemma::plan(context, &ResourceLimits)`.
+- **Greater precision for math with large numbers**: financial and scientific calculations whose intermediate values grow very large now stay exact end to end. Previously, magnitudes were bounded by `i128` (~1.7×10³⁸) and arithmetic beyond that bound fell back to decimal approximation; that fallback is gone. A calculation that genuinely exhausts memory vetoes the affected rule with `out of memory` rather than taking the process down. Transcendental functions (`sqrt`, `sin`, `log`, …) compute in decimal as before; see [`documentation/learn/precision.md`](documentation/learn/precision.md).
+- **Improved performance**: callers that need one answer no longer pay for the whole spec. Evaluation computes only the requested rules (`rules: Option<&[String]>` on `Engine::run` / `Engine::run_plan`), explanations are built only when `explain` is set, and immutable plans (`DataOverlay`) remove the per-request plan clone; the VM (above) removes per-request expression-tree walking. On the benchmark specs, a single-rule evaluation measures 20–169 µs where 0.8.16 measured 285 µs–6.2 ms evaluating every rule with per-call JSON parsing — methodology and numbers in [`documentation/reference/benchmarks/engine.md`](documentation/reference/benchmarks/engine.md). API: `None` means all local rules, and `lemma::plan(context)` is now `lemma::plan(context, &ResourceLimits)`.
 - **Plans serve concurrent requests**: an `ExecutionPlan` is immutable — data values ride alongside in a `DataOverlay` instead of mutating the plan — so one compiled plan can be shared across requests and memory allocation is reduced. Run output unchanged.
 - **Decisions always show what they depended on**: the optimizer can no longer change which inputs a result requires — algebraic folds (`x * 0`, `false and …`, …) apply only to literal operands, so `rule r: x * 0` still requires `x` and vetoes when it is missing. `response.data` again lists the effective values of the data behind the requested rules (it had regressed to always empty). Together these guarantee an auditor sees the true inputs of every decision.
 - **Consistent explanations**: a result exceeding the decimal output limit now vetoes identically in downstream references, `is veto` checks, explanations, and the response — previously these could disagree. Explanations of vetoed unless conditions now name the vetoing condition and carry its veto instead of describing a branch that never ran. Callers and auditors can no longer receive contradictory accounts of the same evaluation.
@@ -104,12 +141,12 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.8.16] - 2026-06-03
 
-0.8.16 makes unit math smarter and the API simpler. Quantity arithmetic now flows across types — `rule wage: rate * hours` resolves to a money amount on its own — and every quantity or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (years, months) are now ordinary quantity units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
+0.8.16 makes unit math smarter and the API simpler. Measure arithmetic now flows across types — `rule wage: rate * hours` resolves to a money amount on its own — and every measure or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (years, months) are now ordinary measure units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
 
 ```lemma
 spec employment_contract
 
-data salary: quantity 
+data salary: measure 
   -> unit eur 1
 
 rule net: salary * 1.3
@@ -125,19 +162,19 @@ rule net_salary: contract.net
 
 ### Added
 
-- **Cross-type quantity arithmetic**: multiplying or dividing quantities of different types now produces the right unit automatically and promotes the result to a matching named type when one exists in scope (e.g. `rate * hours` → money). Ambiguous results are rejected at planning rather than guessed.
-- **Cross-type quantity comparison**: dimensionally equal quantities (e.g. a per-hour rate vs a per-minute rate) compare correctly in rule conditions and inversion.
+- **Cross-type measure arithmetic**: multiplying or dividing quantities of different types now produces the right unit automatically and promotes the result to a matching named type when one exists in scope (e.g. `rate * hours` → money). Ambiguous results are rejected at planning rather than guessed.
+- **Cross-type measure comparison**: dimensionally equal quantities (e.g. a per-hour rate vs a per-minute rate) compare correctly in rule conditions and inversion.
 - **Named type ranges**: declare a range over any rangeable named type, e.g. `data estimate: money range`. Unsupported bases (`text range`, …) are rejected at planning.
 - **`time range`**: half-open time-of-day intervals such as `09:00...17:00`, with `in` containment and span in duration units. Endpoints must share a timezone; reversed literals do not wrap past midnight.
-- **Quantity-range span**: any specialized `quantity range` (mass, money, duration, …) projects its width with `(lo...hi) as <unit> as number` when the unit is in the same family; cross-family span is rejected.
+- **Measure-range span**: any specialized `measure range` (mass, money, duration, …) projects its width with `(lo...hi) as <unit> as number` when the unit is in the same family; cross-family span is rejected.
 - **Structured data input**: JSON unit maps (`{"eur": "84"}`) are accepted at the CLI, HTTP, and WASM boundaries.
 
 ### Changed
 
 - **Binding keyword `fill` → `with`**: set values on an imported spec with `with alias.field: …`. Local `with name: …` is rejected — use `data` for slots in the current spec.
-- **In-spec unit conversion only**: display-time conversion flags (`lemma run --as`, HTTP `as_units`, WASM `rule_result_units`) are removed. Convert with `as <unit>` in the spec; quantity and ratio rule results now return every declared unit as a map.
-- **Calendar periods are units**: years and months are quantity units in the standard library via `uses lemma units` (`units.calendar`). The standalone `calendar` and `calendar range` types are removed; a calendar range comes from `units.calendar -> default 18 year...67 year` or inline literals like `18 year...67 year`. The names `month`, `year`, `week`, and `day` are reserved for calendar/duration units.
-- **No canonical unit required**: a `quantity` type no longer needs a factor-1 unit; magnitudes stay anchored to the units you declare.
+- **In-spec unit conversion only**: display-time conversion flags (`lemma run --as`, HTTP `as_units`, WASM `rule_result_units`) are removed. Convert with `as <unit>` in the spec; measure and ratio rule results now return every declared unit as a map.
+- **Calendar periods are units**: years and months are measure units in the standard library via `uses lemma units` (`units.calendar`). The standalone `calendar` and `calendar range` types are removed; a calendar range comes from `units.calendar -> default 18 year...67 year` or inline literals like `18 year...67 year`. The names `month`, `year`, `week`, and `day` are reserved for calendar/duration units.
+- **No canonical unit required**: a `measure` type no longer needs a factor-1 unit; magnitudes stay anchored to the units you declare.
 - **Compound unit display**: results whose unit is a combination render in operator style (e.g. `26.66… eur·hour/minute`); single-unit values stay `<magnitude> <unit>`.
 
 ### Fixed
@@ -148,14 +185,14 @@ rule net_salary: contract.net
 ### Breaking
 
 - **`fill` → `with`**: update binding rows and tooling; the serde `DataValue` tag is now `"with"`. A bare `with name:` / `fill name:` (no import alias) is a parse error.
-- **Display-conversion API removed**: drop `--as`, `as_units`, `rule_result_units`, and `EvaluationRequest`; read the unit you need from each rule result's unit map (`results.<rule>.quantity`, etc.). Evaluate/load no longer accept legacy `{value, unit}` payloads — use unit maps.
+- **Display-conversion API removed**: drop `--as`, `as_units`, `rule_result_units`, and `EvaluationRequest`; read the unit you need from each rule result's unit map (`results.<rule>.measure`, etc.). Evaluate/load no longer accept legacy `{value, unit}` payloads — use unit maps.
 - **Calendar types removed**: replace `data band: calendar range` with `uses lemma units` and `data band: units.calendar -> default 18 year...67 year`. The API `kind` tags `calendar` and `calendar_range` are gone.
 
 ## [0.8.15] - 2026-05-25
 
 ### Added
 
-- **Cross-type result unit derivation via symbolic unit signatures**: arithmetic between named quantity types now derives a result unit from the user-chosen operand units. `batch_size_ce / packaging_speed` (with `packaging_speed` declared as `ce/minute`) produces `<n> minute` directly, with no `as <unit>` cast required. Combined signatures that resolve unambiguously to a single named unit in scope auto-promote the anonymous intermediate to that named type; ambiguous signatures (the same composite signature matching units in two distinct types) are now a planning error that asks the spec to rename one of the conflicting units or differentiate the factor.
+- **Cross-type result unit derivation via symbolic unit signatures**: arithmetic between named measure types now derives a result unit from the user-chosen operand units. `batch_size_ce / packaging_speed` (with `packaging_speed` declared as `ce/minute`) produces `<n> minute` directly, with no `as <unit>` cast required. Combined signatures that resolve unambiguously to a single named unit in scope auto-promote the anonymous intermediate to that named type; ambiguous signatures (the same composite signature matching units in two distinct types) are now a planning error that asks the spec to rename one of the conflicting units or differentiate the factor.
 - **Unified ratio units across types**: same unit name (e.g. `percent`, `permille`, `basis_points`) may be reused across distinct `ratio` typedefs in the same spec as long as the conversion factors match. Mismatched factors still error at planning. Built-in `percent` / `permille` collisions across multiple `data: ratio` fields are now valid; cross-type ratio rule-result conversion (`lemma run --as rule:unit`) works across the unified unit space.
 - **Ratio range defaults**: ratio ranges may declare a default literal range, e.g. `data band: ratio range -> default 10%...50%`. The default participates in schema (`SpecSchema.data[].default`) the same way scalar ratio defaults do.
 - **LSP navigation for `uses` references**: a `uses @org/repo spec` line becomes a single clickable link that jumps to the resolved dependency file in `lemma_deps/` at the spec's starting line; hover shows the LemmaBase URL. `uses lemma units` opens an on-demand snapshot at `lemma_deps/lemma.std`.
@@ -164,7 +201,7 @@ rule net_salary: contract.net
 
 ### Changed
 
-- **Per-quantity-type unit normalisation removed**: the engine no longer rescales a quantity's natural-factor units to a per-type canonical at planning. Stored magnitudes follow the unit declarations as written; cross-type arithmetic combines natural factors directly, so `1 ce_per_minute * 1 minute` now lands on `1 ce` rather than going through an opaque per-type scale. Specs that relied on hidden rescaling for derived types lacking a factor-1 unit must add one (e.g. declare the canonical base unit explicitly) so that result magnitudes remain anchored to a known unit. No user-visible value change for specs whose canonical unit was already factor 1.
+- **Per-measure-type unit normalisation removed**: the engine no longer rescales a measure's natural-factor units to a per-type canonical at planning. Stored magnitudes follow the unit declarations as written; cross-type arithmetic combines natural factors directly, so `1 ce_per_minute * 1 minute` now lands on `1 ce` rather than going through an opaque per-type scale. Specs that relied on hidden rescaling for derived types lacking a factor-1 unit must add one (e.g. declare the canonical base unit explicitly) so that result magnitudes remain anchored to a known unit. No user-visible value change for specs whose canonical unit was already factor 1.
 - **Case-insensitive logical identifiers**: spec, data, rule, unit, and repo names are canonicalised to lowercase at parse. `repo` blocks that differ only by case are merged. API surfaces (spec lookup, data override keys, `rule_result_units` keys) lowercase inputs at the boundary; internal `eq_ignore_ascii_case` lookups are replaced with exact match on canonical names. The formatter emits identifiers in lowercase.
 - Test registry references and the `12_registry_references` integration example modernised to `uses lemma units` plus reformatted `uses @iso/countries alpha2` blocks.
 - Quality CI workflow declares an explicit `contents: read` permission.
@@ -182,18 +219,18 @@ rule net_salary: contract.net
 ## [0.8.14] - 2026-05-21
 
 - Branch on failed rules: `is veto` / `is not veto` (e.g. `unless price is veto then fallback`).
-- Return a rule’s result in another unit without changing the spec: CLI `lemma run --as rule:unit`, HTTP `?as_units=rule:unit,...`, MCP/WASM `rule_result_units` (quantity conversion or ratio relabel).
+- Return a rule’s result in another unit without changing the spec: CLI `lemma run --as rule:unit`, HTTP `?as_units=rule:unit,...`, MCP/WASM `rule_result_units` (measure conversion or ratio relabel).
 - Time: elapsed intervals via `uses lemma units` and types like `units.duration` (no built-in `duration` type); calendar periods (`year`, `month`, `week`) on **calendar** and **date** types — not mixed with elapsed durations.
-- **Calendar** type and **calendar range** for calendar-aware periods; **date**, **number**, **quantity**, and **ratio** ranges with half-open `lo...hi`; width via `(lo...hi) as <unit>` for number, duration quantity, and ratio ranges.
-- Compound quantity units (e.g. rates built from SI units in `uses lemma units`).
-- Arithmetic stays exact until API output; JSON magnitudes are decimal strings (see `documentation/numeric_precision.md`). Division by zero in rule bodies is rejected at planning time.
+- **Calendar** type and **calendar range** for calendar-aware periods; **date**, **number**, **measure**, and **ratio** ranges with half-open `lo...hi`; width via `(lo...hi) as <unit>` for number, duration measure, and ratio ranges.
+- Compound measure units (e.g. rates built from SI units in `uses lemma units`).
+- Arithmetic stays exact until API output; JSON magnitudes are decimal strings (see `documentation/learn/precision.md`). Division by zero in rule bodies is rejected at planning time.
 
 ### Breaking (0.8.13 → 0.8.14)
 
-- `scale` → `quantity` (and `scale range` → `quantity range`) in specs and API `kind` tags.
+- `scale` → `measure` (and `scale range` → `measure range`) in specs and API `kind` tags.
 - `uses lemma` → `uses lemma units`; stdlib is embedded `repo lemma` / `spec units` (`units.duration`, `units.length`, …).
 - `Engine::run`, `run_plan`, `run_plan_without_defaults`, and `evaluate_plan` take `EvaluationRequest` after `record_operations` — pass `EvaluationRequest::default()` when you do not need display conversion.
-- Value-copy rows use `fill` (removed `from` keyword); integrators: `rule_result_quantity_units` → `rule_result_units`.
+- Value-copy rows use `fill` (removed `from` keyword); integrators: `rule_result_measure_units` → `rule_result_units`.
 - Ratio typedef `minimum` / `maximum` / `default` must include units (`10%`, not bare `10`).
 
 ## [0.8.13] - 2026-05-06
@@ -232,11 +269,11 @@ rule net_salary: contract.net
 
 **Parsing / AST**
 
-- Removed the unused `TokenKind::DurationKw` surface and `PrimitiveKind::Duration` / `ConversionTarget::Duration` AST variants: the word `duration` is a normal identifier (e.g. a typedef may be named `duration`). The old built-in duration value/type shapes are gone; time periods are **quantity** values whose type declares `-> trait duration` (canonical **second**), carried as `Value::Quantity` / `ValueKind::Quantity` only.
-- `parse_value_from_string` has no separate duration primitive; duration-shaped values are quantity literals resolved against in-scope trait-duration quantities.
-- On quantity types that declare `-> trait duration`, `minimum`, `maximum`, and `default` constraints accept legacy duration-shaped literals and normalize them through the quantity unit table (or canonical base when the unit name is spelled differently).
-- Removed the `-> precision` type constraint command on `quantity` and `number` types (use `-> decimals` for decimal-place limits).
-- Schema `units[]` on `quantity` and `ratio` types include per-unit `minimum`, `maximum`, and `default` magnitudes (type-level bounds stay canonical).
+- Removed the unused `TokenKind::DurationKw` surface and `PrimitiveKind::Duration` / `ConversionTarget::Duration` AST variants: the word `duration` is a normal identifier (e.g. a typedef may be named `duration`). The old built-in duration value/type shapes are gone; time periods are **measure** values whose type declares `-> trait duration` (canonical **second**), carried as `Value::Measure` / `ValueKind::Measure` only.
+- `parse_value_from_string` has no separate duration primitive; duration-shaped values are measure literals resolved against in-scope trait-duration quantities.
+- On measure types that declare `-> trait duration`, `minimum`, `maximum`, and `default` constraints accept legacy duration-shaped literals and normalize them through the measure unit table (or canonical base when the unit name is spelled differently).
+- Removed the `-> precision` type constraint command on `measure` and `number` types (use `-> decimals` for decimal-place limits).
+- Schema `units[]` on `measure` and `ratio` types include per-unit `minimum`, `maximum`, and `default` magnitudes (type-level bounds stay canonical).
 - `DataValue::Fill` with `FillRhs` (`Literal` | `Reference`): every `fill` row uses this variant so `fill` is never encoded as `Definition`. Literal and reference right-hand sides for `fill` share no AST shape with `data …: <literal>`.
 - `SpecRef` records optional `repository_span` and `target_span` (serde omits when absent) for tooling; parser fills spans on registry qualifiers and spec-reference targets.
 
@@ -280,9 +317,9 @@ rule net_salary: contract.net
 - Reference targets may be data paths or rule results. Rule-target references are resolved lazily in topological order at evaluation time.
 - Local `-> ...` constraints on a reference (e.g. `data clamped: l.price -> maximum 1000 eur`) are merged with the LHS-declared type and validated against the copied value at runtime — a violation produces a Veto, not a planning error.
 - `-> default N` on a reference supplies a fallback when the target has no value (missing input or rule veto). The default is also surfaced in the spec schema (`SpecSchema.data[].default`).
-- Planning rejects a reference whose LHS-declared quantity family differs from the target's family (e.g. `eur` vs `celsius`) — same `quantity` discriminant is no longer sufficient.
+- Planning rejects a reference whose LHS-declared measure family differs from the target's family (e.g. `eur` vs `celsius`) — same `measure` discriminant is no longer sufficient.
 - Runtime `LiteralValue` stored under a reference path carries the reference's `resolved_type` (LHS-merged), not the target's looser type.
-- `engine/tests/data_references.rs` covers the full reference surface: value copy, chain resolution, user-value override, cycle detection, type mismatch, rule-target lazy resolution, quantity-family mismatch, local default in schema, runtime type invariant.
+- `engine/tests/data_references.rs` covers the full reference surface: value copy, chain resolution, user-value override, cycle detection, type mismatch, rule-target lazy resolution, measure-family mismatch, local default in schema, runtime type invariant.
 
 **Temporal ranges**
 - `Engine::get_spec_set`, `LemmaSpecSet::iter_with_ranges`, `Context::iter_with_ranges`, `Engine::list_specs_with_ranges`: catalog queries returning half-open `[effective_from, effective_to)` ranges per temporal version.
@@ -291,8 +328,8 @@ rule net_salary: contract.net
 - `engine/tests/temporal_range_references.rs`: blueprint §2.1 test suite — qualified ref transitive subtree resolution, qualified-only edges do not split consumer slices, qualified ref skips coverage requirement, unqualified still requires full-range coverage, mixed qualified/unqualified slice counts, qualified type-import instant isolation.
 
 **Literal layer**
-- `QuantityUnits` / `RatioUnits` structs replacing unstructured vecs; `QuantityUnit` / `RatioUnit` carry name + factor.
-- Stricter `NumberWithUnit` and `RatioLiteral` parsing: unit must be present for quantity and ratio literals.
+- `MeasureUnits` / `RatioUnits` structs replacing unstructured vecs; `MeasureUnit` / `RatioUnit` carry name + factor.
+- Stricter `NumberWithUnit` and `RatioLiteral` parsing: unit must be present for measure and ratio literals.
 
 **CLI and tooling**
 - Interactive mode improvements.
@@ -318,7 +355,7 @@ rule net_salary: contract.net
 **Types**
 - `TypePageification::Text` drops `minimum` / `maximum` length-range constraints; only `length` (exact match) remains. Specs using `text -> minimum N` or `text -> maximum N` are rejected at planning.
 - `TypePageification::Duration` gains `minimum` / `maximum`.
-- Reference kind compatibility check replaced discriminant-only comparison with `has_same_base_type` + `same_quantity_family` — quantity types in different families are now correctly rejected.
+- Reference kind compatibility check replaced discriminant-only comparison with `has_same_base_type` + `same_measure_family` — measure types in different families are now correctly rejected.
 
 **Inversion subsystem**
 - Refactored into separate modules: constraints, domain, solve, world, target.

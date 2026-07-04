@@ -5,7 +5,7 @@ use lemma::Engine;
 fn necessary_data_include_nested_spec_data_for_local_rule_deps() {
     let code = r#"
 spec money
-data money: quantity
+data money: measure
   -> unit eur 1
   -> unit usd 0.84
 
@@ -18,7 +18,8 @@ rule discount: 0%
   unless quantity >= 10 then 10%
   unless quantity >= 50 then 20%
   unless is_member then 15%
-rule total: price - discount
+rule discount_amount: price * discount
+rule total: price - discount_amount
   unless price < 50 eur then price
 
 spec cashier
@@ -42,8 +43,8 @@ rule total: calc.total
     );
     let price_type = &schema_all.data.get("calc.price").unwrap().lemma_type;
     assert!(
-        price_type.is_quantity(),
-        "Expected calc.price to be a quantity type, got {:?}",
+        price_type.is_measure(),
+        "Expected calc.price to be a measure type, got {:?}",
         price_type.name()
     );
 
@@ -57,8 +58,8 @@ rule total: calc.total
         .expect("schema_for_rules must include calc.price with same typing as full schema")
         .lemma_type;
     assert!(
-        scoped_price_type.is_quantity(),
-        "scoped schema must preserve nested quantity type for calc.price"
+        scoped_price_type.is_measure(),
+        "scoped schema must preserve nested measure type for calc.price"
     );
     assert_eq!(
         scoped_price_type.name(),

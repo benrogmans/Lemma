@@ -70,13 +70,13 @@ fn qualified_data_import_pins_to_referenced_version() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -137,12 +137,12 @@ fn qualified_data_import_rejects_unit_from_later_version() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 
 spec finance 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -214,12 +214,12 @@ fn unranged_spec_with_type_only_dep_rejects_incompatible_interface() {
         .load(
             r#"
 spec units
-data weight: quantity
+data weight: measure
  -> unit kg 1.00
  -> decimals 1
 
 spec units 2025-06-01
-data weight: quantity
+data weight: measure
  -> unit kg 1.00
  -> unit lb 2.205
  -> decimals 1
@@ -269,13 +269,13 @@ fn mixed_spec_ref_and_data_import_to_same_dep() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -357,13 +357,13 @@ fn inline_data_import_rejects_incompatible_unpinned_dep() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -410,13 +410,13 @@ fn data_import_with_effective_datetime_pins_version() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 data base_price: 50.00 eur
 
 spec finance 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -469,12 +469,12 @@ fn qualified_pin_must_not_leak_later_version_types() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 
 spec finance 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2

@@ -8,7 +8,7 @@ fn source() -> lemma::SourceType {
 }
 
 const MONEY_TYPEDEF: &str = r#"
-data money: quantity
+data money: measure
   -> unit eur 1
 "#;
 
@@ -63,7 +63,7 @@ fn eval_rule(
     eval_literal(code, spec_name, rule_name, effective).to_string()
 }
 
-fn eval_rule_quantity_unit(
+fn eval_rule_measure_unit(
     code: impl AsRef<str>,
     spec_name: &str,
     rule_name: &str,
@@ -80,11 +80,11 @@ fn eval_rule_quantity_unit(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get(unit))
         .cloned()
-        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
+        .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
 }
 
 fn eval_bool(
@@ -221,7 +221,7 @@ fn anon_date_range_to_minutes() {
 uses lemma units
 rule value: (2024-01-01...2024-01-02) as minutes"#;
     assert_eq!(
-        eval_rule_quantity_unit(
+        eval_rule_measure_unit(
             code,
             "test",
             "value",
@@ -360,7 +360,7 @@ rule ok: (2024-01-01...2024-01-02) > 5"#;
 
 #[test]
 fn date_range_sum_promotes_to_duration_and_strips_to_canonical_seconds() {
-    // `(range + range)` produces a duration-decomp quantity. Chained `as seconds as number`
+    // `(range + range)` produces a duration-decomp measure. Chained `as seconds as number`
     // yields canonical seconds (2 days = 172800 seconds).
     let code = r#"spec test
 uses lemma units
@@ -374,7 +374,7 @@ rule value: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) as seconds a
 }
 
 #[test]
-fn anon_result_compare_to_unrelated_quantity_rejected() {
+fn anon_result_compare_to_unrelated_measure_rejected() {
     let code = format!(
         r#"spec test
 uses lemma units
@@ -386,7 +386,7 @@ rule ok: ((2024-01-01...2024-01-02) + (2024-01-02...2024-01-03)) > 5 eur"#,
 }
 
 #[test]
-fn anon_result_plus_unrelated_quantity_rejected() {
+fn anon_result_plus_unrelated_measure_rejected() {
     let code = format!(
         r#"spec test
 uses lemma units

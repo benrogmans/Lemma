@@ -16,13 +16,14 @@ name = "lemma"
 path = "src/main.rs"
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "=0.8.20", path = "../engine", default-features = false }
-lemma-openapi = { version = "=0.8.20", path = "../openapi" }
+lemma = { package = "lemma-engine", version = "=0.8.21", path = "../engine" }
+lemma-lsp = { version = "=0.8.21", path = "../engine/lsp" }
+lemma-openapi = { version = "=0.8.21", path = "../openapi" }
 clap = { version = "4.0", features = ["derive"] }
 anyhow = "1.0"
 ariadne = "0.6"
 chrono.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 walkdir = "2.4"
 super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
@@ -41,14 +42,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 notify = "8"
 notify-debouncer-mini = "0.7"
-tower-lsp = { version = "0.20", features = ["runtime-tokio"] }
 
 [lints]
 workspace = true
-
-[features]
-default = ["registry"]
-registry = ["lemma/registry"]
 
 [dev-dependencies]
 assert_cmd = "2.0"

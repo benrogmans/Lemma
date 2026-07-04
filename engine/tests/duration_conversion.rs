@@ -37,10 +37,10 @@ rule to_hours: duration as hours
         .expect("value")
         .clone();
 
-    if let ValueKind::Quantity(_, _) = &val.value {
+    if let ValueKind::Measure(_, _) = &val.value {
         assert_eq!(
             rule_result
-                .quantity
+                .measure
                 .as_ref()
                 .and_then(|m| m.get("hours"))
                 .map(String::as_str),
@@ -49,7 +49,7 @@ rule to_hours: duration as hours
         );
     } else {
         panic!(
-            "to_hours should be a Quantity after conversion, got {:?}",
+            "to_hours should be a Measure after conversion, got {:?}",
             val
         );
     }

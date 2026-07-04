@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
-use lemma::Engine;
 use lemma::DateTimeValue;
+use lemma::Engine;
+use libfuzzer_sys::fuzz_target;
 use std::collections::HashMap;
 
 fuzz_target!(|data: &[u8]| {
@@ -15,14 +15,19 @@ data x: number
 rule doubled: x * 2
 "#;
 
-        if engine
-            .load(code, lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_binding"))))
-            .is_ok()
-        {
-            let mut data = HashMap::new();
-            data.insert("x".to_string(), s.to_string());
-            let now = DateTimeValue::now();
-    let _ = engine.run(None, "fuzz_test", Some(&now), data, false, None);
-        }
+        engine
+            .load(
+                code,
+                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                    "fuzz_binding",
+                ))),
+            )
+            .expect("BUG: static fuzz spec must load");
+
+        // Property: valid spec loaded => arbitrary data input must not panic.
+        let mut data = HashMap::new();
+        data.insert("x".to_string(), s.to_string());
+        let now = DateTimeValue::now();
+        let _ = engine.run(None, "fuzz_test", Some(&now), data, false, None);
     }
 });

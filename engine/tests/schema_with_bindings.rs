@@ -12,13 +12,13 @@ fn schema_omits_with_bound_rule_references() {
 spec bag
 uses lemma units
 
-data weight: quantity
+data weight: measure
   -> unit kg 1
 
-data money: quantity
+data money: measure
   -> unit eur 1
 
-data price_per_weight: quantity
+data price_per_weight: measure
   -> unit eur_per_kg eur/kg
 
 data item_cost: price_per_weight
@@ -293,13 +293,13 @@ fn calc_schema_bound_type_of_nut_prunes_inactive_nut_branches() {
 spec bag
 uses lemma units
 
-data weight: quantity
+data weight: measure
   -> unit kg 1
 
-data money: quantity
+data money: measure
   -> unit eur 1
 
-data price_per_weight: quantity
+data price_per_weight: measure
   -> unit eur_per_kg eur/kg
 
 data item_cost: price_per_weight

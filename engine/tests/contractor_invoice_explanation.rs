@@ -6,7 +6,7 @@ use std::collections::HashMap;
 const CALC_SPEC: &str = r#"
 spec calc
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1
 

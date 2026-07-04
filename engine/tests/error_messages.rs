@@ -488,7 +488,7 @@ fn test_multiple_error_phases_reported_together() {
         r#"
         spec pricing
 
-        data money: quantity
+        data money: measure
           -> unit eur 1
           -> unit usd 0.84
 

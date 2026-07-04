@@ -17,7 +17,7 @@
 //!     spec example
 //!     data price: 100
 //!     data quantity: 5
-//!     rule total: price * quantity
+//!     rule total: price * measure
 //! "#, SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("example.lemma")))).expect("failed to load");
 //!
 //! // Evaluate the spec (all rules, no data values)
@@ -83,8 +83,8 @@ pub use limits::{
 
 // === Source + parsing ===
 pub use parsing::ast::{
-    DataValue, DateGranularity, DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec, Span,
-    SpecRef, TimezoneValue,
+    try_parse_type_constraint_command, DataValue, DateGranularity, DateTimeValue, EffectiveDate,
+    LemmaRepository, LemmaSpec, Span, SpecRef, TimezoneValue,
 };
 pub use parsing::source::{Source, SourceType};
 // Planning [`semantics::DataValue`] (bindings) vs parse [`ast::DataValue`]; only the parse enum is `DataValue` at the root.
@@ -103,7 +103,7 @@ pub use planning::execution_plan::{
 };
 pub use planning::plan;
 pub use planning::semantics::{
-    DataDefinition, DataPath, LemmaType, LiteralValue, QuantityUnit, QuantityUnits, RatioUnit,
+    DataDefinition, DataPath, LemmaType, LiteralValue, MeasureUnit, MeasureUnits, RatioUnit,
     RatioUnits, RulePath, Source as PlanningSource, TypeSpecification, ValueKind,
 };
 pub use planning::spec_set::LemmaSpecSet;
@@ -122,7 +122,9 @@ pub use formatting::{format_parse_result, format_source, format_specs};
 // === Registry ===
 #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 pub use registry::resolve_registry_references;
-pub use registry::{LemmaBase, Registry, RegistryBundle, RegistryError, RegistryErrorKind};
+#[cfg(feature = "registry")]
+pub use registry::LemmaBase;
+pub use registry::{Registry, RegistryBundle, RegistryError, RegistryErrorKind};
 
 // === Spec set ID ===
 pub use spec_set_id::parse_spec_set_id;

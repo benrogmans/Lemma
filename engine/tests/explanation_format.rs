@@ -45,9 +45,9 @@ fn explanation_compose_with_data_operands() {
         .load(
             r#"
 spec t
-data money: quantity -> unit eur 1 -> decimals 2
+data money: measure -> unit eur 1 -> decimals 2
 data price: 100 eur
-data qty: number
+data quantity: number
 data q: 3
 rule total: price * q
 "#,
@@ -253,7 +253,7 @@ fn explanation_unit_conversion() {
         .load(
             r#"
 spec t
-data weight: quantity -> unit kg 1 -> unit gram 0.001
+data weight: measure -> unit kg 1 -> unit gram 0.001
 data w: 2 kg
 rule in_grams: w as gram
 "#,

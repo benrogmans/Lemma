@@ -29,11 +29,23 @@ pub use spec_set::LemmaSpecSet;
 use std::sync::Arc;
 
 /// Result of planning a single `LemmaSpec`.
+///
+/// Invariant: within a single effective-date slice, plans and errors are
+/// mutually exclusive. Post-hoc errors (e.g. interface validation) must
+/// clear plans via `clear_plans_on_error`.
 #[derive(Debug, Clone)]
 pub struct SpecPlanningResult {
     pub spec: std::sync::Arc<crate::parsing::ast::LemmaSpec>,
     pub plans: Vec<ExecutionPlan>,
     pub errors: Vec<Error>,
+}
+
+impl SpecPlanningResult {
+    fn clear_plans_on_error(&mut self) {
+        if !self.errors.is_empty() {
+            self.plans.clear();
+        }
+    }
 }
 
 /// Result of planning a `LemmaSpecSet` (all specs sharing a name).
@@ -183,6 +195,9 @@ pub fn plan(context: &Context, limits: &crate::limits::ResourceLimits) -> Planni
             .first_mut()
             .expect("planning result must contain at least one spec");
         first_spec.errors.push(err);
+        for slice in &mut set_result.slice_results {
+            slice.clear_plans_on_error();
+        }
     }
 
     for by_name in results.values_mut() {
@@ -218,27 +233,19 @@ fn plan_spec(
     };
 
     for effective in lemma_spec_set.effective_dates(spec, context) {
-        let (dag, dependency_discovery_failed) =
-            match discovery::build_dag_for_spec(context, spec, &effective) {
-                Ok(dag) => (dag, false),
-                Err(discovery::DagError::Cycle(errors)) => {
-                    spec_result.errors.extend(errors);
-                    continue;
-                }
-                Err(discovery::DagError::Other(errors)) => {
-                    spec_result.errors.extend(errors);
-                    (vec![(Arc::clone(repository), Arc::clone(spec))], true)
-                }
-            };
+        let dag = match discovery::build_dag_for_spec(context, spec, &effective, limits) {
+            Ok(dag) => dag,
+            Err(discovery::DagError::Cycle(errors)) => {
+                spec_result.errors.extend(errors);
+                continue;
+            }
+            Err(discovery::DagError::Other(errors)) => {
+                spec_result.errors.extend(errors);
+                continue;
+            }
+        };
 
-        match graph::Graph::build(
-            context,
-            repository,
-            spec,
-            &dag,
-            &effective,
-            dependency_discovery_failed,
-        ) {
+        match graph::Graph::build(context, repository, spec, &dag, &effective, limits) {
             Ok((graph, mut slice_types)) => {
                 match execution_plan::build_execution_plan(
                     &graph,
@@ -833,12 +840,12 @@ rule getx: one.x
     fn test_data_definition_from_spec_has_import_defining_spec() {
         let code = r#"
 spec examples
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
 spec checkout
 uses examples
-data money: quantity
+data money: measure
   -> unit eur 1.00
 data local_price: money
 data imported_price: examples.money
@@ -940,7 +947,7 @@ data quantity: 10
 
 spec example
 uses inventory: somespec
-rule total_quantity: inventory.quantity"#;
+rule total_measure: inventory.quantity"#;
 
         let parsed = parse(
             source,
@@ -1141,8 +1148,13 @@ rule passthrough: imported_amount"#;
             .spec_set(&repository, "consumer")
             .and_then(|ss| ss.spec_at(&effective))
             .expect("consumer spec");
-        let dag = super::discovery::build_dag_for_spec(&ctx, &consumer_arc, &effective)
-            .expect("DAG should succeed");
+        let dag = super::discovery::build_dag_for_spec(
+            &ctx,
+            &consumer_arc,
+            &effective,
+            &crate::ResourceLimits::default(),
+        )
+        .expect("DAG should succeed");
         let ordered_names: Vec<String> = dag.iter().map(|s| s.1.name.clone()).collect();
         let dep_idx = ordered_names
             .iter()

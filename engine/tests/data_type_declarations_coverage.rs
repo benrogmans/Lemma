@@ -147,7 +147,7 @@ rule r: d
 fn primitive_percent_type_only_missing_vetoes() {
     let code = r#"
 spec s
-data p: percent
+data p: ratio
 rule r: p
 "#;
     let mut engine = Engine::new();
@@ -510,7 +510,7 @@ rule r: small_number
 fn cross_spec_value_copy_reference_resolves() {
     let code = r#"
 spec lib
-data money: quantity -> unit eur 1 -> unit usd 0.84
+data money: measure -> unit eur 1 -> unit usd 0.84
 
 spec app
 uses lib
@@ -530,7 +530,7 @@ rule r: price
 fn cross_spec_value_copy_unknown_data_is_rejected() {
     let code = r#"
 spec lib
-data money: quantity -> unit eur 1
+data money: measure -> unit eur 1
 
 spec app
 uses lib

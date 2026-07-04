@@ -324,7 +324,7 @@ fn prompt_value_for_type(
                 )
             }
         }
-        TypeSpecification::Quantity {
+        TypeSpecification::Measure {
             minimum,
             maximum,
             decimals,
@@ -334,7 +334,7 @@ fn prompt_value_for_type(
             decomposition,
             ..
         } => {
-            let quantity_spec = TypeSpecification::Quantity {
+            let measure_spec = TypeSpecification::Measure {
                 minimum: minimum.clone(),
                 maximum: maximum.clone(),
                 decimals: *decimals,
@@ -344,12 +344,12 @@ fn prompt_value_for_type(
                 help: help.clone(),
             };
             let constraints = NumericConstraints {
-                minimum: quantity_spec.minimum_decimal(),
-                maximum: quantity_spec.maximum_decimal(),
+                minimum: measure_spec.minimum_decimal(),
+                maximum: measure_spec.maximum_decimal(),
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_quantity_data(data_name, &type_str, schema_default, units, &constraints)
+            prompt_measure_data(data_name, &type_str, schema_default, units, &constraints)
         }
         TypeSpecification::Number {
             minimum,
@@ -407,7 +407,7 @@ fn prompt_value_for_type(
         TypeSpecification::NumberRange { help, .. }
         | TypeSpecification::DateRange { help, .. }
         | TypeSpecification::TimeRange { help, .. }
-        | TypeSpecification::QuantityRange { help, .. }
+        | TypeSpecification::MeasureRange { help, .. }
         | TypeSpecification::RatioRange { help, .. } => {
             prompt_range_data(data_name, &type_str, lemma_type, schema_default, help.as_str())
         }
@@ -569,7 +569,7 @@ fn prompt_range_data(
         TypeSpecification::DateRange { .. } => "2024-01-01",
         TypeSpecification::TimeRange { .. } => "09:00",
         TypeSpecification::NumberRange { .. } => "0",
-        TypeSpecification::QuantityRange { .. } => "30 kilogram",
+        TypeSpecification::MeasureRange { .. } => "30 kilogram",
         TypeSpecification::RatioRange { .. } => "10%",
         _ => unreachable!("BUG: prompt_range_data called with non-range type"),
     };
@@ -603,15 +603,15 @@ fn prompt_number_data(
     prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "10")
 }
 
-fn prompt_quantity_data(
+fn prompt_measure_data(
     data_name: &str,
     type_str: &str,
     schema_default: Option<&LiteralValue>,
-    units: &lemma::QuantityUnits,
+    units: &lemma::MeasureUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let parsed = schema_default.and_then(|lit| match &lit.value {
-        ValueKind::Quantity(n, signature) => Some((
+        ValueKind::Measure(n, signature) => Some((
             n.clone(),
             signature.first().map(|(n, _)| n.as_str()).unwrap_or(""),
         )),

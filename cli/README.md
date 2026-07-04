@@ -78,8 +78,8 @@ lemma run shipping --json > output.json
 
 ## Documentation
 
-- CLI reference: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>
-- Language guide: <https://github.com/lemma/lemma/blob/main/documentation/index.md>
+- CLI reference: <https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md>
+- Learn guide: <https://github.com/lemma/lemma/blob/main/documentation/learn/readme.md>
 - API docs (engine): <https://docs.rs/lemma-engine>
 - Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
 

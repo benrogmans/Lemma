@@ -13,14 +13,14 @@ use crate::computation::rational::{self, RationalInteger};
 // Dimensional decomposition type
 // -----------------------------------------------------------------------------
 
-/// A dimensional decomposition vector. Maps quantity-type names to integer exponents.
+/// A dimensional decomposition vector. Maps measure-type names to integer exponents.
 /// For example, velocity `{length: 1, duration: -1}` or acceleration `{length: 1, duration: -2}`.
-/// An empty map indicates a base quantity (no decomposition) until the decomposition pass runs,
-/// after which every quantity carries a non-empty vector.
-pub type BaseQuantityVector = BTreeMap<String, i32>;
+/// An empty map indicates a base measure (no decomposition) until the decomposition pass runs,
+/// after which every measure carries a non-empty vector.
+pub type BaseMeasureVector = BTreeMap<String, i32>;
 
 // -----------------------------------------------------------------------------
-// Unit tables for Quantity and Ratio types
+// Unit tables for Measure and Ratio types
 // -----------------------------------------------------------------------------
 
 pub fn rational_to_serialized_str(rational: &RationalInteger) -> Result<String, String> {
@@ -71,20 +71,20 @@ pub mod stored_rational_serde {
     }
 }
 
-/// A single unit within a Quantity type.
+/// A single unit within a Measure type.
 ///
 /// `factor` is the conversion factor: 1 of this unit equals `factor` canonical units.
-/// `derived_quantity_factors` stores `(quantity_ref, exponent)` pairs from compound unit declarations
+/// `derived_measure_factors` stores `(measure_ref, exponent)` pairs from compound unit declarations
 /// (e.g., `meter/second` produces `[("meter", 1), ("second", -1)]`). Empty for base units.
 /// `decomposition` is the dimensional decomposition vector, populated during the planning
 /// decomposition pass. It is empty until that pass completes.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct QuantityUnit {
+pub struct MeasureUnit {
     pub name: String,
     /// Conversion factor: 1 of this unit equals `value` canonical units.
     pub factor: RationalInteger,
-    pub derived_quantity_factors: Vec<(String, i32)>,
-    pub decomposition: BaseQuantityVector,
+    pub derived_measure_factors: Vec<(String, i32)>,
+    pub decomposition: BaseMeasureVector,
     /// Minimum magnitude in this unit (schema/UI); canonical bound is on the type.
     pub minimum: Option<RationalInteger>,
     /// Maximum magnitude in this unit (schema/UI).
@@ -93,51 +93,51 @@ pub struct QuantityUnit {
     pub default_magnitude: Option<RationalInteger>,
 }
 
-impl Serialize for QuantityUnit {
+impl Serialize for MeasureUnit {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use quantity_unit_factor_serialization::FactorSerializer;
+        use measure_unit_factor_serialization::FactorSerializer;
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("QuantityUnit", 7)?;
+        let mut state = serializer.serialize_struct("MeasureUnit", 7)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("factor", &FactorSerializer::from_ratio(&self.factor))?;
-        state.serialize_field("derived_quantity_factors", &self.derived_quantity_factors)?;
+        state.serialize_field("derived_measure_factors", &self.derived_measure_factors)?;
         state.serialize_field("decomposition", &self.decomposition)?;
         if let Some(minimum) = &self.minimum {
             state.serialize_field(
                 "minimum",
                 &rational_to_serialized_str(minimum)
-                    .expect("BUG: planned quantity unit minimum must serialize to decimal string"),
+                    .expect("BUG: planned measure unit minimum must serialize to decimal string"),
             )?;
         }
         if let Some(maximum) = &self.maximum {
             state.serialize_field(
                 "maximum",
                 &rational_to_serialized_str(maximum)
-                    .expect("BUG: planned quantity unit maximum must serialize to decimal string"),
+                    .expect("BUG: planned measure unit maximum must serialize to decimal string"),
             )?;
         }
         if let Some(default_magnitude) = &self.default_magnitude {
             state.serialize_field(
                 "default",
                 &rational_to_serialized_str(default_magnitude)
-                    .expect("BUG: planned quantity unit default must serialize to decimal string"),
+                    .expect("BUG: planned measure unit default must serialize to decimal string"),
             )?;
         }
         state.end()
     }
 }
 
-impl<'de> Deserialize<'de> for QuantityUnit {
+impl<'de> Deserialize<'de> for MeasureUnit {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
-        struct QuantityUnitData {
+        struct MeasureUnitData {
             name: String,
-            #[serde(with = "quantity_unit_factor_serialization")]
+            #[serde(with = "measure_unit_factor_serialization")]
             factor: RationalInteger,
             #[serde(default)]
-            derived_quantity_factors: Vec<(String, i32)>,
+            derived_measure_factors: Vec<(String, i32)>,
             #[serde(default)]
-            decomposition: BaseQuantityVector,
+            decomposition: BaseMeasureVector,
             #[serde(default)]
             minimum: Option<Decimal>,
             #[serde(default)]
@@ -145,11 +145,11 @@ impl<'de> Deserialize<'de> for QuantityUnit {
             #[serde(default, rename = "default")]
             default_magnitude: Option<Decimal>,
         }
-        let data = QuantityUnitData::deserialize(deserializer)?;
+        let data = MeasureUnitData::deserialize(deserializer)?;
         Ok(Self {
             name: data.name,
             factor: data.factor,
-            derived_quantity_factors: data.derived_quantity_factors,
+            derived_measure_factors: data.derived_measure_factors,
             decomposition: data.decomposition,
             minimum: data
                 .minimum
@@ -170,19 +170,19 @@ impl<'de> Deserialize<'de> for QuantityUnit {
     }
 }
 
-impl QuantityUnit {
+impl MeasureUnit {
     pub fn from_decimal_factor(
         name: String,
         decimal_factor: Decimal,
-        derived_quantity_factors: Vec<(String, i32)>,
+        derived_measure_factors: Vec<(String, i32)>,
     ) -> Result<Self, String> {
         let factor =
             rational::decimal_to_rational(decimal_factor).map_err(|failure| failure.to_string())?;
-        Ok(QuantityUnit {
+        Ok(MeasureUnit {
             name,
             factor,
-            derived_quantity_factors,
-            decomposition: BaseQuantityVector::new(),
+            derived_measure_factors,
+            decomposition: BaseMeasureVector::new(),
             minimum: None,
             maximum: None,
             default_magnitude: None,
@@ -208,14 +208,14 @@ impl QuantityUnit {
     /// Conversion factor as decimal (schema unit factors always commit).
     pub fn factor_decimal(&self) -> Decimal {
         rational::commit_rational_to_decimal(&self.factor)
-            .expect("BUG: quantity unit factor must commit to decimal")
+            .expect("BUG: measure unit factor must commit to decimal")
     }
 
     #[must_use]
     pub fn minimum_decimal(&self) -> Option<Decimal> {
         self.minimum.as_ref().map(|bound| {
             rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned quantity unit minimum must commit to decimal")
+                .expect("BUG: planned measure unit minimum must commit to decimal")
         })
     }
 
@@ -223,7 +223,7 @@ impl QuantityUnit {
     pub fn maximum_decimal(&self) -> Option<Decimal> {
         self.maximum.as_ref().map(|bound| {
             rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned quantity unit maximum must commit to decimal")
+                .expect("BUG: planned measure unit maximum must commit to decimal")
         })
     }
 
@@ -231,7 +231,7 @@ impl QuantityUnit {
     pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
         self.default_magnitude.as_ref().map(|bound| {
             rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned quantity unit default must commit to decimal")
+                .expect("BUG: planned measure unit default must commit to decimal")
         })
     }
 
@@ -240,14 +240,14 @@ impl QuantityUnit {
     pub fn maximum_canonical_decimal(&self) -> Option<Decimal> {
         self.maximum.as_ref().map(|maximum| {
             let canonical = rational::checked_mul(maximum, &self.factor)
-                .expect("BUG: planned quantity unit maximum canonical multiply must succeed");
+                .expect("BUG: planned measure unit maximum canonical multiply must succeed");
             rational::commit_rational_to_decimal(&canonical)
-                .expect("BUG: planned quantity unit maximum canonical must commit to decimal")
+                .expect("BUG: planned measure unit maximum canonical must commit to decimal")
         })
     }
 }
 
-mod quantity_unit_factor_serialization {
+mod measure_unit_factor_serialization {
     use super::RationalInteger;
     use crate::computation::bigint::BigInt;
     use crate::computation::rational::try_rational_new;
@@ -264,7 +264,7 @@ mod quantity_unit_factor_serialization {
             let reduced = value
                 .clone()
                 .try_reduce()
-                .expect("BUG: stored quantity unit factor must reduce");
+                .expect("BUG: stored measure unit factor must reduce");
             FactorSerializer {
                 numer: reduced.numer().to_string(),
                 denom: reduced.denom().to_string(),
@@ -277,7 +277,7 @@ mod quantity_unit_factor_serialization {
             let denom = BigInt::try_from_str_radix(&self.denom, 10)
                 .map_err(|_| format!("invalid denominator: {}", self.denom))?;
             if denom.is_zero() {
-                return Err("QuantityUnit conversion factor denominator cannot be zero".to_string());
+                return Err("MeasureUnit conversion factor denominator cannot be zero".to_string());
             }
             try_rational_new(numer, denom).map_err(|e| e.to_string())
         }
@@ -294,27 +294,27 @@ mod quantity_unit_factor_serialization {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct QuantityUnits(pub Vec<QuantityUnit>);
+pub struct MeasureUnits(pub Vec<MeasureUnit>);
 
-impl QuantityUnits {
+impl MeasureUnits {
     pub fn new() -> Self {
-        QuantityUnits(Vec::new())
+        MeasureUnits(Vec::new())
     }
-    pub fn get(&self, name: &str) -> Result<&QuantityUnit, String> {
+    pub fn get(&self, name: &str) -> Result<&MeasureUnit, String> {
         self.0.iter().find(|u| u.name == name).ok_or_else(|| {
             let valid: Vec<&str> = self.0.iter().map(|u| u.name.as_str()).collect();
             format!(
-                "Unknown unit '{}' for this quantity type. Valid units: {}",
+                "Unknown unit '{}' for this measure type. Valid units: {}",
                 name,
                 valid.join(", ")
             )
         })
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, QuantityUnit> {
+    pub fn iter(&self) -> std::slice::Iter<'_, MeasureUnit> {
         self.0.iter()
     }
-    pub fn push(&mut self, u: QuantityUnit) {
+    pub fn push(&mut self, u: MeasureUnit) {
         self.0.push(u);
     }
     pub fn is_empty(&self) -> bool {
@@ -323,13 +323,13 @@ impl QuantityUnits {
     pub fn len(&self) -> usize {
         self.0.len()
     }
-    pub fn map<F: FnMut(QuantityUnit) -> QuantityUnit>(self, f: F) -> Self {
-        QuantityUnits(self.0.into_iter().map(f).collect())
+    pub fn map<F: FnMut(MeasureUnit) -> MeasureUnit>(self, f: F) -> Self {
+        MeasureUnits(self.0.into_iter().map(f).collect())
     }
 }
 
-impl QuantityUnit {
-    pub fn with_decomposition(self, decomposition: BaseQuantityVector) -> Self {
+impl MeasureUnit {
+    pub fn with_decomposition(self, decomposition: BaseMeasureVector) -> Self {
         Self {
             decomposition,
             ..self
@@ -338,32 +338,29 @@ impl QuantityUnit {
     pub fn with_factor(self, factor: RationalInteger) -> Self {
         Self { factor, ..self }
     }
-    pub fn with_derived_quantity_factors(
-        self,
-        derived_quantity_factors: Vec<(String, i32)>,
-    ) -> Self {
+    pub fn with_derived_measure_factors(self, derived_measure_factors: Vec<(String, i32)>) -> Self {
         Self {
-            derived_quantity_factors,
+            derived_measure_factors,
             ..self
         }
     }
 }
 
-impl Default for QuantityUnits {
+impl Default for MeasureUnits {
     fn default() -> Self {
-        QuantityUnits::new()
+        MeasureUnits::new()
     }
 }
 
-impl From<Vec<QuantityUnit>> for QuantityUnits {
-    fn from(v: Vec<QuantityUnit>) -> Self {
-        QuantityUnits(v)
+impl From<Vec<MeasureUnit>> for MeasureUnits {
+    fn from(v: Vec<MeasureUnit>) -> Self {
+        MeasureUnits(v)
     }
 }
 
-impl<'a> IntoIterator for &'a QuantityUnits {
-    type Item = &'a QuantityUnit;
-    type IntoIter = std::slice::Iter<'a, QuantityUnit>;
+impl<'a> IntoIterator for &'a MeasureUnits {
+    type Item = &'a MeasureUnit;
+    type IntoIter = std::slice::Iter<'a, MeasureUnit>;
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
     }
@@ -380,7 +377,7 @@ pub struct RatioUnit {
 
 impl Serialize for RatioUnit {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use quantity_unit_factor_serialization::FactorSerializer;
+        use measure_unit_factor_serialization::FactorSerializer;
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("RatioUnit", 5)?;
         state.serialize_field("name", &self.name)?;
@@ -415,7 +412,7 @@ impl<'de> Deserialize<'de> for RatioUnit {
         #[derive(Deserialize)]
         struct RatioUnitData {
             name: String,
-            #[serde(with = "quantity_unit_factor_serialization")]
+            #[serde(with = "measure_unit_factor_serialization")]
             value: RationalInteger,
             #[serde(default)]
             minimum: Option<Decimal>,
@@ -849,7 +846,7 @@ impl fmt::Display for DateTimeValue {
 /// Literal value data (no type information). Single source of truth in literals.
 ///
 /// `NumberWithUnit` is type-agnostic at parse time (`10 eur` and `50%` share this shape).
-/// Planning resolves ratio vs quantity via the unit index and target [`TypeSpecification`].
+/// Planning resolves ratio vs measure via the unit index and target [`TypeSpecification`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Value {
@@ -1072,7 +1069,11 @@ impl std::str::FromStr for TimeValue {
     }
 }
 
-/// Number literal with Lemma rules (strip _ and ,; MAX_NUMBER_DIGITS).
+/// Number literal with Lemma rules (strip _ and , separators).
+///
+/// `Decimal::from_str` rounds excess fractional digits to the 28 significant
+/// digits a `Decimal` holds (truncate at input); an integer magnitude that
+/// cannot be represented is an error.
 pub(crate) struct NumberLiteral(pub Decimal);
 
 impl std::str::FromStr for NumberLiteral {
@@ -1080,13 +1081,6 @@ impl std::str::FromStr for NumberLiteral {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let clean = s.trim().replace(['_', ','], "");
-        let digit_count = clean.chars().filter(|c| c.is_ascii_digit()).count();
-        if digit_count > crate::limits::MAX_NUMBER_DIGITS {
-            return Err(format!(
-                "Number has too many digits (max {})",
-                crate::limits::MAX_NUMBER_DIGITS
-            ));
-        }
         Decimal::from_str(&clean)
             .map_err(|_| format!("Invalid number: '{}'", s))
             .map(NumberLiteral)
@@ -1110,7 +1104,7 @@ impl std::str::FromStr for TextLiteral {
     }
 }
 
-/// Parsed `<number> <unit-name>` for runtime string input (quantity and ratio types).
+/// Parsed `<number> <unit-name>` for runtime string input (measure and ratio types).
 pub(crate) struct NumberWithUnit(pub Decimal, pub String);
 
 impl std::str::FromStr for NumberWithUnit {
@@ -1120,7 +1114,7 @@ impl std::str::FromStr for NumberWithUnit {
         let trimmed = s.trim();
         if trimmed.is_empty() {
             return Err(
-                "Quantity value cannot be empty. Use a number followed by a unit (e.g. '10 eur')."
+                "Measure value cannot be empty. Use a number followed by a unit (e.g. '10 eur')."
                     .to_string(),
             );
         }
@@ -1131,19 +1125,19 @@ impl std::str::FromStr for NumberWithUnit {
             .expect("split_whitespace yields >=1 token after non-empty guard");
         let unit_part = parts.next().ok_or_else(|| {
             format!(
-                "Quantity value must include a unit (e.g. '{} eur').",
+                "Measure value must include a unit (e.g. '{} eur').",
                 number_part
             )
         })?;
         if parts.next().is_some() {
             return Err(format!(
-                "Invalid quantity value: '{}'. Expected exactly '<number> <unit>', got extra tokens.",
+                "Invalid measure value: '{}'. Expected exactly '<number> <unit>', got extra tokens.",
                 s
             ));
         }
         let n = number_part
             .parse::<NumberLiteral>()
-            .map_err(|_| format!("Invalid quantity: '{}'", s))?
+            .map_err(|_| format!("Invalid measure: '{}'", s))?
             .0;
         Ok(NumberWithUnit(n, unit_part.to_string()))
     }

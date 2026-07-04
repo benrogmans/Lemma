@@ -1,6 +1,5 @@
 [package]
 name = "lemma-lsp"
-publish = false
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,16 +7,13 @@ description = "Language Server Protocol server for Lemma specifications"
 keywords = ["lemma", "lsp", "language-server"]
 license.workspace = true
 repository.workspace = true
+include = ["src/**", "README.md", "LICENSE", "!editors/**"]
 
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
-
-[[bin]]
-name = "lsp"
-path = "src/main.rs"
 
 [lints]
 workspace = true
@@ -26,7 +22,7 @@ workspace = true
 default = []
 
 [dependencies]
-lemma = { package = "lemma-engine", version = "=0.8.20", path = ".." }
+lemma = { package = "lemma-engine", version = "=0.8.21", path = "..", features = ["registry"] }
 async-trait = "0.1"
 serde_json.workspace = true
 

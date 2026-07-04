@@ -37,21 +37,23 @@ Pricing rules for bulk and member discounts.
 Commentary must follow the spec line; it cannot go anywhere else.
 """
 
-data quantity:   number
+data qty:        number
 data base_price: 100
 data is_member:  false
 
-rule price_with_vat: base_price + 21%
+rule vat_amount: base_price * 21%
+rule price_with_vat: base_price + vat_amount
 
 rule bulk_discount:
-  quantity >= 100 and price_with_vat > 500
+  qty >= 100 and price_with_vat > 500
 
 rule discount: 0%
-  unless quantity >= 10  then 10%
-  unless bulk_discount   then 15%
-  unless is_member       then 20%
+  unless qty >= 10     then 10%
+  unless bulk_discount then 15%
+  unless is_member     then 20%
 
-rule price_with_discount: base_price - discount
+rule discount_amount: base_price * discount
+rule price_with_discount: base_price - discount_amount
 ```
 
 **Example B — multi-spec composition (same file)**
@@ -63,28 +65,30 @@ data standard_discount: 5%
 data tax_rate:          21%
 data base_price:        number -> minimum 0 -> default 100
 
-rule price_with_tax:   base_price * (1 + tax_rate)
-rule discounted_price: base_price * (1 - standard_discount)
-rule final_price:      base_price * (1 - standard_discount) * (1 + tax_rate)
+rule tax_amount:       base_price * tax_rate
+rule price_with_tax:   base_price + tax_amount
+rule discount_amount:  base_price * standard_discount
+rule discounted_price: base_price - discount_amount
+rule final_price:      discounted_price * (100% + tax_rate)
 
 
 spec line_item
 
-data quantity: number -> minimum 0 -> default 10
+data qty: number -> minimum 0 -> default 10
 
 uses pricing: base_config
 
-rule line_total:   pricing.final_price * quantity
+rule line_total:   pricing.final_price * qty
 rule has_discount: pricing.standard_discount > 0%
 
 
 spec simple_order
 
 uses line: line_item
-with line.quantity: 100
+with line.qty: 100
 
 rule order_total:          line.line_total
-rule effective_unit_price: order_total / line.quantity
+rule effective_unit_price: order_total / line.qty
 ```
 
 - `uses alias: target_spec` imports another spec in the same file.
@@ -105,7 +109,7 @@ uses lemma units
 
 uses iso: @iso/countries alpha2 2026-01-01
 
-data price: quantity
+data price: measure
   -> unit eur 1
 
 data country: iso.code
@@ -121,9 +125,9 @@ Forms:
 - `uses alias: @user/repo spec_name` — import with alias (`iso.field`, `iso.rule_name`)
 - `uses @user/repo spec_name 2026-01-01` — pin to an effective date
 
-Reference imported members through the alias: `iso.code`, `iso.name`, etc. See [Registry](https://github.com/lemma/lemma/blob/main/documentation/registry.md) for fetch/resolution details.
+Reference imported members through the alias: `iso.code`, `iso.name`, etc. See [Registry](https://github.com/lemma/lemma/blob/main/documentation/reference/registry.md) for fetch/resolution details.
 
-`repo` blocks namespace specs across bounded contexts (e.g. `repo accounting` / `repo billing`). Skip them in LLM-authored output unless the user asks. See [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/spec_composability.md) for cross-repo `uses` and temporal pins.
+`repo` blocks namespace specs across bounded contexts (e.g. `repo accounting` / `repo billing`). Skip them in LLM-authored output unless the user asks. See [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/learn/composing_specs.md) for cross-repo `uses` and temporal pins.
 
 ---
 
@@ -144,7 +148,7 @@ Mapping:
 ```lemma
 spec library_fees
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
   -> minimum 0 eur
@@ -170,7 +174,7 @@ rule is_in_grace_period: days_overdue <= 3
 rule total_fee: days_overdue * daily_fee
 
 rule final_fee: total_fee
-  unless is_first_offense   then total_fee - 50%
+  unless is_first_offense   then total_fee * 50%
   unless is_in_grace_period then 0 eur
 
 rule can_checkout: yes
@@ -188,7 +192,7 @@ rule can_checkout: yes
 ```lemma
 spec coffee_order
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
@@ -217,7 +221,7 @@ data has_loyalty_card: boolean
 ```
 
 - `age`, `number_of_cups` — type-only with bounds (input slots)
-- `money` — user-defined quantity type with units and decimals
+- `money` — user-defined measure type with units and decimals
 - `product`, `size` — text enumeration via `-> option` (prefer over veto for known sets)
 
 **Example E — data patterns**
@@ -249,7 +253,7 @@ Typed alias:
 ```lemma
 spec accounts
 
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 
 data wallet: money -> minimum 0 eur
 ```
@@ -294,7 +298,7 @@ Prefer `units.mass`, `units.duration`, and `units.length` over redefining kilogr
 
 **Ranges — half-open intervals**
 
-Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>` when the result should stay unit-labelled). Bare `as number` on date/quantity ranges is rejected. Range typedefs: `number range`, `date range`, `quantity range`, `ratio range`. Calendar month/year intervals use `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar` with a range default.
+Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>` when the result should stay unit-labelled). Bare `as number` on date/measure ranges is rejected. Range typedefs: `number range`, `date range`, `measure range`, `ratio range`. Calendar month/year intervals use `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar` with a range default.
 
 ```lemma
 spec eligibility
@@ -330,12 +334,12 @@ rule span_years: (1990-05-20...2024-06-15) as years
 
 At the upper bound, `in` is false: `67 years` is not inside `18 years...67 years`. Declare range slots on `data` when a band is reused; use inline `value in lo...hi` for one-off checks.
 
-Range over a custom quantity type (no SI import needed):
+Range over a custom measure type (no SI import needed):
 
 ```lemma
 spec freight
 
-data weight: quantity
+data weight: measure
   -> unit gram 1
   -> unit kilogram 1000
 
@@ -347,31 +351,31 @@ rule inside_band: 45 kilogram in load_band
 rule band_width: (30 kilogram...80 kilogram) as kilogram
 ```
 
-**Derived quantities — compound units**
+**Derived measures — compound units**
 
-Build units from other units with `/`, `*`, and `^`. Name each derived unit, then give a compound expression. Earlier quantity types in the same spec must declare the base units referenced (`eur`, `hour`, `employee`, `results`) so Lemma can resolve dimensions. Import `uses lemma units` when compound units involve time (`eur/hour`, `results/eur/hour/employee`).
+Build units from other units with `/`, `*`, and `^`. Name each derived unit, then give a compound expression. Earlier measure types in the same spec must declare the base units referenced (`eur`, `hour`, `employee`, `results`) so Lemma can resolve dimensions. Import `uses lemma units` when compound units involve time (`eur/hour`, `results/eur/hour/employee`).
 
 ```lemma
 spec contractor
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data headcount: quantity
+data headcount: measure
   -> unit employee 1
 
-data outcome: quantity
+data outcome: measure
   -> unit results 1
 
-data wage_rate: quantity
+data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 
-data productivity: quantity
+data productivity: measure
   -> unit result_per_employee results/eur/hour/employee
 
-data premium_per_head: quantity
+data premium_per_head: measure
   -> unit eur_hour_per_employee eur_per_hour/employee
 
 data hours_worked: 120 hours
@@ -398,16 +402,16 @@ Use **snake_case** rule names. Boolean rules read as predicates: `is_eligible`, 
 ```lemma
 spec vip_discount
 
-data quantity: number
+data qty: number
 data is_vip:   boolean
 
 rule discount: 0%
-  unless quantity >= 10  then 10%
-  unless quantity >= 50  then 20%
+  unless qty >= 10  then 10%
+  unless qty >= 50  then 20%
   unless is_vip          then 25%
 ```
 
-A VIP customer ordering 75 items gets **25%**, not 20%. Both `quantity >= 50` and `is_vip` match; the bottommost clause wins.
+A VIP customer ordering 75 items gets **25%**, not 20%. Both `qty >= 50` and `is_vip` match; the bottommost clause wins.
 
 **Example G — progressive unless chain**
 
@@ -417,19 +421,22 @@ spec rules_and_unless
 data is_premium:   yes
 data base_price:   number -> minimum 0
 data customer_age: number -> minimum 0 -> maximum 120
-data quantity:     number -> minimum 0
+data qty:          number -> minimum 0
 
 rule total_before_discount:
-  base_price * quantity
+  base_price * qty
 
 rule discount_percentage:
   0%
-  unless quantity >= 10 then 10%
-  unless quantity >= 20 then 15%
+  unless qty >= 10 then 10%
+  unless qty >= 20 then 15%
   unless is_premium   then 20%
 
+rule discount_amount:
+  total_before_discount * discount_percentage
+
 rule total_after_discount:
-  total_before_discount - discount_percentage
+  total_before_discount - discount_amount
 
 rule shipping_cost:
   15
@@ -560,7 +567,7 @@ Default `veto` means cannot answer for unlisted values. Each `unless` maps a kno
 ```lemma
 spec coffee_pricing
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> decimals 2
 
@@ -595,7 +602,7 @@ RIGHT — veto for invalid input, boolean for business logic:
 ```lemma
 spec checkout_policy
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> decimals 2
 
@@ -651,7 +658,7 @@ Inline comments (WRONG — `#` is not comment syntax; this fails to parse):
 data customer_age: number -> minimum 0 -> maximum 120  # input slot
 data tax_rate: 21%  # fixed policy constant
 rule discount: 0%  # default: no discount
-  unless quantity >= 10 then 10%  # bulk rate
+  unless qty >= 10 then 10%  # bulk rate
 ```
 
 Commentary after `uses` (WRONG — a frequent LLM mistake; fails to parse):
@@ -670,7 +677,7 @@ Commentary after `data` (WRONG — also fails to parse):
 ```lemma-skip
 spec pricing
 
-data quantity: number
+data qty: number
 """
 This is not valid commentary placement.
 """
@@ -700,18 +707,18 @@ Customer age is an input; tax_rate is a fixed policy constant.
 
 data customer_age: number -> minimum 0 -> maximum 120
 data tax_rate: 21%
-data quantity: number
+data qty: number
 
 rule discount: 0%
-  unless quantity >= 10 then 10%
+  unless qty >= 10 then 10%
 ```
 
 Mega-rule (WRONG):
 ```lemma-skip
 rule final_total:
-  base_price * quantity
-  - base_price * quantity * (0% unless quantity >= 10 then 10% unless is_premium then 20%)
-  + (15 unless base_price * quantity >= 100 then 10 unless base_price * quantity >= 200 then 0)
+  base_price * qty
+  - base_price * qty * (0% unless qty >= 10 then 10% unless is_premium then 20%)
+  + (15 unless base_price * qty >= 100 then 10 unless base_price * qty >= 200 then 0)
 ```
 
 Decomposed pipeline (RIGHT):
@@ -719,10 +726,10 @@ Decomposed pipeline (RIGHT):
 spec order_pricing
 
 data base_price: number -> minimum 0
-data quantity:   number -> minimum 0
+data qty:        number -> minimum 0
 
-rule subtotal:             base_price * quantity
-rule discount_percentage:  0% unless quantity >= 10 then 10%
+rule subtotal:             base_price * qty
+rule discount_percentage:  0% unless qty >= 10 then 10%
 rule discount_amount:      subtotal * discount_percentage
 rule total_after_discount: subtotal - discount_amount
 rule shipping_cost:        15 unless total_after_discount >= 100 then 10
@@ -738,26 +745,26 @@ Input as data (RIGHT):
 ```lemma
 spec bulk_discount
 
-data quantity: number -> minimum 0
-rule discount: quantity * 0.1
+data qty: number -> minimum 0
+rule discount: qty * 0.1
 ```
 
 Wrong unless order (WRONG — VIP gets 20%, not 25%):
 ```lemma-skip
 rule discount: 0%
   unless is_vip          then 25%
-  unless quantity >= 50  then 20%
+  unless qty >= 50  then 20%
 ```
 
 Correct order (RIGHT):
 ```lemma
 spec tiered_discount
 
-data quantity: number
+data qty: number
 data is_vip:   boolean
 
 rule discount: 0%
-  unless quantity >= 50  then 20%
+  unless qty >= 50  then 20%
   unless is_vip          then 25%
 ```
 
@@ -781,32 +788,32 @@ repo default
 
 spec pricing
 
-data quantity: number
+data qty: number
 
 rule discount: 0%
-  unless quantity >= 10 then 10%
+  unless qty >= 10 then 10%
 ```
 
 Single-file spec (RIGHT):
 ```lemma
 spec pricing
 
-data quantity: number
+data qty: number
 
 rule discount: 0%
-  unless quantity >= 10 then 10%
+  unless qty >= 10 then 10%
 ```
 
 ---
 
 ## Docs
 
-- [Language guide](https://github.com/lemma/lemma/blob/main/documentation/index.md): specs, data, rules, unless, veto overview
-- [Reference](https://github.com/lemma/lemma/blob/main/documentation/reference.md): operators, types, units, ranges, `uses`
-- [Veto semantics](https://github.com/lemma/lemma/blob/main/documentation/veto_semantics.md): propagation, `is veto`
-- [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/spec_composability.md): `uses`, temporal versions, pins
-- [CLI](https://github.com/lemma/lemma/blob/main/documentation/CLI.md): `run`, `schema`, `format`
-- [Registry](https://github.com/lemma/lemma/blob/main/documentation/registry.md): LemmaBase `@user/repo` imports
+- [Learn guide](https://github.com/lemma/lemma/blob/main/documentation/learn/readme.md): specs, data, rules, unless, veto overview
+- [Reference](https://github.com/lemma/lemma/blob/main/documentation/reference/readme.md): operators, types, units, ranges, `uses`
+- [Veto](https://github.com/lemma/lemma/blob/main/documentation/learn/types_and_units.md#veto): propagation, `is veto`
+- [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/learn/composing_specs.md): `uses`, temporal versions, pins
+- [CLI](https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md): `run`, `schema`, `format`
+- [Registry](https://github.com/lemma/lemma/blob/main/documentation/reference/registry.md): LemmaBase `@user/repo` imports
 - [LemmaBase search](https://lemmabase.com/search?q=): find published registry specs
 - [Examples (documentation)](https://github.com/lemma/lemma/tree/main/documentation/examples): curated `.lemma` files
 - [Examples (integration tests)](https://github.com/lemma/lemma/tree/main/cli/tests/integrations/examples): progressive example suite
@@ -822,11 +829,15 @@ rule discount: 0%
 - [Registry references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/12_registry_references.lemma): `uses @user/repo spec_name`
 - [Shipping policy](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/07_shipping_policy.lemma): complex decomposed rules
 
+## Numeric precision (summary)
+
+Lemma computes in exact rationals (ℚ) for `+`, `−`, `×`, `÷`, comparisons, and unit conversions. `^`, `sqrt`, trig, and `log` use ~28-significant-digit Decimal semantics. `floor`/`ceil`/`round` on measures operate at Decimal precision.
+
+**Boundary number contract:** all API surfaces (WASM, HTTP JSON, Elixir NIF) accept integers as native numbers and reject non-integer (decimal/float) numbers — pass decimals as strings to preserve exactness. Example: `{ "quantity": 42, "rate": "0.075" }`.
+
 ## Optional
 
 - [LemmaBase](https://lemmabase.com): registry hosting and search
-- [Blueprint](https://github.com/lemma/lemma/blob/main/documentation/blueprint.md): architecture and pipeline
-- [Whitepaper](https://github.com/lemma/lemma/blob/main/documentation/whitepaper.md): design rationale
-- [Numeric precision](https://github.com/lemma/lemma/blob/main/documentation/numeric_precision.md): exact rational arithmetic
-- [WebAssembly](https://github.com/lemma/lemma/blob/main/documentation/wasm.md): Lemma in the browser
+- [Numeric precision](https://github.com/lemma/lemma/blob/main/documentation/learn/precision.md): exact rational arithmetic, full boundary contract
+- [JavaScript / TypeScript (WASM)](https://github.com/lemma/lemma/blob/main/documentation/tools/javascript.md): Lemma in the browser and Node
 - [README](https://github.com/lemma/lemma/blob/main/README.md): install, quick start

@@ -192,10 +192,10 @@ rule s: sin 1
 }
 
 #[test]
-fn quantity_result_magnitude_decimal() {
+fn measure_result_magnitude_decimal() {
     let code = r#"
 spec s
-data money: quantity
+data money: measure
     -> unit eur 1
     -> unit usd 0.84
 data amount: 100 usd
@@ -221,7 +221,7 @@ rule converted: amount as eur
         .value()
         .expect("value");
     match &lit.value {
-        ValueKind::Quantity(magnitude, signature) => {
+        ValueKind::Measure(magnitude, signature) => {
             assert_eq!(*signature, vec![("eur".to_string(), 1)]);
             assert_eq!(
                 lemma::ValueKind::Number(magnitude.clone())
@@ -230,14 +230,14 @@ rule converted: amount as eur
                 Decimal::from(84)
             );
             let json = serde_json::to_value(lit).unwrap();
-            let quantity_json = json.get("value").and_then(|v| v.get("quantity")).unwrap();
+            let measure_json = json.get("value").and_then(|v| v.get("measure")).unwrap();
             assert!(
-                !quantity_json
+                !measure_json
                     .as_array()
                     .is_some_and(|a| a.len() == 2 && a[0].is_array()),
-                "quantity magnitude must not be rational array"
+                "measure magnitude must not be rational array"
             );
         }
-        other => panic!("expected Quantity, got {:?}", other),
+        other => panic!("expected Measure, got {:?}", other),
     }
 }

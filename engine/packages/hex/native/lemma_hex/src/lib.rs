@@ -41,7 +41,7 @@ fn lemma_new<'a>(env: Env<'a>, limits_term: Option<Term<'a>>) -> NifResult<Term<
     Ok((rustler::Atom::from_str(env, "ok")?, resource).encode(env))
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn lemma_load<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
@@ -68,7 +68,7 @@ fn lemma_load<'a>(
     }
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn lemma_load_from_paths<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
@@ -94,7 +94,7 @@ fn lemma_load_from_paths<'a>(
     }
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn lemma_load_batch<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
@@ -212,22 +212,33 @@ fn lemma_list<'a>(env: Env<'a>, resource: ResourceArc<LemmaEngineResource>) -> N
                 let plan = match plan {
                     Ok(p) => p,
                     Err(e) => {
-                        return Err(rustler::Error::RaiseTerm(Box::new(format!(
-                            "Failed to get plan for '{}': {}",
-                            spec.name, e
-                        ))))
+                        let term = encode_error(env, &e)?;
+                        return Ok((rustler::Atom::from_str(env, "error")?, term).encode(env));
                     }
                 };
-                let schema_json = serde_json::to_vec(&plan.schema(&lemma::DataOverlay::default()))
-                    .map_err(|e| {
-                        rustler::Error::RaiseTerm(Box::new(format!(
-                            "Schema serialization failed: {}",
-                            e
-                        )))
-                    })?;
-                let mut schema_bin = OwnedBinary::new(schema_json.len()).ok_or_else(|| {
-                    rustler::Error::RaiseTerm(Box::new("Binary allocation failed".to_string()))
-                })?;
+                let schema_json =
+                    match serde_json::to_vec(&plan.schema(&lemma::DataOverlay::default())) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            let err = lemma::Error::request(
+                                format!("Schema serialization failed for '{}': {}", spec.name, e),
+                                None::<String>,
+                            );
+                            let term = encode_error(env, &err)?;
+                            return Ok((rustler::Atom::from_str(env, "error")?, term).encode(env));
+                        }
+                    };
+                let mut schema_bin = match OwnedBinary::new(schema_json.len()) {
+                    Some(bin) => bin,
+                    None => {
+                        let err = lemma::Error::request(
+                            "Binary allocation failed".to_string(),
+                            None::<String>,
+                        );
+                        let term = encode_error(env, &err)?;
+                        return Ok((rustler::Atom::from_str(env, "error")?, term).encode(env));
+                    }
+                };
                 schema_bin.as_mut_slice().copy_from_slice(&schema_json);
 
                 let mut map = rustler::types::map::map_new(env);
@@ -335,7 +346,7 @@ fn lemma_schema<'a>(
     }
 }
 
-#[rustler::nif]
+#[rustler::nif(schedule = "DirtyCpu")]
 fn lemma_run<'a>(
     env: Env<'a>,
     resource: ResourceArc<LemmaEngineResource>,
@@ -549,6 +560,11 @@ fn limits_from_term(term: Term) -> Result<ResourceLimits, String> {
             "max_expression_depth" => limits.max_expression_depth = value_usize,
             "max_expression_count" => limits.max_expression_count = value_usize,
             "max_data_value_bytes" => limits.max_data_value_bytes = value_usize,
+            "max_spec_dependency_depth" => limits.max_spec_dependency_depth = value_usize,
+            "max_dag_specs" => limits.max_dag_specs = value_usize,
+            "max_normalized_expression_nodes" => {
+                limits.max_normalized_expression_nodes = value_usize
+            }
             _ => return Err(format!("unknown limits key: '{}'", key_str)),
         }
     }
@@ -576,11 +592,13 @@ fn term_to_string(term: Term) -> Result<String, rustler::Error> {
     if let Ok(i) = term.decode::<i64>() {
         return Ok(i.to_string());
     }
-    if let Ok(f) = term.decode::<f64>() {
-        return Ok(f.to_string());
+    if term.decode::<f64>().is_ok() {
+        return Err(rustler::Error::RaiseTerm(Box::new(
+            "decimal values must be passed as strings to preserve exactness".to_string(),
+        )));
     }
     Err(rustler::Error::RaiseTerm(Box::new(
-        "data value must be a string, integer, float, or atom".to_string(),
+        "data value must be a string, integer, or atom".to_string(),
     )))
 }
 

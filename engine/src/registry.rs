@@ -10,8 +10,11 @@
 //! Input to all methods is the full repository name as it appears in source
 //! (e.g. `"@org/project"` including the `@` prefix).
 
-use crate::parsing::ast::{DateTimeValue, LemmaRepository};
+use crate::parsing::ast::DateTimeValue;
+#[cfg(feature = "registry")]
+use crate::parsing::ast::LemmaRepository;
 use std::fmt;
+#[cfg(feature = "registry")]
 use std::sync::Arc;
 
 #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]

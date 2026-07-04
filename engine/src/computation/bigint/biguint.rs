@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use super::alloc::{try_probe_alloc, try_with_capacity, AllocError};
+use super::alloc::{try_reserve_exact, try_with_capacity, AllocError};
 use super::digit::{BigDigit, DoubleBigDigit, BITS};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -59,13 +59,12 @@ impl BigUint {
         if value == 0 {
             return Ok(Self::zero());
         }
-        let mut digits = Vec::new();
+        let mut digits = try_with_capacity(4)?;
         let mut v = value;
         while v > 0 {
             digits.push(v as BigDigit);
             v >>= BITS;
         }
-        try_probe_alloc(digits.len().saturating_mul(4))?;
         Ok(Self { digits })
     }
 
@@ -109,7 +108,6 @@ impl BigUint {
     pub fn try_add(&self, other: &Self) -> Result<Self, AllocError> {
         let max_len = self.digits.len().max(other.digits.len());
         let out_len = max_len + 1;
-        try_probe_alloc(out_len.saturating_mul(4))?;
         let mut out = try_with_capacity(out_len)?;
         out.resize(out_len, 0);
         let mut carry: DoubleBigDigit = 0;
@@ -138,7 +136,6 @@ impl BigUint {
             return Err(AllocError);
         }
         let len = self.digits.len();
-        try_probe_alloc(len.saturating_mul(4))?;
         let mut out = try_with_capacity(len)?;
         out.extend_from_slice(&self.digits);
         sub_in_place(&mut out, &other.digits);
@@ -154,7 +151,6 @@ impl BigUint {
         let a = trim_leading_zeros(&self.digits);
         let b = trim_leading_zeros(&other.digits);
         let out_len = a.len() + b.len();
-        try_probe_alloc(out_len.saturating_mul(4))?;
         let mut out = try_with_capacity(out_len)?;
         out.resize(out_len, 0);
         schoolbook_mul(&mut out, a, b);
@@ -167,8 +163,8 @@ impl BigUint {
         if other == 0 || self.is_zero() {
             return Ok(Self::zero());
         }
-        try_probe_alloc(self.digits.len().saturating_mul(4))?;
-        let mut digits = self.digits.clone();
+        let mut digits = try_with_capacity(self.digits.len())?;
+        digits.extend_from_slice(&self.digits);
         mul_in_place(&mut digits, other as BigDigit)?;
         let mut result = Self { digits };
         result.normalize();
@@ -327,7 +323,6 @@ impl BigUint {
         let bit_shift = bits % BITS;
         let extra = usize::from(bit_shift > 0);
         let new_len = self.digits.len() + digit_shift + extra;
-        try_probe_alloc(new_len.saturating_mul(4))?;
         let mut out = try_with_capacity(new_len)?;
         out.resize(new_len, 0);
         if bit_shift == 0 {
@@ -357,7 +352,6 @@ impl BigUint {
             return Ok(Self::zero());
         }
         let bit_shift = bits % BITS;
-        try_probe_alloc(self.digits.len().saturating_mul(4))?;
         let mut out = try_with_capacity(self.digits.len())?;
         if bit_shift == 0 {
             out.extend_from_slice(&self.digits[digit_shift..]);
@@ -421,7 +415,7 @@ fn mul_in_place(digits: &mut Vec<BigDigit>, mul: BigDigit) -> Result<(), AllocEr
         carry >>= BITS;
     }
     if carry != 0 {
-        try_probe_alloc(4)?;
+        try_reserve_exact(digits, 1)?;
         digits.push(carry as BigDigit);
     }
     Ok(())
@@ -507,7 +501,6 @@ fn div_rem_core(mut a: BigUint, b: &[BigDigit]) -> Result<(BigUint, BigUint), Al
     let b0 = b[b.len() - 1];
     let b1 = b[b.len() - 2];
     let q_len = a.digits.len() - b.len() + 1;
-    try_probe_alloc(q_len.saturating_mul(4))?;
     let mut q = try_with_capacity(q_len)?;
     q.resize(q_len, 0);
 

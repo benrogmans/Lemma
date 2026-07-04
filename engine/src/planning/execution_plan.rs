@@ -648,7 +648,7 @@ pub(crate) fn build_execution_plan(
     let main_resolved_types = main_idx
         .map(|idx| resolved_types.remove(idx).2)
         .unwrap_or_default();
-    let data = graph.build_data(&main_resolved_types.resolved);
+    let data = graph.build_data(&main_resolved_types.resolved)?;
 
     // Planning gate: every data-target reference and plain data declaration
     // must carry a fully resolved type. Rule-target references are exempt:
@@ -1037,7 +1037,7 @@ pub fn type_detail_lines(spec: &TypeSpecification) -> Vec<String> {
     use crate::computation::rational::rational_to_display_str;
     let mut lines = Vec::new();
     match spec {
-        TypeSpecification::Quantity {
+        TypeSpecification::Measure {
             minimum,
             maximum,
             decimals,
@@ -1134,7 +1134,7 @@ pub fn type_detail_lines(spec: &TypeSpecification) -> Vec<String> {
                 lines.push(format!("maximum: {}", v));
             }
         }
-        TypeSpecification::QuantityRange { units, .. } => {
+        TypeSpecification::MeasureRange { units, .. } => {
             let unit_names: Vec<&str> = units.0.iter().map(|u| u.name.as_str()).collect();
             if !unit_names.is_empty() {
                 lines.push(format!("units: {}", unit_names.join(", ")));
@@ -1540,25 +1540,25 @@ pub(crate) fn validate_value_against_type(
             Ok(())
         }
         (
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 minimum,
                 maximum,
                 decimals,
                 units,
                 ..
             },
-            ValueKind::Quantity(magnitude, signature),
+            ValueKind::Measure(magnitude, signature),
         ) => {
             use crate::computation::rational::checked_div;
-            use crate::planning::semantics::quantity_declared_bound_canonical;
+            use crate::planning::semantics::measure_declared_bound_canonical;
             let unit = signature
                 .first()
                 .map(|(n, _)| n.as_str())
-                .expect("BUG: Quantity value has empty signature in execution plan validation");
-            let quantity_unit = units.get(unit)?;
-            let factor = &quantity_unit.factor;
+                .expect("BUG: Measure value has empty signature in execution plan validation");
+            let measure_unit = units.get(unit)?;
+            let factor = &measure_unit.factor;
             let in_unit = checked_div(magnitude, factor).map_err(|failure| {
-                format!("cannot de-canonicalize quantity for validation: {failure}")
+                format!("cannot de-canonicalize measure for validation: {failure}")
             })?;
             if let Some(d) = decimals {
                 if exceeds_decimal_places(&in_unit, *d) {
@@ -1569,7 +1569,7 @@ pub(crate) fn validate_value_against_type(
                 }
             }
             if let Some(bound) = minimum {
-                let canonical_min = quantity_declared_bound_canonical(
+                let canonical_min = measure_declared_bound_canonical(
                     bound,
                     units,
                     expected_type.name().as_str(),
@@ -1587,13 +1587,13 @@ pub(crate) fn validate_value_against_type(
                     let bound_display = format!(
                         "{} {}",
                         format_rational_for_validation_message(expected_type, &min_in_unit),
-                        quantity_unit.name
+                        measure_unit.name
                     );
                     return Err(format!("{value_display} is below minimum {bound_display}"));
                 }
             }
             if let Some(bound) = maximum {
-                let canonical_max = quantity_declared_bound_canonical(
+                let canonical_max = measure_declared_bound_canonical(
                     bound,
                     units,
                     expected_type.name().as_str(),
@@ -1611,7 +1611,7 @@ pub(crate) fn validate_value_against_type(
                     let bound_display = format!(
                         "{} {}",
                         format_rational_for_validation_message(expected_type, &max_in_unit),
-                        quantity_unit.name
+                        measure_unit.name
                     );
                     return Err(format!("{value_display} is above maximum {bound_display}"));
                 }
@@ -1774,7 +1774,7 @@ pub(crate) fn validate_value_against_type(
         | (TypeSpecification::NumberRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::DateRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::TimeRange { .. }, ValueKind::Range(_, _))
-        | (TypeSpecification::QuantityRange { .. }, ValueKind::Range(_, _))
+        | (TypeSpecification::MeasureRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::RatioRange { .. }, ValueKind::Range(_, _))
         | (TypeSpecification::Veto { .. }, _)
         | (TypeSpecification::Undetermined, _) => Ok(()),
@@ -2335,18 +2335,18 @@ mod tests {
     }
 
     #[test]
-    fn with_values_should_enforce_quantity_decimals() {
-        // Higher-standard requirement: decimals should be enforced on quantity inputs,
+    fn with_values_should_enforce_measure_decimals() {
+        // Higher-standard requirement: decimals should be enforced on measure inputs,
         // unless the language explicitly defines rounding semantics.
         let data_path = DataPath::new(vec![], "price".to_string());
 
         let money = crate::planning::semantics::LemmaType::primitive(
-            crate::planning::semantics::TypeSpecification::Quantity {
+            crate::planning::semantics::TypeSpecification::Measure {
                 minimum: None,
                 maximum: None,
                 decimals: Some(2),
-                units: crate::planning::semantics::QuantityUnits::from(vec![
-                    crate::planning::semantics::QuantityUnit::from_decimal_factor(
+                units: crate::planning::semantics::MeasureUnits::from(vec![
+                    crate::planning::semantics::MeasureUnit::from_decimal_factor(
                         "eur".to_string(),
                         rust_decimal::Decimal::from_str("1.0").unwrap(),
                         Vec::new(),
@@ -2371,7 +2371,7 @@ mod tests {
         data.insert(
             data_path.clone(),
             crate::planning::semantics::DataDefinition::Value {
-                value: crate::planning::semantics::LiteralValue::quantity_with_type(
+                value: crate::planning::semantics::LiteralValue::measure_with_type(
                     rational_zero(),
                     "eur".to_string(),
                     Arc::new(money.clone()),
@@ -2448,7 +2448,7 @@ mod tests {
         let dep_spec = Arc::new(crate::parsing::ast::LemmaSpec::new("examples".to_string()));
         let imported_type = crate::planning::semantics::LemmaType::new(
             "salary".to_string(),
-            TypeSpecification::quantity(),
+            TypeSpecification::measure(),
             crate::planning::semantics::TypeExtends::Custom {
                 parent: "money".to_string(),
                 family: "money".to_string(),
@@ -3082,7 +3082,7 @@ mod tests {
             .load(
                 r#"
                 spec pricing
-                data bridge_height: quantity
+                data bridge_height: measure
                   -> unit meter 1
                   -> default 100 meter
                 data quantity: number -> minimum 0
@@ -3121,41 +3121,41 @@ mod tests {
 
         let ty = &bh["type"];
         assert_eq!(
-            ty["kind"], "quantity",
+            ty["kind"], "measure",
             "kind tag sits on the type object itself"
         );
         assert!(
             ty["units"].is_array(),
-            "quantity-only fields flatten up to top level"
+            "measure-only fields flatten up to top level"
         );
         assert!(
             ty.get("options").is_none(),
             "text-only fields must not leak"
         );
 
-        let qty = &value["data"]["quantity"];
-        assert_eq!(qty["type"]["kind"], "number");
+        let quantity = &value["data"]["quantity"];
+        assert_eq!(quantity["type"]["kind"], "number");
         assert!(
-            qty.get("default").is_none(),
+            quantity.get("default").is_none(),
             "quantity has no default suggestion"
         );
         assert!(
-            qty.get("bound_value").is_none(),
+            quantity.get("bound_value").is_none(),
             "quantity has no bound literal"
         );
 
         let cost = &value["rules"]["cost"];
         assert_eq!(
-            cost["kind"], "quantity",
+            cost["kind"], "measure",
             "rule types use the same flat shape"
         );
         assert!(
             cost["units"].is_array() && !cost["units"].as_array().unwrap().is_empty(),
-            "quantity rule result types expose declared units"
+            "measure rule result types expose declared units"
         );
         assert!(
             cost["units"][0].get("factor").is_some(),
-            "quantity rule units use factor field"
+            "measure rule units use factor field"
         );
     }
 
@@ -3166,7 +3166,7 @@ mod tests {
             .load(
                 r#"
                 spec units_contract
-                data money: quantity
+                data money: measure
                   -> unit eur 1
                   -> unit usd 0.91
                 data rate: ratio

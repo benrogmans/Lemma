@@ -97,7 +97,7 @@ rule message: "Order processed"
         .run(None, "test_spec", Some(&now), data, false, None)
         .unwrap();
 
-    // subtotal should fail due to missing quantity
+    // subtotal should fail due to missing measure
     let subtotal_rule = response
         .results
         .values()

@@ -42,7 +42,7 @@ pub struct Fixture {
 }
 
 const BENCH_EFFECTIVE_ISO: &str = "2026-01-01T00:00:00Z";
-pub const RESULTS_RELATIVE: &str = "documentation/benchmarks/engine.md";
+pub const RESULTS_RELATIVE: &str = "documentation/reference/benchmarks/engine.md";
 const PYTHON_BENCH_RELATIVE: &str = "engine/benches/python/benchmark.py";
 
 #[derive(Debug, Deserialize)]
@@ -276,7 +276,7 @@ fn diff_pair(
     python_value: &String,
 ) -> Result<Option<AccuracyDeviation>, String> {
     match lemma.kind.as_str() {
-        "number" | "ratio" | "quantity" | "calendar" => {
+        "number" | "ratio" | "measure" | "calendar" => {
             let lemma_dec = Decimal::from_str(&lemma.value).map_err(|error| {
                 format!(
                     "BUG: spec '{spec_name}' rule '{rule_name}' Lemma value '{}' exceeds rust_decimal precision: {error}",
@@ -358,6 +358,7 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     } = ctx;
     let (stats, deviations) = accuracy;
     let mut out = String::new();
+    out.push_str("---\nnav_title: Engine benchmarks\nparent: Reference\nnav_order: 60\n---\n\n");
     out.push_str("# Engine evaluation benchmarks\n\n");
     out.push_str(
         "Numbers are produced by `cargo benchmarks engine`. \

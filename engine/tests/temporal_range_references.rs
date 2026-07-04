@@ -1,6 +1,6 @@
-//! Integration tests for blueprint §2.1 temporal range and spec references.
+//! Integration tests for temporal range and spec references.
 //!
-//! Normative source: [documentation/blueprint.md §2.1](../../documentation/blueprint.md#21-temporality-composition-and-dependency-interfaces-cornerstone).
+//! Normative source: [Composing specs](../../documentation/learn/composing_specs.md).
 
 use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
@@ -261,12 +261,12 @@ data p: 5 usd
 rule doubled: p * 2
 
 spec child 2025-01-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 
 spec child 2025-06-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2

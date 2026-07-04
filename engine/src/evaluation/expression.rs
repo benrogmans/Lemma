@@ -3,8 +3,8 @@
 //! All runtime errors (division by zero, etc.) result in Veto instead of errors.
 
 use super::operations::{OperationResult, VetoType};
-use crate::computation::quantity_math::{
-    mathematical_computation_preserves_quantity_magnitude, quantity_magnitude_math,
+use crate::computation::measure_math::{
+    mathematical_computation_preserves_measure_magnitude, measure_magnitude_math,
 };
 use crate::planning::semantics::{LiteralValue, MathematicalComputation, ValueKind};
 
@@ -15,10 +15,10 @@ pub(crate) fn evaluate_mathematical_operator(
     use crate::computation::decimal_math::{decimal_acos, decimal_asin, decimal_atan};
     use rust_decimal::MathematicalOps;
 
-    if matches!(&value.value, ValueKind::Quantity(_, _))
-        && mathematical_computation_preserves_quantity_magnitude(op)
+    if matches!(&value.value, ValueKind::Measure(_, _))
+        && mathematical_computation_preserves_measure_magnitude(op)
     {
-        return quantity_magnitude_math(op, value);
+        return measure_magnitude_math(op, value);
     }
 
     match &value.value {

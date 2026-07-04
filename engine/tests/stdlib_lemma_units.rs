@@ -47,7 +47,7 @@ rule hours: age as hours"#;
             .results
             .get("hours")
             .expect("hours rule")
-            .quantity
+            .measure
             .as_ref()
             .and_then(|m| m.get("hours"))
             .map(String::as_str),
@@ -59,7 +59,7 @@ rule hours: age as hours"#;
 fn uses_lemma_units_length_and_duration_units_for_compound_cast() {
     let code = r#"spec speed_test
 uses lemma units
-data velocity: quantity -> unit mps metre/second
+data velocity: measure -> unit mps metre/second
 data dist: 100 metre
 data secs: 20 seconds
 rule speed: (dist / secs) as mps"#;

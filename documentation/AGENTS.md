@@ -1,6 +1,6 @@
-# AGENTS.md — Mandatory rules for AI agents working on Lemma
+# AGENTS.md: Mandatory rules for AI agents working on Lemma
 
-These are **non-negotiable rules**, not guidelines. Violating any of them is a bug you introduced. This file does not describe Lemma's language — read `documentation/`, `README.md`, and the codebase for that.
+These are **non-negotiable rules**, not guidelines. Violating any of them is a bug you introduced. This file does not describe Lemma's language; read `documentation/`, `README.md`, and the codebase for that.
 
 ---
 
@@ -14,7 +14,7 @@ Do not write a parallel implementation. Do not re-derive a value that is already
 
 This is the single most common mistake. Treat discovery as mandatory.
 
-### 2. Invariant violations crash — no exceptions
+### 2. Invariant violations crash: no exceptions
 
 **NEVER write a soft error path (error-and-return, default value, empty fallback) for a condition that cannot happen if the code is correct.** Use `expect()`, `unreachable!()`, or `panic!("BUG: ...")`.
 
@@ -25,12 +25,12 @@ This is the single most common mistake. Treat discovery as mandatory.
 
 A wrong value that silently propagates is infinitely worse than a crash. This is rocket-ship code. A crash is safe. A wrong value kills.
 
-### 3. Error vs Veto vs panic — three-way split, no gray area
+### 3. Error vs Veto vs panic: three-way split, no gray area
 
 | Phase | Bad input / invalid spec | Domain "no value" | Bug / impossible state |
 |-------|-------------------------|-------------------|----------------------|
-| Parse/Planning | `Err(Error)` | — | `panic!` / `unreachable!` |
-| Evaluation | — | `Veto(reason)` | `panic!` / `unreachable!` |
+| Parse/Planning | `Err(Error)` | none | `panic!` / `unreachable!` |
+| Evaluation | none | `Veto(reason)` | `panic!` / `unreachable!` |
 
 - **Error** = user wrote invalid Lemma. Return it with source location.
 - **Veto** = valid spec, but data make a rule impossible (division by zero, missing data, user `veto`). Veto is a result, not an error.
@@ -46,17 +46,17 @@ If the semantics do not define a value, the code must Error, Veto, or panic. Nev
 
 Placeholders in `.lemma` sources, documentation, tests, or examples are forbidden. No dummy values, no "TODO" literals, no fake numbers, no `"example"` strings. Use real domain values or omit and fail validation.
 
-### 6. Validation before execution — always
+### 6. Validation before execution: always
 
 Planning fully validates the spec. Only after planning succeeds does evaluation run. Invalid Lemma is rejected with Error during planning. Never "try to run and see."
 
-After planning succeeds, evaluation is **guaranteed** to complete. The execution plan is self-contained. If something impossible happens during evaluation, it is a bug — panic.
+After planning succeeds, evaluation is **guaranteed** to complete. The execution plan is self-contained. If something impossible happens during evaluation, it is a bug; panic.
 
 ### 7. Determinism is non-negotiable
 
 Same spec + same data = same evaluation order = same results (or same Veto). Do not iterate over unordered collections in ways that affect output. Rules evaluate in topological order by dependency.
 
-### 8. Failing tests are valuable — never suppress them
+### 8. Failing tests are valuable: never suppress them
 
 Failing tests reveal missing or broken functionality. Do not:
 - Delete or skip a failing test to make the suite green
@@ -67,7 +67,7 @@ If a test fails, either fix the code or fix the test to match correct behavior. 
 
 ### 9. Partial implementations must be guarded
 
-If you cannot finish an implementation completely, every unfinished path must have a `todo!()` macro. Do not write code that compiles and runs but silently skips unimplemented branches. Rust will warn about unreachable code after `todo!()` — that warning is correct and intentional. A partial implementation that pretends to be complete is worse than one that refuses to compile.
+If you cannot finish an implementation completely, every unfinished path must have a `todo!()` macro. Do not write code that compiles and runs but silently skips unimplemented branches. Rust will warn about unreachable code after `todo!()`; that warning is correct and intentional. A partial implementation that pretends to be complete is worse than one that refuses to compile.
 
 ### 10. Use `cargo nextest run`, not `cargo test`
 
@@ -81,7 +81,6 @@ Unit tests go in the same module as the code (to test private functions). Engine
 |----------|---------|
 | **README.md** | Project overview, quick start |
 | **xtask/README.md** | precommit, `cargo bump` / `cargo verify`, release paths |
-| **documentation/index.md** | Language concepts |
-| **documentation/reference.md** | Operators, types, literals, syntax |
-| **documentation/veto_semantics.md** | Veto propagation rules |
-| **documentation/examples/** | Example `.lemma` files |
+| **documentation/learn/readme.md** | Learn guide: language concepts |
+| **documentation/reference/readme.md** | Operators, types, literals, syntax |
+| **documentation/learn/types_and_units.md#veto** | Veto propagation rules |

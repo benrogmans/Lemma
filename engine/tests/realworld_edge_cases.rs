@@ -142,9 +142,7 @@ rule final: m.doubled + 1
 }
 
 // ===========================================================================
-// EDGE CASE 4: Chained percentage operations
-// value - 50% should give value * 0.5
-// (value - 50%) - 50% should give value * 0.25
+// EDGE CASE 4: Chained percentage operations (explicit scaling)
 // ===========================================================================
 
 #[test]
@@ -157,18 +155,18 @@ spec chain_pct
 
 data amount: 1000
 
-rule half: amount - 50%
-rule quarter: half - 50%
-rule eighth: quarter - 50%
+rule half: amount - 50% * amount
+rule quarter: half - 50% * half
+rule eighth: quarter - 50% * quarter
 "#,
             src("chain.lemma"),
         )
         .unwrap();
 
     let resp = run_spec(&engine, "chain_pct", &[]);
-    assert_eq!(rule_display(&resp, "half"), "500", "1000 - 50% = 500");
-    assert_eq!(rule_display(&resp, "quarter"), "250", "500 - 50% = 250");
-    assert_eq!(rule_display(&resp, "eighth"), "125", "250 - 50% = 125");
+    assert_eq!(rule_display(&resp, "half"), "500");
+    assert_eq!(rule_display(&resp, "quarter"), "250");
+    assert_eq!(rule_display(&resp, "eighth"), "125");
 }
 
 // ===========================================================================
@@ -338,7 +336,7 @@ rule result: "none"
 }
 
 // ===========================================================================
-// EDGE CASE 9: Ratio type with custom constraints
+// EDGE CASE 9: Ratio type with custom constraints — multiply only
 // ===========================================================================
 
 #[test]
@@ -352,8 +350,6 @@ spec ratio_math
 data discount: ratio -> minimum 0% -> maximum 100%
 data base: number
 
-rule discounted: base - discount
-rule added: base + discount
 rule raw_mult: base * discount
 "#,
             src("ratio.lemma"),
@@ -365,9 +361,29 @@ rule raw_mult: base * discount
         "ratio_math",
         &[("discount", "25%"), ("base", "400")],
     );
-    assert_eq!(rule_display(&resp, "discounted"), "300", "400 - 25% = 300");
-    assert_eq!(rule_display(&resp, "added"), "500", "400 + 25% = 500");
     assert_eq!(rule_display(&resp, "raw_mult"), "100", "400 * 25% = 100");
+}
+
+#[test]
+fn edge_ratio_add_subtract_rejected() {
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"
+spec ratio_math
+data discount: ratio
+data base: number
+rule bad: base - discount
+"#,
+        src("ratio.lemma"),
+    );
+    assert!(result.is_err());
+    let msg = result
+        .unwrap_err()
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(msg.contains("scale explicitly"), "got: {}", msg);
 }
 
 // ===========================================================================
@@ -534,11 +550,11 @@ rule step5: step4 + 10
 }
 
 // ===========================================================================
-// EDGE CASE 15: Unit conversion chain: quantity -> as unit -> as number
+// EDGE CASE 15: Unit conversion chain: measure -> as unit -> as number
 // ===========================================================================
 
 #[test]
-fn edge_quantity_to_number_conversion() {
+fn edge_measure_to_number_conversion() {
     let mut engine = Engine::new();
     engine
         .load(
@@ -628,7 +644,8 @@ fn edge_with_binding_override() {
 spec config
 data tax_rate: 10%
 data base_price: 100
-rule total: base_price + tax_rate
+rule tax_amount: base_price * tax_rate
+rule total: base_price + tax_amount
 
 spec custom
 uses c: config
@@ -641,11 +658,11 @@ rule custom_total: c.total
 
     let resp = run_spec(&engine, "custom", &[]);
     // c.total should use overridden tax_rate of 25%
-    // 100 + 25% = 125
+    // tax_amount = 100 * 0.25 = 25, total = 100 + 25 = 125
     assert_eq!(
         rule_display(&resp, "custom_total"),
         "125",
-        "with override: 100 + 25% = 125"
+        "with override: 100 + 100*25% = 125"
     );
 }
 

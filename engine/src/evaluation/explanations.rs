@@ -78,7 +78,7 @@ pub enum ExplanationNode {
         message: Option<String>,
     },
     /// A unit reconciliation fact ("1 mile is 1.60934 kilometer") stated when
-    /// an operator's operands carry different units of the same quantity
+    /// an operator's operands carry different units of the same measure
     /// family, so the implicit conversion inside the arithmetic is
     /// followable without external lookup tables. Derived from declared unit
     /// factors — static metadata, not evaluation.
@@ -162,8 +162,8 @@ fn conversion_source_step_text(operand: &LiteralValue, data_ref: Option<&DataPat
 fn type_specification_display_name(lemma_type: &LemmaType) -> &'static str {
     match &lemma_type.specifications {
         TypeSpecification::Boolean { .. } => "boolean",
-        TypeSpecification::Quantity { .. } => "quantity",
-        TypeSpecification::QuantityRange { .. } => "quantity range",
+        TypeSpecification::Measure { .. } => "measure",
+        TypeSpecification::MeasureRange { .. } => "measure range",
         TypeSpecification::Number { .. } => "number",
         TypeSpecification::NumberRange { .. } => "number range",
         TypeSpecification::Text { .. } => "text",
@@ -186,12 +186,12 @@ fn conversion_rule_step_text(
 ) -> Option<String> {
     match &value.value {
         ValueKind::Range(left, right) => range_span_rule_step_text(left, right, result),
-        ValueKind::Quantity(_, from_signature) if !value.lemma_type.is_calendar_like() => {
+        ValueKind::Measure(_, from_signature) if !value.lemma_type.is_calendar_like() => {
             match target {
                 SemanticConversionTarget::Unit {
                     unit_name,
                     owning_type,
-                } => quantity_unit_equivalence_step_text(
+                } => measure_unit_equivalence_step_text(
                     from_signature,
                     unit_name,
                     &value.lemma_type,
@@ -203,7 +203,7 @@ fn conversion_rule_step_text(
         }
         ValueKind::Number(_) => None,
         ValueKind::Ratio(_, _) => None,
-        ValueKind::Quantity(_, _) if value.lemma_type.is_calendar_like() => None,
+        ValueKind::Measure(_, _) if value.lemma_type.is_calendar_like() => None,
         _ => None,
     }
 }
@@ -229,7 +229,7 @@ fn format_explanation_multiplier(
     format!("{}/{}", reduced.numer(), reduced.denom())
 }
 
-fn quantity_unit_equivalence_step_text(
+fn measure_unit_equivalence_step_text(
     from_signature: &[(String, i32)],
     to_unit: &str,
     lemma_type: &LemmaType,
@@ -242,7 +242,7 @@ fn quantity_unit_equivalence_step_text(
         .unwrap_or("");
 
     let both_units_in_lemma_type = match &lemma_type.specifications {
-        TypeSpecification::Quantity { units, .. } => {
+        TypeSpecification::Measure { units, .. } => {
             !from_unit.is_empty()
                 && from_signature.len() == 1
                 && units.get(from_unit).is_ok()
@@ -252,8 +252,8 @@ fn quantity_unit_equivalence_step_text(
     };
 
     if both_units_in_lemma_type {
-        let from_factor = lemma_type.quantity_unit_factor(from_unit);
-        let to_factor = lemma_type.quantity_unit_factor(to_unit);
+        let from_factor = lemma_type.measure_unit_factor(from_unit);
+        let to_factor = lemma_type.measure_unit_factor(to_unit);
         let multiplier = checked_div(from_factor, to_factor).ok()?;
         let multiplier_display = format_explanation_multiplier(&multiplier);
         if multiplier_display == "1" {
@@ -262,12 +262,12 @@ fn quantity_unit_equivalence_step_text(
         return Some(format!("1 {from_unit} is {multiplier_display} {to_unit}"));
     }
 
-    let to_factor = target_owning_type.quantity_unit_factor(to_unit).clone();
+    let to_factor = target_owning_type.measure_unit_factor(to_unit).clone();
     let UnitResolutionContext::WithIndex(unit_index) = resolution_context else {
         return None;
     };
     let from_factor =
-        crate::planning::semantics::signature_factor(from_signature, unit_index, None);
+        crate::planning::semantics::signature_factor(from_signature, unit_index, None).ok()?;
     let multiplier = checked_div(&from_factor, &to_factor).ok()?;
     let multiplier_display = format_explanation_multiplier(&multiplier);
     if multiplier_display == "1" {
@@ -295,8 +295,8 @@ fn range_span_rule_step_text(
             let (lower, upper) = ordered_number_pair(left, right);
             Some(format!("{upper} − {lower} = {result}"))
         }
-        (ValueKind::Quantity(_, _), ValueKind::Quantity(_, _)) => {
-            let (lower, upper) = ordered_quantity_pair(left, right);
+        (ValueKind::Measure(_, _), ValueKind::Measure(_, _)) => {
+            let (lower, upper) = ordered_measure_pair(left, right);
             Some(format!("{upper} − {lower} = {result}"))
         }
         _ => None,
@@ -333,15 +333,15 @@ fn ordered_number_pair<'a>(
     }
 }
 
-fn ordered_quantity_pair<'a>(
+fn ordered_measure_pair<'a>(
     left: &'a LiteralValue,
     right: &'a LiteralValue,
 ) -> (&'a LiteralValue, &'a LiteralValue) {
-    let ValueKind::Quantity(left_magnitude, _) = &left.value else {
-        unreachable!("BUG: ordered_quantity_pair called with non-quantity operand");
+    let ValueKind::Measure(left_magnitude, _) = &left.value else {
+        unreachable!("BUG: ordered_measure_pair called with non-measure operand");
     };
-    let ValueKind::Quantity(right_magnitude, _) = &right.value else {
-        unreachable!("BUG: ordered_quantity_pair called with non-quantity operand");
+    let ValueKind::Measure(right_magnitude, _) = &right.value else {
+        unreachable!("BUG: ordered_measure_pair called with non-measure operand");
     };
     if *left_magnitude <= *right_magnitude {
         (left, right)
@@ -708,7 +708,7 @@ fn flatten_arithmetic_chain<'e>(
 }
 
 fn build_operand_nodes(operands: &[&Expression], ctx: &ExplainCtx<'_, '_>) -> Vec<ExplanationNode> {
-    // Cross-unit facts first: when operands mix units of one quantity
+    // Cross-unit facts first: when operands mix units of one measure
     // family, the arithmetic reconciles them implicitly; the factor is
     // stated so the numbers are followable.
     let mut nodes = unit_equivalence_nodes(operands, ctx);
@@ -741,8 +741,8 @@ fn operand_leaf_value(expr: &Expression, ctx: &ExplainCtx<'_, '_>) -> Option<Lit
     }
 }
 
-/// Does the type owning `unit` also declare `other` (same quantity family)?
-fn same_quantity_family(
+/// Does the type owning `unit` also declare `other` (same measure family)?
+fn same_measure_family(
     unit: &str,
     other: &str,
     unit_index: &HashMap<String, std::sync::Arc<LemmaType>>,
@@ -750,13 +750,13 @@ fn same_quantity_family(
     unit_index.get(unit).is_some_and(|owning| {
         matches!(
             &owning.specifications,
-            TypeSpecification::Quantity { units, .. } if units.get(other).is_ok()
+            TypeSpecification::Measure { units, .. } if units.get(other).is_ok()
         )
     })
 }
 
 /// Unit reconciliation facts for one operator's operands, in operand order:
-/// each unit that shares a quantity family with an earlier-seen different
+/// each unit that shares a measure family with an earlier-seen different
 /// unit yields one equivalence line. Pure unit-index metadata; no values are
 /// computed.
 fn unit_equivalence_nodes(
@@ -771,15 +771,15 @@ fn unit_equivalence_nodes(
         let Some(value) = operand_leaf_value(operand, ctx) else {
             continue;
         };
-        if !matches!(value.value, ValueKind::Quantity(_, _)) {
+        if !matches!(value.value, ValueKind::Measure(_, _)) {
             continue;
         }
         // Expand named compound units (eur_per_km → eur/kilometer) so family
         // members are visible.
         let expanded =
-            crate::planning::normalize::expand_named_quantity_literal(&value, Some(&resolution))
+            crate::planning::normalize::expand_named_measure_literal(&value, Some(&resolution))
                 .unwrap_or(value);
-        let ValueKind::Quantity(_, signature) = &expanded.value else {
+        let ValueKind::Measure(_, signature) = &expanded.value else {
             continue;
         };
         for (unit, _) in signature {
@@ -788,13 +788,13 @@ fn unit_equivalence_nodes(
             }
             if let Some(earlier) = seen
                 .iter()
-                .find(|earlier| same_quantity_family(unit, earlier, unit_index))
+                .find(|earlier| same_measure_family(unit, earlier, unit_index))
             {
                 if let (Some(owning), Some(target_owning)) = (
                     unit_index.get(unit.as_str()),
                     unit_index.get(earlier.as_str()),
                 ) {
-                    if let Some(text) = quantity_unit_equivalence_step_text(
+                    if let Some(text) = measure_unit_equivalence_step_text(
                         &[(unit.clone(), 1)],
                         earlier,
                         owning,
@@ -961,7 +961,7 @@ fn build_conversion_node(
     };
 
     // The source step may already name the operand data leaf and its value
-    // ("The quantity of mass is 2 kilogram"); a child would restate it.
+    // ("The measure of mass is 2 kilogram"); a child would restate it.
     let operand_named_in_steps = data_path_in_expression(value_expr)
         .map(|path| {
             steps
@@ -1401,12 +1401,12 @@ mod tests {
     use crate::computation::rational::rational_new;
     use crate::computation::UnitResolutionContext;
     use crate::literals::DateGranularity;
-    use crate::literals::QuantityUnit;
+    use crate::literals::MeasureUnit;
     use crate::parsing::ast::DateTimeValue;
     use crate::parsing::source::SourceType;
     use crate::planning::semantics::{
         date_time_to_semantic, duration_decomposition, DataPath, LemmaType, LiteralValue,
-        QuantityTrait, QuantityUnits, RulePath, SemanticConversionTarget, TypeSpecification,
+        MeasureTrait, MeasureUnits, RulePath, SemanticConversionTarget, TypeSpecification,
         ValueKind,
     };
     use crate::Engine;
@@ -1418,7 +1418,7 @@ mod tests {
     const CALC_SPEC: &str = r#"
 spec calc
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1
 
@@ -1661,28 +1661,27 @@ rule total: subtotal + vat
 
     #[test]
     fn conversion_source_step_text_with_data_reference() {
-        let operand = LiteralValue::quantity_with_type(
+        let operand = LiteralValue::measure_with_type(
             rational_new(2, 1),
             "kilogram".to_string(),
-            Arc::new(LemmaType::primitive(TypeSpecification::quantity())),
+            Arc::new(LemmaType::primitive(TypeSpecification::measure())),
         );
         let path = DataPath::local("mass".to_string());
         let text = conversion_source_step_text(&operand, Some(&path));
-        assert_eq!(text, "The quantity of mass is 2 kilogram");
+        assert_eq!(text, "The measure of mass is 2 kilogram");
     }
 
     #[test]
-    fn build_conversion_steps_scalar_quantity() {
-        let mut units = QuantityUnits::new();
+    fn build_conversion_steps_scalar_measure() {
+        let mut units = MeasureUnits::new();
         units.0.push(
-            QuantityUnit::from_decimal_factor("kilogram".to_string(), Decimal::ONE, vec![])
-                .unwrap(),
+            MeasureUnit::from_decimal_factor("kilogram".to_string(), Decimal::ONE, vec![]).unwrap(),
         );
         units.0.push(
-            QuantityUnit::from_decimal_factor("gram".to_string(), Decimal::new(1, 3), vec![])
+            MeasureUnit::from_decimal_factor("gram".to_string(), Decimal::new(1, 3), vec![])
                 .unwrap(),
         );
-        let lemma_type = Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
+        let lemma_type = Arc::new(LemmaType::primitive(TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
@@ -1691,13 +1690,13 @@ rule total: subtotal + vat
             decomposition: Default::default(),
             help: String::new(),
         }));
-        let operand = LiteralValue::quantity_with_type(
+        let operand = LiteralValue::measure_with_type(
             rational_new(2, 1),
             "kilogram".to_string(),
             Arc::clone(&lemma_type),
         );
         let gram_target = Arc::clone(&lemma_type);
-        let result = LiteralValue::quantity_with_type(
+        let result = LiteralValue::measure_with_type(
             rational_new(2, 1),
             "gram".to_string(),
             Arc::clone(&lemma_type),
@@ -1711,7 +1710,7 @@ rule total: subtotal + vat
             },
             &result,
             Some(&path),
-            UnitResolutionContext::NamedQuantityOnly,
+            UnitResolutionContext::NamedMeasureOnly,
         );
         assert_eq!(steps.len(), 3);
         assert!(matches!(steps[0].role, ConversionTraceRole::Outcome));
@@ -1719,7 +1718,7 @@ rule total: subtotal + vat
         assert!(matches!(steps[1].role, ConversionTraceRole::Rule));
         assert_eq!(steps[1].text, "1 kilogram is 1000 gram");
         assert!(matches!(steps[2].role, ConversionTraceRole::Source));
-        assert_eq!(steps[2].text, "The quantity of mass is 2 kilogram");
+        assert_eq!(steps[2].text, "The measure of mass is 2 kilogram");
         assert_eq!(steps[2].data_ref, Some(path));
     }
 
@@ -1753,24 +1752,24 @@ rule total: subtotal + vat
             value: ValueKind::Range(Box::new(left), Box::new(right)),
             lemma_type: Arc::new(LemmaType::primitive(TypeSpecification::date_range())),
         };
-        let mut duration_units = QuantityUnits::new();
+        let mut duration_units = MeasureUnits::new();
         duration_units.0.push(
-            QuantityUnit::from_decimal_factor("days".to_string(), Decimal::from(86_400), vec![])
+            MeasureUnit::from_decimal_factor("days".to_string(), Decimal::from(86_400), vec![])
                 .unwrap(),
         );
-        let days_owning_type = Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
+        let days_owning_type = Arc::new(LemmaType::primitive(TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
             units: duration_units,
-            traits: vec![QuantityTrait::Duration],
+            traits: vec![MeasureTrait::Duration],
             decomposition: Some(duration_decomposition()),
             help: String::new(),
         }));
-        let result = LiteralValue::quantity_with_type(
+        let result = LiteralValue::measure_with_type(
             rational_new(14, 1),
             "days".to_string(),
-            Arc::new(LemmaType::primitive(TypeSpecification::quantity())),
+            Arc::new(LemmaType::primitive(TypeSpecification::measure())),
         );
         let path = DataPath::local("age".to_string());
         let steps = build_conversion_steps(
@@ -1793,12 +1792,11 @@ rule total: subtotal + vat
 
     #[test]
     fn build_conversion_steps_identity_omits_rule_and_source() {
-        let mut units = QuantityUnits::new();
+        let mut units = MeasureUnits::new();
         units.0.push(
-            QuantityUnit::from_decimal_factor("kilogram".to_string(), Decimal::ONE, vec![])
-                .unwrap(),
+            MeasureUnit::from_decimal_factor("kilogram".to_string(), Decimal::ONE, vec![]).unwrap(),
         );
-        let lemma_type = Arc::new(LemmaType::primitive(TypeSpecification::Quantity {
+        let lemma_type = Arc::new(LemmaType::primitive(TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
@@ -1807,17 +1805,14 @@ rule total: subtotal + vat
             decomposition: Default::default(),
             help: String::new(),
         }));
-        let operand = LiteralValue::quantity_with_type(
+        let operand = LiteralValue::measure_with_type(
             rational_new(2, 1),
             "kilogram".to_string(),
             Arc::clone(&lemma_type),
         );
         let kilogram_target = Arc::clone(&lemma_type);
-        let result = LiteralValue::quantity_with_type(
-            rational_new(2, 1),
-            "kilogram".to_string(),
-            lemma_type,
-        );
+        let result =
+            LiteralValue::measure_with_type(rational_new(2, 1), "kilogram".to_string(), lemma_type);
         let steps = build_conversion_steps(
             &operand,
             &SemanticConversionTarget::Unit {
@@ -1826,7 +1821,7 @@ rule total: subtotal + vat
             },
             &result,
             None,
-            UnitResolutionContext::NamedQuantityOnly,
+            UnitResolutionContext::NamedMeasureOnly,
         );
         // Identity conversion: no factor to show, and a source step would
         // restate the outcome value verbatim.
@@ -1849,9 +1844,9 @@ rule total: subtotal + vat
     fn explanation_for_compound_signature_uses_signature_factor() {
         let code = r#"spec t
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_minute eur/minute
 data r: 40 eur_per_minute
 data h: 2 hour

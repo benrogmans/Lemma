@@ -74,13 +74,13 @@ Create `shipping.lemma`:
 ```lemma
 spec shipping
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
   -> minimum 0 eur
 
-data weight: quantity
+data weight: measure
   -> unit kilogram 1
   -> unit gram 0.001
 
@@ -132,7 +132,7 @@ Define custom types with units, constraints, and automatic conversion:
 ```lemma
 spec type_examples
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 1.19
   -> decimals 2
@@ -147,7 +147,7 @@ data discount: ratio
   -> maximum 100%
 ```
 
-**Primitive types:** `boolean`, `number`, `quantity` (with units; elapsed time via `trait duration`, calendar periods via `trait calendar`), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `quantity range`, `ratio range`, plus named `<type> range`). Import stdlib with `uses lemma units` (`units.duration`, `units.calendar`, …).
+**Primitive types:** `boolean`, `number`, `measure` (with units; elapsed time via `trait duration`, calendar periods via `trait calendar`), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `measure range`, `ratio range`, plus named `<type> range`). Import stdlib with `uses lemma units` (`units.duration`, `units.calendar`, …).
 
 ### Spec composition
 
@@ -225,7 +225,7 @@ rule bonus_percentage: 0%
     then veto "Review date must be after start date"
 ```
 
-A vetoed rule produces no result. See [veto semantics](documentation/veto_semantics.md).
+A vetoed rule produces no result. See [veto](documentation/learn/types_and_units.md#veto).
 
 ### Registry dependencies
 
@@ -236,7 +236,7 @@ spec invoicing
 
 uses @iso/countries alpha2
 
-data price: quantity 
+data price: measure 
   -> unit eur 1
 
 data country: alpha2.code
@@ -316,7 +316,7 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 ```
 
-[documentation/wasm.md](documentation/wasm.md)
+See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 
 ### Docker
 
@@ -335,14 +335,14 @@ Supports `linux/amd64` and `linux/arm64`.
 
 ## Documentation
 
-- **[Language Guide](documentation/index.md)** -- specs, data, rules, types
+- **[Learn guide](documentation/learn/readme.md)** -- guided path from first spec to composing specs
 - **[LLM guide (llms.txt)](documentation/llms.txt)** -- authoring Lemma from business logic
-- **[Composing specs](documentation/spec_composability.md)** -- `uses`, temporal versions, pins
-- **[Reference](documentation/reference.md)** -- operators, literals, syntax
-- **[Veto Semantics](documentation/veto_semantics.md)** -- when rules produce no value
+- **[Composing specs](documentation/learn/composing_specs.md)** -- `uses`, temporal versions, pins
+- **[Reference](documentation/reference/readme.md)** -- operators, literals, syntax
+- **[Veto](documentation/learn/types_and_units.md#veto)** -- when rules produce no value
+- **[CLI Reference](documentation/reference/cli.md)** -- all commands and flags
+- **[Registry](documentation/reference/registry.md)** -- shared specs and `@` references
 - **[Examples](documentation/examples/)** -- example `.lemma` files
-- **[CLI Reference](documentation/CLI.md)** -- all commands and flags
-- **[Registry](documentation/registry.md)** -- shared specs and `@` references
 
 ## Status
 
@@ -350,7 +350,7 @@ Lemma is pre-1.0. The language and APIs are stable for most use cases, but break
 
 ## Contributing
 
-Contributions welcome! See [contributing](documentation/contributing.md) for setup and workflow.
+Contributions welcome! See [Contributing](documentation/community/contributing.md) for setup and workflow.
 
 From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy, Nextest, WASM npm `build.js` + `test.js`, and cargo-deny (install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) first). SDK steps always run, not only when their directories change. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
 
@@ -360,4 +360,4 @@ Apache 2.0 -- see LICENSE for details.
 
 ---
 
-**[GitHub](https://github.com/lemma/lemma)** -- **[Issues](https://github.com/lemma/lemma/issues)** -- **[Documentation](documentation/index.md)** -- **[WASM](documentation/wasm.md)**
+**[GitHub](https://github.com/lemma/lemma)** -- **[Issues](https://github.com/lemma/lemma/issues)** -- **[Documentation](documentation/readme.md)**

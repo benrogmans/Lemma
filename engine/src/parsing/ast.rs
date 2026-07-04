@@ -698,14 +698,14 @@ impl SpecRef {
 
 /// A single factor in a compound unit expression.
 ///
-/// `quantity_ref` is the name of the referenced unit (e.g. `"meter"`, `"second"`).
+/// `measure_ref` is the name of the referenced unit (e.g. `"meter"`, `"second"`).
 /// `exp` is the integer exponent, positive for numerator and negative for denominator.
 /// For example `meter/second^2` produces:
-/// - `UnitFactor { quantity_ref: "meter", exp: 1 }`
-/// - `UnitFactor { quantity_ref: "second", exp: -2 }`
+/// - `UnitFactor { measure_ref: "meter", exp: 1 }`
+/// - `UnitFactor { measure_ref: "second", exp: -2 }`
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UnitFactor {
-    pub quantity_ref: String,
+    pub measure_ref: String,
     pub exp: i32,
 }
 
@@ -739,7 +739,7 @@ impl fmt::Display for UnitArg {
                         if index > 0 {
                             write!(f, " * ")?;
                         }
-                        write!(f, "{}", factor.quantity_ref)?;
+                        write!(f, "{}", factor.measure_ref)?;
                         if factor.exp != 1 {
                             write!(f, "^{}", factor.exp)?;
                         }
@@ -751,7 +751,7 @@ impl fmt::Display for UnitArg {
                         } else {
                             write!(f, "/")?;
                         }
-                        write!(f, "{}", factor.quantity_ref)?;
+                        write!(f, "{}", factor.measure_ref)?;
                         let positive_exp = factor
                             .exp
                             .checked_neg()
@@ -772,7 +772,7 @@ impl fmt::Display for UnitArg {
 ///
 /// Three grammatical kinds appear after a constraint command:
 /// - **Literal** — a fully-typed value carrying the literal kind the parser
-///   recognised (`Number`, `Ratio`, `Quantity`, `Date`, `Time`,
+///   recognised (`Number`, `Ratio`, `Measure`, `Date`, `Time`,
 ///   `Boolean`, `Text`). Stored as the canonical [`crate::literals::Value`]
 ///   so downstream consumers match on the variant rather than re-parsing strings.
 /// - **Label** — a bare identifier used as a name (e.g. the unit name `eur`
@@ -1326,11 +1326,10 @@ impl fmt::Display for LogicalComputation {
 #[serde(rename_all = "snake_case")]
 pub enum PrimitiveKind {
     Boolean,
-    Quantity,
-    QuantityRange,
+    Measure,
+    MeasureRange,
     Number,
     NumberRange,
-    Percent,
     Ratio,
     RatioRange,
     Text,
@@ -1344,11 +1343,10 @@ impl std::fmt::Display for PrimitiveKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             PrimitiveKind::Boolean => "boolean",
-            PrimitiveKind::Quantity => "quantity",
-            PrimitiveKind::QuantityRange => "quantity range",
+            PrimitiveKind::Measure => "measure",
+            PrimitiveKind::MeasureRange => "measure range",
             PrimitiveKind::Number => "number",
             PrimitiveKind::NumberRange => "number range",
-            PrimitiveKind::Percent => "percent",
             PrimitiveKind::Ratio => "ratio",
             PrimitiveKind::RatioRange => "ratio range",
             PrimitiveKind::Text => "text",
@@ -1364,7 +1362,7 @@ impl std::fmt::Display for PrimitiveKind {
 /// Parent type in a type definition: built-in primitive or custom type name.
 ///
 /// `name` is the declared type name (the data name that introduces this type).
-/// For `data temperature: quantity`, name = "temperature", primitive = Quantity.
+/// For `data temperature: measure`, name = "temperature", primitive = Measure.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ParentType {
@@ -1654,7 +1652,7 @@ pub(crate) fn canonicalize_parent_type(parent: &mut ParentType) {
 }
 
 pub(crate) fn canonicalize_unit_factor(factor: &mut UnitFactor) {
-    factor.quantity_ref = ascii_lowercase_logical_name(std::mem::take(&mut factor.quantity_ref));
+    factor.measure_ref = ascii_lowercase_logical_name(std::mem::take(&mut factor.measure_ref));
 }
 
 pub(crate) fn canonicalize_unit_arg(unit_arg: &mut UnitArg) {
@@ -1957,7 +1955,7 @@ mod tests {
         CommandArg::Literal(crate::literals::Value::Boolean(b))
     }
 
-    fn quantity_arg(value: &str, unit: &str) -> CommandArg {
+    fn measure_arg(value: &str, unit: &str) -> CommandArg {
         let d: rust_decimal::Decimal = value.parse().expect("decimal");
         CommandArg::Literal(crate::literals::Value::NumberWithUnit(d, unit.to_string()))
     }
@@ -2008,13 +2006,13 @@ mod tests {
             }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Help,
-                vec![text_arg("Enter a quantity")],
+                vec![text_arg("Enter a measure")],
             )]),
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "number -> help \"Enter a quantity\""
+            "number -> help \"Enter a measure\""
         );
     }
 
@@ -2037,10 +2035,10 @@ mod tests {
     }
 
     #[test]
-    fn as_lemma_source_quantity_unit_not_quoted() {
+    fn as_lemma_source_measure_unit_not_quoted() {
         let fv = DataValue::Definition {
             base: Some(ParentType::Primitive {
-                primitive: PrimitiveKind::Quantity,
+                primitive: PrimitiveKind::Measure,
             }),
             constraints: Some(vec![
                 (
@@ -2056,25 +2054,25 @@ mod tests {
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "quantity -> unit eur 1.00 -> unit usd 0.91"
+            "measure -> unit eur 1.00 -> unit usd 0.91"
         );
     }
 
     #[test]
-    fn as_lemma_source_quantity_minimum_with_unit() {
+    fn as_lemma_source_measure_minimum_with_unit() {
         let fv = DataValue::Definition {
             base: Some(ParentType::Primitive {
-                primitive: PrimitiveKind::Quantity,
+                primitive: PrimitiveKind::Measure,
             }),
             constraints: Some(vec![(
                 TypeConstraintCommand::Minimum,
-                vec![quantity_arg("0", "eur")],
+                vec![measure_arg("0", "eur")],
             )]),
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "quantity -> minimum 0 eur"
+            "measure -> minimum 0 eur"
         );
     }
 
@@ -2154,8 +2152,8 @@ mod tests {
             prefix,
             factors
                 .iter()
-                .map(|(quantity_ref, exp)| UnitFactor {
-                    quantity_ref: (*quantity_ref).to_string(),
+                .map(|(measure_ref, exp)| UnitFactor {
+                    measure_ref: (*measure_ref).to_string(),
                     exp: *exp,
                 })
                 .collect(),

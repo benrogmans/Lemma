@@ -66,7 +66,7 @@ fn rule_reference_is_veto_when_rule_vetoed() {
 spec pricing
 data quantity: -1
 rule validated_quantity: quantity
-    unless quantity < 0 then veto "Quantity cannot be negative"
+    unless quantity < 0 then veto "Measure cannot be negative"
 rule flag: validated_quantity is veto
 "#;
 
@@ -93,7 +93,7 @@ spec pricing
 data price: 10
 data quantity: -1
 rule validated_quantity: quantity
-    unless quantity < 0 then veto "Quantity cannot be negative"
+    unless quantity < 0 then veto "Measure cannot be negative"
 rule total: price * validated_quantity
     unless validated_quantity is veto then 0
 "#;

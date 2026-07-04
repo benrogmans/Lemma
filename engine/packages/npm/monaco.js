@@ -5,18 +5,19 @@
 
 // Must stay in exact index order with TOKEN_TYPES in engine/lsp/src/semantic_tokens.rs.
 export const SEMANTIC_TOKEN_TYPES = [
-  'namespace',      // 0 — repo keyword + qualifier
-  'class',          // 1 — spec keyword + name
-  'property',       // 2 — data keyword + field path (before colon)
-  'function',       // 3 — rule keyword + rule name (colon is punctuation)
-  'string',         // 4 — values in rule body / defaults
-  'comment',        // 5
-  'keyword',        // 6 — type keywords, math functions
-  'operator',       // 7
-  'controlKeyword', // 8 — unless, then, uses, and, not, from, in, veto, …
-  'dataBody',       // 9 — data block after the colon
-  'punctuation',    // 10 — colons after data field and rule name
-  'reference',      // 11 — identifiers in spec/rule body
+  'namespace',          // 0 — repo qualifier
+  'class',              // 1 — spec name
+  'property',           // 2 — data field path (before colon)
+  'function',           // 3 — rule name (colon is punctuation)
+  'string',             // 4 — values in rule body / defaults
+  'comment',            // 5
+  'keyword',            // 6 — type keywords, math functions, constraint words
+  'operator',           // 7
+  'controlKeyword',     // 8 — unless, then, not, and, in, type, veto, now, past, future, stray repo
+  'dataBody',           // 9 — data block after the colon
+  'punctuation',        // 10 — colons after data field and rule name
+  'reference',          // 11 — identifiers in spec/rule body
+  'declarationKeyword', // 12 — declaration keywords: spec, data, with, rule, repo, uses, meta
 ];
 
 export const SEMANTIC_TOKEN_MODIFIERS = [];
@@ -32,18 +33,19 @@ export const SEMANTIC_TOKEN_MODIFIERS = [];
  * Use in monaco.editor.defineTheme: { ..., rules: LEMMA_MONACO_RULES }
  */
 export const LEMMA_MONACO_RULES = [
-  { token: 'namespace',      foreground: 'BD8EBB' }, // repo keyword + qualifier
-  { token: 'class',          foreground: '5DBDAA' }, // spec keyword + name
-  { token: 'property',       foreground: 'A3B5DF' }, // data header (keyword + field)
-  { token: 'function',       foreground: 'A3B5DF' }, // rule header (keyword + name)
-  { token: 'string',         foreground: 'D07868' }, // same as dataBody (values / literals bucket)
-  { token: 'comment',        foreground: '595945' },
-  { token: 'keyword',        foreground: '6BA0C2' }, // type + math keywords
-  { token: 'operator',       foreground: '80807A' },
-  { token: 'controlKeyword', foreground: '726B83' }, // unless, then, uses
-  { token: 'dataBody',       foreground: 'D07868' }, // data block after colon
-  { token: 'punctuation',    foreground: '79987F' }, // declaration colons
-  { token: 'reference',      foreground: 'A59582' }, // paths, aliases, …
+  { token: 'namespace',          foreground: 'BD8EBB' }, // repo qualifier
+  { token: 'class',              foreground: '5DBDAA' }, // spec name
+  { token: 'property',           foreground: 'A3B5DF' }, // data field path
+  { token: 'function',           foreground: 'A3B5DF' }, // rule name
+  { token: 'string',             foreground: 'D07868' }, // same as dataBody (values / literals bucket)
+  { token: 'comment',            foreground: '595945' },
+  { token: 'keyword',            foreground: '6BA0C2' }, // type + math keywords + constraint words
+  { token: 'operator',           foreground: '80807A' },
+  { token: 'controlKeyword',     foreground: '726B83' }, // unless, then, not, and, in, type, veto, now, past, future
+  { token: 'dataBody',           foreground: 'D07868' }, // data block after colon
+  { token: 'punctuation',        foreground: '79987F' }, // declaration colons
+  { token: 'reference',          foreground: 'A59582' }, // paths, aliases, …
+  { token: 'declarationKeyword', foreground: '80807A' }, // spec, data, with, rule, repo, uses, meta
 ];
 
 /**
@@ -51,18 +53,19 @@ export const LEMMA_MONACO_RULES = [
  * Monaco uses dot notation for modifier-qualified rules (type.modifier).
  */
 export const LEMMA_SEMANTIC_COLORS = {
-  'namespace':      '#BD8EBB', // repo
-  'class':          '#5DBDAA', // spec
-  'property':       '#A3B5DF', // data header
-  'function':       '#A3B5DF', // rule header
-  'string':         '#D07868', // same hex as dataBody
-  'comment':        '#595945',
-  'keyword':        '#6BA0C2', // type + math keywords
-  'operator':       '#80807A',
-  'controlKeyword': '#726B83',
-  'dataBody':       '#D07868', // data after colon
-  'punctuation':    '#79987F', // data/rule colons
-  'reference':      '#A59582',
+  'namespace':          '#BD8EBB', // repo qualifier
+  'class':              '#5DBDAA', // spec name
+  'property':           '#A3B5DF', // data field path
+  'function':           '#A3B5DF', // rule name
+  'string':             '#D07868', // same hex as dataBody
+  'comment':            '#595945',
+  'keyword':            '#6BA0C2', // type + math keywords + constraint words
+  'operator':           '#80807A',
+  'controlKeyword':     '#726B83',
+  'dataBody':           '#D07868', // data after colon
+  'punctuation':        '#79987F', // data/rule colons
+  'reference':          '#A59582',
+  'declarationKeyword': '#80807A', // spec, data, with, rule, repo, uses, meta
 };
 
 /**

@@ -20,7 +20,20 @@ use lemma::Context;
 use lemma::{DataValue, SpecRef};
 
 async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
-    let file_diagnostics = workspace.validate_workspace();
+    let file_diagnostics = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        workspace.validate_workspace()
+    })) {
+        Ok(diags) => diags,
+        Err(panic_payload) => {
+            let msg = panic_payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.as_str()))
+                .unwrap_or("unknown internal error");
+            eprintln!("engine panic during workspace validation: {}", msg);
+            return;
+        }
+    };
     for file_diag in file_diagnostics {
         let lsp_diagnostics = diagnostics::errors_to_diagnostics(
             &file_diag.errors,

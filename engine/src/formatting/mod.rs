@@ -588,13 +588,13 @@ mod tests {
     }
 
     #[test]
-    fn test_format_value_quantity() {
+    fn test_format_value_measure() {
         let v = Value::NumberWithUnit(Decimal::from_str("99.50").unwrap(), "eur".to_string());
         assert_eq!(fmt_value(&v), "99.50 eur");
     }
 
     #[test]
-    fn test_format_value_duration_as_quantity() {
+    fn test_format_value_duration_as_measure() {
         let v = Value::NumberWithUnit(Decimal::from(40), "hours".to_string());
         assert_eq!(fmt_value(&v), "40 hours");
     }
@@ -943,10 +943,10 @@ rule total: quantity
     }
 
     #[test]
-    fn test_format_quantity_type_def_round_trips() {
+    fn test_format_measure_type_def_round_trips() {
         let source = r#"spec test
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 0.91
   -> decimals 2
@@ -960,7 +960,7 @@ rule total: price
             format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
         assert!(
             formatted.contains("unit eur 1.00"),
-            "quantity unit should not be quoted, got: {}",
+            "measure unit should not be quoted, got: {}",
             formatted
         );
         // Round-trip

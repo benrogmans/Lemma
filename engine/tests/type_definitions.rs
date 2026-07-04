@@ -126,18 +126,18 @@ rule x: pi
     assert_eq!(rule_x.display.clone().expect("display"), "3.14");
 }
 
-/// Regression test: quantity type with `-> default` before `-> unit` must work.
+/// Regression test: measure type with `-> default` before `-> unit` must work.
 /// Previously, constraints were applied in declaration order, so `default`
 /// would fail to find the unit because it hadn't been registered yet.
 #[test]
-fn test_quantity_type_default_before_unit_declarations() {
+fn test_measure_type_default_before_unit_declarations() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec pricing
-        data money: quantity
+        data money: measure
           -> default 4 eur
           -> unit eur 1
           -> unit usd 0.84
@@ -155,16 +155,16 @@ fn test_quantity_type_default_before_unit_declarations() {
     let schema = plan.schema(&lemma::DataOverlay::default());
     let entry = schema.data.get("price").expect("price data in schema");
     assert!(
-        entry.lemma_type.is_quantity(),
-        "price must be quantity money type"
+        entry.lemma_type.is_measure(),
+        "price must be measure money type"
     );
     assert_eq!(entry.lemma_type.extends.parent_name(), Some("money"));
     match &entry.lemma_type.specifications {
-        TypeSpecification::Quantity { units, .. } => {
+        TypeSpecification::Measure { units, .. } => {
             let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
             assert!(names.contains(&"eur") && names.contains(&"usd"));
         }
-        other => panic!("expected Quantity, got {:?}", other),
+        other => panic!("expected Measure, got {:?}", other),
     }
     assert!(
         entry.default.is_some() && entry.bound_value.is_none(),
@@ -174,14 +174,14 @@ fn test_quantity_type_default_before_unit_declarations() {
 
 /// Verify that `-> default` after `-> unit` (the original order) still works.
 #[test]
-fn test_quantity_type_default_after_unit_declarations() {
+fn test_measure_type_default_after_unit_declarations() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec pricing
-        data money: quantity
+        data money: measure
           -> unit eur 1
           -> unit usd 0.84
           -> default 4 eur
@@ -198,16 +198,16 @@ fn test_quantity_type_default_after_unit_declarations() {
     let schema = plan.schema(&lemma::DataOverlay::default());
     let entry = schema.data.get("money").expect("money data in schema");
     assert!(
-        entry.lemma_type.is_quantity(),
-        "money must be quantity money type"
+        entry.lemma_type.is_measure(),
+        "money must be measure money type"
     );
     assert_eq!(entry.lemma_type.name(), "money");
     match &entry.lemma_type.specifications {
-        TypeSpecification::Quantity { units, .. } => {
+        TypeSpecification::Measure { units, .. } => {
             let names: Vec<&str> = units.iter().map(|u| u.name.as_str()).collect();
             assert!(names.contains(&"eur") && names.contains(&"usd"));
         }
-        other => panic!("expected Quantity, got {:?}", other),
+        other => panic!("expected Measure, got {:?}", other),
     }
     assert!(
         entry.default.is_some() && entry.bound_value.is_none(),
@@ -321,14 +321,14 @@ fn test_schema_splits_bound_literal_and_default_suggestion() {
 }
 
 #[test]
-fn test_schema_quantity_default_is_value() {
+fn test_schema_measure_default_is_value() {
     let mut engine = Engine::new();
 
     engine
         .load(
             r#"
         spec salary
-        data money: quantity
+        data money: measure
           -> unit eur 1
           -> unit usd 0.84
           -> default 3000 eur
@@ -348,7 +348,7 @@ fn test_schema_quantity_default_is_value() {
     let salary = schema.data.get("salary").expect("salary should exist");
     assert!(
         salary.default.is_some() && salary.bound_value.is_none(),
-        "quantity typedef default must surface as schema suggestion on salary"
+        "measure typedef default must surface as schema suggestion on salary"
     );
 }
 
@@ -362,7 +362,7 @@ fn test_typedef_default_inherits_through_extension_chain() {
         .load(
             r#"
             spec chain
-            data money: quantity
+            data money: measure
               -> unit eur 1
               -> default 4 eur
             data price: money

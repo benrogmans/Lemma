@@ -13,15 +13,21 @@ pub mod http {
     use lemma::Engine;
     use lemma_cli::deps::{dependency_identifier_from_dependency_path, lemma_deps_dir};
     use serde::Deserialize;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
 
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::RwLock;
     use tower_http::cors::CorsLayer;
     use tracing::{error, info, warn};
 
-    type SharedEngine = Arc<RwLock<Engine>>;
+    /// Requests read-lock only long enough to clone the inner `Arc<Engine>`
+    /// (a pointer copy) and never hold the lock during evaluation. The file
+    /// watcher builds a reloaded `Engine` off to the side and write-locks only
+    /// for the instant it takes to swap the `Arc`.
+    type SharedEngine = Arc<RwLock<Arc<Engine>>>;
 
     fn parse_spec_path(path: &str) -> String {
         path.trim_matches('/').to_string()
@@ -65,11 +71,38 @@ pub mod http {
     struct AppState {
         engine: SharedEngine,
         explanations_enabled: bool,
+        eval_timeout: Duration,
+    }
+
+    /// Owned snapshot of the engine for this request; the read guard lives
+    /// only for the duration of the `Arc` clone.
+    async fn engine_snapshot(state: &AppState) -> Arc<Engine> {
+        Arc::clone(&*state.engine.read().await)
     }
 
     #[derive(Debug, serde::Serialize)]
     struct ErrorResponse {
         error: String,
+    }
+
+    fn catch_engine_panic<F, T>(f: F) -> Result<T, (StatusCode, Json<ErrorResponse>)>
+    where
+        F: FnOnce() -> T + std::panic::UnwindSafe,
+    {
+        catch_unwind(f).map_err(|panic_payload| {
+            let msg = panic_payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.as_str()))
+                .unwrap_or("unknown internal error");
+            error!("engine panic caught: {}", msg);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "internal engine error".to_string(),
+                }),
+            )
+        })
     }
 
     #[derive(serde::Serialize)]
@@ -128,6 +161,12 @@ pub mod http {
     /// - `GET /health` — health check
     /// - `GET /openapi.json` — OpenAPI 3.1 specification
     /// - `GET /docs` — Scalar interactive documentation
+    ///
+    /// Deployment posture: the server has no built-in authentication or TLS.
+    /// It binds to localhost by default; for any non-localhost deployment, put
+    /// it behind a reverse proxy that terminates TLS and enforces access
+    /// control. Cross-origin browser access is denied unless `cors` is set.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_server(
         engine: Engine,
         host: &str,
@@ -135,6 +174,8 @@ pub mod http {
         watch: bool,
         explanations: bool,
         workdir: PathBuf,
+        eval_timeout_secs: u64,
+        cors: bool,
     ) -> anyhow::Result<()> {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -143,7 +184,7 @@ pub mod http {
             )
             .init();
 
-        let shared_engine: SharedEngine = Arc::new(RwLock::new(engine));
+        let shared_engine: SharedEngine = Arc::new(RwLock::new(Arc::new(engine)));
 
         if watch {
             start_file_watcher(shared_engine.clone(), workdir)?;
@@ -152,18 +193,32 @@ pub mod http {
         let state = AppState {
             engine: shared_engine,
             explanations_enabled: explanations,
+            eval_timeout: Duration::from_secs(eval_timeout_secs),
         };
 
-        let app = Router::new()
+        let router = Router::new()
             .route("/", get(list_specs))
             .route("/health", get(health_check))
             .route("/openapi.json", get(openapi_spec))
             .route("/docs", get(scalar_docs))
             .route("/scalar.js", get(scalar_js))
             .route("/{*path}", get(spec_get_schema).post(spec_post_evaluate))
-            .fallback(fallback_404)
-            .layer(CorsLayer::permissive())
-            .with_state(state);
+            .fallback(fallback_404);
+        let router = if cors {
+            info!("Permissive CORS enabled (--cors): cross-origin browser requests allowed");
+            router.layer(CorsLayer::permissive())
+        } else {
+            router
+        };
+        let app = router.with_state(state);
+
+        if !matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]") {
+            warn!(
+                "Binding to non-localhost address {host}: the Lemma HTTP server has no \
+                 built-in authentication or TLS. Deploy behind a reverse proxy that \
+                 terminates TLS and enforces access control."
+            );
+        }
 
         let addr: SocketAddr = format!("{host}:{port}").parse()?;
         info!("Lemma server listening on http://{}", addr);
@@ -179,18 +234,42 @@ pub mod http {
     // Meta routes
     // -----------------------------------------------------------------------
 
+    /// One entry per loaded spec: schema on success, error message on failure.
+    /// Specs never silently disappear from the list.
+    #[derive(serde::Serialize)]
+    #[serde(untagged)]
+    enum SpecListEntry {
+        Schema {
+            name: String,
+            schema: Box<lemma::SpecSchema>,
+        },
+        Error {
+            name: String,
+            error: String,
+        },
+    }
+
     async fn list_specs(
         State(state): State<AppState>,
         Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let now = resolve_effective(q.effective.as_deref())?;
-        let engine = state.engine.read().await;
+        let engine = engine_snapshot(&state).await;
 
-        let specs: Vec<lemma::SpecSchema> = engine
+        let specs: Vec<SpecListEntry> = engine
             .get_workspace()
             .specs
             .iter()
-            .filter_map(|ss| engine.schema(None, &ss.name, Some(&now)).ok())
+            .map(|ss| match engine.schema(None, &ss.name, Some(&now)) {
+                Ok(schema) => SpecListEntry::Schema {
+                    name: ss.name.clone(),
+                    schema: Box::new(schema),
+                },
+                Err(e) => SpecListEntry::Error {
+                    name: ss.name.clone(),
+                    error: e.message().to_string(),
+                },
+            })
             .collect();
 
         Ok(Json(specs))
@@ -219,7 +298,7 @@ pub mod http {
         Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let effective = resolve_effective(q.effective.as_deref())?;
-        let engine = state.engine.read().await;
+        let engine = engine_snapshot(&state).await;
         let spec = lemma_openapi::generate_openapi_effective(
             &engine,
             state.explanations_enabled,
@@ -229,7 +308,7 @@ pub mod http {
     }
 
     async fn scalar_docs(State(state): State<AppState>) -> impl IntoResponse {
-        let engine = state.engine.read().await;
+        let engine = engine_snapshot(&state).await;
         let sources = lemma_openapi::temporal_api_sources(&engine);
 
         let shared_opts = r#"layout: 'modern',
@@ -330,7 +409,7 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_set_id = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
-        let engine = state.engine.read().await;
+        let engine = engine_snapshot(&state).await;
 
         let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
             (
@@ -341,24 +420,45 @@ pub mod http {
             )
         })?;
 
-        let schema = engine
-            .schema(None, &spec_name, Some(&effective))
-            .map_err(|e| {
-                (
-                    lemma_error_to_status(&e),
-                    Json(ErrorResponse {
-                        error: e.to_string(),
-                    }),
-                )
-            })?;
+        catch_engine_panic(AssertUnwindSafe(
+            || -> Result<_, (StatusCode, Json<ErrorResponse>)> {
+                let schema = engine
+                    .schema(None, &spec_name, Some(&effective))
+                    .map_err(|e| {
+                        (
+                            lemma_error_to_status(&e),
+                            Json(ErrorResponse {
+                                error: e.to_string(),
+                            }),
+                        )
+                    })?;
 
-        let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
-        let schema = if rule_names.is_empty() {
-            schema
-        } else {
-            let plan = engine
-                .get_plan(None, &spec_name, Some(&effective))
-                .map_err(|e| {
+                let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
+                let schema = if rule_names.is_empty() {
+                    schema
+                } else {
+                    let plan = engine
+                        .get_plan(None, &spec_name, Some(&effective))
+                        .map_err(|e| {
+                            (
+                                lemma_error_to_status(&e),
+                                Json(ErrorResponse {
+                                    error: e.to_string(),
+                                }),
+                            )
+                        })?;
+                    plan.schema_for_rules(&rule_names, &lemma::DataOverlay::default())
+                        .map_err(|err| {
+                            (
+                                lemma_error_to_status(&err),
+                                Json(ErrorResponse {
+                                    error: err.to_string(),
+                                }),
+                            )
+                        })?
+                };
+
+                let spec_arc = engine.get_spec(&spec_name, Some(&effective)).map_err(|e| {
                     (
                         lemma_error_to_status(&e),
                         Json(ErrorResponse {
@@ -366,61 +466,47 @@ pub mod http {
                         }),
                     )
                 })?;
-            plan.schema_for_rules(&rule_names, &lemma::DataOverlay::default())
-                .map_err(|err| {
-                    (
-                        lemma_error_to_status(&err),
-                        Json(ErrorResponse {
-                            error: err.to_string(),
-                        }),
-                    )
-                })?
-        };
 
-        let spec_arc = engine.get_spec(&spec_name, Some(&effective)).map_err(|e| {
-            (
-                lemma_error_to_status(&e),
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
+                let versions: Vec<VersionEntry> = engine
+                    .get_workspace()
+                    .specs
+                    .iter()
+                    .filter(|ss| ss.name == spec_arc.name)
+                    .flat_map(|ss| ss.iter_with_ranges())
+                    .map(|(_, effective_from, effective_to)| VersionEntry {
+                        effective_from: effective_from.as_ref().map(|d| d.to_string()),
+                        effective_to: effective_to.as_ref().map(|d| d.to_string()),
+                    })
+                    .collect();
 
-        let versions: Vec<VersionEntry> = engine
-            .get_workspace()
-            .specs
-            .iter()
-            .filter(|ss| ss.name == spec_arc.name)
-            .flat_map(|ss| ss.iter_with_ranges())
-            .map(|(_, effective_from, effective_to)| VersionEntry {
-                effective_from: effective_from.as_ref().map(|d| d.to_string()),
-                effective_to: effective_to.as_ref().map(|d| d.to_string()),
-            })
-            .collect();
+                let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
 
-        let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
+                let body = GetSpecResponse {
+                    spec_set_id,
+                    effective_from: effective_from_str,
+                    data: Some(
+                        serde_json::to_value(&schema.data)
+                            .expect("BUG: failed to serialize schema data"),
+                    ),
+                    rules: Some(
+                        serde_json::to_value(&schema.rules)
+                            .expect("BUG: failed to serialize schema rules"),
+                    ),
+                    meta: Some(
+                        serde_json::to_value(&schema.meta)
+                            .expect("BUG: failed to serialize schema meta"),
+                    ),
+                    versions,
+                };
 
-        let body = GetSpecResponse {
-            spec_set_id,
-            effective_from: effective_from_str,
-            data: Some(
-                serde_json::to_value(&schema.data).expect("BUG: failed to serialize schema data"),
-            ),
-            rules: Some(
-                serde_json::to_value(&schema.rules).expect("BUG: failed to serialize schema rules"),
-            ),
-            meta: Some(
-                serde_json::to_value(&schema.meta).expect("BUG: failed to serialize schema meta"),
-            ),
-            versions,
-        };
-
-        let mut response = Json(body).into_response();
-        let headers_mut = response.headers_mut();
-        for (k, v) in spec_response_headers(spec_arc.effective_from()) {
-            headers_mut.insert(k, v);
-        }
-        Ok(response)
+                let mut response = Json(body).into_response();
+                let headers_mut = response.headers_mut();
+                for (k, v) in spec_response_headers(spec_arc.effective_from()) {
+                    headers_mut.insert(k, v);
+                }
+                Ok(response)
+            },
+        ))?
     }
 
     fn parse_post_evaluate_body(
@@ -496,7 +582,6 @@ pub mod http {
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_set_id = parse_spec_path(&path);
         let effective = accept_datetime_from_headers(&headers)?;
-        let engine = state.engine.read().await;
 
         let spec_name = lemma::parse_spec_set_id(&spec_set_id).map_err(|e| {
             (
@@ -508,17 +593,6 @@ pub mod http {
         })?;
 
         let data_values = parse_post_evaluate_body(&headers, &body)?;
-
-        let plan = engine
-            .get_plan(None, &spec_name, Some(&effective))
-            .map_err(|err| {
-                (
-                    lemma_error_to_status(&err),
-                    Json(ErrorResponse {
-                        error: err.to_string(),
-                    }),
-                )
-            })?;
 
         let parsed_rules: Option<Vec<String>> = match q.rules.as_deref() {
             None => None,
@@ -537,29 +611,81 @@ pub mod http {
         };
 
         let include_explanations = want_explanations(&state, &headers);
-        let response = engine
-            .run_plan(
-                plan,
-                Some(&effective),
-                data_values,
-                include_explanations,
-                parsed_rules.as_deref(),
-            )
-            .map_err(|err| {
-                (
-                    lemma_error_to_status(&err),
-                    Json(ErrorResponse {
-                        error: err.to_string(),
-                    }),
-                )
-            })?;
+        let engine = engine_snapshot(&state).await;
 
-        let spec_arc = engine.get_spec(&spec_name, Some(&effective)).ok();
-        let effective_from = spec_arc.as_ref().and_then(|a| a.effective_from());
-        let payload = Formatter.response_json_value(&response, include_explanations);
+        // Evaluate on a blocking thread with no lock held. Post-planning
+        // evaluation is loop-free/terminating by design; the wall-clock
+        // timeout is a boundary safeguard, not an engine mechanism.
+        let eval_task = tokio::task::spawn_blocking(move || {
+            let plan = engine
+                .get_plan(None, &spec_name, Some(&effective))
+                .map_err(|err| {
+                    (
+                        lemma_error_to_status(&err),
+                        Json(ErrorResponse {
+                            error: err.to_string(),
+                        }),
+                    )
+                })?;
+
+            let response = engine
+                .run_plan(
+                    plan,
+                    Some(&effective),
+                    data_values,
+                    include_explanations,
+                    parsed_rules.as_deref(),
+                )
+                .map_err(|err| {
+                    (
+                        lemma_error_to_status(&err),
+                        Json(ErrorResponse {
+                            error: err.to_string(),
+                        }),
+                    )
+                })?;
+
+            let effective_from = engine
+                .get_spec(&spec_name, Some(&effective))
+                .ok()
+                .and_then(|spec_arc| spec_arc.effective_from().cloned());
+            let payload = Formatter.response_json_value(&response, include_explanations);
+            Ok((payload, effective_from))
+        });
+
+        let (payload, effective_from) =
+            match tokio::time::timeout(state.eval_timeout, eval_task).await {
+                Err(_elapsed) => {
+                    error!(
+                        "evaluation timed out after {}s",
+                        state.eval_timeout.as_secs()
+                    );
+                    return Err((
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Json(ErrorResponse {
+                            error: format!(
+                                "evaluation timed out after {}s",
+                                state.eval_timeout.as_secs()
+                            ),
+                        }),
+                    ));
+                }
+                // The blocking task panicked (JoinError); same mapping as catch_engine_panic.
+                Ok(Err(join_error)) => {
+                    error!("engine panic caught: {}", join_error);
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ErrorResponse {
+                            error: "internal engine error".to_string(),
+                        }),
+                    ));
+                }
+                Ok(Ok(result)) => result?,
+            };
+
         let mut axum_response = Json(payload).into_response();
         let headers_mut = axum_response.headers_mut();
-        for (k, v) in spec_response_headers(effective_from) {
+        for (k, v) in spec_response_headers(effective_from.as_ref()) {
             headers_mut.insert(k, v);
         }
         Ok(axum_response)
@@ -708,8 +834,8 @@ pub mod http {
                                 match reload_engine(&workdir_clone).await {
                                     Ok(new_engine) => {
                                         let spec_count = new_engine.get_workspace().specs.len();
-                                        let mut engine = engine_clone.write().await;
-                                        *engine = new_engine;
+                                        // Write lock held only for the Arc swap.
+                                        *engine_clone.write().await = Arc::new(new_engine);
                                         info!("Reloaded engine with {} spec(s)", spec_count);
                                     }
                                     Err(err) => {

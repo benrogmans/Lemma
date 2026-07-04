@@ -494,15 +494,6 @@ pub use {
     try_pow_i32 as checked_pow_i32, try_sub as checked_sub,
 };
 
-pub fn convert_quantity_magnitude_rational(
-    magnitude: RationalInteger,
-    from_factor: &RationalInteger,
-    to_factor: &RationalInteger,
-) -> Result<RationalInteger, NumericFailure> {
-    let ratio = try_div(from_factor, to_factor)?;
-    try_mul(&magnitude, &ratio)
-}
-
 impl fmt::Display for RationalInteger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", rational_to_display_str(self))

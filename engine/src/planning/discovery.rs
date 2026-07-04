@@ -527,6 +527,7 @@ pub(crate) fn build_dag_for_spec(
     context: &Context,
     root: &Arc<LemmaSpec>,
     effective: &EffectiveDate,
+    limits: &crate::limits::ResourceLimits,
 ) -> Result<Vec<DagSpec>, DagError> {
     // nodes: insertion-ordered, no duplicates (membership via Arc::ptr_eq).
     let mut nodes: Vec<DagSpec> = Vec::new();
@@ -551,6 +552,8 @@ pub(crate) fn build_dag_for_spec(
         &mut edges,
         &mut errors,
         &mut visited,
+        0,
+        limits,
     );
 
     if errors.is_empty() {
@@ -590,7 +593,25 @@ fn dfs_discover(
     edges: &mut Vec<(usize, usize)>,
     errors: &mut Vec<Error>,
     visited: &mut Vec<(*const LemmaSpec, EffectiveDate)>,
+    depth: usize,
+    limits: &crate::limits::ResourceLimits,
 ) {
+    if depth > limits.max_spec_dependency_depth {
+        errors.push(Error::resource_limit_exceeded(
+            "max_spec_dependency_depth",
+            limits.max_spec_dependency_depth.to_string(),
+            depth.to_string(),
+            format!(
+                "Spec '{}' exceeds the maximum dependency nesting depth; flatten the import chain",
+                spec.name
+            ),
+            None,
+            Some(Arc::clone(&spec)),
+            None,
+        ));
+        return;
+    }
+
     // Walk membership is keyed on (spec pointer, effective instant): the
     // same spec reached at a different instant can resolve different
     // dependency slices and must be walked again. Node membership stays
@@ -607,6 +628,22 @@ fn dfs_discover(
     let spec_index = match nodes.iter().position(|(_, s)| Arc::ptr_eq(s, &spec)) {
         Some(existing_index) => existing_index,
         None => {
+            if nodes.len() >= limits.max_dag_specs {
+                errors.push(Error::resource_limit_exceeded(
+                    "max_dag_specs",
+                    limits.max_dag_specs.to_string(),
+                    (nodes.len() + 1).to_string(),
+                    format!(
+                        "Dependency graph of the root spec grew past {} specs at '{}'; \
+                         reduce the number of transitive imports",
+                        limits.max_dag_specs, spec.name
+                    ),
+                    None,
+                    Some(Arc::clone(&spec)),
+                    None,
+                ));
+                return;
+            }
             let new_index = nodes.len();
             nodes.push((Arc::clone(consumer_repository), Arc::clone(&spec)));
             new_index
@@ -651,11 +688,18 @@ fn dfs_discover(
             edges,
             errors,
             visited,
+            depth + 1,
+            limits,
         );
-        let dep_index = nodes
-            .iter()
-            .position(|(_, s)| Arc::ptr_eq(s, &dependency))
-            .expect("BUG: dfs_discover must have inserted dependency before returning");
+        // A limit rejection above returns without inserting the dependency;
+        // the recorded error fails planning, so skip the edge.
+        let Some(dep_index) = nodes.iter().position(|(_, s)| Arc::ptr_eq(s, &dependency)) else {
+            assert!(
+                !errors.is_empty(),
+                "BUG: dependency absent from nodes without a recorded error"
+            );
+            continue;
+        };
         edges.push((dep_index, spec_index));
     }
 }
@@ -841,7 +885,15 @@ mod tests {
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(build_dag_for_spec(&ctx, &consumer, &effective).unwrap_err());
+        let errs = dag_errors(
+            build_dag_for_spec(
+                &ctx,
+                &consumer,
+                &effective,
+                &crate::ResourceLimits::default(),
+            )
+            .unwrap_err(),
+        );
 
         assert_eq!(errs.len(), 1);
         let msg = errs[0].message();
@@ -874,7 +926,15 @@ mod tests {
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(build_dag_for_spec(&ctx, &consumer, &effective).unwrap_err());
+        let errs = dag_errors(
+            build_dag_for_spec(
+                &ctx,
+                &consumer,
+                &effective,
+                &crate::ResourceLimits::default(),
+            )
+            .unwrap_err(),
+        );
 
         assert_eq!(errs.len(), 1);
         let msg = errs[0].message();
@@ -924,7 +984,15 @@ mod tests {
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(build_dag_for_spec(&ctx, &consumer, &effective).unwrap_err());
+        let errs = dag_errors(
+            build_dag_for_spec(
+                &ctx,
+                &consumer,
+                &effective,
+                &crate::ResourceLimits::default(),
+            )
+            .unwrap_err(),
+        );
 
         assert_eq!(errs.len(), 1);
         let suggestion = errs[0].suggestion().expect("should have suggestion");
@@ -949,7 +1017,15 @@ mod tests {
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(build_dag_for_spec(&ctx, &consumer, &effective).unwrap_err());
+        let errs = dag_errors(
+            build_dag_for_spec(
+                &ctx,
+                &consumer,
+                &effective,
+                &crate::ResourceLimits::default(),
+            )
+            .unwrap_err(),
+        );
 
         let display = format!("{}", errs[0]);
         assert!(
@@ -1212,12 +1288,12 @@ data p: 5 usd
 rule doubled: p * 2
 
 spec child 2025-01-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 
 spec child 2025-06-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -1243,6 +1319,7 @@ data money: quantity
             &ctx,
             &consumer,
             &EffectiveDate::from_option(Some(date(2025, 3, 1))),
+            &crate::ResourceLimits::default(),
         )
         .expect("DAG must not reference unresolved alias `c`");
         let names: Vec<_> = dag.iter().map(|(_, s)| s.name.as_str()).collect();

@@ -159,7 +159,7 @@ fn test_04_unit_conversions() {
     assert!(!duration_hours.vetoed);
     assert_eq!(
         duration_hours
-            .quantity
+            .measure
             .as_ref()
             .and_then(|m| m.get("hours"))
             .map(String::as_str),
@@ -170,7 +170,7 @@ fn test_04_unit_conversions() {
     assert!(!duration_seconds.vetoed);
     assert_eq!(
         duration_seconds
-            .quantity
+            .measure
             .as_ref()
             .and_then(|m| m.get("seconds"))
             .map(String::as_str),

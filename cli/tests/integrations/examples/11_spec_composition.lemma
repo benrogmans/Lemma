@@ -11,14 +11,20 @@ data standard_discount : 5%
 data tax_rate          : 21%
 data base_price        : number -> minimum 0 -> default 100
 
+rule tax_amount:
+  base_price * tax_rate
+
 rule price_with_tax:
-  base_price * (1 + tax_rate)
+  base_price + tax_amount
+
+rule discount_amount:
+  base_price * standard_discount
 
 rule discounted_price:
-  base_price * (1 - standard_discount)
+  base_price - discount_amount
 
 rule final_price:
-  base_price * (1 - standard_discount) * (1 + tax_rate)
+  discounted_price * (100% + tax_rate)
 
 
 spec wholesale
@@ -32,14 +38,20 @@ data base_price        : 75
 data standard_discount : 15%
 data tax_rate          : 21%
 
+rule tax_amount:
+  base_price * tax_rate
+
 rule price_with_tax:
-  base_price * (1 + tax_rate)
+  base_price + tax_amount
+
+rule discount_amount:
+  base_price * standard_discount
 
 rule discounted_price:
-  base_price * (1 - standard_discount)
+  base_price - discount_amount
 
 rule final_price:
-  base_price * (1 - standard_discount) * (1 + tax_rate)
+  discounted_price * (100% + tax_rate)
 
 rule wholesale_final:
   final_price
@@ -59,14 +71,20 @@ data base_price        : 120
 data standard_discount : 0%
 data tax_rate          : 21%
 
+rule tax_amount:
+  base_price * tax_rate
+
 rule price_with_tax:
-  base_price * (1 + tax_rate)
+  base_price + tax_amount
+
+rule discount_amount:
+  base_price * standard_discount
 
 rule discounted_price:
-  base_price * (1 - standard_discount)
+  base_price - discount_amount
 
 rule final_price:
-  base_price * (1 - standard_discount) * (1 + tax_rate)
+  discounted_price * (100% + tax_rate)
 
 rule retail_final:
   final_price
@@ -79,7 +97,7 @@ spec line_item
 """
 Order Line Item
 
-Combines pricing with quantity calculations.
+Combines pricing with measure calculations.
 Demonstrates nested spec references and multi-level data access.
 """
 

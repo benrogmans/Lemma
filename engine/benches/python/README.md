@@ -2,7 +2,7 @@
 
 Hand-written Python implementations of the three Lemma specs in
 [`../specs/`](../specs). Used as the Python side of the Lemma vs
-Python comparison in [`../../../documentation/benchmarks/engine.md`](../../../documentation/benchmarks/engine.md).
+Python comparison in [`../../../documentation/reference/benchmarks/engine.md`](../../../documentation/reference/benchmarks/engine.md).
 
 ## Layout
 
@@ -54,7 +54,7 @@ cargo benchmarks engine
 
 From the workspace root. This runs the `evaluate` and `outputs` Rust
 benches and `python3 engine/benches/python/benchmark.py`, joins
-everything, and rewrites `documentation/benchmarks/engine.md` with latency and
+everything, and rewrites `documentation/reference/benchmarks/engine.md` with latency and
 numerical-accuracy tables side by side.
 
 ## Per-call boundary

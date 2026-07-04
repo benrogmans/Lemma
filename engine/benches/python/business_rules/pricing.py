@@ -8,7 +8,7 @@ from business_rules.rational import Rational, parse_rational
 @dataclass(frozen=True, slots=True)
 class Inputs:
     product_type: str
-    quantity: Rational
+    measure: Rational
     unit_price: Rational
     coupon_percent: Rational
     loyalty_years: Rational
@@ -39,7 +39,7 @@ class Outputs:
 def build_inputs(raw: dict[str, str]) -> Inputs:
     return Inputs(
         product_type=raw["product_type"],
-        quantity=parse_rational(raw["quantity"]),
+        measure=parse_rational(raw["measure"]),
         unit_price=parse_rational(raw["unit_price"]),
         coupon_percent=parse_rational(raw["coupon_percent"]),
         loyalty_years=parse_rational(raw["loyalty_years"]),
@@ -55,11 +55,11 @@ def compute(inputs: Inputs) -> Outputs:
     is_luxury = inputs.product_type == "luxury"
 
     volume_discount = Rational(0)
-    if inputs.quantity >= 10:
+    if inputs.measure >= 10:
         volume_discount = Rational("0.05")
-    if inputs.quantity >= 50:
+    if inputs.measure >= 50:
         volume_discount = Rational("0.10")
-    if inputs.quantity >= 100:
+    if inputs.measure >= 100:
         volume_discount = Rational("0.15")
 
     tier_discount = Rational(0)
@@ -90,7 +90,7 @@ def compute(inputs: Inputs) -> Outputs:
         + coupon_discount
     )
 
-    subtotal = inputs.unit_price * inputs.quantity
+    subtotal = inputs.unit_price * inputs.measure
     discount_amount = subtotal * combined_discount
     taxable = subtotal - discount_amount
 
