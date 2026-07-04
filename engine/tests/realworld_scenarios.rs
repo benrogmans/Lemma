@@ -188,7 +188,7 @@ data principal: number -> minimum 0
 data annual_rate: ratio -> minimum 0% -> maximum 100%
 data years: number -> minimum 1 -> maximum 50
 
-rule growth_factor: (1 + annual_rate) ^ years
+rule growth_factor: (100% + annual_rate) ^ years
 
 rule future_value: principal * growth_factor
 
@@ -320,18 +320,18 @@ data member_discount: 10%
 data seasonal_discount: 20%
 data coupon_discount: 5%
 
-rule after_member: price - member_discount
-rule after_seasonal: after_member - seasonal_discount
-rule final_price: after_seasonal - coupon_discount
+rule after_member: price - member_discount * price
+rule after_seasonal: after_member - seasonal_discount * after_member
+rule final_price: after_seasonal - coupon_discount * after_seasonal
 "#,
             src("discounts.lemma"),
         )
         .unwrap();
 
     // price = 1000
-    // after_member = 1000 - 10% = 900
-    // after_seasonal = 900 - 20% = 720
-    // final = 720 - 5% = 684
+    // after_member = 1000 - 0.1*1000 = 900
+    // after_seasonal = 900 - 0.2*900 = 720
+    // final = 720 - 0.05*720 = 684
     let resp = run_spec(&engine, "stacked_discounts", &[("price", "1000")]);
     let display = rule_display(&resp, "final_price");
     assert_eq!(display, "684", "1000 * 0.9 * 0.8 * 0.95 = 684");
@@ -485,8 +485,8 @@ spec division_test
 data numerator: number
 data denominator: number
 
-rule ratio: numerator / denominator
-rule double_ratio: ratio * 2
+rule division_ratio: numerator / denominator
+rule double_ratio: division_ratio * 2
 "#,
             src("division.lemma"),
         )
@@ -498,7 +498,10 @@ rule double_ratio: ratio * 2
         &[("numerator", "100"), ("denominator", "0")],
     );
 
-    assert!(rule_vetoed(&resp, "ratio"), "division by zero should veto");
+    assert!(
+        rule_vetoed(&resp, "division_ratio"),
+        "division by zero should veto"
+    );
     assert!(
         rule_vetoed(&resp, "double_ratio"),
         "dependent rule should also veto"
@@ -713,22 +716,39 @@ rule safe_value: validated
 }
 
 // ===========================================================================
-// SCENARIO 14: Percentage subtraction semantics
-// Tests: `value - 10%` means `value * 0.9`, not `value - 0.1`
+// SCENARIO 14: Percentage arithmetic semantics
+// Tests: number ± ratio is rejected; multiplication stays
 // ===========================================================================
 
 #[test]
-fn scenario_percentage_subtraction_semantics() {
+fn scenario_percentage_subtract_rejected() {
+    let mut engine = Engine::new();
+    let result = engine.load(
+        r#"
+spec percent_ops
+data amount: number
+rule bad: amount - 10%
+"#,
+        src("pct_ops.lemma"),
+    );
+    assert!(result.is_err());
+    let msg = result
+        .unwrap_err()
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(msg.contains("scale explicitly"), "got: {}", msg);
+}
+
+#[test]
+fn scenario_percentage_multiply() {
     let mut engine = Engine::new();
     engine
         .load(
             r#"
 spec percent_ops
-
 data amount: number
-
-rule minus_ten_pct: amount - 10%
-rule plus_twenty_pct: amount + 20%
 rule times_fifty_pct: amount * 50%
 "#,
             src("pct_ops.lemma"),
@@ -736,16 +756,6 @@ rule times_fifty_pct: amount * 50%
         .unwrap();
 
     let resp = run_spec(&engine, "percent_ops", &[("amount", "200")]);
-
-    // amount - 10% = 200 * 0.9 = 180
-    let minus = rule_display(&resp, "minus_ten_pct");
-    assert_eq!(minus, "180", "200 - 10% = 180");
-
-    // amount + 20% = 200 * 1.2 = 240
-    let plus = rule_display(&resp, "plus_twenty_pct");
-    assert_eq!(plus, "240", "200 + 20% = 240");
-
-    // amount * 50% = 200 * 0.5 = 100
     let times = rule_display(&resp, "times_fifty_pct");
     assert_eq!(times, "100", "200 * 50% = 100");
 }

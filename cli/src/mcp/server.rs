@@ -4,10 +4,16 @@ mod imp {
     use lemma::Engine;
     use serde::{Deserialize, Serialize};
     use std::io::{self, BufRead, Write};
+    use std::time::Duration;
     use tracing::{debug, error, info};
 
     const PROTOCOL_VERSION: &str = "2024-11-05";
     const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+    /// Upper bound on a single stdin JSON-RPC line. Lines beyond this are
+    /// consumed and rejected with a JSON-RPC error instead of being buffered
+    /// unboundedly.
+    const MAX_STDIN_LINE_BYTES: usize = 10 * 1024 * 1024;
 
     #[derive(Debug, Deserialize)]
     struct McpRequest {
@@ -87,11 +93,23 @@ mod imp {
     }
 
     /// Configuration for the MCP server.
-    #[derive(Default)]
     pub struct McpConfig {
         /// When true, admin tools (`add_spec`, `get_spec_source`) are
         /// advertised and allowed. When false (default), the server is read-only.
         pub admin: bool,
+        /// Wall-clock budget for handling a single request. Requests that
+        /// exceed it get a JSON-RPC internal error; the worker finishes the
+        /// stale request in the background and its late response is discarded.
+        pub request_timeout: Duration,
+    }
+
+    impl Default for McpConfig {
+        fn default() -> Self {
+            Self {
+                admin: false,
+                request_timeout: Duration::from_secs(10),
+            }
+        }
     }
 
     struct McpServer {
@@ -199,7 +217,7 @@ mod imp {
                             "data": {
                                 "type": "array",
                                 "items": { "type": "string" },
-                                "description": "Optional data values as 'name=value' (e.g. ['price=100', 'quantity=5'])",
+                                "description": "Optional data values as 'name=value' (e.g. ['price=100', 'measure=5'])",
                                 "default": []
                             },
                             "effective": {
@@ -209,7 +227,7 @@ mod imp {
                             "conversions": {
                                 "type": "array",
                                 "items": { "type": "string" },
-                                "description": "Optional quantity unit conversions as 'rule=unit' or 'rule:unit' (e.g. ['total=usd'])",
+                                "description": "Optional measure unit conversions as 'rule=unit' or 'rule:unit' (e.g. ['total=usd'])",
                                 "default": []
                             }
                         },
@@ -647,11 +665,9 @@ mod imp {
             let plan = self
                 .engine
                 .get_plan(None, &spec_name, Some(&now))
-                .map_err(|_| {
-                    McpError::invalid_params(format!(
-                        "Spec '{}' not found. Use list_specs to see available specs.",
-                        spec_set_id.trim()
-                    ))
+                .map_err(|e| {
+                    error!("get_plan failed for '{}': {}", spec_set_id.trim(), e);
+                    McpError::internal_error(format!("Failed to get schema: {e}"))
                 })?;
 
             let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
@@ -693,6 +709,67 @@ mod imp {
         }
     }
 
+    /// Result of reading one stdin line under a byte cap.
+    enum CappedLine {
+        Eof,
+        Line(String),
+        /// Line exceeded the cap; its bytes were consumed up to and including
+        /// the terminating newline so the stream stays in sync.
+        TooLong,
+        /// Line was within the cap but is not valid UTF-8.
+        InvalidUtf8,
+    }
+
+    /// Read one `\n`-terminated line, buffering at most `cap` bytes. Oversized
+    /// lines are drained (not buffered) and reported as `TooLong`. A trailing
+    /// `\r` is stripped, matching `BufRead::lines`.
+    fn read_line_capped(reader: &mut impl BufRead, cap: usize) -> io::Result<CappedLine> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut over_cap = false;
+        loop {
+            let (consume_len, line_done) = {
+                let available = reader.fill_buf()?;
+                if available.is_empty() {
+                    if buf.is_empty() && !over_cap {
+                        return Ok(CappedLine::Eof);
+                    }
+                    (0, true)
+                } else if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+                    if !over_cap {
+                        if buf.len() + pos > cap {
+                            over_cap = true;
+                        } else {
+                            buf.extend_from_slice(&available[..pos]);
+                        }
+                    }
+                    (pos + 1, true)
+                } else {
+                    if !over_cap {
+                        if buf.len() + available.len() > cap {
+                            over_cap = true;
+                        } else {
+                            buf.extend_from_slice(available);
+                        }
+                    }
+                    (available.len(), false)
+                }
+            };
+            reader.consume(consume_len);
+            if line_done {
+                if over_cap {
+                    return Ok(CappedLine::TooLong);
+                }
+                if buf.last() == Some(&b'\r') {
+                    buf.pop();
+                }
+                return match String::from_utf8(buf) {
+                    Ok(s) => Ok(CappedLine::Line(s)),
+                    Err(_) => Ok(CappedLine::InvalidUtf8),
+                };
+            }
+        }
+    }
+
     pub fn start_server(engine: Engine, config: McpConfig) -> Result<()> {
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -710,12 +787,86 @@ mod imp {
             info!("Read-only mode (default)");
         }
 
-        let mut server = McpServer::new(engine, config);
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
+        let request_timeout = config.request_timeout;
 
-        for line in stdin.lock().lines() {
-            let line = line?;
+        // Requests are handled on a dedicated worker thread that owns the
+        // engine state, so the reader loop can enforce a wall-clock timeout
+        // per request. The worker sends exactly one response per request; a
+        // timed-out request's late response is counted in `abandoned` and
+        // discarded when it eventually arrives.
+        let (request_tx, request_rx) = std::sync::mpsc::channel::<McpRequest>();
+        let (response_tx, response_rx) = std::sync::mpsc::channel::<Option<McpResponse>>();
+        std::thread::spawn(move || {
+            let mut server = McpServer::new(engine, config);
+            for request in request_rx {
+                let request_id = request.id.clone();
+                let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    server.handle_request(request)
+                })) {
+                    Ok(resp) => resp,
+                    Err(panic_payload) => {
+                        let msg = panic_payload
+                            .downcast_ref::<&str>()
+                            .copied()
+                            .or_else(|| panic_payload.downcast_ref::<String>().map(|s| s.as_str()))
+                            .unwrap_or("unknown internal error");
+                        error!("engine panic caught: {}", msg);
+                        Some(McpResponse {
+                            jsonrpc: "2.0".to_string(),
+                            id: request_id,
+                            result: None,
+                            error: Some(McpError::internal_error(
+                                "internal engine error".to_string(),
+                            )),
+                        })
+                    }
+                };
+                if response_tx.send(response).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut stdin = io::stdin().lock();
+        let mut stdout = io::stdout();
+        let mut abandoned: usize = 0;
+
+        loop {
+            let line = match read_line_capped(&mut stdin, MAX_STDIN_LINE_BYTES)? {
+                CappedLine::Eof => break,
+                CappedLine::Line(line) => line,
+                CappedLine::TooLong => {
+                    error!(
+                        "stdin line exceeds {} bytes, rejected",
+                        MAX_STDIN_LINE_BYTES
+                    );
+                    let response = McpResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: None,
+                        result: None,
+                        error: Some(McpError::parse_error(format!(
+                            "Request line exceeds {MAX_STDIN_LINE_BYTES} bytes"
+                        ))),
+                    };
+                    writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
+                    stdout.flush()?;
+                    continue;
+                }
+                CappedLine::InvalidUtf8 => {
+                    error!("stdin line is not valid UTF-8, rejected");
+                    let response = McpResponse {
+                        jsonrpc: "2.0".to_string(),
+                        id: None,
+                        result: None,
+                        error: Some(McpError::parse_error(
+                            "Request line is not valid UTF-8".to_string(),
+                        )),
+                    };
+                    writeln!(stdout, "{}", serde_json::to_string(&response)?)?;
+                    stdout.flush()?;
+                    continue;
+                }
+            };
 
             if line.trim().is_empty() {
                 continue;
@@ -723,11 +874,61 @@ mod imp {
 
             debug!("Received: {}", line);
 
+            // Drain late responses from previously timed-out requests so the
+            // response channel stays aligned with the request we are about to
+            // send.
+            while abandoned > 0 {
+                match response_rx.try_recv() {
+                    Ok(_) => abandoned -= 1,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        anyhow::bail!("BUG: MCP worker thread exited while requests pending")
+                    }
+                }
+            }
+
             // Parse error responds with id: null (JSON-RPC 2.0 §4.2). For
             // any successfully-parsed notification, handle_request returns
             // None and we MUST NOT write anything back.
             let response = match serde_json::from_str::<McpRequest>(&line) {
-                Ok(request) => server.handle_request(request),
+                Ok(request) => {
+                    let request_id = request.id.clone();
+                    let is_notification = request_id.is_none();
+                    request_tx
+                        .send(request)
+                        .map_err(|_| anyhow::anyhow!("BUG: MCP worker thread exited"))?;
+                    loop {
+                        match response_rx.recv_timeout(request_timeout) {
+                            Ok(response) => {
+                                if abandoned > 0 {
+                                    abandoned -= 1;
+                                    continue;
+                                }
+                                break response;
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                abandoned += 1;
+                                error!("request timed out after {}s", request_timeout.as_secs());
+                                break if is_notification {
+                                    None
+                                } else {
+                                    Some(McpResponse {
+                                        jsonrpc: "2.0".to_string(),
+                                        id: request_id,
+                                        result: None,
+                                        error: Some(McpError::internal_error(format!(
+                                            "Request timed out after {}s",
+                                            request_timeout.as_secs()
+                                        ))),
+                                    })
+                                };
+                            }
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                anyhow::bail!("BUG: MCP worker thread exited mid-request")
+                            }
+                        }
+                    }
+                }
                 Err(e) => {
                     error!("Parse error: {}", e);
                     Some(McpResponse {
@@ -820,6 +1021,76 @@ mod imp {
             let resp = s.handle_request(req).expect("request must yield response");
             let result = resp.result.expect("result expected");
             assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+        }
+
+        fn read_all_capped(input: &[u8], cap: usize) -> Vec<CappedLine> {
+            let mut reader = io::BufReader::with_capacity(8, input);
+            let mut out = Vec::new();
+            loop {
+                let line = read_line_capped(&mut reader, cap).expect("in-memory read");
+                let eof = matches!(line, CappedLine::Eof);
+                out.push(line);
+                if eof {
+                    break;
+                }
+            }
+            out
+        }
+
+        #[test]
+        fn capped_reader_returns_lines_within_cap() {
+            let lines = read_all_capped(b"hello\nworld\n", 100);
+            assert!(matches!(&lines[0], CappedLine::Line(s) if s == "hello"));
+            assert!(matches!(&lines[1], CappedLine::Line(s) if s == "world"));
+            assert!(matches!(lines[2], CappedLine::Eof));
+        }
+
+        #[test]
+        fn capped_reader_strips_trailing_cr() {
+            let lines = read_all_capped(b"hello\r\n", 100);
+            assert!(matches!(&lines[0], CappedLine::Line(s) if s == "hello"));
+        }
+
+        #[test]
+        fn capped_reader_handles_final_line_without_newline() {
+            let lines = read_all_capped(b"no newline", 100);
+            assert!(matches!(&lines[0], CappedLine::Line(s) if s == "no newline"));
+            assert!(matches!(lines[1], CappedLine::Eof));
+        }
+
+        #[test]
+        fn capped_reader_rejects_over_cap_line_and_resyncs() {
+            let mut input = vec![b'x'; 50];
+            input.push(b'\n');
+            input.extend_from_slice(b"ok\n");
+            let lines = read_all_capped(&input, 10);
+            assert!(matches!(lines[0], CappedLine::TooLong));
+            assert!(
+                matches!(&lines[1], CappedLine::Line(s) if s == "ok"),
+                "stream must stay in sync after an oversized line"
+            );
+        }
+
+        #[test]
+        fn capped_reader_rejects_over_cap_line_at_eof_without_newline() {
+            let input = vec![b'x'; 50];
+            let lines = read_all_capped(&input, 10);
+            assert!(matches!(lines[0], CappedLine::TooLong));
+            assert!(matches!(lines[1], CappedLine::Eof));
+        }
+
+        #[test]
+        fn capped_reader_reports_invalid_utf8() {
+            let lines = read_all_capped(&[0xff, 0xfe, b'\n'], 100);
+            assert!(matches!(lines[0], CappedLine::InvalidUtf8));
+        }
+
+        #[test]
+        fn capped_reader_line_exactly_at_cap_is_accepted() {
+            let mut input = vec![b'x'; 10];
+            input.push(b'\n');
+            let lines = read_all_capped(&input, 10);
+            assert!(matches!(&lines[0], CappedLine::Line(s) if s.len() == 10));
         }
     }
 }

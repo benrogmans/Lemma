@@ -1026,6 +1026,135 @@ fn test_mcp_tools_call_unknown_tool() {
     );
 }
 
+// ── stdin hardening ─────────────────────────────────────────────────────
+
+/// A stdin line over the 10 MiB cap must be rejected with a JSON-RPC parse
+/// error, and the server must stay in sync to serve subsequent requests.
+#[test]
+fn test_mcp_oversized_line_rejected_then_recovers() {
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut cmd = Command::new(bin);
+    cmd.arg("mcp");
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut child = cmd.spawn().expect("Failed to start MCP server");
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let reader = BufReader::new(stdout);
+
+    let mut input = Vec::with_capacity(11 * 1024 * 1024);
+    input.resize(10 * 1024 * 1024 + 1, b'x');
+    input.push(b'\n');
+    input.extend_from_slice(
+        serde_json::to_string(&make_request(1, "initialize", json!({})))
+            .unwrap()
+            .as_bytes(),
+    );
+    input.push(b'\n');
+    stdin.write_all(&input).unwrap();
+    drop(stdin);
+
+    let mut responses = Vec::new();
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+            responses.push(val);
+        }
+    }
+    child.wait().unwrap();
+
+    assert_eq!(responses.len(), 2, "expected error + initialize response");
+    assert_eq!(
+        responses[0]["error"]["code"], -32700,
+        "oversized line must yield parse error: {}",
+        responses[0]
+    );
+    assert!(
+        responses[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("exceeds"),
+        "error should mention the byte cap: {}",
+        responses[0]
+    );
+    assert!(
+        responses[1]["result"].is_object(),
+        "server must recover and answer the next request: {}",
+        responses[1]
+    );
+}
+
+/// `--request-timeout 0` makes every request exceed its wall-clock budget;
+/// the server must answer with a JSON-RPC internal error instead of hanging.
+/// The spec carries a rule chain so handling takes real work and the
+/// zero-length budget always elapses before the worker finishes.
+#[test]
+fn test_mcp_request_timeout_returns_error() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let mut spec = String::from("spec slow_spec\ndata x: number\nrule r0: x + 1\n");
+    for i in 1..100 {
+        spec.push_str(&format!("rule r{i}: r{} * 2 + {i}\n", i - 1));
+    }
+    write_spec(temp_dir.path(), "slow.lemma", &spec);
+
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut cmd = Command::new(bin);
+    cmd.arg("mcp")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--request-timeout")
+        .arg("0");
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut child = cmd.spawn().expect("Failed to start MCP server");
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let reader = BufReader::new(stdout);
+
+    let request = make_request(
+        1,
+        "tools/call",
+        json!({
+            "name": "evaluate",
+            "arguments": { "spec": "slow_spec", "data": ["x=1"] }
+        }),
+    );
+    let mut input = serde_json::to_string(&request).unwrap();
+    input.push('\n');
+    stdin.write_all(input.as_bytes()).unwrap();
+    drop(stdin);
+
+    let mut responses = Vec::new();
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
+            responses.push(val);
+        }
+    }
+    child.wait().unwrap();
+
+    assert_eq!(responses.len(), 1, "expected exactly one timeout response");
+    assert_eq!(responses[0]["id"], 1, "response id must match request");
+    assert!(
+        responses[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("timed out"),
+        "error should mention timeout: {}",
+        responses[0]
+    );
+}
+
 // ── add_spec error cases ────────────────────────────────────────────────
 
 #[test]

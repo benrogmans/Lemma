@@ -17,7 +17,7 @@ pub fn comparison_operation(
 ) -> OperationResult {
     let _ = unit_context;
     match (&left.value, &right.value) {
-        (ValueKind::Range(range_left, range_right), ValueKind::Quantity(_, sig))
+        (ValueKind::Range(range_left, range_right), ValueKind::Measure(_, sig))
             if left.lemma_type.is_date_range() && right.lemma_type.is_calendar_like() =>
         {
             let (ValueKind::Date(left_date), ValueKind::Date(right_date)) =
@@ -28,7 +28,7 @@ pub fn comparison_operation(
                 );
             };
             let calendar_unit =
-                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
             let measure = super::datetime::compute_date_calendar_difference(
                 left_date,
                 right_date,
@@ -38,7 +38,7 @@ pub fn comparison_operation(
             compare_with_operation_result(measure, op, right)
         }
 
-        (ValueKind::Quantity(_, sig), ValueKind::Range(range_left, range_right))
+        (ValueKind::Measure(_, sig), ValueKind::Range(range_left, range_right))
             if right.lemma_type.is_date_range() && left.lemma_type.is_calendar_like() =>
         {
             let (ValueKind::Date(left_date), ValueKind::Date(right_date)) =
@@ -49,7 +49,7 @@ pub fn comparison_operation(
                 );
             };
             let calendar_unit =
-                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
             let measure = super::datetime::compute_date_calendar_difference(
                 left_date,
                 right_date,
@@ -60,7 +60,7 @@ pub fn comparison_operation(
         }
 
         (ValueKind::Range(range_left, range_right), _) => {
-            let measure = super::range::compute_quantity(
+            let measure = super::range::compute_measure(
                 range_left.as_ref(),
                 range_right.as_ref(),
                 Some(right),
@@ -107,28 +107,28 @@ pub fn comparison_operation(
         (ValueKind::Ratio(l, _), ValueKind::Ratio(r, _)) => {
             compare_stored_rationals(l, op, r)
         }
-        (ValueKind::Quantity(left_value, _), ValueKind::Quantity(right_value, _))
+        (ValueKind::Measure(left_value, _), ValueKind::Measure(right_value, _))
             if left.lemma_type.is_calendar_like() && right.lemma_type.is_calendar_like() =>
         {
             compare_stored_rationals(left_value, op, right_value)
         }
 
-        (ValueKind::Quantity(l, _), ValueKind::Quantity(r, _)) => {
+        (ValueKind::Measure(l, _), ValueKind::Measure(r, _)) => {
             let l_decomp = left
                 .lemma_type
-                .quantity_type_decomposition()
+                .measure_type_decomposition()
                 .expect("BUG: decomposition must be resolved after planning");
             let r_decomp = right
                 .lemma_type
-                .quantity_type_decomposition()
+                .measure_type_decomposition()
                 .expect("BUG: decomposition must be resolved after planning");
             let same_decomp = l_decomp == r_decomp;
-            if !left.lemma_type.same_quantity_family(&right.lemma_type)
-                && !left.lemma_type.compatible_with_anonymous_quantity(&right.lemma_type)
+            if !left.lemma_type.same_measure_family(&right.lemma_type)
+                && !left.lemma_type.compatible_with_anonymous_measure(&right.lemma_type)
                 && !same_decomp
             {
                 unreachable!(
-                    "BUG: compared incompatible quantity types ({} vs {}); planning must reject this",
+                    "BUG: compared incompatible measure types ({} vs {}); planning must reject this",
                     left.lemma_type.name(),
                     right.lemma_type.name()
                 );
@@ -139,22 +139,22 @@ pub fn comparison_operation(
         (ValueKind::Date(_), ValueKind::Date(_)) => super::datetime::datetime_comparison(left, op, right),
         (ValueKind::Time(_), ValueKind::Time(_)) => super::datetime::time_comparison(left, op, right),
 
-        (ValueKind::Quantity(value, _), ValueKind::Number(n))
-            if left.lemma_type.is_duration_like_quantity() =>
+        (ValueKind::Measure(value, _), ValueKind::Number(n))
+            if left.lemma_type.is_duration_like_measure() =>
         {
             compare_stored_rationals(value, op, n)
         }
-        (ValueKind::Number(n), ValueKind::Quantity(value, _))
-            if right.lemma_type.is_duration_like_quantity() =>
+        (ValueKind::Number(n), ValueKind::Measure(value, _))
+            if right.lemma_type.is_duration_like_measure() =>
         {
             compare_stored_rationals(n, op, value)
         }
-        (ValueKind::Quantity(value, _), ValueKind::Number(n))
+        (ValueKind::Measure(value, _), ValueKind::Number(n))
             if left.lemma_type.is_calendar_like() =>
         {
             compare_stored_rationals(value, op, n)
         }
-        (ValueKind::Number(n), ValueKind::Quantity(value, _))
+        (ValueKind::Number(n), ValueKind::Measure(value, _))
             if right.lemma_type.is_calendar_like() =>
         {
             compare_stored_rationals(n, op, value)
@@ -204,7 +204,7 @@ fn compare_with_operation_result(
         &left_value,
         op,
         right,
-        UnitResolutionContext::NamedQuantityOnly,
+        UnitResolutionContext::NamedMeasureOnly,
     )
 }
 
@@ -221,7 +221,7 @@ fn compare_with_right_result(
         left,
         op,
         &right_value,
-        UnitResolutionContext::NamedQuantityOnly,
+        UnitResolutionContext::NamedMeasureOnly,
     )
 }
 
@@ -238,7 +238,7 @@ mod tests {
 
     fn eval_bool(left: &LiteralValue, op: &ComparisonComputation, right: &LiteralValue) -> bool {
         let OperationResult::Value(lit) =
-            comparison_operation(left, op, right, UnitResolutionContext::NamedQuantityOnly)
+            comparison_operation(left, op, right, UnitResolutionContext::NamedMeasureOnly)
         else {
             panic!("expected boolean value");
         };

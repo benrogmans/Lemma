@@ -5,8 +5,8 @@
 //! `RatioLiteral::parse`. Pins exact `ValueKind::Ratio(decimal, optional_unit)`,
 //! not substrings of `Display`, so a 100x off value cannot pass.
 //!
-//! Also includes a Quantity-side regression: `"5%"` against a Quantity type must error
-//! with the friendly Quantity message (no leftover `%`/`%%` handling in the Quantity
+//! Also includes a Measure-side regression: `"5%"` against a Measure type must error
+//! with the friendly Measure message (no leftover `%`/`%%` handling in the Measure
 //! literal parser).
 
 use lemma::DateTimeValue;
@@ -94,7 +94,7 @@ fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
 fn percent_spec() -> &'static str {
     r#"
 spec s
-data r: percent
+data r: ratio
 rule out: r
 "#
 }
@@ -379,35 +379,35 @@ fn rejects_unknown_unit_name() {
     );
 }
 
-// ─── Quantity-side regression: `%` is no longer accepted by NumberWithUnit ───
+// ─── Measure-side regression: `%` is no longer accepted by NumberWithUnit ───
 
 #[test]
-fn quantity_type_rejects_percent_sigil() {
+fn measure_type_rejects_percent_sigil() {
     let code = r#"
 spec s
-data r: quantity -> unit eur 1
+data r: measure -> unit eur 1
 rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
     let msg = run_err(&engine, "s", "5%");
     assert!(
-        msg.contains("Quantity value")
+        msg.contains("Measure value")
             || msg.contains("must include a unit")
-            || msg.contains("Invalid quantity"),
-        "expected friendly Quantity-unit error, got: {msg}"
+            || msg.contains("Invalid measure"),
+        "expected friendly Measure-unit error, got: {msg}"
     );
     assert!(
         !msg.contains("Unknown unit 'percent'"),
-        "Quantity path must not leak a 'percent' unit lookup, got: {msg}"
+        "Measure path must not leak a 'percent' unit lookup, got: {msg}"
     );
 }
 
 #[test]
-fn quantity_type_rejects_permille_sigil() {
+fn measure_type_rejects_permille_sigil() {
     let code = r#"
 spec s
-data r: quantity -> unit eur 1
+data r: measure -> unit eur 1
 rule out: r
 "#;
     let mut engine = Engine::new();
@@ -415,6 +415,6 @@ rule out: r
     let msg = run_err(&engine, "s", "5%%");
     assert!(
         !msg.contains("Unknown unit 'permille'"),
-        "Quantity path must not leak a 'permille' unit lookup, got: {msg}"
+        "Measure path must not leak a 'permille' unit lookup, got: {msg}"
     );
 }

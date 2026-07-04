@@ -550,7 +550,7 @@ rule other: 1"#,
     fn parse_rejects_plain_number_plus_converted_operand() {
         let result = parse(
             r#"spec test
-data c: quantity
+data c: measure
   -> unit eur 1
   -> unit usd 0.84
 rule z: 5 + c as usd"#,
@@ -571,7 +571,7 @@ rule z: 5 + c as usd"#,
             (
                 "money",
                 r#"spec test
-data c: quantity
+data c: measure
   -> unit eur 1
   -> unit usd 0.84
 rule z: 5 as usd + c as usd"#,
@@ -595,7 +595,7 @@ rule z: duration as hours + 1 > 0"#,
                 r#"spec test
 uses lemma units
 data age: date range
-data c: quantity
+data c: measure
   -> unit eur 1
 rule z: age as days + c"#,
             ),
@@ -661,7 +661,7 @@ rule z: age as days + c"#,
     fn parse_range_binds_tighter_than_multiply() {
         let base = r#"spec test
 uses lemma units
-data rate: quantity -> unit eur 1
+data rate: measure -> unit eur 1
 data period_start: 2026-01-01
 data period_end: 2026-01-02
 "#;
@@ -706,8 +706,8 @@ rule span: period_start...period_end + 1 day"#,
         let expression = rule_expression(
             r#"spec test
 uses lemma units
-data money: quantity -> unit eur 1
-data rate: quantity -> unit eur_per_hour eur/hour
+data money: measure -> unit eur 1
+data rate: measure -> unit eur_per_hour eur/hour
 data hourly_rate: 50 eur_per_hour
 data period_start: 2026-01-01
 data period_end: 2026-01-02
@@ -1591,5 +1591,161 @@ data y: 2"#;
             "formatted duplicate-repo file must still merge to one logical repo"
         );
         assert_eq!(again.flatten_specs().len(), 2);
+    }
+
+    #[test]
+    fn parse_rejects_data_named_measure() {
+        let result = parse(
+            "spec s\ndata measure: 1",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "data named measure (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_data_named_number() {
+        let result = parse(
+            "spec s\ndata number: 42",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "data named number (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_data_named_text() {
+        let result = parse(
+            "spec s\ndata text: \"hello\"",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "data named text (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_data_named_date() {
+        let result = parse(
+            "spec s\ndata date: 2024-01-01",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "data named date (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_data_named_boolean() {
+        let result = parse(
+            "spec s\ndata boolean: true",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "data named boolean (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_data_named_ratio() {
+        let result = parse(
+            "spec s\ndata ratio: 5%",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "data named ratio (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_rule_named_measure() {
+        let result = parse(
+            "spec s\ndata x: 1\nrule measure: x",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "rule named measure (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_rule_named_number() {
+        let result = parse(
+            "spec s\ndata x: 1\nrule number: x",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "rule named number (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_rule_named_text() {
+        let result = parse(
+            "spec s\ndata x: 1\nrule text: x",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "rule named text (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_rule_named_date() {
+        let result = parse(
+            "spec s\ndata x: 1\nrule date: x",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "rule named date (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_rule_named_boolean() {
+        let result = parse(
+            "spec s\ndata x: 1\nrule boolean: x",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "rule named boolean (type keyword) must be rejected"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_rule_named_ratio() {
+        let result = parse(
+            "spec s\ndata x: 1\nrule ratio: x",
+            crate::parsing::source::SourceType::Volatile,
+            &ResourceLimits::default(),
+        );
+        assert!(
+            result.is_err(),
+            "rule named ratio (type keyword) must be rejected"
+        );
     }
 }

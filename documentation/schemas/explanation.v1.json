@@ -205,7 +205,7 @@
         "text"
       ],
       "additionalProperties": false,
-      "description": "A unit reconciliation fact stated when an operator's operands carry different units of the same quantity family, so the implicit conversion inside the arithmetic is followable without external lookup tables. Derived from declared unit factors.",
+      "description": "A unit reconciliation fact stated when an operator's operands carry different units of the same measure family, so the implicit conversion inside the arithmetic is followable without external lookup tables. Derived from declared unit factors.",
       "properties": {
         "type": {
           "const": "unit_equivalence"

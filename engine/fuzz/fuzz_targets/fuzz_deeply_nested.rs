@@ -1,13 +1,17 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
+use lemma::DateTimeValue;
 use lemma::Engine;
+use libfuzzer_sys::fuzz_target;
+use std::collections::HashMap;
 
+// Depth range 1..=9 crosses the default max_expression_depth of 7, so both
+// the accept path and the depth-limit rejection path are exercised.
 fuzz_target!(|data: &[u8]| {
     if data.len() < 2 {
         return;
     }
-    let depth = (data[0] as usize % 6) + 1;
+    let depth = (data[0] as usize % 9) + 1;
     let variant = data[1] % 4;
 
     let mut expr = String::from("1");
@@ -26,5 +30,14 @@ fuzz_target!(|data: &[u8]| {
     );
 
     let mut engine = Engine::new();
-    let _ = engine.load(&code, lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_nested"))));
+    let loaded = engine.load(
+        &code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_nested"))),
+    );
+
+    // Property: load Ok => evaluation must not panic.
+    if loaded.is_ok() {
+        let now = DateTimeValue::now();
+        let _ = engine.run(None, "fuzz_nested", Some(&now), HashMap::new(), false, None);
+    }
 });

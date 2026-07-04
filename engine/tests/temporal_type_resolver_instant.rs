@@ -34,12 +34,12 @@ fn qualified_parent_data_import_resolves_child_at_qualifier_not_root_slice() {
         .load(
             r#"
 spec child 2025-01-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 
 spec child 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2

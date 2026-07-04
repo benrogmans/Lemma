@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub enum DataValueInput {
     Convenience(String),
     Boolean(bool),
-    QuantityMap(BTreeMap<String, String>),
+    MeasureMap(BTreeMap<String, String>),
     RatioMap(BTreeMap<String, String>),
 }
 
@@ -43,16 +43,16 @@ pub fn parse_data_value(
                 value_kind_tag_for_type(type_spec)
             )));
         }
-        (DataValueInput::QuantityMap(map), TypeSpecification::Quantity { .. }) => {
-            quantity_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?
+        (DataValueInput::MeasureMap(map), TypeSpecification::Measure { .. }) => {
+            measure_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?
         }
         (
-            DataValueInput::QuantityMap(map) | DataValueInput::RatioMap(map),
+            DataValueInput::MeasureMap(map) | DataValueInput::RatioMap(map),
             TypeSpecification::Ratio { .. },
         ) => ratio_from_unit_map(map, lemma_type.as_ref()).map_err(to_err)?,
-        (DataValueInput::QuantityMap(_), _) => {
+        (DataValueInput::MeasureMap(_), _) => {
             return Err(to_err(format!(
-                "quantity unit map is only valid for quantity data, not {}",
+                "measure unit map is only valid for measure data, not {}",
                 value_kind_tag_for_type(type_spec)
             )));
         }
@@ -70,18 +70,18 @@ pub fn parse_data_value(
     })
 }
 
-fn quantity_from_unit_map(
+fn measure_from_unit_map(
     map: &BTreeMap<String, String>,
     lemma_type: &LemmaType,
 ) -> Result<ValueKind, String> {
     if map.is_empty() {
-        return Err("quantity input map must contain at least one unit key".to_string());
+        return Err("measure input map must contain at least one unit key".to_string());
     }
     if lemma_type
-        .quantity_unit_names()
+        .measure_unit_names()
         .is_none_or(|names| names.is_empty())
     {
-        unreachable!("BUG: quantity type has no units at data input");
+        unreachable!("BUG: measure type has no units at data input");
     }
 
     let mut kinds: Vec<ValueKind> = Vec::with_capacity(map.len());
@@ -94,28 +94,28 @@ fn quantity_from_unit_map(
     }
 
     let first = kinds.first().expect("BUG: map non-empty");
-    let ValueKind::Quantity(first_magnitude, first_signature) = first else {
-        return Err("expected quantity value".to_string());
+    let ValueKind::Measure(first_magnitude, first_signature) = first else {
+        return Err("expected measure value".to_string());
     };
     if first_signature.len() != 1 || first_signature[0].1 != 1 {
         return Err(
-            "quantity map produced a compound signature; use a convenience string instead"
+            "measure map produced a compound signature; use a convenience string instead"
                 .to_string(),
         );
     }
     for kind in kinds.iter().skip(1) {
-        let ValueKind::Quantity(magnitude, signature) = kind else {
-            return Err("expected quantity value".to_string());
+        let ValueKind::Measure(magnitude, signature) = kind else {
+            return Err("expected measure value".to_string());
         };
         if signature.len() != 1 || signature[0].1 != 1 {
             return Err(
-                "quantity map produced a compound signature; use a convenience string instead"
+                "measure map produced a compound signature; use a convenience string instead"
                     .to_string(),
             );
         }
         if magnitude != first_magnitude {
             return Err(
-                "quantity unit map values disagree when converted to a common basis".to_string(),
+                "measure unit map values disagree when converted to a common basis".to_string(),
             );
         }
     }
@@ -166,10 +166,10 @@ fn ratio_from_unit_map(
 fn value_kind_tag_for_type(spec: &TypeSpecification) -> &'static str {
     match spec {
         TypeSpecification::Boolean { .. } => "boolean",
-        TypeSpecification::Quantity { .. } => "quantity",
+        TypeSpecification::Measure { .. } => "measure",
         TypeSpecification::Number { .. } => "number",
         TypeSpecification::NumberRange { .. }
-        | TypeSpecification::QuantityRange { .. }
+        | TypeSpecification::MeasureRange { .. }
         | TypeSpecification::DateRange { .. }
         | TypeSpecification::TimeRange { .. }
         | TypeSpecification::RatioRange { .. } => "range",
@@ -187,7 +187,7 @@ mod tests {
     use super::*;
     use crate::computation::rational::{decimal_to_rational, rational_new, rational_one};
     use crate::planning::semantics::{
-        primitive_number_arc, QuantityUnit, QuantityUnits, RatioUnit, RatioUnits, TypeExtends,
+        primitive_number_arc, MeasureUnit, MeasureUnits, RatioUnit, RatioUnits, TypeExtends,
     };
 
     fn dummy_source() -> Source {
@@ -202,28 +202,28 @@ mod tests {
         )
     }
 
-    fn mass_quantity_type() -> Arc<LemmaType> {
+    fn mass_measure_type() -> Arc<LemmaType> {
         Arc::new(LemmaType::new(
             "Mass".to_string(),
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 minimum: None,
                 maximum: None,
                 decimals: None,
-                units: QuantityUnits::from(vec![
-                    QuantityUnit {
+                units: MeasureUnits::from(vec![
+                    MeasureUnit {
                         name: "kilogram".to_string(),
                         factor: rational_one(),
-                        derived_quantity_factors: Vec::new(),
-                        decomposition: crate::literals::BaseQuantityVector::new(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: crate::literals::BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
                         default_magnitude: None,
                     },
-                    QuantityUnit {
+                    MeasureUnit {
                         name: "gram".to_string(),
                         factor: decimal_to_rational(Decimal::new(1, 3)).expect("factor"),
-                        derived_quantity_factors: Vec::new(),
-                        decomposition: crate::literals::BaseQuantityVector::new(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: crate::literals::BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
                         default_magnitude: None,
@@ -279,15 +279,14 @@ mod tests {
     }
 
     #[test]
-    fn quantity_map_agreeing_units_canonicalize() {
-        let ty = mass_quantity_type();
+    fn measure_map_agreeing_units_canonicalize() {
+        let ty = mass_measure_type();
         let mut map = BTreeMap::new();
         map.insert("kilogram".to_string(), "2".to_string());
         map.insert("gram".to_string(), "2000".to_string());
-        let lit =
-            parse_data_value(&DataValueInput::QuantityMap(map), &ty, &dummy_source()).unwrap();
-        let ValueKind::Quantity(magnitude, signature) = &lit.value else {
-            panic!("expected quantity");
+        let lit = parse_data_value(&DataValueInput::MeasureMap(map), &ty, &dummy_source()).unwrap();
+        let ValueKind::Measure(magnitude, signature) = &lit.value else {
+            panic!("expected measure");
         };
         assert_eq!(magnitude, &rational_new(2, 1));
         assert_eq!(signature.len(), 1);
@@ -295,13 +294,13 @@ mod tests {
     }
 
     #[test]
-    fn quantity_map_disagreeing_units_rejected() {
-        let ty = mass_quantity_type();
+    fn measure_map_disagreeing_units_rejected() {
+        let ty = mass_measure_type();
         let mut map = BTreeMap::new();
         map.insert("kilogram".to_string(), "2".to_string());
         map.insert("gram".to_string(), "3000".to_string());
         let err =
-            parse_data_value(&DataValueInput::QuantityMap(map), &ty, &dummy_source()).unwrap_err();
+            parse_data_value(&DataValueInput::MeasureMap(map), &ty, &dummy_source()).unwrap_err();
         assert!(err.message().contains("disagree"));
     }
 

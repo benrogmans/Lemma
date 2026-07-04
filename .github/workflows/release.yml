@@ -278,6 +278,12 @@ jobs:
       - name: Wait for crates.io index
         run: sleep 60
 
+      - name: Publish lemma-lsp
+        run: cargo publish -p lemma-lsp --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: sleep 60
+
       - name: Publish lemma-openapi
         run: cargo publish -p lemma-openapi --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

@@ -207,7 +207,7 @@ rule hours_diff: time1...time2 as hours as number
             decimal_lit("0")
         );
     } else {
-        panic!("Expected Quantity duration value");
+        panic!("Expected Measure duration value");
     }
 }
 

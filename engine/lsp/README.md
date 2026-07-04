@@ -21,7 +21,7 @@ From the **repository root**:
 cargo build --release -p lemma
 ```
 
-The LSP runs as `lemma lsp` (stdio). The standalone `lsp` binary (`cargo build --release -p lsp`) still exists for direct invocation and WASM builds.
+The LSP runs as `lemma lsp` (stdio).
 
 The crate also supports a **WASM** build for in-browser use; the library entry point is `lsp::browser::serve`. The Lemma WASM playground does not use the LSP for diagnostics; it uses the engine’s `getDiagnostics` API directly for inline errors.
 

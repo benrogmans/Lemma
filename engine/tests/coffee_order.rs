@@ -19,7 +19,7 @@ fn load_coffee_order() -> Engine {
     let examples = r#"
 spec examples
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17
@@ -130,9 +130,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .result
         .value()
         .expect("base_price should have value");
-    // base_price should be Quantity with unit "eur"
+    // base_price should be Measure with unit "eur"
     match &base_price_value.value {
-        lemma::ValueKind::Quantity(n, signature) => {
+        lemma::ValueKind::Measure(n, signature) => {
             let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
                 unit, "eur",
@@ -150,7 +150,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
             );
         }
         _ => panic!(
-            "base_price should be Quantity type, got: {:?}",
+            "base_price should be Measure type, got: {:?}",
             base_price_value.value
         ),
     }
@@ -201,9 +201,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .result
         .value()
         .expect("price_per_cup should have value");
-    // price_per_cup should be Quantity with unit "eur" (inherited from base_price)
+    // price_per_cup should be Measure with unit "eur" (inherited from base_price)
     match &cup_price.value {
-        lemma::ValueKind::Quantity(n, signature) => {
+        lemma::ValueKind::Measure(n, signature) => {
             let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
                 unit, "eur",
@@ -222,7 +222,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
             );
         }
         _ => panic!(
-            "price_per_cup should be Quantity type, got: {:?}",
+            "price_per_cup should be Measure type, got: {:?}",
             cup_price.value
         ),
     }
@@ -241,9 +241,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .result
         .value()
         .expect("subtotal should have value");
-    // subtotal should be Quantity with unit "eur" (inherited from price_per_cup)
+    // subtotal should be Measure with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::ValueKind::Quantity(n, signature) => {
+        lemma::ValueKind::Measure(n, signature) => {
             let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
                 unit, "eur",
@@ -253,7 +253,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
             n.clone()
         }
         _ => panic!(
-            "subtotal should be Quantity type, got: {:?}",
+            "subtotal should be Measure type, got: {:?}",
             subtotal_value.value
         ),
     };
@@ -307,19 +307,19 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("total rule not found");
 
     let total_eur = total
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get("eur"))
-        .expect("total quantity map must include eur");
+        .expect("total measure map must include eur");
     let subtotal_eur = response
         .results
         .values()
         .find(|r| r.rule.name == "subtotal")
         .expect("subtotal rule not found")
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get("eur"))
-        .expect("subtotal quantity map must include eur");
+        .expect("subtotal measure map must include eur");
     assert_eq!(
         total_eur, subtotal_eur,
         "total should equal subtotal when discount is 0"
@@ -355,9 +355,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .result
         .value()
         .expect("base_price should have value");
-    // base_price should be Quantity with unit "eur"
+    // base_price should be Measure with unit "eur"
     match &base_price_value.value {
-        lemma::ValueKind::Quantity(n, signature) => {
+        lemma::ValueKind::Measure(n, signature) => {
             let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
                 unit, "eur",
@@ -375,7 +375,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
             );
         }
         _ => panic!(
-            "base_price should be Quantity type, got: {:?}",
+            "base_price should be Measure type, got: {:?}",
             base_price_value.value
         ),
     }
@@ -473,9 +473,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
         .value()
         .expect("total should have value");
 
-    // subtotal should be Quantity with unit "eur" (inherited from price_per_cup)
+    // subtotal should be Measure with unit "eur" (inherited from price_per_cup)
     let subtotal_num = match &subtotal_value.value {
-        lemma::ValueKind::Quantity(n, signature) => {
+        lemma::ValueKind::Measure(n, signature) => {
             let unit = signature.first().map(|(n, _)| n.as_str()).unwrap_or("");
             assert_eq!(
                 unit, "eur",
@@ -485,7 +485,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
             n.clone()
         }
         _ => panic!(
-            "subtotal should be Quantity type, got: {:?}",
+            "subtotal should be Measure type, got: {:?}",
             subtotal_value.value
         ),
     };
@@ -500,10 +500,10 @@ fn test_coffee_order_latte_large_with_loyalty() {
     );
 
     let total_eur = total
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get("eur"))
-        .expect("total quantity map must include eur");
+        .expect("total measure map must include eur");
     // discount_amount = 12.60 * 0.10 = 1.26
     // total = 12.60 - 1.26 = 11.34
     assert_eq!(

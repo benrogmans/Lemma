@@ -68,10 +68,10 @@ rule r: price
 }
 
 #[test]
-fn quantity_unit_literal_matches_declared_unit_case() {
+fn measure_unit_literal_matches_declared_unit_case() {
     let code = r#"
 spec s
-data mass: quantity -> unit gram 1
+data mass: measure -> unit gram 1
 rule r: 500 Gram
 "#;
     let mut engine = Engine::new();

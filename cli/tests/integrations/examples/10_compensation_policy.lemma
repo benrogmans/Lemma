@@ -106,13 +106,13 @@ with eng_policy.performance_rating : 4.2
 with eng_policy.years_of_service   : 7
 
 rule effective_base:
-  eng_policy.base_for_level * (1 + location_cola)
+  eng_policy.base_for_level + eng_policy.base_for_level * location_cola
 
 rule location_adjusted_stock:
-  eng_policy.stock_value * (1 + location_cola)
+  eng_policy.stock_value + eng_policy.stock_value * location_cola
 
 rule location_adjusted_bonus:
-  eng_policy.performance_bonus * (1 + location_cola)
+  eng_policy.performance_bonus + eng_policy.performance_bonus * location_cola
 
 rule total_location_adjusted:
   effective_base + location_adjusted_bonus
@@ -189,7 +189,7 @@ rule on_call_stipend:
   unless on_call_rotation then 6_000
 
 rule effective_base:
-  eng_policy.base_for_level * (1 + location_cola)
+  eng_policy.base_for_level + eng_policy.base_for_level * location_cola
 
 rule all_bonuses:
   eng_policy.performance_bonus + eng_policy.tenure_bonus
@@ -201,7 +201,7 @@ rule base_plus_bonuses:
   effective_base + all_bonuses
 
 rule adjusted_stock:
-  eng_policy.stock_value * (1 + location_cola)
+  eng_policy.stock_value + eng_policy.stock_value * location_cola
 
 rule total_cash:
   base_plus_bonuses + adjusted_stock

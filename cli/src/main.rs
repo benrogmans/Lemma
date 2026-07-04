@@ -2,7 +2,6 @@ mod data_json;
 mod error_formatter;
 mod formatter;
 mod interactive;
-mod lsp;
 mod mcp;
 pub(crate) mod server;
 
@@ -127,6 +126,13 @@ enum Commands {
         /// Enable explanation generation
         #[arg(long)]
         explanations: bool,
+        /// Wall-clock timeout for a single evaluation request, in seconds
+        #[arg(long, default_value = "10", value_name = "SECONDS")]
+        eval_timeout: u64,
+        /// Allow cross-origin browser requests from any origin (permissive CORS).
+        /// Off by default: cross-origin requests are denied.
+        #[arg(long)]
+        cors: bool,
     },
     /// Start Language Server Protocol server (stdio)
     Lsp,
@@ -138,6 +144,9 @@ enum Commands {
         /// Enable admin tools: add_spec, get_spec_source (read-only by default)
         #[arg(long)]
         admin: bool,
+        /// Wall-clock timeout for a single request, in seconds
+        #[arg(long, default_value = "10", value_name = "SECONDS")]
+        request_timeout: u64,
     },
     /// Fetch dependencies from the registry
     Fetch {
@@ -284,15 +293,23 @@ fn main() {
             port,
             watch,
             explanations,
+            eval_timeout,
+            cors,
         } => server_command(
             workspace_dir(prefix.as_ref()),
             host,
             *port,
             *watch,
             *explanations,
+            *eval_timeout,
+            *cors,
         ),
         Commands::Lsp => lsp_command(),
-        Commands::Mcp { prefix, admin } => mcp_command(prefix.as_deref(), *admin),
+        Commands::Mcp {
+            prefix,
+            admin,
+            request_timeout,
+        } => mcp_command(prefix.as_deref(), *admin, *request_timeout),
         Commands::Fetch {
             dependency,
             prefix,
@@ -633,12 +650,15 @@ fn list_command(source_path: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn server_command(
     source: &Path,
     host: &str,
     port: u16,
     watch: bool,
     explanations: bool,
+    eval_timeout_secs: u64,
+    cors: bool,
 ) -> Result<()> {
     use tokio::runtime::Runtime;
     let rt = Runtime::new()?;
@@ -655,6 +675,8 @@ fn server_command(
             watch,
             explanations,
             source.to_path_buf(),
+            eval_timeout_secs,
+            cors,
         )
         .await
     })?;
@@ -662,16 +684,19 @@ fn server_command(
 }
 
 fn lsp_command() -> Result<()> {
-    lsp::stdio::run_stdio().map_err(anyhow::Error::from)
+    lemma_lsp::stdio::run_stdio().map_err(anyhow::Error::from)
 }
 
-fn mcp_command(workdir: Option<&Path>, admin: bool) -> Result<()> {
+fn mcp_command(workdir: Option<&Path>, admin: bool, request_timeout_secs: u64) -> Result<()> {
     let mut engine = Engine::new();
     if let Some(path) = workdir {
         let _: usize = load_workspace(&mut engine, path)?;
     }
 
-    let config = mcp::McpConfig { admin };
+    let config = mcp::McpConfig {
+        admin,
+        request_timeout: std::time::Duration::from_secs(request_timeout_secs),
+    };
 
     eprintln!(
         "Starting MCP server with {} spec(s) loaded",
@@ -1000,16 +1025,8 @@ async fn fetch_workspace_deps(
     Ok(())
 }
 
-#[cfg(feature = "registry")]
 fn make_fetch_registry() -> Box<dyn lemma::Registry> {
     Box::new(lemma::LemmaBase::new())
-}
-
-#[cfg(not(feature = "registry"))]
-fn make_fetch_registry() -> Box<dyn lemma::Registry> {
-    eprintln!("Error: `lemma fetch` requires the `registry` feature.");
-    eprintln!("Recompile with: cargo build --features registry");
-    std::process::exit(1);
 }
 
 /// Load specs from a workspace directory (recursive walk) or a single `.lemma` path.

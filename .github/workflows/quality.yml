@@ -163,6 +163,9 @@ jobs:
       - name: Build release
         run: cargo build --release --workspace --verbose
 
+      - name: Check engine without registry feature
+        run: cargo check -p lemma-engine --no-default-features
+
   security:
     name: Security & Dependencies
     runs-on: ubuntu-latest

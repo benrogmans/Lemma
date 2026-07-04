@@ -6,7 +6,7 @@ Shows conditional logic with unless clauses.
 Easy to understand: books returned late incur fees.
 """
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
   -> minimum 0 eur
@@ -32,7 +32,7 @@ rule is_in_grace_period: days_overdue <= 3
 rule total_fee: days_overdue * daily_fee
 
 rule final_fee: total_fee
-  unless is_first_offense   then total_fee - 50%
+  unless is_first_offense   then total_fee * 50%
   unless is_in_grace_period then 0 eur
 
 rule can_checkout: yes

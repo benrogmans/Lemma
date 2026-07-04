@@ -182,7 +182,7 @@ fn explanation_unit_conversion_steps() {
         .load(
             r#"
 spec t
-data weight: quantity -> unit kg 1 -> unit gram 0.001
+data weight: measure -> unit kg 1 -> unit gram 0.001
 data w: 2 kg
 rule in_grams: w as gram
 "#,

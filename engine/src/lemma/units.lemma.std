@@ -8,7 +8,7 @@ Length units are canonical `metre` (not `kilometer`).
 Calendar units are canonical `month` (not `year`).
 """
 
-data duration: quantity
+data duration: measure
   -> unit second 1
   -> unit seconds 1
   -> unit millisecond 0.001
@@ -25,7 +25,7 @@ data duration: quantity
   -> unit weeks 604800
   -> trait duration
 
-data length: quantity
+data length: measure
   -> unit metre 1
   -> unit metres 1
   -> unit meter 1
@@ -43,7 +43,7 @@ data length: quantity
   -> unit kilometer 1000
   -> unit kilometers 1000
 
-data mass: quantity
+data mass: measure
   -> unit kilogram 1
   -> unit kilograms 1
   -> unit gram 0.001
@@ -53,27 +53,27 @@ data mass: quantity
   -> unit tonne 1000
   -> unit tonnes 1000
 
-data current: quantity
+data current: measure
   -> unit ampere 1
   -> unit amperes 1
   -> unit milliampere 0.001
   -> unit milliamperes 0.001
 
-data temperature: quantity
+data temperature: measure
   -> unit kelvin 1
   -> unit kelvins 1
 
-data substance: quantity
+data substance: measure
   -> unit mole 1
   -> unit moles 1
   -> unit millimole 0.001
   -> unit millimoles 0.001
 
-data luminous_intensity: quantity
+data luminous_intensity: measure
   -> unit candela 1
   -> unit candelas 1
 
-data calendar: quantity
+data calendar: measure
   -> unit month 1
   -> unit months 1
   -> unit year 12

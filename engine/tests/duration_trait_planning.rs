@@ -35,7 +35,7 @@ fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
     );
 }
 
-fn eval_rule_quantity_unit(
+fn eval_rule_measure_unit(
     code: impl AsRef<str>,
     spec_name: &str,
     rule_name: &str,
@@ -52,11 +52,11 @@ fn eval_rule_quantity_unit(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get(unit))
         .cloned()
-        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
+        .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
 }
 
 fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String {
@@ -211,7 +211,7 @@ data elapsed: duration -> default 2 hours
 rule value: elapsed as minutes"#;
     let _engine = load_ok(code);
     assert_eq!(
-        eval_rule_quantity_unit(code, "test", "value", "minutes"),
+        eval_rule_measure_unit(code, "test", "value", "minutes"),
         "120"
     );
 }
@@ -246,7 +246,7 @@ data elapsed: duration"#;
 #[test]
 fn planning_trait_duration_requires_second_factor_one() {
     let code = r#"spec test
-data duration: quantity
+data duration: measure
   -> unit second 2
   -> unit hour 3600
   -> trait duration"#;
@@ -256,7 +256,7 @@ data duration: quantity
 #[test]
 fn planning_trait_duration_requires_second_unit() {
     let code = r#"spec test
-data duration: quantity
+data duration: measure
   -> unit hour 3600
   -> trait duration"#;
     expect_plan_error(code, "second");
@@ -265,7 +265,7 @@ data duration: quantity
 #[test]
 fn planning_duplicate_trait_duration_rejected() {
     let code = r#"spec test
-data duration: quantity
+data duration: measure
   -> unit second 1
   -> trait duration
   -> trait duration"#;
@@ -275,16 +275,16 @@ data duration: quantity
 #[test]
 fn planning_unknown_trait_rejected() {
     let code = r#"spec test
-data duration: quantity
+data duration: measure
   -> unit second 1
   -> trait temporal"#;
     expect_plan_error(code, "trait");
 }
 
 #[test]
-fn planning_trait_duration_on_non_quantity_rejected() {
+fn planning_trait_duration_on_non_measure_rejected() {
     let code = r#"spec test
 data x: number
   -> trait duration"#;
-    expect_plan_error(code, "quantity");
+    expect_plan_error(code, "measure");
 }

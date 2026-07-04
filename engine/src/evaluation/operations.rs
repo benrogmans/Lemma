@@ -79,25 +79,25 @@ impl OperationResult {
         Self::Value(LiteralValue::number_from_decimal(number))
     }
 
-    pub fn quantity(
+    pub fn measure(
         value: rust_decimal::Decimal,
         unit: impl Into<String>,
         lemma_type: Option<LemmaType>,
     ) -> Self {
         use crate::computation::rational::checked_mul;
         let lemma_type = std::sync::Arc::new(
-            lemma_type.unwrap_or_else(|| LemmaType::primitive(TypeSpecification::quantity())),
+            lemma_type.unwrap_or_else(|| LemmaType::primitive(TypeSpecification::measure())),
         );
         let unit_name = unit.into();
         let rational = crate::literals::rational_from_parsed_decimal(value)
-            .expect("BUG: operation result quantity must lift at boundary");
-        let factor = if let TypeSpecification::Quantity { units, .. } = &lemma_type.specifications {
+            .expect("BUG: operation result measure must lift at boundary");
+        let factor = if let TypeSpecification::Measure { units, .. } = &lemma_type.specifications {
             units
                 .get(&unit_name)
                 .map(|u| u.factor.clone())
                 .unwrap_or_else(|_| {
                     panic!(
-                        "BUG: OperationResult::quantity unit '{}' not declared on type",
+                        "BUG: OperationResult::measure unit '{}' not declared on type",
                         unit_name
                     )
                 })
@@ -105,8 +105,8 @@ impl OperationResult {
             crate::computation::rational::rational_one()
         };
         let canonical = checked_mul(&rational, &factor)
-            .expect("BUG: quantity canonicalization overflow in OperationResult::quantity");
-        Self::Value(LiteralValue::quantity_with_type(
+            .expect("BUG: measure canonicalization overflow in OperationResult::measure");
+        Self::Value(LiteralValue::measure_with_type(
             canonical, unit_name, lemma_type,
         ))
     }

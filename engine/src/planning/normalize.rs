@@ -28,7 +28,7 @@ fn normalization_error(source: Option<Source>, failure: NumericFailure, context:
 ///
 /// Contract: callers must only fold operands admitted by
 /// [`as_rational_literal`] (plain numbers). Unit-bearing operands must never
-/// reach this function — quantity folds must carry their unit signature (see
+/// reach this function — measure folds must carry their unit signature (see
 /// [`typed_product_zero`]).
 fn literal_from_folded_rational(
     rational: RationalInteger,
@@ -320,7 +320,7 @@ impl<'a> CompileContext<'a> {
         // their base-unit signature at interning so both instruction streams
         // carry signatures runtime arithmetic understands. This is lowering,
         // not rewriting: deterministic per literal given the unit index.
-        let value = expand_named_quantity_literal(&value, Some(self.unit_ctx)).unwrap_or(value);
+        let value = expand_named_measure_literal(&value, Some(self.unit_ctx)).unwrap_or(value);
         if let Some((idx, _)) = self
             .constants
             .iter()
@@ -1565,7 +1565,7 @@ fn fold_unit_literals(
             Ok(NormalForm::Piecewise(folded_arms))
         }
         NormalForm::Leaf(LeafKind::Literal(literal)) => {
-            if let Some(expanded) = expand_named_quantity_literal(literal.as_ref(), unit_ctx) {
+            if let Some(expanded) = expand_named_measure_literal(literal.as_ref(), unit_ctx) {
                 Ok(NormalForm::Leaf(LeafKind::Literal(Arc::new(expanded))))
             } else {
                 Ok(NormalForm::Leaf(LeafKind::Literal(literal)))
@@ -1578,14 +1578,14 @@ fn fold_unit_literals(
     }
 }
 
-pub(crate) fn expand_named_quantity_literal(
+pub(crate) fn expand_named_measure_literal(
     literal: &LiteralValue,
     unit_ctx: Option<&UnitResolutionContext<'_>>,
 ) -> Option<LiteralValue> {
     let UnitResolutionContext::WithIndex(unit_index) = unit_ctx? else {
         return None;
     };
-    let ValueKind::Quantity(magnitude, signature) = &literal.value else {
+    let ValueKind::Measure(magnitude, signature) = &literal.value else {
         return None;
     };
     if signature.len() != 1 || signature[0].1 != 1 {
@@ -1593,16 +1593,16 @@ pub(crate) fn expand_named_quantity_literal(
     }
     let unit_name = &signature[0].0;
     let owning_type = unit_index.get(unit_name)?;
-    let TypeSpecification::Quantity { units, .. } = &owning_type.specifications else {
+    let TypeSpecification::Measure { units, .. } = &owning_type.specifications else {
         return None;
     };
     let unit = units.get(unit_name).ok()?;
-    if unit.derived_quantity_factors.is_empty() {
+    if unit.derived_measure_factors.is_empty() {
         return None;
     }
     let expanded =
         crate::computation::arithmetic::expand_signature_to_base_units(signature, unit_index);
-    Some(LiteralValue::quantity_with_signature(
+    Some(LiteralValue::measure_with_signature(
         magnitude.clone(),
         expanded,
         Arc::clone(&literal.lemma_type),
@@ -2217,39 +2217,39 @@ fn eliminate_identities(nf: NormalForm) -> NormalForm {
 /// literal: the correctly typed zero the runtime multiply would produce.
 ///
 /// `None` when folding is not semantics-preserving: any non-literal child
-/// (its veto would be erased), more than one quantity literal (combining
+/// (its veto would be erased), more than one measure literal (combining
 /// signatures must reproduce the runtime's decomposition and signature-index
 /// logic, so it is left to the runtime multiply), or a non-numeric literal
 /// child (a type error planning reports elsewhere).
 fn typed_product_zero(children: &[NormalForm]) -> Option<NormalForm> {
-    let mut quantity_literal: Option<&LiteralValue> = None;
+    let mut measure_literal: Option<&LiteralValue> = None;
     for child in children {
         let NormalForm::Leaf(LeafKind::Literal(literal)) = child else {
             return None;
         };
         match &literal.value {
             ValueKind::Number(_) => {}
-            ValueKind::Quantity(_, _) => {
-                if quantity_literal.is_some() {
+            ValueKind::Measure(_, _) => {
+                if measure_literal.is_some() {
                     return None;
                 }
-                quantity_literal = Some(literal.as_ref());
+                measure_literal = Some(literal.as_ref());
             }
             _ => return None,
         }
     }
-    match quantity_literal {
+    match measure_literal {
         None => Some(NormalForm::Leaf(LeafKind::Literal(Arc::new(
             LiteralValue::number(rational_zero()),
         )))),
         Some(literal) => {
-            let ValueKind::Quantity(_, signature) = &literal.value else {
-                unreachable!("BUG: quantity literal collected above must carry a quantity value");
+            let ValueKind::Measure(_, signature) = &literal.value else {
+                unreachable!("BUG: measure literal collected above must carry a measure value");
             };
-            // Mirrors the runtime number-times-quantity multiply: the
-            // quantity's signature and type are preserved on the result.
+            // Mirrors the runtime number-times-measure multiply: the
+            // measure's signature and type are preserved on the result.
             Some(NormalForm::Leaf(LeafKind::Literal(Arc::new(
-                LiteralValue::quantity_with_signature(
+                LiteralValue::measure_with_signature(
                     rational_zero(),
                     signature.clone(),
                     literal.lemma_type.clone(),
@@ -2873,7 +2873,7 @@ mod tests {
             },
         );
         let rule_type = Arc::clone(crate::planning::semantics::primitive_number_arc());
-        let unit_ctx = UnitResolutionContext::NamedQuantityOnly;
+        let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
         build_normalized_rule_instructions(
             &branches,
             &HashMap::new(),
@@ -2912,7 +2912,7 @@ mod tests {
             },
         );
         let rule_type = Arc::clone(crate::planning::semantics::primitive_number_arc());
-        let unit_ctx = UnitResolutionContext::NamedQuantityOnly;
+        let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
         build_normalized_rule_instructions(
             &branches,
             &HashMap::new(),
@@ -2951,7 +2951,7 @@ mod tests {
             },
         );
         let rule_type = Arc::clone(crate::planning::semantics::primitive_number_arc());
-        let unit_ctx = UnitResolutionContext::NamedQuantityOnly;
+        let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
         build_normalized_rule_instructions(
             &branches,
             &HashMap::new(),
@@ -3384,7 +3384,7 @@ mod tests {
             ),
             None,
         );
-        let ctx = UnitResolutionContext::NamedQuantityOnly;
+        let ctx = UnitResolutionContext::NamedMeasureOnly;
         let norm = normalize_expression(&expr, Some(&ctx)).expect("normalize");
         assert!(matches!(
             norm.kind,
@@ -3422,7 +3422,7 @@ mod tests {
         );
         let branches = vec![(None as Option<Expression>, product)];
         let plan_paths = HashSet::from([RulePath::new(vec![], "sqrt_product".into())]);
-        let unit_ctx = UnitResolutionContext::NamedQuantityOnly;
+        let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
         let data: IndexMap<DataPath, DataDefinition> = IndexMap::new();
         let rule_type = Arc::clone(crate::planning::semantics::primitive_number_arc());
         let compiled = build_normalized_rule_instructions(
@@ -3463,10 +3463,10 @@ mod tests {
 spec t
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
 
 rule total: 100 eur_per_hour
@@ -3486,7 +3486,7 @@ rule total: 100 eur_per_hour
         let uses_named_only = rule.instructions.constants.iter().any(|constant| {
             matches!(
                 &constant.value,
-                ValueKind::Quantity(_, signature)
+                ValueKind::Measure(_, signature)
                     if signature.len() == 1 && signature[0].0 == "eur_per_hour"
             )
         });

@@ -7,7 +7,7 @@ Pricing tiers, tax brackets, leave entitlement, eligibility checks, discount sta
 ```lemma
 spec pricing 2026-01-01
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> decimals 2
 
@@ -42,7 +42,7 @@ The `Response` carries every rule's value (or `veto` if no result could be compu
 - **Deterministic.** `(spec, data, effective_date) → result`. No DB, no clock, no ambient state. Same inputs → same outputs, every time.
 - **Explainable.** The `Response` tells you which rules contributed and why; pair it with the [CLI](https://github.com/lemma/lemma) for a full reasoning trace.
 - **Time-aware.** Multiple versions of the same spec coexist. Pass an `effective` date and the engine resolves the version in force on that day.
-- **Statically checked.** Type errors, missing data, cycles, quantity-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
+- **Statically checked.** Type errors, missing data, cycles, measure-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
 - **Runs anywhere V8 does.** ~2 MB WASM, no native binary, no postinstall script.
 - **Editor in a tab.** Includes an in-process language server and a Monaco adapter, so you can build a real Lemma editor experience client-side - diagnostics, completion, formatting... even without setting up a server.
 
@@ -140,6 +140,10 @@ In the browser, the registry must allow your origin (CORS). Use `https` or `http
 ## Status
 
 Lemma is pre-1.0. The WASM API is stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
+
+### WASM panic behavior
+
+Rust panics cannot unwind on the `wasm32` target, so an internal invariant violation (a bug) traps the WASM instance. The call throws a `RuntimeError` which you can catch with `try/catch` to fail gracefully, but the module's linear memory is poisoned — constructing a new `Engine()` from the same initialized module is not safe. To recover, re-initialize the WASM module (`init()` again) or, for robust containment, run the engine in a Web Worker and respawn the worker on trap. The panic message (prefixed `BUG: ...`) is logged to the console before the trap. All domain-level failures (invalid specs, bad data, impossible rules) are reported as `EngineError[]` or vetoes and never cause traps.
 
 ## Related
 

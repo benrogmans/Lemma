@@ -11,7 +11,8 @@ fn test_single_level_spec_ref_with_rule_reference() {
 spec pricing
 data base_price: 100
 data tax_rate: 21%
-rule final_price: base_price * (1 + tax_rate)
+rule tax_amount: base_price * tax_rate
+rule final_price: base_price + tax_amount
 "#;
 
     let line_item_spec = r#"
@@ -220,7 +221,8 @@ fn test_deep_nested_data_binding() {
 spec pricing
 data base_price: 100
 data tax_rate: 21%
-rule final_price: base_price * (1 + tax_rate)
+rule tax_amount: base_price * tax_rate
+rule final_price: base_price + tax_amount
 "#;
 
     let line_item_spec = r#"
@@ -570,7 +572,8 @@ fn test_same_spec_different_bindings() {
 spec pricing
 data price: 100
 data discount: 0%
-rule final_price: price * (1 - discount)
+rule discount_amount: price * discount
+rule final_price: price - discount_amount
 "#;
 
     let scenario_spec = r#"

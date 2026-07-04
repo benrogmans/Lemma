@@ -34,7 +34,7 @@
     "keywords": {
       "patterns": [
         {
-          "match": "\\b(spec|data|with|rule|type)\\b",
+          "match": "\\b(spec|data|with|rule)\\b",
           "name": "keyword.declaration.lemma"
         },
         {
@@ -42,7 +42,7 @@
           "name": "keyword.control.lemma"
         },
         {
-          "match": "\\b(boolean|quantity|number|percent|ratio|text|date|time|duration)\\b",
+          "match": "\\b(boolean|measure|number|percent|ratio|text|date|time|duration)\\b",
           "name": "storage.type.lemma"
         },
         {
@@ -211,17 +211,6 @@
             },
             "2": {
               "name": "entity.name.function.lemma"
-            }
-          }
-        },
-        {
-          "match": "\\b(type)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=:)",
-          "captures": {
-            "1": {
-              "name": "keyword.declaration.lemma"
-            },
-            "2": {
-              "name": "storage.type.lemma"
             }
           }
         }

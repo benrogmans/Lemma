@@ -41,7 +41,7 @@ pub struct CalendarResult {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct RuleResultPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub quantity: Option<BTreeMap<String, String>>,
+    pub measure: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ratio: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,7 +97,7 @@ pub struct RuleResult {
     pub rule_type: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub quantity: Option<BTreeMap<String, String>>,
+    pub measure: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ratio: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,7 +143,7 @@ impl RuleResult {
                     _ => Some(veto.to_string()),
                 },
                 rule_type: rule_type_name,
-                quantity: None,
+                measure: None,
                 ratio: None,
                 number: None,
                 boolean: None,
@@ -171,7 +171,7 @@ impl RuleResult {
                             display: Some(literal.to_string()),
                             veto_reason: None,
                             rule_type: rule_type_name,
-                            quantity: None,
+                            measure: None,
                             ratio: None,
                             number: None,
                             boolean: None,
@@ -198,7 +198,7 @@ impl RuleResult {
                         display: Some(literal.to_string()),
                         veto_reason: None,
                         rule_type: rule_type_name,
-                        quantity: payload.quantity,
+                        measure: payload.measure,
                         ratio: payload.ratio,
                         number: payload.number,
                         boolean: payload.boolean,
@@ -245,10 +245,10 @@ impl RuleResult {
             let rational =
                 rational_from_parsed_decimal(decimal_from_materialized_string(&calendar.value))
                     .expect("BUG: calendar rule result value must lift to rational");
-            return LiteralValue::quantity_with_type(rational, calendar.unit.clone(), rule_type);
+            return LiteralValue::measure_with_type(rational, calendar.unit.clone(), rule_type);
         }
-        if let Some(quantity) = &self.quantity {
-            return literal_from_quantity_map(quantity, &rule_type);
+        if let Some(measure) = &self.measure {
+            return literal_from_measure_map(measure, &rule_type);
         }
         if let Some(ratio) = &self.ratio {
             return literal_from_ratio_map(ratio, &rule_type);
@@ -292,29 +292,29 @@ fn decimal_from_materialized_string(value: &str) -> rust_decimal::Decimal {
         .unwrap_or_else(|_| panic!("BUG: rule result materialized string must parse as decimal"))
 }
 
-fn literal_from_quantity_map(
-    quantity: &BTreeMap<String, String>,
+fn literal_from_measure_map(
+    measure: &BTreeMap<String, String>,
     rule_type: &LemmaType,
 ) -> LiteralValue {
     use crate::computation::rational::checked_mul;
     use crate::literals::rational_from_parsed_decimal;
 
     let unit_names = rule_type
-        .quantity_unit_names()
-        .expect("BUG: quantity rule result must have declared units");
+        .measure_unit_names()
+        .expect("BUG: measure rule result must have declared units");
     let unit_name = unit_names
         .first()
-        .expect("BUG: quantity rule result type must declare at least one unit");
-    let display = quantity
+        .expect("BUG: measure rule result type must declare at least one unit");
+    let display = measure
         .get(*unit_name)
-        .unwrap_or_else(|| panic!("BUG: quantity map missing unit '{unit_name}'"));
+        .unwrap_or_else(|| panic!("BUG: measure map missing unit '{unit_name}'"));
     let rational = rational_from_parsed_decimal(decimal_from_materialized_string(display))
-        .expect("BUG: quantity rule result value must lift to rational");
-    let factor = rule_type.quantity_unit_factor(unit_name);
+        .expect("BUG: measure rule result value must lift to rational");
+    let factor = rule_type.measure_unit_factor(unit_name);
     let canonical = checked_mul(&rational, factor).unwrap_or_else(|failure| {
-        panic!("BUG: quantity canonicalization from materialized fields failed: {failure}")
+        panic!("BUG: measure canonicalization from materialized fields failed: {failure}")
     });
-    LiteralValue::quantity_with_type(
+    LiteralValue::measure_with_type(
         canonical,
         (*unit_name).to_string(),
         Arc::new(rule_type.clone()),
@@ -382,14 +382,14 @@ fn payload_to_literal(payload: &RuleResultPayload, rule_type: &LemmaType) -> Lit
         let rational =
             rational_from_parsed_decimal(decimal_from_materialized_string(&calendar.value))
                 .expect("BUG: calendar payload value must lift to rational");
-        return LiteralValue::quantity_with_type(
+        return LiteralValue::measure_with_type(
             rational,
             calendar.unit.clone(),
             Arc::new(rule_type.clone()),
         );
     }
-    if let Some(quantity) = &payload.quantity {
-        return literal_from_quantity_map(quantity, rule_type);
+    if let Some(measure) = &payload.measure {
+        return literal_from_measure_map(measure, rule_type);
     }
     if let Some(ratio) = &payload.ratio {
         return literal_from_ratio_map(ratio, rule_type);
@@ -423,7 +423,7 @@ fn endpoint_materialization_type(
     endpoint: &crate::planning::semantics::LiteralValue,
     range_element_type: &LemmaType,
 ) -> LemmaType {
-    if endpoint.lemma_type.quantity_unit_names().is_some() {
+    if endpoint.lemma_type.measure_unit_names().is_some() {
         endpoint.lemma_type.as_ref().clone()
     } else {
         range_element_type.clone()
@@ -443,7 +443,7 @@ fn vetoed_rule_result_for_decimal_limit(
         display: None,
         veto_reason: Some(veto.to_string()),
         rule_type: rule_type_name,
-        quantity: None,
+        measure: None,
         ratio: None,
         number: None,
         boolean: None,
@@ -462,9 +462,9 @@ fn materialize_payload(
     _expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
 ) -> Result<RuleResultPayload, NumericFailure> {
     match &literal.value {
-        ValueKind::Quantity(rational, sig) if literal.lemma_type.is_calendar_like() => {
+        ValueKind::Measure(rational, sig) if literal.lemma_type.is_calendar_like() => {
             let unit =
-                crate::planning::semantics::semantic_calendar_unit_from_quantity_signature(sig);
+                crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
             Ok(RuleResultPayload {
                 calendar: Some(CalendarResult {
                     value: literal
@@ -475,8 +475,8 @@ fn materialize_payload(
                 ..RuleResultPayload::default()
             })
         }
-        ValueKind::Quantity(_, _) => Ok(RuleResultPayload {
-            quantity: Some(quantity_to_unit_map(literal, result_type)?),
+        ValueKind::Measure(_, _) => Ok(RuleResultPayload {
+            measure: Some(measure_to_unit_map(literal, result_type)?),
             ..RuleResultPayload::default()
         }),
         ValueKind::Ratio(_, _) => Ok(RuleResultPayload {
@@ -509,20 +509,20 @@ fn materialize_payload(
     }
 }
 
-fn quantity_to_unit_map(
+fn measure_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
 ) -> Result<BTreeMap<String, String>, NumericFailure> {
     let unit_names = result_type
-        .quantity_unit_names()
-        .expect("BUG: rule result quantity must have declared units");
-    let ValueKind::Quantity(magnitude, _signature) = &literal.value else {
-        panic!("BUG: quantity_to_unit_map called with non-quantity value");
+        .measure_unit_names()
+        .expect("BUG: rule result measure must have declared units");
+    let ValueKind::Measure(magnitude, _signature) = &literal.value else {
+        panic!("BUG: measure_to_unit_map called with non-measure value");
     };
     let mut map = BTreeMap::new();
     for unit_name in unit_names {
         let materialized =
-            result_type.try_materialize_quantity_canonical_in_unit(magnitude, unit_name)?;
+            result_type.try_materialize_measure_canonical_in_unit(magnitude, unit_name)?;
         map.insert(unit_name.to_string(), materialized);
     }
     Ok(map)
@@ -625,7 +625,7 @@ mod tests {
     use super::*;
     use crate::literals::DateGranularity;
     use crate::planning::semantics::{
-        primitive_number, BaseQuantityVector, LemmaType, LiteralValue, QuantityUnit, QuantityUnits,
+        primitive_number, BaseMeasureVector, LemmaType, LiteralValue, MeasureUnit, MeasureUnits,
         RatioUnit, RatioUnits, RulePath, Span, TypeExtends, TypeSpecification,
     };
     use rust_decimal::Decimal;
@@ -760,35 +760,35 @@ mod tests {
     fn test_money_type() -> LemmaType {
         LemmaType::new(
             "money".to_string(),
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 minimum: None,
                 maximum: None,
                 decimals: Some(2),
-                units: QuantityUnits::from(vec![
-                    QuantityUnit {
+                units: MeasureUnits::from(vec![
+                    MeasureUnit {
                         name: "eur".to_string(),
                         factor: crate::computation::rational::rational_one(),
-                        derived_quantity_factors: Vec::new(),
-                        decomposition: BaseQuantityVector::new(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
                         default_magnitude: None,
                     },
-                    QuantityUnit {
+                    MeasureUnit {
                         name: "usd".to_string(),
                         factor: crate::computation::rational::decimal_to_rational(Decimal::new(
                             91, 2,
                         ))
                         .expect("factor"),
-                        derived_quantity_factors: Vec::new(),
-                        decomposition: BaseQuantityVector::new(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
                         default_magnitude: None,
                     },
                 ]),
                 traits: Vec::new(),
-                decomposition: Some(BaseQuantityVector::new()),
+                decomposition: Some(BaseMeasureVector::new()),
                 help: String::new(),
             },
             TypeExtends::Primitive,
@@ -796,10 +796,10 @@ mod tests {
     }
 
     #[test]
-    fn quantity_materialization_uses_rule_type_when_expression_index_empty() {
+    fn measure_materialization_uses_rule_type_when_expression_index_empty() {
         let money = test_money_type();
         let ten_usd = LiteralValue {
-            value: ValueKind::Quantity(
+            value: ValueKind::Measure(
                 crate::computation::rational::checked_mul(
                     &crate::computation::rational::decimal_to_rational(Decimal::from(10))
                         .expect("ten"),
@@ -819,17 +819,17 @@ mod tests {
             &expression_units,
             None,
         );
-        let quantity = result.quantity.expect("quantity map");
-        assert_eq!(quantity.get("usd"), Some(&"10.00".to_string()));
-        assert!(quantity.contains_key("eur"));
+        let measure = result.measure.expect("measure map");
+        assert_eq!(measure.get("usd"), Some(&"10.00".to_string()));
+        assert!(measure.contains_key("eur"));
     }
 
     #[test]
-    fn test_quantity_materialization_multi_unit() {
+    fn test_measure_materialization_multi_unit() {
         let money = test_money_type();
         let expression_units = HashMap::new();
         let ten_eur = LiteralValue {
-            value: ValueKind::Quantity(
+            value: ValueKind::Measure(
                 crate::computation::rational::decimal_to_rational(Decimal::from(10)).expect("ten"),
                 vec![],
             ),
@@ -842,50 +842,50 @@ mod tests {
             &expression_units,
             None,
         );
-        let quantity = result.quantity.expect("quantity map");
-        assert_eq!(quantity.get("eur"), Some(&"10.00".to_string()));
-        assert_eq!(quantity.get("usd"), Some(&"10.99".to_string()));
+        let measure = result.measure.expect("measure map");
+        assert_eq!(measure.get("eur"), Some(&"10.00".to_string()));
+        assert_eq!(measure.get("usd"), Some(&"10.99".to_string()));
     }
 
     #[test]
-    fn quantity_materialization_respects_decimals_on_unit_conversion() {
+    fn measure_materialization_respects_decimals_on_unit_conversion() {
         let money = LemmaType::new(
             "money".to_string(),
-            TypeSpecification::Quantity {
+            TypeSpecification::Measure {
                 minimum: None,
                 maximum: None,
                 decimals: Some(2),
-                units: QuantityUnits::from(vec![
-                    QuantityUnit {
+                units: MeasureUnits::from(vec![
+                    MeasureUnit {
                         name: "eur".to_string(),
                         factor: crate::computation::rational::rational_one(),
-                        derived_quantity_factors: Vec::new(),
-                        decomposition: BaseQuantityVector::new(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
                         default_magnitude: None,
                     },
-                    QuantityUnit {
+                    MeasureUnit {
                         name: "usd".to_string(),
                         factor: crate::computation::rational::decimal_to_rational(Decimal::new(
                             84, 2,
                         ))
                         .expect("usd factor"),
-                        derived_quantity_factors: Vec::new(),
-                        decomposition: BaseQuantityVector::new(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
                         default_magnitude: None,
                     },
                 ]),
                 traits: Vec::new(),
-                decomposition: Some(BaseQuantityVector::new()),
+                decomposition: Some(BaseMeasureVector::new()),
                 help: String::new(),
             },
             TypeExtends::Primitive,
         );
         let three_twelve_eur = LiteralValue {
-            value: ValueKind::Quantity(
+            value: ValueKind::Measure(
                 crate::computation::rational::decimal_to_rational(Decimal::new(312, 2))
                     .expect("3.12 eur canonical"),
                 vec![],
@@ -899,9 +899,9 @@ mod tests {
             &HashMap::new(),
             None,
         );
-        let quantity = result.quantity.expect("quantity map");
-        assert_eq!(quantity.get("eur"), Some(&"3.12".to_string()));
-        assert_eq!(quantity.get("usd"), Some(&"3.71".to_string()));
+        let measure = result.measure.expect("measure map");
+        assert_eq!(measure.get("eur"), Some(&"3.12".to_string()));
+        assert_eq!(measure.get("usd"), Some(&"3.71".to_string()));
     }
 
     #[test]
@@ -957,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn test_quantity_materialization_cross_spec_import() {
+    fn test_measure_materialization_cross_spec_import() {
         use crate::parsing::source::SourceType;
         use crate::Engine;
 
@@ -976,12 +976,12 @@ data p: 5 usd
 rule doubled: p * 2
 
 spec child 2025-01-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> decimals 2
 
 spec child 2025-06-01
-data money: quantity
+data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
@@ -1013,9 +1013,9 @@ data money: quantity
             .expect("run");
         let out = response.results.get("out").expect("out rule");
         assert!(!out.vetoed);
-        let quantity = out.quantity.as_ref().expect("quantity map");
-        assert!(quantity.contains_key("usd"));
-        assert!(quantity.contains_key("eur"));
+        let measure = out.measure.as_ref().expect("measure map");
+        assert!(measure.contains_key("usd"));
+        assert!(measure.contains_key("eur"));
     }
 
     #[test]
@@ -1033,10 +1033,10 @@ data money: quantity
     }
 
     #[test]
-    fn materialized_literal_roundtrips_quantity() {
+    fn materialized_literal_roundtrips_measure() {
         let expression_units = HashMap::new();
         let money = test_money_type();
-        let literal = LiteralValue::quantity_with_type(
+        let literal = LiteralValue::measure_with_type(
             crate::computation::rational::rational_new(60, 1),
             "eur".into(),
             Arc::new(money.clone()),

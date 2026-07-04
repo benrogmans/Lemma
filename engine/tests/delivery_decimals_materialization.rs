@@ -6,16 +6,16 @@ fn delivery_cost_materializes_converted_unit_with_schema_decimals() {
     let code = r#"
 spec delivery 2026-01-01
 
-data distance: quantity
+data distance: measure
   -> unit meter 1
   -> unit kilometer 1000
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
   -> unit usd 0.84
 
-data rate: quantity
+data rate: measure
   -> unit eur_per_km eur/kilometer
 
 rule delivery_cost: 0.26 eur_per_km * distance
@@ -53,10 +53,10 @@ rule delivery_cost: 0.26 eur_per_km * distance
         .expect("delivery_cost rule");
 
     assert!(!delivery_cost.vetoed);
-    let quantity = delivery_cost
-        .quantity
+    let measure = delivery_cost
+        .measure
         .as_ref()
-        .expect("quantity map on delivery_cost");
-    assert_eq!(quantity.get("eur"), Some(&"3.12".to_string()));
-    assert_eq!(quantity.get("usd"), Some(&"3.71".to_string()));
+        .expect("measure map on delivery_cost");
+    assert_eq!(measure.get("eur"), Some(&"3.12".to_string()));
+    assert_eq!(measure.get("usd"), Some(&"3.71".to_string()));
 }

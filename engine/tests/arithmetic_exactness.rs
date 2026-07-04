@@ -9,7 +9,7 @@ fn source() -> lemma::SourceType {
     lemma::SourceType::Path(Arc::new(PathBuf::from("arithmetic_exactness.lemma")))
 }
 
-fn eval_quantity_rule(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
+fn eval_measure_rule(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("spec must load");
     let response = engine
@@ -122,22 +122,22 @@ fn runtime_data_ten_divide_three_returns_value_not_veto() {
 fn hourly_rate_times_date_range_yields_eur_total() {
     let code = r#"spec wage
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1.00
-data rate: quantity
+data rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 data hourly_rate: 50 eur_per_hour
 data period_start: 2026-01-01
 data period_end: 2026-01-02
 rule pay: (hourly_rate * (period_start...period_end as hours))"#;
-    let value = eval_quantity_rule(code, "wage", "pay");
-    let ValueKind::Quantity(amount, signature) = value.value else {
-        panic!("expected quantity result, got {:?}", value.value);
+    let value = eval_measure_rule(code, "wage", "pay");
+    let ValueKind::Measure(amount, signature) = value.value else {
+        panic!("expected measure result, got {:?}", value.value);
     };
     assert_eq!(signature, vec![("eur".to_string(), 1)]);
     assert_eq!(
-        lemma::ValueKind::Quantity(amount, signature.clone())
+        lemma::ValueKind::Measure(amount, signature.clone())
             .as_decimal_magnitude()
             .unwrap(),
         rust_decimal::Decimal::from(1200)

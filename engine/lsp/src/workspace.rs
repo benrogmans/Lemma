@@ -582,10 +582,10 @@ mod tests {
             r#"spec contractor
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data wage_rate: quantity
+data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 

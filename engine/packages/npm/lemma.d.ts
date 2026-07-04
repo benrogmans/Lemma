@@ -50,6 +50,10 @@ declare module './lemma.bindings.js' {
 
     /**
      * `repository`: qualifier or `null`/omit for workspace — same as `Engine::run` `repo`.
+     *
+     * `data_values`: pass integers as numbers, decimals as strings (e.g.
+     * `{ quantity: 42, rate: "0.075" }`). Non-integer numbers are rejected
+     * to prevent silent precision loss from IEEE 754 doubles.
      */
     run(
       repository: string | null | undefined,
@@ -147,7 +151,7 @@ export type LemmaType =
   & (
     | { kind: "boolean"; help: string }
     | {
-        kind: "quantity";
+        kind: "measure";
         minimum: string | null;
         maximum: string | null;
         decimals: number | null;
@@ -155,7 +159,7 @@ export type LemmaType =
         help: string;
       }
     | {
-        kind: "quantity range";
+        kind: "measure range";
         minimum: string | null;
         maximum: string | null;
         decimals: number | null;
@@ -220,7 +224,7 @@ export interface RuleResult {
   display?: string | null;
   veto_reason?: string | null;
   rule_type: string;
-  quantity?: Record<string, string> | null;
+  measure?: Record<string, string> | null;
   ratio?: Record<string, string> | null;
   number?: string | null;
   boolean?: boolean | null;
@@ -233,7 +237,7 @@ export interface RuleResult {
 }
 
 export interface RuleResultPayload {
-  quantity?: Record<string, string> | null;
+  measure?: Record<string, string> | null;
   ratio?: Record<string, string> | null;
   number?: string | null;
   boolean?: boolean | null;
@@ -252,7 +256,7 @@ export interface EvaluationDataEntry {
 export interface SpecSchema {
   spec: string;
   data: Record<string, DataEntry>;
-  /** Rule result types; quantity and ratio entries expose `units[]` like their data counterparts. */
+  /** Rule result types; measure and ratio entries expose `units[]` like their data counterparts. */
   rules: Record<string, LemmaType>;
   meta: Record<string, unknown>;
 }

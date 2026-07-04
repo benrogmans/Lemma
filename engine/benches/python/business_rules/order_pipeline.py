@@ -10,7 +10,7 @@ class Inputs:
     customer_tier: str
     payment_method: str
     shipping_zone: str
-    quantity: Rational
+    measure: Rational
     unit_price: Rational
     package_weight: Rational
     delivery_distance: Rational
@@ -72,7 +72,7 @@ def build_inputs(raw: dict[str, str]) -> Inputs:
         customer_tier=raw["customer_tier"],
         payment_method=raw["payment_method"],
         shipping_zone=raw["shipping_zone"],
-        quantity=parse_rational(raw["quantity"]),
+        measure=parse_rational(raw["measure"]),
         unit_price=parse_rational(raw["unit_price"]),
         package_weight=parse_rational(raw["package_weight"]),
         delivery_distance=parse_rational(raw["delivery_distance"]),
@@ -92,16 +92,16 @@ def compute(inputs: Inputs) -> Outputs:
     is_gold = inputs.customer_tier == "gold"
     is_platinum = inputs.customer_tier == "platinum"
 
-    subtotal = inputs.unit_price * inputs.quantity
+    subtotal = inputs.unit_price * inputs.measure
 
     volume_discount_rate = Rational(0)
-    if inputs.quantity >= 5:
+    if inputs.measure >= 5:
         volume_discount_rate = Rational("0.03")
-    if inputs.quantity >= 25:
+    if inputs.measure >= 25:
         volume_discount_rate = Rational("0.07")
-    if inputs.quantity >= 100:
+    if inputs.measure >= 100:
         volume_discount_rate = Rational("0.12")
-    if inputs.quantity >= 500:
+    if inputs.measure >= 500:
         volume_discount_rate = Rational("0.18")
 
     tier_discount_rate = Rational(0)

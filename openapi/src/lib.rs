@@ -206,7 +206,7 @@ pub fn generate_openapi_effective(
 
 /// Information about a single input data for OpenAPI generation.
 struct InputData {
-    /// The data name as it appears in the API (e.g. "quantity", "is_member").
+    /// The data name as it appears in the API (e.g. "measure", "is_member").
     name: String,
     /// The resolved Lemma type for this data.
     lemma_type: LemmaType,
@@ -421,10 +421,10 @@ fn build_rule_result_schema(explanations_enabled: bool) -> Value {
                 "type": "string",
                 "description": "Result type name (e.g. number, boolean, money)"
             },
-            "quantity": {
+            "measure": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
-                "description": "Named quantity rule: unit name to magnitude string"
+                "description": "Named measure rule: unit name to magnitude string"
             },
             "ratio": {
                 "type": "object",
@@ -722,8 +722,8 @@ fn build_spec_path_item_with_schema_refs(
 fn type_help(lemma_type: &LemmaType) -> String {
     match &lemma_type.specifications {
         TypeSpecification::Boolean { help, .. } => help.clone(),
-        TypeSpecification::Quantity { help, .. } => help.clone(),
-        TypeSpecification::QuantityRange { help, .. } => help.clone(),
+        TypeSpecification::Measure { help, .. } => help.clone(),
+        TypeSpecification::MeasureRange { help, .. } => help.clone(),
         TypeSpecification::Number { help, .. } => help.clone(),
         TypeSpecification::NumberRange { help, .. } => help.clone(),
         TypeSpecification::Ratio { help, .. } => help.clone(),

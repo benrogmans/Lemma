@@ -1,15 +1,15 @@
 //! Range span projection: `(lo...hi) as <unit> as number` = **width** of the interval.
 //! All ranges require an explicit unit before `as number`; bare `as number` on
-//! date/quantity ranges is rejected.
+//! date/measure ranges is rejected.
 //!
 //! | Range type | Valid `as` targets | Must reject |
 //! |------------|--------------------|-------------|
 //! | **DateRange** | `as <duration_unit> as number`, `as year/month as number` | bare `as number`, mass units |
 //! | **NumberRange** | `as number` (no unit needed) | mass, duration units |
-//! | **QuantityRange** (any family) | `as <same-family unit> as number` | cross-family units, bare `as number` |
+//! | **MeasureRange** (any family) | `as <same-family unit> as number` | cross-family units, bare `as number` |
 //! | **RatioRange** | `as <ratio_unit>` | duration, mass |
 //!
-//! Calendar quantity-range span `as` is not supported.
+//! Calendar measure-range span `as` is not supported.
 
 use lemma::{DateGranularity, DateTimeValue, Engine, LiteralValue, TimezoneValue};
 use std::collections::HashMap;
@@ -113,11 +113,11 @@ fn assert_contains_parts(actual: &str, parts: &[&str]) {
 
 const USES_UNITS: &str = "uses lemma units";
 
-const MONEY: &str = r#"data money: quantity
+const MONEY: &str = r#"data money: measure
   -> unit eur 1.00
   -> unit usd 0.91"#;
 
-const WEIGHT: &str = r#"data weight: quantity
+const WEIGHT: &str = r#"data weight: measure
   -> unit stone 1
   -> unit pound 14"#;
 
@@ -230,7 +230,7 @@ rule span: (100...0) as number"#;
 
     #[test]
     fn rejects_span_as_mass_unit() {
-        // Number range `as <quantity unit>` is rejected — no unit basis for span.
+        // Number range `as <measure unit>` is rejected — no unit basis for span.
         let code = format!(
             r#"spec test
 {USES_UNITS}
@@ -249,10 +249,10 @@ rule bad: (0...100) as percent"#;
 }
 
 // =============================================================================
-// QuantityRange (trait duration / units.duration)
+// MeasureRange (trait duration / units.duration)
 // =============================================================================
 
-mod duration_quantity_range {
+mod duration_measure_range {
     use super::*;
 
     #[test]
@@ -296,8 +296,8 @@ rule span: (7 days...2 weeks) as days as number"#
     }
 
     #[test]
-    fn rejects_bare_as_number_on_quantity_range() {
-        // Duration quantity range `as number` without explicit unit is rejected.
+    fn rejects_bare_as_number_on_measure_range() {
+        // Duration measure range `as number` without explicit unit is rejected.
         let code = format!(
             r#"spec test
 {USES_UNITS}
@@ -329,15 +329,15 @@ rule bad: (7 days...14 days) as percent as number"#
 }
 
 // =============================================================================
-// QuantityRange (mass / money — not a duration)
+// MeasureRange (mass / money — not a duration)
 // =============================================================================
 
-mod mass_quantity_range {
+mod mass_measure_range {
     use super::*;
 
     #[test]
     fn rejects_span_as_duration_with_mass_endpoints() {
-        // Mass quantity range cannot produce a duration span.
+        // Mass measure range cannot produce a duration span.
         let code = format!(
             r#"spec test
 {USES_UNITS}
@@ -372,14 +372,14 @@ rule span: (1 stone...3 stone) as pound as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-data cargo: quantity -> unit crate 1
+data cargo: measure -> unit crate 1
 rule bad: (3 crate...5 crate) as days as number"#
         );
         expect_plan_error(&code, "convert");
     }
 }
 
-mod money_quantity_range {
+mod money_measure_range {
     use super::*;
 
     #[test]
@@ -481,6 +481,6 @@ rule bad: (18 year...67 year) as days as number"#
         let code = r#"spec test
 uses lemma units
 rule bad: (18 year...67 year) as number"#;
-        expect_plan_error(code, "quantity range");
+        expect_plan_error(code, "measure range");
     }
 }

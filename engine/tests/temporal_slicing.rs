@@ -1837,11 +1837,11 @@ fn slice_incompat_named_type_adds_unit_across_slices() {
         .load(
             r#"
 spec dep 2025-01-01
-data money: quantity
+data money: measure
  -> unit eur 1.0
 
 spec dep 2025-07-01
-data money: quantity
+data money: measure
  -> unit eur 1.0
  -> unit usd 1.1
 "#,

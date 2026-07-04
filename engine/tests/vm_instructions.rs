@@ -19,7 +19,7 @@ rule discount: 0
 const CALC_SPEC: &str = r#"
 spec calc
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1
 
@@ -56,10 +56,10 @@ fn assert_plan_jumps_strict(engine: &Engine, spec: &str) {
     }
 }
 
-fn run_quantity(engine: &Engine, quantity: &str) -> lemma::Response {
+fn run_measure(engine: &Engine, measure: &str) -> lemma::Response {
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
-    data.insert("quantity".to_string(), quantity.to_string());
+    data.insert("quantity".to_string(), measure.to_string());
     engine
         .run(None, "pricing", Some(&now), data, false, None)
         .expect("run pricing")
@@ -88,7 +88,7 @@ fn rule_display(response: &lemma::Response, rule: &str) -> String {
         .expect("display")
 }
 
-fn rule_quantity_display(response: &lemma::Response, rule: &str) -> String {
+fn rule_measure_display(response: &lemma::Response, rule: &str) -> String {
     response
         .get(rule)
         .unwrap_or_else(|_| panic!("rule {rule}"))
@@ -124,31 +124,31 @@ fn calc_plan_instructions_have_strict_jump_targets() {
 }
 
 #[test]
-fn discount_unless_quantity_below_ten() {
+fn discount_unless_measure_below_ten() {
     let engine = load_engine(PRICING_SPEC, "pricing.lemma");
-    let response = run_quantity(&engine, "5");
+    let response = run_measure(&engine, "5");
     assert_eq!(rule_number(&response, "discount"), Decimal::ZERO);
     assert_eq!(rule_number(&response, "total"), Decimal::from(50));
 }
 
 #[test]
-fn discount_unless_quantity_ten() {
+fn discount_unless_measure_ten() {
     let engine = load_engine(PRICING_SPEC, "pricing.lemma");
-    let response = run_quantity(&engine, "10");
+    let response = run_measure(&engine, "10");
     assert_eq!(rule_number(&response, "discount"), Decimal::from(5));
 }
 
 #[test]
-fn discount_unless_quantity_fifty() {
+fn discount_unless_measure_fifty() {
     let engine = load_engine(PRICING_SPEC, "pricing.lemma");
-    let response = run_quantity(&engine, "50");
+    let response = run_measure(&engine, "50");
     assert_eq!(rule_number(&response, "discount"), Decimal::from(15));
 }
 
 #[test]
-fn discount_unless_quantity_between_tiers() {
+fn discount_unless_measure_between_tiers() {
     let engine = load_engine(PRICING_SPEC, "pricing.lemma");
-    let response = run_quantity(&engine, "25");
+    let response = run_measure(&engine, "25");
     assert_eq!(rule_number(&response, "discount"), Decimal::from(5));
 }
 
@@ -181,12 +181,12 @@ fn inlined_piecewise_subexpression_does_not_return_early_from_parent_rule() {
 
     assert_eq!(rule_display(&response, "total"), "4821.09 eur");
     assert_eq!(
-        rule_quantity_display(&response, "rush_surcharge"),
+        rule_measure_display(&response, "rush_surcharge"),
         "796.88 eur"
     );
     assert_ne!(
         rule_display(&response, "total"),
-        rule_quantity_display(&response, "rush_surcharge"),
+        rule_measure_display(&response, "rush_surcharge"),
         "total must not equal inlined rush_surcharge alone"
     );
 }
@@ -255,7 +255,7 @@ fn calc_total_without_rush_is_not_zero_surcharge_path() {
     let response = run_calc(data);
     assert_eq!(rule_display(&response, "total"), "3856.88 eur");
     assert_eq!(
-        rule_quantity_display(&response, "rush_surcharge"),
+        rule_measure_display(&response, "rush_surcharge"),
         "0.00 eur"
     );
 }

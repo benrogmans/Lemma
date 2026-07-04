@@ -751,7 +751,7 @@ mod tests {
     #[test]
     fn test_related_data_attribution_and_display() {
         let err = Error::validation(
-            "Unknown unit 'mete' for this quantity type",
+            "Unknown unit 'mete' for this measure type",
             Some(test_source()),
             None::<String>,
         )
@@ -759,7 +759,7 @@ mod tests {
 
         assert_eq!(err.related_data(), Some("bridge_height"));
         assert_eq!(err.kind(), ErrorKind::Validation);
-        assert_eq!(err.message(), "Unknown unit 'mete' for this quantity type");
+        assert_eq!(err.message(), "Unknown unit 'mete' for this measure type");
 
         let display = format!("{err}");
         assert!(

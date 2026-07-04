@@ -452,7 +452,7 @@ fn test_cli_explain_scalar_conversion_format() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec test_cli_conversion_explain
-data mass: quantity
+data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
     -> default 2 kilogram
@@ -482,7 +482,7 @@ rule result: mass as gram
         "stdout:\n{stdout}"
     );
     assert!(
-        stdout.contains("The quantity of mass is 2 kilogram"),
+        stdout.contains("The measure of mass is 2 kilogram"),
         "stdout:\n{stdout}"
     );
     assert!(!stdout.contains('×'), "stdout:\n{stdout}");
@@ -541,7 +541,7 @@ fn test_cli_explain_conversion_nested_operand() {
         temp_dir.path().join("test.lemma"),
         r#"
 spec test_cli_nested_conversion_explain
-data mass: quantity
+data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
     -> default 2 kilogram
@@ -571,20 +571,20 @@ rule result: (mass * 2) as gram
         "stdout:\n{stdout}"
     );
     assert!(
-        stdout.contains("The quantity is 4 kilogram"),
+        stdout.contains("The measure is 4 kilogram"),
         "stdout:\n{stdout}"
     );
     assert!(stdout.contains("mass"), "stdout:\n{stdout}");
 }
 
 #[test]
-fn test_cli_run_quantity_rule_result_includes_all_units_json() {
+fn test_cli_run_measure_rule_result_includes_all_units_json() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("money.lemma"),
         r#"
 spec money
-data price: quantity
+data price: measure
     -> unit eur 1
     -> unit usd 0.91
     -> default 100 eur
@@ -603,19 +603,19 @@ rule total: price
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("\"quantity\""))
+        .stdout(predicate::str::contains("\"measure\""))
         .stdout(predicate::str::contains("\"eur\""))
         .stdout(predicate::str::contains("\"usd\""));
 }
 
 #[test]
-fn test_cli_explain_shows_multiply_trace_for_quantity_product() {
+fn test_cli_explain_shows_multiply_trace_for_measure_product() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
         r#"
 spec product_explanation
-data price: quantity
+data price: measure
     -> unit eur 1
     -> default 10 eur
 data quantity: number -> default 3
@@ -647,13 +647,13 @@ rule product: price * quantity
 }
 
 #[test]
-fn test_cli_explain_with_quantity_product_preserves_multiply_trace() {
+fn test_cli_explain_with_measure_product_preserves_multiply_trace() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
         r#"
 spec product_as_explanation
-data price: quantity
+data price: measure
     -> unit eur 1
     -> unit usd 0.91
     -> default 10 eur
@@ -693,7 +693,7 @@ fn test_cli_run_calc_explain_json_includes_total_explanation() {
         r#"
 spec calc
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1
 

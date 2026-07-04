@@ -455,7 +455,7 @@ fn format_repo_sections_idempotent_under_format_parse_result_roundtrip() {
 #[test]
 fn format_compound_unit_metre_per_second_idempotent() {
     let source = r#"spec test
-data velocity: quantity
+data velocity: measure
   -> unit mps metre/second
 "#;
     let st = lemma::SourceType::Volatile;

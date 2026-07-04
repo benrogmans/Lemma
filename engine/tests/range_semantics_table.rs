@@ -57,7 +57,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     eval_literal(code, spec_name, rule_name).to_string()
 }
 
-fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> String {
+fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> String {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let effective = default_effective();
@@ -77,11 +77,11 @@ fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get(unit))
         .cloned()
-        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}' for rule '{rule_name}'"))
+        .unwrap_or_else(|| panic!("measure map missing unit '{unit}' for rule '{rule_name}'"))
 }
 
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
@@ -232,35 +232,35 @@ rule reversed_cmp: (5...3) >= 0"#;
 }
 
 #[test]
-fn quantity_mixed_arithmetic_uses_range_size() {
+fn measure_mixed_arithmetic_uses_range_size() {
     let code = r#"spec test
-data weight: quantity -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram 1 -> unit kilogram 1000
 rule plus: (3 kilogram...5 kilogram) + 2 kilogram
 rule rplus: 2 kilogram + (3 kilogram...5 kilogram)
 rule minus: (3 kilogram...5 kilogram) - 2 kilogram
 rule rminus: 5 kilogram - (3 kilogram...5 kilogram)"#;
     assert_eq!(
-        eval_rule_quantity_unit(code, "test", "plus", "kilogram"),
+        eval_rule_measure_unit(code, "test", "plus", "kilogram"),
         "4"
     );
     assert_eq!(
-        eval_rule_quantity_unit(code, "test", "rplus", "kilogram"),
+        eval_rule_measure_unit(code, "test", "rplus", "kilogram"),
         "4"
     );
     assert_eq!(
-        eval_rule_quantity_unit(code, "test", "minus", "kilogram"),
+        eval_rule_measure_unit(code, "test", "minus", "kilogram"),
         "0"
     );
     assert_eq!(
-        eval_rule_quantity_unit(code, "test", "rminus", "kilogram"),
+        eval_rule_measure_unit(code, "test", "rminus", "kilogram"),
         "3"
     );
 }
 
 #[test]
-fn quantity_range_arithmetic_and_comparison_use_sizes() {
+fn measure_range_arithmetic_and_comparison_use_sizes() {
     let code = r#"spec test
-data weight: quantity -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram 1 -> unit kilogram 1000
 rule sum: (3 kilogram...5 kilogram) + (6 kilogram...7 kilogram)
 rule diff: (3 kilogram...5 kilogram) - (6 kilogram...7 kilogram)
 rule cmp: (3 kilogram...5 kilogram) >= 2 kilogram"#;
@@ -320,10 +320,10 @@ rule reversed: (2024-01-03...2024-01-01) as days as number"#;
 }
 
 #[test]
-fn quantity_range_arithmetic_rejects_mixed_families() {
+fn measure_range_arithmetic_rejects_mixed_families() {
     let code = r#"spec test
-data weight: quantity -> unit gram 1 -> unit kilogram 1000
-data money: quantity -> unit eur 1
+data weight: measure -> unit gram 1 -> unit kilogram 1000
+data money: measure -> unit eur 1
 rule bad: (3 kilogram...5 kilogram) + (6 eur...7 eur)"#;
     expect_plan_error(code, "Cannot apply");
 }

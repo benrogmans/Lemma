@@ -52,17 +52,17 @@ fn rule_value(result: &lemma::Response, rule_name: &str) -> String {
     rr.display.clone().expect("display")
 }
 
-fn rule_quantity_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> String {
+fn rule_measure_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> String {
     let rr = result
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule_name));
     assert!(!rr.vetoed, "rule '{}' vetoed", rule_name);
-    rr.quantity
+    rr.measure
         .as_ref()
         .and_then(|map| map.get(unit))
         .cloned()
-        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}' for rule '{rule_name}'"))
+        .unwrap_or_else(|| panic!("measure map missing unit '{unit}' for rule '{rule_name}'"))
 }
 
 fn run(engine: &Engine, spec: &str) -> lemma::Response {
@@ -415,7 +415,7 @@ rule r: d
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    assert_eq!(rule_quantity_unit(&run(&engine, "s"), "r", "days"), "7");
+    assert_eq!(rule_measure_unit(&run(&engine, "s"), "r", "days"), "7");
 }
 
 #[test]
@@ -659,13 +659,13 @@ rule out: r
     }
 }
 
-// ─── Quantity literals (require user-defined unit) ───────────────────────
+// ─── Measure literals (require user-defined unit) ───────────────────────
 
 #[test]
-fn quantity_literal_with_defined_unit() {
+fn measure_literal_with_defined_unit() {
     let code = r#"
 spec s
-data money: quantity
+data money: measure
   -> unit eur 1
   -> unit usd 0.84
 data price: 10 eur
@@ -678,11 +678,11 @@ rule r: price
 }
 
 #[test]
-fn quantity_literal_with_unknown_unit_is_rejected() {
-    // No quantity type defines `banana` as a unit; the literal must fail.
+fn measure_literal_with_unknown_unit_is_rejected() {
+    // No measure type defines `banana` as a unit; the literal must fail.
     let code = r#"
 spec s
-data money: quantity -> unit eur 1
+data money: measure -> unit eur 1
 data price: 10 banana
 rule r: price
 "#;
@@ -697,10 +697,10 @@ rule r: price
 }
 
 #[test]
-fn quantity_literal_conversion_to_defined_unit() {
+fn measure_literal_conversion_to_defined_unit() {
     let code = r#"
 spec s
-data money: quantity
+data money: measure
   -> unit eur 1
   -> unit usd 0.84
 data price: 10 usd

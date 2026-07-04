@@ -55,8 +55,13 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
             ))),
         )
         .unwrap();
+    // 30 nines exceeds Decimal::MAX (~7.92e28): unrepresentable input must
+    // veto with a parse reason, not panic.
     let mut data = HashMap::new();
-    data.insert("x".to_string(), "40000000000000000460903669760".to_string());
+    data.insert(
+        "x".to_string(),
+        "999999999999999999999999999999".to_string(),
+    );
     let now = DateTimeValue::now();
     let response = engine
         .run(None, "fuzz_test", Some(&now), data, false, None)
@@ -64,12 +69,48 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     let doubled = response.results.get("doubled").expect("doubled");
     assert!(
         doubled.vetoed,
-        "expected veto for 29-digit number, got {:?}",
+        "expected veto for unrepresentable number, got {:?}",
         doubled.display
     );
     let reason = doubled.veto_reason.as_deref().expect("veto reason");
     assert!(
-        reason.contains("too many digits") || reason.contains("Invalid number"),
-        "expected 'too many digits' or parse error, got: {reason}"
+        reason.contains("Invalid number"),
+        "expected parse-failure veto, got: {reason}"
+    );
+}
+
+#[test]
+fn data_binding_with_excess_fractional_digits_truncates_at_input() {
+    // 40 fractional digits: input is truncated (rounded) to the 28 significant
+    // digits a Decimal holds, then evaluation proceeds normally.
+    let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
+    let mut engine = Engine::new();
+    engine
+        .load(
+            code,
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "fuzz_binding",
+            ))),
+        )
+        .unwrap();
+    let mut data = HashMap::new();
+    data.insert(
+        "x".to_string(),
+        "0.1234567890123456789012345678901234567890".to_string(),
+    );
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "fuzz_test", Some(&now), data, false, None)
+        .expect("run must complete");
+    let doubled = response.results.get("doubled").expect("doubled");
+    assert!(
+        !doubled.vetoed,
+        "truncated input must evaluate, got veto: {:?}",
+        doubled.veto_reason
+    );
+    assert_eq!(
+        doubled.number.as_deref(),
+        Some("0.2469135780246913578024691358"),
+        "doubled truncated input"
     );
 }

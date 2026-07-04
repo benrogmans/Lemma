@@ -37,4 +37,4 @@ CLI tests assert process boundaries (binary exit codes, JSON shapes, HTTP). Engi
 
 ## Ignored / bench
 
-Criterion benches: `cli/benches/http_evaluate.rs`, `engine_profile.rs`. Regenerate numbers with `cargo benchmarks cli` (writes `documentation/benchmarks/cli.md`). CI also runs them via `cargo nextest run --run-ignored all`.
+Criterion benches: `cli/benches/http_evaluate.rs`, `engine_profile.rs`. Regenerate numbers with `cargo benchmarks cli` (writes `documentation/reference/benchmarks/cli.md`). CI also runs them via `cargo nextest run --run-ignored all`.

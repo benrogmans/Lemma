@@ -227,18 +227,6 @@ impl WasmEngine {
         serialize_engine_json(&schema)
     }
 
-    pub fn invert(
-        &self,
-        spec_name: &str,
-        rule_name: &str,
-        target_json: &str,
-        provided_values_json: &str,
-    ) -> Result<JsValue, JsValue> {
-        todo!(
-            "WASM invert not implemented (spec={spec_name}, rule={rule_name}, target={target_json}, values={provided_values_json})"
-        )
-    }
-
     /// Returns formatted source string on success; throws with error message on failure.
     #[wasm_bindgen(js_name = format)]
     pub fn format_wasm(&self, code: &str, attribute: Option<String>) -> Result<JsValue, JsValue> {
@@ -442,7 +430,13 @@ fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput
     match value {
         serde_json::Value::String(s) => Ok(DataValueInput::Convenience(s)),
         serde_json::Value::Bool(b) => Ok(DataValueInput::Boolean(b)),
-        serde_json::Value::Number(n) => Ok(DataValueInput::Convenience(n.to_string())),
+        serde_json::Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                Ok(DataValueInput::Convenience(n.to_string()))
+            } else {
+                Err("decimal values must be passed as strings to preserve exactness".to_string())
+            }
+        }
         serde_json::Value::Object(obj) => {
             if obj.is_empty() {
                 return Err("data value object must not be empty".to_string());
@@ -465,7 +459,7 @@ fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput
                         )
                     })
                     .collect();
-                return Ok(DataValueInput::QuantityMap(map));
+                return Ok(DataValueInput::MeasureMap(map));
             }
             Err("data value object must be a unit map with string magnitudes".to_string())
         }

@@ -46,7 +46,7 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name));
-    if let Some(quantity) = &rule.quantity {
+    if let Some(measure) = &rule.measure {
         let value = rule
             .explanation
             .as_ref()
@@ -55,18 +55,18 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
             .value()
             .expect("rule must return a value");
         let unit = match &value.value {
-            ValueKind::Quantity(_, signature) => signature
+            ValueKind::Measure(_, signature) => signature
                 .first()
                 .map(|(unit, _)| unit.as_str())
-                .expect("BUG: quantity result has empty signature"),
-            other => panic!("expected quantity map for quantity value, got {other:?}"),
+                .expect("BUG: measure result has empty signature"),
+            other => panic!("expected measure map for measure value, got {other:?}"),
         };
-        return quantity
+        return measure
             .get(unit)
-            .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
+            .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
             .parse()
             .unwrap_or_else(|error| {
-                panic!("invalid decimal in quantity map for '{unit}': {error}")
+                panic!("invalid decimal in measure map for '{unit}': {error}")
             });
     }
     if let Some(calendar) = &rule.calendar {
@@ -117,9 +117,9 @@ fn assert_loads(code: &str) {
 fn cross_type_arithmetic_promotes_without_as_cast() {
     let code = r#"spec pay_calc
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
 data hours_worked: 40 hour
 data hourly_rate: 30 eur_per_hour
@@ -145,13 +145,13 @@ rule pay: hourly_rate * hours_worked"#;
 #[test]
 fn ambiguous_decomposition_lists_both_candidates() {
     let code = r#"spec ambiguous
-data torque: quantity
+data torque: measure
   -> unit newton_meter newton*meter
-data energy: quantity
+data energy: measure
   -> unit joule newton*meter
-data force: quantity
+data force: measure
   -> unit newton 1
-data length: quantity
+data length: measure
   -> unit meter 1
 data f: 3 newton
 data d: 5 meter
@@ -171,15 +171,15 @@ rule work: f * d"#;
     );
 }
 
-/// Two types with different names but the same base-quantity decomposition ({length:1})
+/// Two types with different names but the same base-measure decomposition ({length:1})
 /// produce an ambiguous result when their base units are multiplied by a scalar. The
 /// planner must reject this with both candidate names in the error (not a panic).
 #[test]
 fn ambiguity_across_distinct_types_same_decomposition() {
     let code = r#"spec ambiguous_length
-data imperial_length: quantity
+data imperial_length: measure
   -> unit inch 1
-data metric_length: quantity
+data metric_length: measure
   -> unit meter 1
 data x: 3 inch
 data y: 4 inch
@@ -194,9 +194,9 @@ rule total: x + y"#;
     // if we multiply two instances with the same decomposition; currently this promotes
     // to {length:2} which has no named type and is rejected as anonymous at rule boundary):
     let cross_code = r#"spec ambiguous_length
-data imperial_length: quantity
+data imperial_length: measure
   -> unit inch 1
-data metric_length: quantity
+data metric_length: measure
   -> unit meter 1
 data x: 3 inch
 data y: 4 meter
@@ -215,9 +215,9 @@ rule product: x * y"#;
 #[test]
 fn no_named_type_for_decomposition_clear_error() {
     let code = r#"spec pressure_calc
-data force: quantity
+data force: measure
   -> unit newton 1
-data area: quantity
+data area: measure
   -> unit square_meter meter*meter
 data f: 10 newton
 data a: 2 square_meter
@@ -240,9 +240,9 @@ rule pressure: f / a"#;
 fn input_only_data_uses_decomposition() {
     let base = r#"spec rate_calc
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
   -> unit eur_per_minute eur/minute
 data rate_value: {RATE}
@@ -324,12 +324,12 @@ rule gap: finish - start"#;
 // Type-system permissiveness
 // ---------------------------------------------------------------------------
 
-/// A base quantity type with no factor-1 unit must be accepted.
+/// A base measure type with no factor-1 unit must be accepted.
 /// Pins: no "canonical" requirement.
 #[test]
-fn base_quantity_without_factor_one_unit_accepted_and_displays_in_declared_units() {
+fn base_measure_without_factor_one_unit_accepted_and_displays_in_declared_units() {
     let code = r#"spec weird_units
-data weight: quantity
+data weight: measure
   -> unit half_kg 0.5
   -> unit quarter_kg 0.25
 data a: 5 half_kg
@@ -343,13 +343,13 @@ rule converted: (a) as quarter_kg"#;
     assert_eq!(
         eval_decimal(code, "weird_units", "sum"),
         rust_decimal::Decimal::new(65, 1),
-        "expected 6.5 half_kg in quantity map"
+        "expected 6.5 half_kg in measure map"
     );
     // 5 half_kg as quarter_kg = 5 * (0.5/0.25) = 10 quarter_kg
     assert_eq!(
         eval_decimal(code, "weird_units", "converted"),
         rust_decimal::Decimal::from(10),
-        "expected 10 quarter_kg in quantity map"
+        "expected 10 quarter_kg in measure map"
     );
 }
 
@@ -358,11 +358,11 @@ rule converted: (a) as quarter_kg"#;
 #[test]
 fn compound_type_without_factor_one_unit_evaluates_and_displays_via_signature() {
     let code = r#"spec rate_display
-data money: quantity
+data money: measure
   -> unit eur 1
-data time_unit: quantity
+data time_unit: measure
   -> unit hour 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
 data total: 120 eur
 data duration: 2 hour
@@ -388,16 +388,16 @@ rule rate_result: total / duration"#;
 // Runtime behavior: display format
 // ---------------------------------------------------------------------------
 
-/// A Quantity value whose signature matches a signature_index entry must display
+/// A Measure value whose signature matches a signature_index entry must display
 /// using the friendly unit name.
 #[test]
 fn value_with_compound_signature_renders_friendly_name_when_signature_index_matches() {
     let code = r#"spec rate_display
-data money: quantity
+data money: measure
   -> unit eur 1
-data time_unit: quantity
+data time_unit: measure
   -> unit hour 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
 data total: 120 eur
 data duration: 2 hour
@@ -412,17 +412,17 @@ rule rate_result: total / duration"#;
     );
 }
 
-/// A Quantity with a compound signature that does NOT match any signature_index
+/// A Measure with a compound signature that does NOT match any signature_index
 /// entry must be rejected at planning — rule results require a named type with
 /// declared units for API serialization.
 #[test]
 fn value_with_compound_signature_renders_operator_style_when_signature_index_misses() {
     let code = r#"spec weird_compound
-data money: quantity
+data money: measure
   -> unit eur 1
-data time_h: quantity
+data time_h: measure
   -> unit hour 1
-data time_m: quantity
+data time_m: measure
   -> unit minute 1
 data amount: 40 eur
 data h: 2 hour
@@ -438,15 +438,15 @@ rule compound: amount * h / m"#;
     );
 }
 
-/// ce_per_minute * minute -> Quantity(15, [("ce",1)]). Signature cancels; lookup
+/// ce_per_minute * minute -> Measure(15, [("ce",1)]). Signature cancels; lookup
 /// hits the `batch` type; emits named lemma_type.
 #[test]
 fn signature_combination_cancels_to_named_unit() {
     let code = r#"spec packaging
 uses lemma units
-data batch: quantity
+data batch: measure
   -> unit ce 1
-data packaging_speed: quantity
+data packaging_speed: measure
   -> unit ce_per_minute ce/minute
 data speed: 5 ce_per_minute
 data duration: 3 minute
@@ -469,13 +469,13 @@ rule throughput: speed * duration"#;
 #[test]
 fn signature_combination_misses_yields_operator_style_display() {
     let code = r#"spec weird_rate
-data money: quantity
+data money: measure
   -> unit eur 1
-data time_m: quantity
+data time_m: measure
   -> unit minute 1
-data time_h: quantity
+data time_h: measure
   -> unit hour 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_minute eur/minute
 data r: 40 eur_per_minute
 data h: 2 hour
@@ -490,12 +490,12 @@ rule compound: r * h"#;
     );
 }
 
-/// Two Quantity values with identical signatures must sum magnitudes directly,
+/// Two Measure values with identical signatures must sum magnitudes directly,
 /// no factor conversion applied.
 #[test]
-fn quantity_plus_quantity_same_signature_direct_sum() {
+fn measure_plus_measure_same_signature_direct_sum() {
     let code = r#"spec sums
-data money: quantity
+data money: measure
   -> unit eur 1
 data a: 100 eur
 data b: 50 eur
@@ -508,16 +508,16 @@ rule total: a + b"#;
     );
 }
 
-/// Two Quantity values with different-but-compatible signatures (eur/sec and
+/// Two Measure values with different-but-compatible signatures (eur/sec and
 /// eur/minute) convert via signature_factor and sum in the LHS signature.
 /// 10 eur/sec + 20 eur/minute = 10 + 20/60 = 31/3 eur/sec ≈ 10.333...
 #[test]
-fn quantity_plus_quantity_different_signature_converts_via_signature_factor() {
+fn measure_plus_measure_different_signature_converts_via_signature_factor() {
     let code = r#"spec rate_sum
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_minute eur/minute
 data a: 10 eur_per_second
@@ -539,14 +539,14 @@ rule total_rate: (a + b)"#;
 // ---------------------------------------------------------------------------
 
 /// eur_per_month * 3 month: signature [(eur,1),(month,-1),(month,1)] cancels to
-/// [(eur,1)]; signature_index hits; emits named Quantity(300, eur).
+/// [(eur,1)]; signature_index hits; emits named Measure(300, eur).
 #[test]
 fn q_times_calendar_uses_builtin_calendar_factor() {
     let code = r#"spec monthly_pay
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data monthly: 100 eur_per_month
 rule quarterly: monthly * 3 month"#;
@@ -573,9 +573,9 @@ rule quarterly: monthly * 3 month"#;
 fn q_divide_rate_yields_months() {
     let code = r#"spec runway_inverse
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate_type: quantity
+data rate_type: measure
   -> unit eur_per_month eur/month
 data balance: 300 eur
 data burn: 100 eur_per_month
@@ -598,9 +598,9 @@ rule months: (balance / burn) as month"#;
 fn q_times_calendar_mismatched_unit_keeps_operand_magnitudes() {
     let code = r#"spec annual_pay
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data monthly: 100 eur_per_month
 rule annual: (monthly * 1 year)"#;
@@ -618,12 +618,12 @@ rule annual: (monthly * 1 year)"#;
 // Validation: calendar unit name collision
 // ---------------------------------------------------------------------------
 
-/// Declaring a quantity unit named after a calendar unit must be rejected at
+/// Declaring a measure unit named after a calendar unit must be rejected at
 /// plan time (it would shadow the built-in calendar factor table).
 #[test]
 fn user_declared_unit_named_after_calendar_unit_is_rejected() {
     let code = r#"spec bad_unit
-data duration: quantity
+data duration: measure
   -> unit month 1"#;
     let error = load_expect_error(code);
     assert!(
@@ -655,14 +655,14 @@ fn burn_baby_burn_deadline_months() {
     let code = r#"spec burn_baby_burn
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit usd 1.00
   -> unit eur 1.19
   -> decimals 2
   -> minimum 0 usd
 
 data balance: money
-data money_flow: quantity
+data money_flow: measure
   -> unit eur_month eur/month
   -> unit usd_year usd/year
 
@@ -700,10 +700,10 @@ rule deadline: veto "Everything is fine: no deadline"
         .value()
         .expect("deadline value");
     let decimal = match &value.value {
-        ValueKind::Quantity(n, ..) => lemma::ValueKind::Number(n.clone())
+        ValueKind::Measure(n, ..) => lemma::ValueKind::Number(n.clone())
             .as_decimal_magnitude()
             .expect("deadline magnitude must commit to decimal"),
-        other => panic!("expected quantity deadline, got {:?}", other),
+        other => panic!("expected measure deadline, got {:?}", other),
     };
     assert_eq!(
         decimal,
@@ -722,9 +722,9 @@ rule deadline: veto "Everything is fine: no deadline"
 fn plural_calendar_unit_accepted_with_import() {
     let plural_code = r#"spec pl
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data r: 10 eur_per_month
 rule x: r * 3 months"#;
@@ -737,9 +737,9 @@ rule x: r * 3 months"#;
 
     let singular_code = r#"spec sing
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data r: 10 eur_per_month
 rule x: r * 3 month"#;
@@ -759,20 +759,20 @@ fn manufacturing_spec_full_eval_no_casts() {
     let code = r#"spec manufacturing
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1
 
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
   -> unit eur_per_minute eur/minute
 
-data unit_cost: quantity
+data unit_cost: measure
   -> unit eur_per_ce eur/ce
 
-data batch: quantity
+data batch: measure
   -> unit ce 1
 
-data speed: quantity
+data speed: measure
   -> unit ce_per_minute ce/minute
 
 data batch_size_ce: 100 ce
@@ -787,7 +787,7 @@ data machine_var_rate_hr: 30 eur_per_hour
 data machine_fixed_rate_hr: 20 eur_per_hour
 data indirect_overhead_pct: 15 percent
 
-data mixing_rate: quantity
+data mixing_rate: measure
   -> unit eur_per_kg eur/kilogram
 
 rule packaging_duration: batch_size_ce / packaging_speed
@@ -834,16 +834,16 @@ rule manufacturing_cost_per_ce: (total_production_cost / batch_size_ce)"#;
 // Serialization round-trip
 // ---------------------------------------------------------------------------
 
-/// Evaluating a rule that produces a compound-signature Quantity (not cast),
+/// Evaluating a rule that produces a compound-signature Measure (not cast),
 /// round-tripping via serialize then deserialize must preserve the magnitude
 /// and the unit display.
 #[test]
 fn value_round_trip_via_evaluator_unit_conversion() {
     let code = r#"spec round_trip
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
 data fee: 120 eur
 data hrs: 2 hour
@@ -861,18 +861,18 @@ rule hourly: (fee / hrs)"#;
 // ---------------------------------------------------------------------------
 // Pre-existing tests preserved from the original symbolic_unit_arithmetic suite.
 // These test behavior that must continue to work through and after the rewrite.
-// Pattern matches on ValueKind::Quantity use the OLD (RationalInteger, String,
-// BaseQuantityVector) shape; they will be updated to (RationalInteger, Vec<(String,i32)>)
-// when the rewrite_quantity_value_kind_shape todo lands.
+// Pattern matches on ValueKind::Measure use the OLD (RationalInteger, String,
+// BaseMeasureVector) shape; they will be updated to (RationalInteger, Vec<(String,i32)>)
+// when the rewrite_measure_value_kind_shape todo lands.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn ce_divided_by_ce_per_minute_yields_minute() {
     let code = r#"spec packaging
 uses lemma units
-data batch_size: quantity
+data batch_size: measure
   -> unit ce 1
-data packaging_speed: quantity
+data packaging_speed: measure
   -> unit ce_per_minute ce/minute
 data batch_size_ce: 100 ce
 data speed: 5 ce_per_minute
@@ -891,9 +891,9 @@ rule packaging_duration: batch_size_ce / speed"#;
 fn ce_per_minute_times_minute_yields_ce_with_correct_magnitude() {
     let code = r#"spec packaging
 uses lemma units
-data batch_size: quantity
+data batch_size: measure
   -> unit ce 1
-data packaging_speed: quantity
+data packaging_speed: measure
   -> unit ce_per_minute ce/minute
 data speed: 2 ce_per_minute
 data shift: 60 minute
@@ -912,9 +912,9 @@ rule throughput: speed * shift"#;
 fn ce_per_minute_times_hour_requires_as_cast() {
     let code = r#"spec packaging
 uses lemma units
-data batch_size: quantity
+data batch_size: measure
   -> unit ce 1
-data packaging_speed: quantity
+data packaging_speed: measure
   -> unit ce_per_minute ce/minute
 data speed: 2 ce_per_minute
 data shift: 1 hour
@@ -933,14 +933,14 @@ rule throughput: (speed * shift) as ce"#;
 fn manufacturing_packaging_duration_and_labor_cost() {
     let code = r#"spec manufacturing
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1.00
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
   -> unit eur_per_minute eur/minute
-data batch: quantity
+data batch: measure
   -> unit ce 1
-data speed: quantity
+data speed: measure
   -> unit ce_per_minute ce/minute
 data batch_size_ce: 100 ce
 data packaging_speed: 5 ce_per_minute
@@ -965,9 +965,9 @@ rule direct_labor_cost: (labor_rate_hr * packaging_duration)"#;
 #[test]
 fn unresolvable_signature_rejected_at_rule_boundary() {
     let code = r#"spec mixed
-data length: quantity
+data length: measure
   -> unit meter 1
-data force: quantity
+data force: measure
   -> unit newton 1
 data x: 3 meter
 data y: 5 newton
@@ -986,9 +986,9 @@ rule weird: x * y"#;
 fn derived_type_without_factor_one_unit_plans_and_runs() {
     let code = r#"spec rates
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1.00
-data rate: quantity
+data rate: measure
   -> unit eur_per_hour eur/hour
 data fee: 10 eur_per_hour
 data minutes: 30 minute
@@ -1009,9 +1009,9 @@ rule charge: (fee * minutes)"#;
 fn as_binding_division_suggests_parentheses() {
     let code = r#"spec burn
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
@@ -1024,7 +1024,7 @@ rule runway: balance / burn_rate as month"#;
         error
     );
     assert!(
-        !error.contains("different quantity families"),
+        !error.contains("different measure families"),
         "expected targeted error, not generic family error, got: {}",
         error
     );
@@ -1036,11 +1036,11 @@ rule runway: balance / burn_rate as month"#;
 #[test]
 fn as_binding_multiplication_suggests_parentheses() {
     let code = r#"spec payroll
-data money_type: quantity
+data money_type: measure
   -> unit eur 1
-data duration_type: quantity
+data duration_type: measure
   -> unit hour 1
-data rate_type: quantity
+data rate_type: measure
   -> unit eur_per_hour eur/hour
 data fee: 10 eur_per_hour
 data shift: 8 hour
@@ -1059,9 +1059,9 @@ rule wages: fee * shift as eur"#;
 fn as_binding_compound_operand_suggestion_is_readable() {
     let code = r#"spec burn
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
@@ -1069,7 +1069,7 @@ data revenue: 2000 eur_per_month
 rule runway: balance / (burn_rate - revenue) as month"#;
     let error = load_expect_error(code);
     assert!(
-        !error.contains("<expr>") && !error.contains("<quantity>"),
+        !error.contains("<expr>") && !error.contains("<measure>"),
         "expected readable operand labels in error, got: {}",
         error
     );
@@ -1086,7 +1086,7 @@ rule runway: balance / (burn_rate - revenue) as month"#;
 fn as_binding_valid_operand_conversion_succeeds() {
     let code = r#"spec motion
 uses lemma units
-data speed_type: quantity
+data speed_type: measure
   -> unit metre_per_second metre/second
 data speed_val: 10 metre_per_second
 data duration: 2 hour
@@ -1101,7 +1101,7 @@ rule distance: speed_val * duration as seconds"#;
 fn as_binding_neither_interpretation_valid_emits_standard_error() {
     let code = r#"spec bad
 uses lemma units
-data mass_type: quantity
+data mass_type: measure
   -> unit kilogram 1
   -> unit gram 0.001
 data m: 5 kilogram
@@ -1122,9 +1122,9 @@ rule weird: m / t as gram"#;
 fn as_binding_compound_unit_newton_suggests_parentheses() {
     let code = r#"spec mechanics
 uses lemma units
-data acceleration_type: quantity
+data acceleration_type: measure
   -> unit mps2 metre/second^2
-data force: quantity
+data force: measure
   -> unit newton kilogram * mps2
 data m: 10 kilogram
 data a: 5 mps2
@@ -1142,9 +1142,9 @@ rule f: m * a as newton"#;
 fn as_binding_compound_unit_newton_explicit_parentheses_succeeds() {
     let code = r#"spec mechanics
 uses lemma units
-data acceleration_type: quantity
+data acceleration_type: measure
   -> unit mps2 metre/second^2
-data force: quantity
+data force: measure
   -> unit newton kilogram * mps2
 data m: 10 kilogram
 data a: 5 mps2
@@ -1163,9 +1163,9 @@ rule f: (m * a) as newton"#;
 fn as_binding_explicit_parentheses_succeeds() {
     let code = r#"spec burn
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data rate: quantity
+data rate: measure
   -> unit eur_per_month eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month

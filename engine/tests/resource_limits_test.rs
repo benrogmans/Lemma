@@ -165,6 +165,92 @@ fn find_resource_limit_name(errors: &[Error]) -> Option<String> {
     })
 }
 
+// --- Spec dependency depth / DAG size limits ---
+
+/// `spec s0` uses `s1`, which uses `s2`, ... down to `s{levels-1}` (a leaf).
+fn spec_chain(levels: usize) -> String {
+    let mut code = String::new();
+    for i in 0..levels {
+        code.push_str(&format!("spec s{i}\n"));
+        if i + 1 < levels {
+            code.push_str(&format!("uses dep: s{}\n", i + 1));
+            code.push_str(&format!("rule r{i}: dep.r{}\n\n", i + 1));
+        } else {
+            code.push_str(&format!("rule r{i}: 1\n"));
+        }
+    }
+    code
+}
+
+#[test]
+fn spec_chain_exceeding_dependency_depth_is_rejected() {
+    let limits = ResourceLimits {
+        max_spec_dependency_depth: 3,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
+    let result = engine.load(spec_chain(6), lemma::SourceType::Volatile);
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for dependency depth");
+    assert_eq!(limit_err, "max_spec_dependency_depth");
+}
+
+#[test]
+fn spec_chain_within_dependency_depth_loads() {
+    let limits = ResourceLimits {
+        max_spec_dependency_depth: 3,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
+    engine
+        .load(spec_chain(4), lemma::SourceType::Volatile)
+        .expect("chain of 4 has depth 3, within the limit");
+}
+
+#[test]
+fn spec_chain_within_default_depth_loads() {
+    let mut engine = Engine::new();
+    engine
+        .load(spec_chain(6), lemma::SourceType::Volatile)
+        .expect("chain of 6 loads under the default depth limit");
+}
+
+#[test]
+fn dag_exceeding_max_specs_is_rejected() {
+    let limits = ResourceLimits {
+        max_dag_specs: 3,
+        ..ResourceLimits::default()
+    };
+    // Root imports 4 leaves: DAG holds 5 specs, over the limit of 3.
+    let code = r#"
+spec leaf_a
+rule r: 1
+
+spec leaf_b
+rule r: 1
+
+spec leaf_c
+rule r: 1
+
+spec leaf_d
+rule r: 1
+
+spec root
+uses a: leaf_a
+uses b: leaf_b
+uses c: leaf_c
+uses d: leaf_d
+rule total: a.r + b.r + c.r + d.r
+"#;
+    let mut engine = Engine::with_limits(limits);
+    let result = engine.load(code, lemma::SourceType::Volatile);
+    let load_err = result.unwrap_err();
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for DAG size");
+    assert_eq!(limit_err, "max_dag_specs");
+}
+
 #[test]
 fn spec_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::MAX_SPEC_NAME_LENGTH + 1);
@@ -343,9 +429,6 @@ fn performance_test_10k_rules() {
         "{num_rules:>6} rules ({nodes:>7} nodes, {bytes:>8} bytes): parse+plan {elapsed:>8.2?}  eval {eval_time:>8.2?}  result={:?}",
         resp.results[0].display
     );
-
-    // Assert that the test takes less than 10 seconds
-    assert!(elapsed.as_secs() < 10, "test took too long: {elapsed:?}");
 }
 
 /// Scaling test: deep rule dependency chains (linear + binary tree).

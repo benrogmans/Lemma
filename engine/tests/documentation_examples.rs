@@ -96,7 +96,7 @@ fn test_01_coffee_order() {
     // discount_amount = 8.40 * 20% = 1.68 eur
     // total = 8.40 - 1.68 = 6.72 eur
     match &total.value {
-        ValueKind::Quantity(n, signature) => {
+        ValueKind::Measure(n, signature) => {
             assert_eq!(
                 ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("6.72")
@@ -106,7 +106,7 @@ fn test_01_coffee_order() {
                 Some("eur")
             );
         }
-        other => panic!("expected Quantity total, got {other:?}"),
+        other => panic!("expected Measure total, got {other:?}"),
     }
 }
 
@@ -121,7 +121,7 @@ fn test_02_library_fees() {
 
     let final_fee = get_rule_value(&engine, "library_fees", "final_fee", data.clone());
     match &final_fee.value {
-        ValueKind::Quantity(n, signature) => {
+        ValueKind::Measure(n, signature) => {
             assert_eq!(
                 ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("1.25")
@@ -131,7 +131,7 @@ fn test_02_library_fees() {
                 Some("eur")
             );
         }
-        other => panic!("expected Quantity final_fee, got {other:?}"),
+        other => panic!("expected Measure final_fee, got {other:?}"),
     }
 
     let can_checkout = get_rule_value(&engine, "library_fees", "can_checkout", data);
@@ -155,7 +155,7 @@ fn test_03_recipe_scaling() {
 
     let baking_time = get_rule_value(&engine, "recipe_scaling", "baking_time", data.clone());
     match &baking_time.value {
-        ValueKind::Quantity(n, signature) => {
+        ValueKind::Measure(n, signature) => {
             assert_eq!(
                 ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("2400")
@@ -165,12 +165,12 @@ fn test_03_recipe_scaling() {
                 Some("minutes")
             );
         }
-        other => panic!("expected Quantity baking_time, got {other:?}"),
+        other => panic!("expected Measure baking_time, got {other:?}"),
     }
 
     let oven_temp = get_rule_value(&engine, "recipe_scaling", "oven_temperature", data);
     match &oven_temp.value {
-        ValueKind::Quantity(n, signature) => {
+        ValueKind::Measure(n, signature) => {
             assert_eq!(
                 ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 decimal_lit("175")
@@ -180,7 +180,7 @@ fn test_03_recipe_scaling() {
                 Some("celsius")
             );
         }
-        other => panic!("expected Quantity oven_temperature, got {other:?}"),
+        other => panic!("expected Measure oven_temperature, got {other:?}"),
     }
 }
 

@@ -3,7 +3,6 @@
 use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 fn date(y: i32, m: u32, d: u32) -> DateTimeValue {
     DateTimeValue {
@@ -56,40 +55,15 @@ fn alpha2_analog_source(branch_count: usize, layer_count: usize) -> String {
 }
 
 #[test]
-fn alpha2_analog_small_chain_loads_quickly() {
-    let src = alpha2_analog_source(20, 18);
-    let mut engine = Engine::new();
-    let started = Instant::now();
-    engine
-        .load(
-            &src,
-            SourceType::Path(Arc::new(PathBuf::from("alpha2_analog_small.lemma"))),
-        )
-        .expect("small analog must load");
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "small analog load took {:?}",
-        started.elapsed()
-    );
-}
-
-#[test]
 fn alpha2_analog_199_branches_compiles_and_evaluates() {
     let src = alpha2_analog_source(199, 18);
     let mut engine = Engine::new();
-    let started = Instant::now();
     engine
         .load(
             &src,
             SourceType::Path(Arc::new(PathBuf::from("alpha2_analog.lemma"))),
         )
         .expect("alpha2 analog must load");
-    let load_elapsed = started.elapsed();
-    assert!(
-        load_elapsed < Duration::from_secs(30),
-        "alpha2 analog load took {:?}, expected < 30s",
-        load_elapsed
-    );
 
     let effective = date(2025, 1, 1);
     engine

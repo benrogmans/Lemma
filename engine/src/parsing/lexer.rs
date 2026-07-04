@@ -16,7 +16,6 @@ pub enum TokenKind {
     And,
     In,
     As,
-    Type,
     Uses,
     With,
     Meta,
@@ -34,13 +33,12 @@ pub enum TokenKind {
     Reject,
 
     // Type keywords
-    QuantityKw,
+    MeasureKw,
     NumberKw,
     TextKw,
     DateKw,
     TimeKw,
     BooleanKw,
-    PercentKw,
     RatioKw,
 
     // Math function keywords
@@ -113,7 +111,6 @@ impl std::fmt::Display for TokenKind {
             TokenKind::And => write!(f, "'and'"),
             TokenKind::In => write!(f, "'in'"),
             TokenKind::As => write!(f, "'as'"),
-            TokenKind::Type => write!(f, "'type'"),
             TokenKind::Uses => write!(f, "'uses'"),
             TokenKind::With => write!(f, "'with'"),
             TokenKind::Meta => write!(f, "'meta'"),
@@ -127,13 +124,12 @@ impl std::fmt::Display for TokenKind {
             TokenKind::No => write!(f, "'no'"),
             TokenKind::Accept => write!(f, "'accept'"),
             TokenKind::Reject => write!(f, "'reject'"),
-            TokenKind::QuantityKw => write!(f, "'quantity'"),
+            TokenKind::MeasureKw => write!(f, "'measure'"),
             TokenKind::NumberKw => write!(f, "'number'"),
             TokenKind::TextKw => write!(f, "'text'"),
             TokenKind::DateKw => write!(f, "'date'"),
             TokenKind::TimeKw => write!(f, "'time'"),
             TokenKind::BooleanKw => write!(f, "'boolean'"),
-            TokenKind::PercentKw => write!(f, "'percent'"),
             TokenKind::RatioKw => write!(f, "'ratio'"),
             TokenKind::Sqrt => write!(f, "'sqrt'"),
             TokenKind::Sin => write!(f, "'sin'"),
@@ -498,6 +494,16 @@ impl Lexer {
             }
         }
         let span = self.make_span(start_byte, start_line, start_col);
+        if content.len() > crate::limits::MAX_TEXT_VALUE_LENGTH {
+            return Err(self.make_error(
+                format!(
+                    "Text literal exceeds maximum length of {} characters (found {})",
+                    crate::limits::MAX_TEXT_VALUE_LENGTH,
+                    content.len()
+                ),
+                span,
+            ));
+        }
         // Store the full text including quotes for span accuracy,
         // but content without quotes for the parser to use.
         let full_text = format!("\"{}\"", content);
@@ -673,7 +679,6 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "and" => TokenKind::And,
         "in" => TokenKind::In,
         "as" => TokenKind::As,
-        "type" => TokenKind::Type,
         "uses" => TokenKind::Uses,
         "with" => TokenKind::With,
         "meta" => TokenKind::Meta,
@@ -687,13 +692,12 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "no" => TokenKind::No,
         "accept" => TokenKind::Accept,
         "reject" => TokenKind::Reject,
-        "quantity" => TokenKind::QuantityKw,
+        "measure" => TokenKind::MeasureKw,
         "number" => TokenKind::NumberKw,
         "text" => TokenKind::TextKw,
         "date" => TokenKind::DateKw,
         "time" => TokenKind::TimeKw,
         "boolean" => TokenKind::BooleanKw,
-        "percent" => TokenKind::PercentKw,
         "ratio" => TokenKind::RatioKw,
         "sqrt" => TokenKind::Sqrt,
         "sin" => TokenKind::Sin,
@@ -715,10 +719,9 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
 }
 
 /// Structural keywords can never be used as identifiers (data/rule names).
-/// Type keywords (quantity, number, text, date, time, boolean, percent, ratio)
-/// CAN be used as names because `reference_segment` accepts them
-/// via the `type_standard` alternative.
-pub fn is_structural_keyword(kind: &TokenKind) -> bool {
+/// Type keywords (measure, number, text, date, time, boolean, ratio)
+/// are reserved and cannot be used as names.
+pub fn is_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
         TokenKind::Spec
@@ -731,7 +734,6 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
             | TokenKind::And
             | TokenKind::In
             | TokenKind::As
-            | TokenKind::Type
             | TokenKind::Uses
             | TokenKind::With
             | TokenKind::Meta
@@ -756,13 +758,14 @@ pub fn is_structural_keyword(kind: &TokenKind) -> bool {
             | TokenKind::No
             | TokenKind::Accept
             | TokenKind::Reject
+            | TokenKind::MeasureKw
+            | TokenKind::NumberKw
+            | TokenKind::TextKw
+            | TokenKind::DateKw
+            | TokenKind::TimeKw
+            | TokenKind::BooleanKw
+            | TokenKind::RatioKw
     )
-}
-
-/// Returns true if the given token kind represents a type keyword
-/// (used for type declarations and inline type annotations).
-pub fn is_type_keyword(kind: &TokenKind) -> bool {
-    token_kind_to_primitive(kind).is_some()
 }
 
 /// Map type keyword token to PrimitiveKind. Single source of truth for type keywords.
@@ -770,9 +773,8 @@ pub fn is_type_keyword(kind: &TokenKind) -> bool {
 pub fn token_kind_to_primitive(kind: &TokenKind) -> Option<PrimitiveKind> {
     match kind {
         TokenKind::BooleanKw => Some(PrimitiveKind::Boolean),
-        TokenKind::QuantityKw => Some(PrimitiveKind::Quantity),
+        TokenKind::MeasureKw => Some(PrimitiveKind::Measure),
         TokenKind::NumberKw => Some(PrimitiveKind::Number),
-        TokenKind::PercentKw => Some(PrimitiveKind::Percent),
         TokenKind::RatioKw => Some(PrimitiveKind::Ratio),
         TokenKind::TextKw => Some(PrimitiveKind::Text),
         TokenKind::DateKw => Some(PrimitiveKind::Date),
@@ -832,11 +834,11 @@ pub fn is_math_function(kind: &TokenKind) -> bool {
 }
 
 /// Returns true if the token kind can start the body of a spec
-/// (data, rule, type, or meta definition).
+/// (data, rule, or meta definition).
 pub fn is_spec_body_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::Data | TokenKind::With | TokenKind::Rule | TokenKind::Type | TokenKind::Meta
+        TokenKind::Data | TokenKind::With | TokenKind::Rule | TokenKind::Meta
     )
 }
 
@@ -862,7 +864,7 @@ pub fn token_is_calendar_period_marker(tok: &Token) -> bool {
 /// Returns true if the token kind can be used as a reference segment
 /// (identifier, type keyword, or non-reserved contextual keyword).
 pub fn can_be_reference_segment(kind: &TokenKind) -> bool {
-    can_be_label(kind) || is_type_keyword(kind)
+    can_be_label(kind)
 }
 
 /// Slash-/dot-separated registry path segments (`@org/repo/...`). Keywords that are
@@ -872,9 +874,8 @@ pub fn can_be_reference_segment(kind: &TokenKind) -> bool {
 #[must_use]
 pub fn can_be_repository_qualifier_segment(kind: &TokenKind) -> bool {
     matches!(kind, TokenKind::Identifier)
-        || is_structural_keyword(kind)
+        || is_keyword(kind)
         || can_be_label(kind)
-        || is_type_keyword(kind)
         || is_boolean_keyword(kind)
         || is_math_function(kind)
 }
@@ -906,6 +907,30 @@ mod tests {
         let tokens = lex_all("").unwrap();
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn string_literal_at_max_length_is_accepted() {
+        let content = "a".repeat(crate::limits::MAX_TEXT_VALUE_LENGTH);
+        let tokens = lex_all(&format!("\"{content}\"")).unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::StringLit);
+    }
+
+    #[test]
+    fn string_literal_over_max_length_is_parse_error() {
+        let content = "a".repeat(crate::limits::MAX_TEXT_VALUE_LENGTH + 1);
+        let err = lex_all(&format!("\"{content}\"")).unwrap_err();
+        assert!(
+            err.message().contains("maximum length"),
+            "expected length error, got: {err}"
+        );
+        assert!(err.location().is_some(), "parse error must carry a source");
+    }
+
+    #[test]
+    fn number_literal_with_separators_lexes() {
+        let tokens = lex_all("9,999,999,999,999,999,999,999,999,999").unwrap();
+        assert_eq!(tokens[0].kind, TokenKind::NumberLit);
     }
 
     #[test]
@@ -1008,9 +1033,9 @@ mod tests {
     #[test]
     fn lex_keywords() {
         let kinds =
-            lex_kinds("spec data rule unless then not and in as type uses meta veto now").unwrap();
+            lex_kinds("spec data rule unless then not and in as uses meta veto now").unwrap();
         assert_eq!(
-            &kinds[..14],
+            &kinds[..13],
             &[
                 TokenKind::Spec,
                 TokenKind::Data,
@@ -1021,7 +1046,6 @@ mod tests {
                 TokenKind::And,
                 TokenKind::In,
                 TokenKind::As,
-                TokenKind::Type,
                 TokenKind::Uses,
                 TokenKind::Meta,
                 TokenKind::Veto,

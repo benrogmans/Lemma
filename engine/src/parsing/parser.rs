@@ -3,9 +3,9 @@ use crate::limits::ResourceLimits;
 use crate::parsing::ast::{try_parse_type_constraint_command, *};
 use crate::parsing::lexer::{
     can_be_label, can_be_reference_segment, can_be_repository_qualifier_segment,
-    is_boolean_keyword, is_math_function, is_spec_body_keyword, is_structural_keyword,
-    is_type_keyword, token_is_calendar_period_marker, token_kind_to_boolean_value,
-    token_kind_to_primitive, Lexer, LexerCheckpoint, Token, TokenKind,
+    is_boolean_keyword, is_keyword, is_math_function, is_spec_body_keyword,
+    token_is_calendar_period_marker, token_kind_to_boolean_value, token_kind_to_primitive, Lexer,
+    LexerCheckpoint, Token, TokenKind,
 };
 use crate::parsing::source::Source;
 use indexmap::IndexMap;
@@ -334,14 +334,6 @@ impl Parser {
                     let rule = self.parse_rule()?;
                     rules.push(rule);
                 }
-                TokenKind::Type => {
-                    let token = self.next()?;
-                    return Err(self.error_at_token_with_suggestion(
-                        &token,
-                        "'type' cannot start a declaration here",
-                        "Declare types with 'data', e.g. 'data age: number -> minimum 0'",
-                    ));
-                }
                 TokenKind::Meta => {
                     let meta = self.parse_meta()?;
                     meta_fields.push(meta);
@@ -493,7 +485,7 @@ impl Parser {
                 ),
             ));
         }
-        if !has_at && is_structural_keyword(&first.kind) {
+        if !has_at && is_keyword(&first.kind) {
             return Err(self.error_at_token(
                 &first,
                 format!(
@@ -786,7 +778,7 @@ impl Parser {
             return Ok(DataValue::With(WithRhs::Literal(value)));
         }
 
-        if can_be_label(&peek_kind) || is_type_keyword(&peek_kind) {
+        if can_be_label(&peek_kind) {
             let target = self.parse_reference()?;
             if self.at(&TokenKind::Arrow)? {
                 let tok = self.peek()?.clone();
@@ -813,9 +805,8 @@ impl Parser {
         let mut segments = Vec::new();
 
         let first = self.next()?;
-        // Structural keywords (spec, data, rule, unless, ...) cannot be names.
-        // Type keywords (duration, number, date, ...) CAN be names per the grammar.
-        if is_structural_keyword(&first.kind) {
+        // Keywords cannot be used as names
+        if is_keyword(&first.kind) {
             return Err(self.error_at_token_with_suggestion(
                 &first,
                 format!(
@@ -950,7 +941,7 @@ impl Parser {
         let start_span = rule_token.span.clone();
 
         let name_tok = self.next()?;
-        if is_structural_keyword(&name_tok.kind) {
+        if is_keyword(&name_tok.kind) {
             return Err(self.error_at_token_with_suggestion(
                 &name_tok,
                 format!(
@@ -960,7 +951,7 @@ impl Parser {
                 "Choose a different name that is not a reserved keyword",
             ));
         }
-        if !can_be_label(&name_tok.kind) && !is_type_keyword(&name_tok.kind) {
+        if !can_be_label(&name_tok.kind) {
             return Err(self.error_at_token(
                 &name_tok,
                 format!("Expected a rule name, found {}", name_tok.kind),
@@ -1134,7 +1125,7 @@ impl Parser {
 
     fn parse_command(&mut self) -> Result<(TypeConstraintCommand, Vec<CommandArg>), Error> {
         let name_tok = self.next()?;
-        if !can_be_label(&name_tok.kind) && !is_type_keyword(&name_tok.kind) {
+        if !can_be_label(&name_tok.kind) {
             return Err(self.error_at_token(
                 &name_tok,
                 format!("Expected a command name, found {}", name_tok.kind),
@@ -1184,7 +1175,7 @@ impl Parser {
                     let value = self.parse_literal_value()?;
                     args.push(CommandArg::Literal(value));
                 }
-                ref k if can_be_label(k) || is_type_keyword(k) => {
+                ref k if can_be_label(k) => {
                     let tok = self.next()?;
                     args.push(CommandArg::Label(tok.text));
                 }
@@ -1245,7 +1236,7 @@ impl Parser {
         }
 
         let peek_kind = self.peek()?.kind.clone();
-        if !can_be_label(&peek_kind) && !is_type_keyword(&peek_kind) {
+        if !can_be_label(&peek_kind) {
             // Not a label — let semantics produce the error.
             return Ok(Vec::new());
         }
@@ -1276,9 +1267,8 @@ impl Parser {
         // After an optional numeric prefix, check whether a compound unit expression follows
         // (starts with a label / duration-unit keyword).
         let peek_kind_after_prefix = self.peek()?.kind.clone();
-        let has_compound_expr = (can_be_label(&peek_kind_after_prefix)
-            || is_type_keyword(&peek_kind_after_prefix))
-            && !self.at_command_terminator()?;
+        let has_compound_expr =
+            can_be_label(&peek_kind_after_prefix) && !self.at_command_terminator()?;
 
         if has_compound_expr {
             let factors = self.parse_unit_factors()?;
@@ -1295,7 +1285,7 @@ impl Parser {
         }
     }
 
-    /// Parse a sequence of `<quantity_ref>[^[-]<integer>]` terms joined by `*` or `/`.
+    /// Parse a sequence of `<measure_ref>[^[-]<integer>]` terms joined by `*` or `/`.
     ///
     /// `*` is explicit multiplication and resets to numerator mode.
     /// `/` switches to denominator mode for all subsequent factors until the next `*`.
@@ -1360,9 +1350,9 @@ impl Parser {
                 continue;
             }
 
-            // A label (or duration-unit keyword treated as a label) is a quantity reference.
+            // A label is a measure reference.
             let peek_kind = self.peek()?.kind.clone();
-            if !can_be_label(&peek_kind) && !is_type_keyword(&peek_kind) {
+            if !can_be_label(&peek_kind) {
                 break;
             }
 
@@ -1373,8 +1363,8 @@ impl Parser {
             }
             operator_just_consumed = false;
 
-            let quantity_ref_tok = self.next()?;
-            let quantity_ref = quantity_ref_tok.text.clone();
+            let measure_ref_tok = self.next()?;
+            let measure_ref = measure_ref_tok.text.clone();
 
             // Optional exponent: `^` followed by an optional `-` and an integer.
             let explicit_exp: Option<i32> = if self.at(&TokenKind::Caret)? {
@@ -1430,7 +1420,7 @@ impl Parser {
             };
 
             factors.push(UnitFactor {
-                quantity_ref,
+                measure_ref,
                 exp: final_exp,
             });
         }
@@ -1623,13 +1613,6 @@ impl Parser {
                     ));
                 }
             }
-            let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            return Ok(Value::NumberWithUnit(decimal, "percent".to_string()));
-        }
-
-        // Check for "percent" keyword
-        if peeked.kind == TokenKind::PercentKw {
-            self.next()?; // consume "percent"
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
             return Ok(Value::NumberWithUnit(decimal, "percent".to_string()));
         }
@@ -2252,11 +2235,7 @@ impl Parser {
         while self.at(&TokenKind::As)? {
             self.expect(&TokenKind::As)?;
             let target_tok = self.next()?;
-            let target = if matches!(target_tok.kind, TokenKind::PercentKw) {
-                ConversionTarget::Unit {
-                    unit_name: "percent".to_string(),
-                }
-            } else if matches!(target_tok.kind, TokenKind::Permille) {
+            let target = if matches!(target_tok.kind, TokenKind::Permille) {
                 ConversionTarget::Unit {
                     unit_name: "permille".to_string(),
                 }
@@ -2769,16 +2748,6 @@ impl Parser {
             );
         }
 
-        // Check for "percent" keyword
-        if self.at(&TokenKind::PercentKw)? {
-            self.next()?;
-            let decimal = parse_decimal_string(&num_text, &start_span, self)?;
-            return self.new_expression(
-                ExpressionKind::Literal(Value::NumberWithUnit(decimal, "percent".to_string())),
-                self.make_source(start_span),
-            );
-        }
-
         // Check for "permille" keyword
         if self.at(&TokenKind::Permille)? {
             self.next()?;
@@ -2866,7 +2835,6 @@ impl TokenKind {
     fn is_identifier_like(&self) -> bool {
         matches!(self, TokenKind::Identifier)
             || can_be_label(self)
-            || is_type_keyword(self)
             || is_boolean_keyword(self)
             || is_math_function(self)
     }

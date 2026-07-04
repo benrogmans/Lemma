@@ -1,4 +1,4 @@
-//! Binding aliases sharing a quantity family must not block decomposition promotion.
+//! Binding aliases sharing a measure family must not block decomposition promotion.
 
 use lemma::Engine;
 use std::collections::HashMap;
@@ -35,11 +35,11 @@ fn eval_display(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 const PURCHASE_COST_SPEC: &str = r#"spec units
 uses lemma units
-data money: quantity
+data money: measure
   -> unit eur 1
-data mass: quantity
+data mass: measure
   -> unit kg 1
-data price_per_weight: quantity
+data price_per_weight: measure
   -> unit eur_per_kg eur/kg
 
 spec purchase_cost

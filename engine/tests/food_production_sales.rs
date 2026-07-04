@@ -50,11 +50,11 @@ fn display(resp: &lemma::Response, rule: &str) -> String {
         .unwrap_or_else(|| panic!("rule '{}' has no display", rule))
 }
 
-fn qty_unit(resp: &lemma::Response, rule: &str, unit: &str) -> String {
+fn quantity_unit(resp: &lemma::Response, rule: &str, unit: &str) -> String {
     result(resp, rule)
-        .quantity
+        .measure
         .as_ref()
-        .unwrap_or_else(|| panic!("rule '{}' is not a quantity", rule))
+        .unwrap_or_else(|| panic!("rule '{}' is not a measure", rule))
         .get(unit)
         .unwrap_or_else(|| panic!("rule '{}' has no unit '{}'", rule, unit))
         .clone()
@@ -83,11 +83,11 @@ fn ingredient_cost_per_batch() {
 spec ingredient_costing
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> decimals 2
 
-data unit_price: quantity
+data unit_price: measure
   -> unit eur_per_kg eur/kilogram
 
 data flour_bag_weight: 25 kilogram
@@ -150,7 +150,7 @@ data batch_size: 120
 data reject_rate: 5%
 data cookies_per_box: 12
 
-rule good_cookies: batch_size - reject_rate
+rule good_cookies: batch_size - reject_rate * batch_size
 rule full_boxes: floor(good_cookies / cookies_per_box)
 rule leftover_cookies: good_cookies % cookies_per_box
 "#,
@@ -160,9 +160,9 @@ rule leftover_cookies: good_cookies % cookies_per_box
 
     let resp = run(&engine, "batch_packaging", &[]);
 
-    // good = 120 * 0.95 = 114
+    // good = 120 - 0.05*120 = 114
     let good = display(&resp, "good_cookies");
-    assert_eq!(good, "114", "120 - 5% = 114 good cookies");
+    assert_eq!(good, "114", "120 - 5%*120 = 114 good cookies");
 
     // boxes = floor(114 / 12) = floor(9.5) = 9
     let boxes = display(&resp, "full_boxes");
@@ -308,7 +308,8 @@ rule base_freight: weight_kg / 100 * rate_per_100kg
 rule refrigeration_surcharge: 0%
   unless is_refrigerated then 40%
 
-rule total_freight: base_freight + refrigeration_surcharge
+rule surcharge_amount: base_freight * refrigeration_surcharge
+rule total_freight: base_freight + surcharge_amount
 "#,
             src("freight.lemma"),
         )
@@ -330,7 +331,7 @@ rule total_freight: base_freight + refrigeration_surcharge
     let total = display(&resp, "total_freight");
     assert_eq!(total, "45", "no refrigeration surcharge");
 
-    // 750kg refrigerated: 45 + 40% = 63
+    // 750kg refrigerated: 45 + 45*0.4 = 63
     let resp = run(
         &engine,
         "freight",
@@ -340,7 +341,7 @@ rule total_freight: base_freight + refrigeration_surcharge
         ],
     );
     let total = display(&resp, "total_freight");
-    assert_eq!(total, "63", "45 + 40% = 63");
+    assert_eq!(total, "63", "45 + 45*40% = 63");
 
     // 300kg: rate = 8, freight = 3 * 8 = 24
     let resp = run(
@@ -378,19 +379,20 @@ fn volume_discount_and_moq() {
 spec wholesale_order
 
 data unit_price: 2.40
-data order_quantity: number -> minimum 0
+data order_measure: number -> minimum 0
 data moq: 50
 
-rule quantity_check: accept
-  unless order_quantity < moq then veto "Below minimum order quantity"
+rule measure_check: accept
+  unless order_measure < moq then veto "Below minimum order measure"
 
 rule volume_discount: 0%
-  unless order_quantity >= 100  then 5%
-  unless order_quantity >= 500  then 12%
-  unless order_quantity >= 1000 then 18%
+  unless order_measure >= 100  then 5%
+  unless order_measure >= 500  then 12%
+  unless order_measure >= 1000 then 18%
 
-rule effective_price: unit_price - volume_discount
-rule order_value: effective_price * order_quantity
+rule discount_amount: unit_price * volume_discount
+rule effective_price: unit_price - discount_amount
+rule order_value: effective_price * order_measure
 
 rule free_shipping: order_value >= 2000
 rule shipping_cost: 35
@@ -402,7 +404,7 @@ rule shipping_cost: 35
 
     // Order 750 units: discount = 12%, effective = 2.40 * 0.88 = 2.112
     // order_value = 2.112 * 750 = 1584
-    let resp = run(&engine, "wholesale_order", &[("order_quantity", "750")]);
+    let resp = run(&engine, "wholesale_order", &[("order_measure", "750")]);
     let disc = display(&resp, "volume_discount");
     assert_eq!(disc, "12%", "750 units → 12% discount");
     let ep = display(&resp, "effective_price");
@@ -414,7 +416,7 @@ rule shipping_cost: 35
 
     // Order 1200 units: discount = 18%, effective = 2.40 * 0.82 = 1.968
     // order_value = 1200 * 1.968 = 2361.6
-    let resp = run(&engine, "wholesale_order", &[("order_quantity", "1200")]);
+    let resp = run(&engine, "wholesale_order", &[("order_measure", "1200")]);
     let disc = display(&resp, "volume_discount");
     assert_eq!(disc, "18%", "1200 → 18%");
     let ov = display(&resp, "order_value");
@@ -425,8 +427,8 @@ rule shipping_cost: 35
     assert_eq!(sc, "0", "free shipping → 0");
 
     // Below MOQ: 30 units → veto
-    let resp = run(&engine, "wholesale_order", &[("order_quantity", "30")]);
-    assert!(vetoed(&resp, "quantity_check"), "30 < 50 MOQ should veto");
+    let resp = run(&engine, "wholesale_order", &[("order_measure", "30")]);
+    assert!(vetoed(&resp, "measure_check"), "30 < 50 MOQ should veto");
 }
 
 // ===========================================================================
@@ -435,7 +437,7 @@ rule shipping_cost: 35
 // Base price in EUR. Convert to USD and GBP.
 // Apply regional markup: US +8%, UK +5%.
 //
-// Exercises: user-defined quantity types with currency units,
+// Exercises: user-defined measure types with currency units,
 //            as-conversion between units, percentage markup
 // ===========================================================================
 
@@ -447,7 +449,7 @@ fn multi_currency_pricing() {
             r#"
 spec currency_pricing
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 0.91
   -> unit gbp 1.17
@@ -461,8 +463,10 @@ rule price_gbp: base_price as gbp
 rule us_markup: 8%
 rule uk_markup: 5%
 
-rule us_retail: price_usd + us_markup
-rule uk_retail: price_gbp + uk_markup
+rule us_markup_amount: price_usd * us_markup
+rule uk_markup_amount: price_gbp * uk_markup
+rule us_retail: price_usd + us_markup_amount
+rule uk_retail: price_gbp + uk_markup_amount
 "#,
             src("currency.lemma"),
         )
@@ -497,7 +501,7 @@ rule uk_retail: price_gbp + uk_markup
 // SCENARIO 8: Production planning with cross-spec composition
 //
 // Spec 1: recipe (ingredients per batch, yield)
-// Spec 2: order (customer order quantity, required batches)
+// Spec 2: order (customer order measure, required batches)
 //
 // Exercises: uses, with, qualified references, ceil for rounding up batches
 // ===========================================================================
@@ -513,16 +517,16 @@ spec recipe
 data yield_per_batch: 500
 data reject_rate: 3%
 
-rule net_yield: yield_per_batch - reject_rate
+rule net_yield: yield_per_batch - reject_rate * yield_per_batch
 
 
 spec production_order
 
 uses r: recipe
 
-data customer_order_qty: number -> minimum 1
+data customer_order_quantity: number -> minimum 1
 
-rule batches_needed: ceil(customer_order_qty / r.net_yield)
+rule batches_needed: ceil(customer_order_quantity / r.net_yield)
 rule total_production: batches_needed * r.yield_per_batch
 rule expected_waste: total_production * r.reject_rate
 "#,
@@ -533,7 +537,7 @@ rule expected_waste: total_production * r.reject_rate
     let resp = run(
         &engine,
         "production_order",
-        &[("customer_order_qty", "1200")],
+        &[("customer_order_quantity", "1200")],
     );
 
     // net_yield = 500 - 3% = 485
@@ -569,10 +573,10 @@ fn compound_unit_cost_per_kg() {
 spec cost_per_weight
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data cost_rate: quantity
+data cost_rate: measure
   -> unit eur_per_kg eur/kilogram
 
 data shipment_weight: 340 kilogram
@@ -836,12 +840,12 @@ spec sales_order
 
 uses recipe: batch_recipe
 
-data order_qty: number -> minimum 1
+data order_quantity: number -> minimum 1
 data target_margin: 35%
 
-rule production_cost: recipe.unit_cost * order_qty
-rule unit_sell_price: recipe.unit_cost / (1 - target_margin)
-rule order_revenue: unit_sell_price * order_qty
+rule production_cost: recipe.unit_cost * order_quantity
+rule unit_sell_price: recipe.unit_cost / (100% - target_margin)
+rule order_revenue: unit_sell_price * order_quantity
 rule gross_profit: order_revenue - production_cost
 rule actual_margin: gross_profit / order_revenue
 rule margin_pct: actual_margin as percent
@@ -851,7 +855,7 @@ rule margin_check: margin_pct >= target_margin
         )
         .unwrap();
 
-    let resp = run(&engine, "sales_order", &[("order_qty", "500")]);
+    let resp = run(&engine, "sales_order", &[("order_quantity", "500")]);
 
     // unit_cost = (12.50 + 8.00) / 200 = 20.50 / 200 = 0.1025
     let _uc = display(&resp, "unit_sell_price");
@@ -997,7 +1001,7 @@ rule is_near_capacity: utilization > 0.8
 }
 
 // ===========================================================================
-// Display uses quantity signature when it names a single declared unit
+// Display uses measure signature when it names a single declared unit
 // ===========================================================================
 
 #[test]
@@ -1026,8 +1030,8 @@ rule sugar_chain: sugar as kilogram as number
         "as kilogram → signature kilogram → display"
     );
 
-    let kg = qty_unit(&resp, "sugar_kg", "kilogram");
-    assert_eq!(kg, "0.8", "quantity map still has all units");
+    let kg = quantity_unit(&resp, "sugar_kg", "kilogram");
+    assert_eq!(kg, "0.8", "measure map still has all units");
 
     let n = display(&resp, "sugar_chain");
     assert_eq!(n, "0.8", "as kilogram as number = 0.8");

@@ -1,8 +1,7 @@
-//! Rock-solid tests locking in ratio vs quantity unit behaviour.
+//! Rock-solid tests locking in ratio vs measure unit behaviour.
 //!
 //! Covers: "as percent" / "as permille" ratio conversion; comparison with percent literals;
-//! unknown unit error; quantity conversion unchanged; ratio display with no unit;
-//! number ± ratio data semantics (e.g. 100 - discount: 100 * (1 - discount)).
+//! unknown unit error; measure conversion unchanged; ratio display with no unit.
 
 use lemma::DateTimeValue;
 use lemma::ValueKind;
@@ -158,7 +157,7 @@ rule bad_conv: x as not_a_unit
 }
 
 #[test]
-fn number_minus_ratio_data_is_100_times_one_minus_discount() {
+fn number_minus_ratio_data_is_rejected() {
     let code = r#"
 spec pricing
 data discount: ratio
@@ -167,33 +166,19 @@ rule price: 100 - discount
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-
-    let now = DateTimeValue::now();
-    let response = engine
-        .run(
-            None,
-            "pricing",
-            Some(&now),
-            HashMap::from([("discount".to_string(), "20 percent".to_string())]),
-            true,
-            None,
-        )
-        .unwrap();
-
-    let price = response.results.get("price").expect("price rule");
-    let lit = rule_literal(price);
-    if let ValueKind::Number(n) = &lit.value {
-        assert_eq!(
-            lemma::ValueKind::Number(n.clone())
-                .as_decimal_magnitude()
-                .unwrap(),
-            Decimal::from(80),
-            "100 - 20% = 100 * (1 - 0.20) = 80"
-        );
-    } else {
-        panic!("price should be Number, got {:?}", lit.value);
-    }
+    let result = engine.load(code, lemma::SourceType::Volatile);
+    assert!(result.is_err(), "number - ratio should be rejected");
+    let msg = result
+        .unwrap_err()
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        msg.contains("scale explicitly"),
+        "expected scale-explicitly hint, got: {}",
+        msg
+    );
 }
 
 #[test]
@@ -263,10 +248,10 @@ rule compared: plus_five > 25%
 }
 
 #[test]
-fn quantity_and_ratio_conversion_in_same_spec() {
+fn measure_and_ratio_conversion_in_same_spec() {
     let code = r#"
 spec mixed
-data money: quantity
+data money: measure
   -> unit eur 1
 
 data amount: 200
@@ -293,7 +278,7 @@ rule share_above_20: share_pct > 20%
 
     let lit = rule_literal(as_eur);
     match &lit.value {
-        ValueKind::Quantity(n, signature) => {
+        ValueKind::Measure(n, signature) => {
             assert_eq!(
                 ValueKind::Number(n.clone()).as_decimal_magnitude().unwrap(),
                 Decimal::from(200)
@@ -303,7 +288,7 @@ rule share_above_20: share_pct > 20%
                 Some("eur")
             );
         }
-        other => panic!("as_eur: expected Quantity, got {other:?}"),
+        other => panic!("as_eur: expected Measure, got {other:?}"),
     }
     let lit = rule_literal(share_pct);
     if let ValueKind::Ratio(r, u) = &lit.value {

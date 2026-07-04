@@ -53,14 +53,14 @@ Or from git:
 spec pricing
 data quantity: number
 data price: 10
-rule total: quantity * price
+rule total: measure * price
 rule discount: 0
   unless quantity >= 10 then 5
   unless quantity >= 50 then 15
 """)
 
 # Run with data
-{:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "25"})
+{:ok, response} = Lemma.run(engine, "pricing", data: %{"measure" => "25"})
 
 # Introspect (specs grouped by repository)
 {:ok, groups} = Lemma.list(engine)
@@ -89,6 +89,16 @@ rule discount: 0
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 
 See `Lemma` module docs for full typespecs and options.
+
+## Data values
+
+Data values passed to `Lemma.run/3` must be strings or integers. Elixir floats (IEEE 754 doubles) are rejected to prevent silent precision loss — pass decimal values as strings instead:
+
+```elixir
+Lemma.run(engine, "pricing", data: %{"rate" => "0.075"})   # correct
+Lemma.run(engine, "pricing", data: %{"quantity" => 42})     # correct (integer)
+Lemma.run(engine, "pricing", data: %{"rate" => 0.075})      # raises — use string
+```
 
 ## Engine lifecycle
 

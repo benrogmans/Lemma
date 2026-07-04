@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.20"
+lemma-engine = "0.8.21"
 ```
 
 ### Minimal example
@@ -128,7 +128,7 @@ cargo add lemma-engine
 
 ```bash
 cargo install lemma
-lemma run pricing quantity=10
+lemma run pricing measure=10
 ```
 
 ### HTTP server
@@ -153,10 +153,10 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 
 ## Documentation
 
-- Language guide: <https://github.com/lemma/lemma/blob/main/documentation/index.md>
+- Learn guide: <https://github.com/lemma/lemma/blob/main/documentation/learn/readme.md>
 - API documentation: <https://docs.rs/lemma-engine>
 - Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
-- CLI usage: <https://github.com/lemma/lemma/blob/main/documentation/CLI.md>
+- CLI usage: <https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md>
 
 ## Use cases
 

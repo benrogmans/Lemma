@@ -1,7 +1,7 @@
 //! Ratio typedef constraints (`minimum`, `maximum`, `default`) with custom units.
 //!
 //! Parser emits `N label` as `Value::NumberWithUnit`; planning must resolve against
-//! the typedef's `RatioUnits` (same as quantity constraints after scale rename).
+//! the typedef's `RatioUnits` (same as measure constraints after scale rename).
 
 use lemma::DateTimeValue;
 use lemma::Engine;

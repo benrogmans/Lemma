@@ -176,7 +176,7 @@ rule total: price * 1.1
 fn percent_minimum_violation_on_override() {
     let code = r#"
 spec s
-data p: percent -> minimum 10%
+data p: ratio -> minimum 10%
 rule r: p
 "#;
     let mut engine = Engine::new();
@@ -212,7 +212,7 @@ fn percent_override_value_is_pinned() {
     }
     let code = r#"
 spec s
-data p: percent
+data p: ratio
 rule r: p
 "#;
     let mut engine = Engine::new();
@@ -257,7 +257,7 @@ rule r: p
 fn percent_maximum_violation_on_override() {
     let code = r#"
 spec s
-data p: percent -> maximum 50%
+data p: ratio -> maximum 50%
 rule r: p
 "#;
     let mut engine = Engine::new();
@@ -427,7 +427,7 @@ fn import_binding_unit_factor_override_errors() {
         .load(
             r#"
 spec finance
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 0.91
 "#,
@@ -461,10 +461,10 @@ rule r: currency
 }
 
 #[test]
-fn quantity_override_with_wrong_unit_rejected() {
+fn measure_override_with_wrong_unit_rejected() {
     let code = r#"
 spec s
-data money: quantity -> unit eur 1 -> unit usd 0.84
+data money: measure -> unit eur 1 -> unit usd 0.84
 data price: money
 rule r: price
 "#;
@@ -489,10 +489,10 @@ rule r: price
 }
 
 #[test]
-fn test_veto_reason_on_invalid_quantity_unit_override() {
+fn test_veto_reason_on_invalid_measure_unit_override() {
     let code = r#"
 spec bridge
-data bridge_height: quantity -> unit meter 1.0
+data bridge_height: measure -> unit meter 1.0
 rule span: bridge_height
 "#;
 

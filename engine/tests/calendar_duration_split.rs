@@ -76,7 +76,7 @@ uses lemma units
 data a: 1 weeks
 data b: 1 month
 rule total: a + b"#;
-    expect_plan_error(code, "Cannot add unrelated quantity types");
+    expect_plan_error(code, "Cannot add unrelated measure types");
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn calendar_to_duration_conversion_rejected() {
 uses lemma units
 data c: 1 month
 rule seconds: c as seconds as number"#;
-    expect_plan_error(code, "different quantity families");
+    expect_plan_error(code, "different measure families");
 }
 
 #[test]
@@ -98,10 +98,10 @@ data d: units.duration -> default 1 month"#;
 }
 
 #[test]
-fn weight_quantity_calendar_default_lists_quantity_units() {
+fn weight_measure_calendar_default_lists_measure_units() {
     let code = r#"spec s
 uses lemma units
-data weight: quantity -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram 1 -> unit kilogram 1000
 data w: weight -> default 1 month"#;
     expect_plan_error(code, "Unit 'month' is for calendar data");
     expect_plan_error(code, "Valid 'weight' units are");

@@ -1,7 +1,5 @@
 //! Fallible allocation helpers for vendored bigint digits.
 
-use std::alloc::Layout;
-
 #[cfg(test)]
 use std::cell::Cell;
 
@@ -60,19 +58,4 @@ pub fn try_with_capacity<T>(capacity: usize) -> Result<Vec<T>, AllocError> {
     let mut vec = Vec::new();
     try_reserve_exact(&mut vec, capacity)?;
     Ok(vec)
-}
-
-/// Probe the global allocator for `size` bytes; dealloc immediately on success.
-pub fn try_probe_alloc(size: usize) -> Result<(), AllocError> {
-    if size == 0 {
-        return Ok(());
-    }
-    check_forced_fail()?;
-    let layout = Layout::from_size_align(size, 8).map_err(|_| AllocError)?;
-    let ptr = unsafe { std::alloc::alloc(layout) };
-    if ptr.is_null() {
-        return Err(AllocError);
-    }
-    unsafe { std::alloc::dealloc(ptr, layout) };
-    Ok(())
 }

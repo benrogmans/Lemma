@@ -8,7 +8,7 @@ fn source() -> lemma::SourceType {
 }
 
 const MONEY_TYPEDEF: &str = r#"
-data money: quantity
+data money: measure
   -> unit eur 1
 "#;
 
@@ -63,7 +63,7 @@ fn eval_rule(
     eval_literal(code, spec_name, rule_name, effective).to_string()
 }
 
-fn eval_rule_quantity_unit(
+fn eval_rule_measure_unit(
     code: impl AsRef<str>,
     spec_name: &str,
     rule_name: &str,
@@ -80,11 +80,11 @@ fn eval_rule_quantity_unit(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get(unit))
         .cloned()
-        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
+        .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
 }
 
 fn eval_bool(
@@ -266,7 +266,7 @@ fn temporal_future_keyword_still_builds_range() {
 uses lemma units
 rule value: (future 2 hours) as minutes"#;
     assert_eq!(
-        eval_rule_quantity_unit(
+        eval_rule_measure_unit(
             code,
             "test",
             "value",
@@ -399,7 +399,7 @@ rule ok: event in future 1 month"#;
 }
 
 #[test]
-fn temporal_date_plus_unrelated_quantity_rejected() {
+fn temporal_date_plus_unrelated_measure_rejected() {
     let code = format!(
         r#"spec test
 uses lemma units
@@ -411,7 +411,7 @@ rule value: 2024-01-01 + 2 eur"#,
 }
 
 #[test]
-fn temporal_time_plus_unrelated_quantity_rejected() {
+fn temporal_time_plus_unrelated_measure_rejected() {
     let code = format!(
         r#"spec test
 uses lemma units

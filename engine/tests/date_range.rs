@@ -425,15 +425,15 @@ rule ok: (2024-06-01...2024-06-15) as days as number >= 7"#;
 }
 
 // =============================================================================
-// F. Quantity * DateRange
+// F. Measure * DateRange
 // =============================================================================
 
 #[test]
 fn f1_hours() {
     let code = r#"spec test
 uses lemma units
-data money: quantity -> unit eur 1.00
-data rate: quantity
+data money: measure -> unit eur 1.00
+data rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 data hourly_rate: 50 eur_per_hour
@@ -446,8 +446,8 @@ rule cost: (hourly_rate * (2024-01-01...2024-01-02 as hours))"#;
 fn f2_months() {
     let code = r#"spec test
 uses lemma units
-data money: quantity -> unit eur 1.00
-data monthly_rate: quantity -> unit eur_per_month eur/month
+data money: measure -> unit eur 1.00
+data monthly_rate: measure -> unit eur_per_month eur/month
 data rate: 50 eur_per_month
 rule cost: (rate * (2024-01-01...2024-06-15 as month))"#;
     let val = eval_rule(code, "test", "cost");
@@ -674,7 +674,7 @@ uses lemma units
 data elapsed: units.duration
 data d: elapsed -> default 90 days
 rule total: d as number"#;
-    expect_plan_error(code, "Cannot use 'as number' on quantity");
+    expect_plan_error(code, "Cannot use 'as number' on measure");
 }
 
 #[test]

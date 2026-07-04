@@ -1,8 +1,8 @@
 use crate::computation::rational::rational_new;
 use crate::parsing::ast::*;
 use crate::planning::semantics::{
-    date_time_to_semantic, primitive_time, time_to_semantic, BaseQuantityVector, LemmaType,
-    LiteralValue, QuantityTrait, QuantityUnit, QuantityUnits, TypeExtends, TypeSpecification,
+    date_time_to_semantic, primitive_time, time_to_semantic, BaseMeasureVector, LemmaType,
+    LiteralValue, MeasureTrait, MeasureUnit, MeasureUnits, TypeExtends, TypeSpecification,
 };
 use rust_decimal::Decimal;
 
@@ -48,27 +48,27 @@ fn test_literal_value_to_primitive_type() {
     );
     let dur_type = LemmaType::new(
         "duration".to_string(),
-        TypeSpecification::Quantity {
+        TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
-            units: QuantityUnits::from(vec![QuantityUnit {
+            units: MeasureUnits::from(vec![MeasureUnit {
                 name: "second".to_string(),
                 factor: crate::computation::rational::rational_one(),
-                derived_quantity_factors: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
+                derived_measure_factors: Vec::new(),
+                decomposition: BaseMeasureVector::new(),
                 minimum: None,
                 maximum: None,
                 default_magnitude: None,
             }]),
-            traits: vec![QuantityTrait::Duration],
+            traits: vec![MeasureTrait::Duration],
             decomposition: None,
             help: String::new(),
         },
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::quantity_with_type(
+        LiteralValue::measure_with_type(
             one.clone(),
             "second".to_string(),
             std::sync::Arc::new(dur_type)
@@ -133,8 +133,8 @@ fn test_spec_type_display() {
         "ratio"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_quantity()),
-        "quantity"
+        format!("{}", crate::planning::semantics::primitive_measure()),
+        "measure"
     );
     assert_eq!(format!("{}", primitive_time()), "time");
 }
@@ -245,28 +245,28 @@ fn test_literal_value_display_value() {
 
     let dur_type = LemmaType::new(
         "duration".to_string(),
-        TypeSpecification::Quantity {
+        TypeSpecification::Measure {
             minimum: None,
             maximum: None,
             decimals: None,
-            units: QuantityUnits::from(vec![QuantityUnit {
+            units: MeasureUnits::from(vec![MeasureUnit {
                 name: "hours".to_string(),
                 factor: crate::computation::rational::decimal_to_rational(Decimal::from(3600))
                     .expect("3600 must be exact decimal ratio"),
-                derived_quantity_factors: Vec::new(),
-                decomposition: BaseQuantityVector::new(),
+                derived_measure_factors: Vec::new(),
+                decomposition: BaseMeasureVector::new(),
                 minimum: None,
                 maximum: None,
                 default_magnitude: None,
             }]),
-            traits: vec![QuantityTrait::Duration],
+            traits: vec![MeasureTrait::Duration],
             decomposition: None,
             help: String::new(),
         },
         TypeExtends::Primitive,
     );
     assert_eq!(
-        LiteralValue::quantity_with_type(
+        LiteralValue::measure_with_type(
             ten_hours_canonical,
             "hours".to_string(),
             std::sync::Arc::new(dur_type),

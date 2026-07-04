@@ -192,7 +192,7 @@ rule check: event_date in calendar week
 }
 
 #[test]
-fn past_calendar_week_from_week_1_wraps_to_previous_year() {
+fn past_calendar_week_from_week_2_wraps_to_week_1() {
     // now is 2026-01-05 (Monday), ISO week 2 of 2026
     // past week = ISO week 1 of 2026, which starts 2025-12-29
     let mut engine = Engine::new();
@@ -204,6 +204,38 @@ rule check: event_date in past calendar week
     "#;
     engine.load(code, lemma::SourceType::Volatile).unwrap();
     let eff = effective(2026, 1, 5, 12, 0, 0);
+    assert!(eval_bool(&engine, "test", "check", &eff));
+}
+
+#[test]
+fn past_calendar_week_from_week_1_wraps_to_previous_year() {
+    // now is 2025-12-31 (Wednesday), ISO week 1 of 2026
+    // past week = ISO week 52 of 2025: Mon 2025-12-22 through Sun 2025-12-28
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+data event_date: 2025-12-25
+rule check: event_date in past calendar week
+    "#;
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let eff = effective(2025, 12, 31, 12, 0, 0);
+    assert!(eval_bool(&engine, "test", "check", &eff));
+}
+
+#[test]
+fn future_calendar_week_from_week_52_wraps_to_next_year() {
+    // now is 2025-12-24 (Wednesday), ISO week 52 of 2025
+    // future week = ISO week 1 of 2026: Mon 2025-12-29 through Sun 2026-01-04
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+data event_date: 2026-01-02
+rule check: event_date in future calendar week
+    "#;
+    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    let eff = effective(2025, 12, 24, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
 

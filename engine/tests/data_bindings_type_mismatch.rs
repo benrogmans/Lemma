@@ -30,13 +30,13 @@ fn load_ok(engine: &mut Engine, code: &str) {
 }
 
 const INNER_SPEC: &str = r#"spec product_structure
-data primary_weight: quantity
+data primary_weight: measure
   -> unit kilogram 1
   -> minimum 0 kilogram
 "#;
 
 #[test]
-fn fill_bare_number_into_quantity_slot_returns_planning_error() {
+fn fill_bare_number_into_measure_slot_returns_planning_error() {
     let code = format!(
         r#"{INNER_SPEC}
 spec almonds
@@ -47,13 +47,13 @@ with product_structure.primary_weight: 10
     let mut engine = Engine::new();
     let err = load_err_joined(&mut engine, &code);
     assert!(
-        err.to_lowercase().contains("quantity") || err.contains("kilogram"),
-        "expected quantity/unit mismatch error, got: {err}"
+        err.to_lowercase().contains("measure") || err.contains("kilogram"),
+        "expected measure/unit mismatch error, got: {err}"
     );
 }
 
 #[test]
-fn fill_text_into_quantity_slot_returns_planning_error() {
+fn fill_text_into_measure_slot_returns_planning_error() {
     let code = format!(
         r#"{INNER_SPEC}
 spec almonds
@@ -65,7 +65,7 @@ with product_structure.primary_weight: "hello"
     let err = load_err_joined(&mut engine, &code);
     assert!(
         !err.is_empty(),
-        "expected planning error for text into quantity, got empty"
+        "expected planning error for text into measure, got empty"
     );
 }
 
@@ -87,7 +87,7 @@ with inner.flag: 10
 }
 
 #[test]
-fn fill_quantity_with_unit_succeeds() {
+fn fill_measure_with_unit_succeeds() {
     let code = format!(
         r#"{INNER_SPEC}
 spec almonds

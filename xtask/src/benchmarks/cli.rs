@@ -10,7 +10,7 @@ use super::common::{
 };
 use std::path::Path;
 
-pub const RESULTS_RELATIVE: &str = "documentation/benchmarks/cli.md";
+pub const RESULTS_RELATIVE: &str = "documentation/reference/benchmarks/cli.md";
 
 pub struct BenchCase {
     pub group: &'static str,
@@ -103,6 +103,7 @@ fn compose_report(
     profile_rows: &[(&BenchCase, LatencyRow)],
 ) -> Result<String, String> {
     let mut out = String::new();
+    out.push_str("---\nnav_title: CLI benchmarks\nparent: Reference\nnav_order: 50\n---\n\n");
     out.push_str("# CLI benchmarks\n\n");
     out.push_str(
         "Numbers are produced by `cargo benchmarks cli`. \

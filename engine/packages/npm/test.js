@@ -19,9 +19,9 @@ function ruleNumber(rr) {
   return Number(rr.number);
 }
 
-function ruleQuantityUnit(rr, unit) {
-  if (!rr || !rr.quantity || typeof rr.quantity !== 'object') return null;
-  const v = rr.quantity[unit];
+function ruleMeasureUnit(rr, unit) {
+  if (!rr || !rr.measure || typeof rr.measure !== 'object') return null;
+  const v = rr.measure[unit];
   return v != null ? Number(v) : null;
 }
 
@@ -222,10 +222,10 @@ export async function test() {
       assert(typeof doubleRule.kind === 'string', 'rule types expose `kind` at the top level');
     });
 
-    await run('schema rule result units for quantity and ratio', () => {
+    await run('schema rule result units for measure and ratio', () => {
       engine.load(
         `spec units_contract
-data money: quantity -> unit eur 1 -> unit usd 0.91
+data money: measure -> unit eur 1 -> unit usd 0.91
 data rate: ratio
   -> unit basis_points 10000
   -> unit percent 100
@@ -236,7 +236,7 @@ rule rate_out: rate`,
       );
       const schema = engine.schema(null, 'units_contract', null);
       assert(Array.isArray(schema.rules.total.units) && schema.rules.total.units.length >= 1);
-      assert(schema.rules.total.units[0].factor, 'quantity rule units expose factor');
+      assert(schema.rules.total.units[0].factor, 'measure rule units expose factor');
       assert(Array.isArray(schema.rules.rate_out.units) && schema.rules.rate_out.units.length >= 1);
       assert(schema.rules.rate_out.units[0].value, 'ratio rule units expose value');
     });
@@ -309,10 +309,10 @@ rule rate_out: rate`,
       assert(threw);
     });
 
-    await run('invalid quantity unit override completes with veto', () => {
+    await run('invalid measure unit override completes with veto', () => {
       engine.load(
         `spec bridge
-data bridge_height: quantity -> unit meter 1.0
+data bridge_height: measure -> unit meter 1.0
 rule span: bridge_height`,
         'workspace.lemma'
       );
@@ -385,18 +385,18 @@ rule r: x`,
       assert(typeof r.results.sum.veto_reason === 'string' && r.results.sum.veto_reason.includes('y'));
     });
 
-    await run('quantity unit conversion', () => {
+    await run('measure unit conversion', () => {
       // unit usd 0.84: 1 USD = 0.84 EUR (canonical). 100 usd as eur => 100 * 0.84 = 84.
       engine.load(
-        `spec quantity_conv
-      data money: quantity
+        `spec measure_conv
+      data money: measure
         -> unit eur 1
         -> unit usd 0.84
       rule price_eur: 100 usd as eur`,
         'sc.lemma'
       );
-      const r = runEx(engine, 'quantity_conv', null, {}, null);
-      const eur = ruleQuantityUnit(r.results.price_eur, 'eur');
+      const r = runEx(engine, 'measure_conv', null, {}, null);
+      const eur = ruleMeasureUnit(r.results.price_eur, 'eur');
       assert(eur === 84, `expected 84 eur, got ${eur}`);
     });
 

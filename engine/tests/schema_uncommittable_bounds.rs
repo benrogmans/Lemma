@@ -1,4 +1,4 @@
-//! Declared quantity bounds follow `rust_decimal` for input and schema output.
+//! Declared measure bounds follow `rust_decimal` for input and schema output.
 //!
 //! IN: literals in `.lemma` must parse as `Decimal`. Oversize literals are rejected at parse.
 //! OUT: rationals stored after planning must commit to `Decimal` for schema export, or planning
@@ -45,20 +45,20 @@ fn load_err(engine: &mut Engine, code: &str) -> String {
         .join("\n")
 }
 
-fn qty_unit<'a>(spec: &'a TypeSpecification, name: &str) -> &'a lemma::QuantityUnit {
+fn quantity_unit<'a>(spec: &'a TypeSpecification, name: &str) -> &'a lemma::MeasureUnit {
     match spec {
-        TypeSpecification::Quantity { units, .. } => units
+        TypeSpecification::Measure { units, .. } => units
             .get(name)
-            .expect("BUG: quantity unit must exist in test fixture"),
-        _ => panic!("BUG: test fixture must use quantity type"),
+            .expect("BUG: measure unit must exist in test fixture"),
+        _ => panic!("BUG: test fixture must use measure type"),
     }
 }
 
-fn quantity_spec(constraint: &str) -> String {
+fn measure_spec(constraint: &str) -> String {
     format!(
         r#"
 spec t
-data money: quantity
+data money: measure
   -> unit eur 1
   -> {constraint}
 rule r: money
@@ -66,11 +66,11 @@ rule r: money
     )
 }
 
-fn quantity_spec_with_milli(constraint: &str) -> String {
+fn measure_spec_with_milli(constraint: &str) -> String {
     format!(
         r#"
 spec t
-data money: quantity
+data money: measure
   -> unit eur 1
   -> unit milli 0.001
   -> {constraint}
@@ -84,7 +84,7 @@ fn committable_minimum_at_10_pow_28_loads() {
     let mut engine = Engine::new();
     load(
         &mut engine,
-        &quantity_spec(&format!("minimum {COMMITTABLE_BOUND} eur")),
+        &measure_spec(&format!("minimum {COMMITTABLE_BOUND} eur")),
     );
 
     let now = DateTimeValue::now();
@@ -110,7 +110,7 @@ fn oversize_minimum_literal_rejected_at_parse() {
     let mut engine = Engine::new();
     let joined = load_err(
         &mut engine,
-        &quantity_spec(&format!("minimum {OVERSIZE_LITERAL} eur")),
+        &measure_spec(&format!("minimum {OVERSIZE_LITERAL} eur")),
     );
     assert!(
         joined.contains("Invalid number"),
@@ -128,7 +128,7 @@ fn uncommittable_minimum_per_unit_magnitude_rejected_at_planning() {
     let mut engine = Engine::new();
     let joined = load_err(
         &mut engine,
-        &quantity_spec_with_milli(&format!("minimum {COMMITTABLE_BOUND} eur")),
+        &measure_spec_with_milli(&format!("minimum {COMMITTABLE_BOUND} eur")),
     );
     assert!(
         joined.contains("cannot be represented as a decimal"),
@@ -142,7 +142,7 @@ fn committable_maximum_at_10_pow_28_loads() {
     let mut engine = Engine::new();
     load(
         &mut engine,
-        &quantity_spec(&format!("maximum {COMMITTABLE_BOUND} eur")),
+        &measure_spec(&format!("maximum {COMMITTABLE_BOUND} eur")),
     );
 
     let now = DateTimeValue::now();
@@ -168,7 +168,7 @@ fn oversize_maximum_literal_rejected_at_parse() {
     let mut engine = Engine::new();
     let joined = load_err(
         &mut engine,
-        &quantity_spec(&format!("maximum {OVERSIZE_LITERAL} eur")),
+        &measure_spec(&format!("maximum {OVERSIZE_LITERAL} eur")),
     );
     assert!(joined.contains("Invalid number"), "got: {joined}");
     assert!(
@@ -182,7 +182,7 @@ fn uncommittable_maximum_per_unit_magnitude_rejected_at_planning() {
     let mut engine = Engine::new();
     let joined = load_err(
         &mut engine,
-        &quantity_spec_with_milli(&format!("maximum {COMMITTABLE_BOUND} eur")),
+        &measure_spec_with_milli(&format!("maximum {COMMITTABLE_BOUND} eur")),
     );
     assert!(
         joined.contains("cannot be represented as a decimal"),
@@ -196,13 +196,13 @@ fn committable_default_at_10_pow_28_loads() {
     let mut engine = Engine::new();
     load(
         &mut engine,
-        &quantity_spec(&format!("default {COMMITTABLE_BOUND} eur")),
+        &measure_spec(&format!("default {COMMITTABLE_BOUND} eur")),
     );
 
     let now = DateTimeValue::now();
     let schema = engine.schema(None, "t", Some(&now)).expect("schema");
     let entry = schema.data.get("money").expect("data");
-    let eur = qty_unit(&entry.lemma_type.specifications, "eur");
+    let eur = quantity_unit(&entry.lemma_type.specifications, "eur");
     assert_eq!(
         eur.default_magnitude_decimal(),
         Some(decimal_lit(COMMITTABLE_BOUND))
@@ -219,7 +219,7 @@ fn oversize_default_literal_rejected_at_parse() {
     let mut engine = Engine::new();
     let joined = load_err(
         &mut engine,
-        &quantity_spec(&format!("default {OVERSIZE_LITERAL} eur")),
+        &measure_spec(&format!("default {OVERSIZE_LITERAL} eur")),
     );
     assert!(joined.contains("Invalid number"), "got: {joined}");
     assert!(
@@ -233,7 +233,7 @@ fn uncommittable_default_per_unit_magnitude_rejected_at_planning() {
     let mut engine = Engine::new();
     let joined = load_err(
         &mut engine,
-        &quantity_spec_with_milli(&format!("default {COMMITTABLE_BOUND} eur")),
+        &measure_spec_with_milli(&format!("default {COMMITTABLE_BOUND} eur")),
     );
     assert!(
         joined.contains("cannot be represented as a decimal"),

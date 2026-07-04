@@ -356,14 +356,14 @@ rule r: i.slot
 }
 
 #[test]
-fn binding_reference_quantity_family_mismatch_is_rejected() {
+fn binding_reference_measure_family_mismatch_is_rejected() {
     let code = r#"
 spec inner
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data payment: money
 
 spec source_spec
-data temp_unit: quantity -> unit celsius 1.0
+data temp_unit: measure -> unit celsius 1.0
 data temperature: temp_unit
 
 spec outer
@@ -382,10 +382,10 @@ rule r: i.payment
     );
     let joined = load_err_joined(res);
     assert!(
-        joined.contains("quantity family")
-            || joined.contains("quantity_family")
+        joined.contains("measure family")
+            || joined.contains("measure_family")
             || joined.contains("family")
             || joined.contains("type mismatch"),
-        "expected quantity-family-mismatch error, got: {joined}"
+        "expected measure-family-mismatch error, got: {joined}"
     );
 }

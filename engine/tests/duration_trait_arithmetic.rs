@@ -9,7 +9,7 @@ fn source() -> lemma::SourceType {
 }
 
 const MONEY_TYPEDEF: &str = r#"
-data money: quantity
+data money: measure
   -> unit eur 1
 "#;
 
@@ -38,7 +38,7 @@ fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String 
     eval_literal(code, spec_name, rule_name).to_string()
 }
 
-fn eval_rule_quantity_unit(
+fn eval_rule_measure_unit(
     code: impl AsRef<str>,
     spec_name: &str,
     rule_name: &str,
@@ -55,11 +55,11 @@ fn eval_rule_quantity_unit(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .quantity
+        .measure
         .as_ref()
         .and_then(|m| m.get(unit))
         .cloned()
-        .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'"))
+        .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
 }
 
 fn eval_bool(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> bool {
@@ -227,7 +227,7 @@ fn arith_duration_divided_by_number() {
 uses lemma units
 rule value: (2 hours / 2) as minutes"#;
     assert_eq!(
-        eval_rule_quantity_unit(code, "test", "value", "minutes"),
+        eval_rule_measure_unit(code, "test", "value", "minutes"),
         "60"
     );
 }
@@ -282,7 +282,7 @@ rule value: 2 hours + 3 month"#;
 }
 
 #[test]
-fn arith_named_duration_plus_unrelated_quantity_rejected() {
+fn arith_named_duration_plus_unrelated_measure_rejected() {
     let code = format!(
         r#"spec test
 uses lemma units
@@ -304,7 +304,7 @@ data d: elapsed -> default 2 hours
 rule value: d as eur"#,
         money = MONEY_TYPEDEF
     );
-    expect_plan_error(code, "different quantity families");
+    expect_plan_error(code, "different measure families");
 }
 
 #[test]

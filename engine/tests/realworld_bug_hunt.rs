@@ -55,10 +55,10 @@ fn hunt_as_precedence_with_division() {
 spec as_prec
 uses lemma units
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
 
-data wage: quantity
+data wage: measure
   -> unit eur_per_hour eur/hour
 
 data hours_worked: 160 hours
@@ -197,17 +197,17 @@ rule check_step3: step3 is veto
 }
 
 // ===========================================================================
-// BUG HUNT 5: Comparison between quantity and literal
+// BUG HUNT 5: Comparison between measure and literal
 // 5 kilogram > 3 kilogram (same unit) — should work
 // ===========================================================================
 
 #[test]
-fn hunt_quantity_comparison() {
+fn hunt_measure_comparison() {
     let mut engine = Engine::new();
     engine
         .load(
             r#"
-spec qty_cmp
+spec quantity_cmp
 uses lemma units
 
 data weight: units.mass
@@ -216,16 +216,16 @@ rule over_five: weight > 5 kilogram
 rule under_one: weight < 1 kilogram
 rule exactly_three: weight is 3 kilogram
 "#,
-            src("qty_cmp.lemma"),
+            src("quantity_cmp.lemma"),
         )
         .unwrap();
 
-    let resp = run_spec(&engine, "qty_cmp", &[("weight", "3 kilogram")]);
+    let resp = run_spec(&engine, "quantity_cmp", &[("weight", "3 kilogram")]);
     assert_eq!(rule_display(&resp, "over_five"), "false");
     assert_eq!(rule_display(&resp, "under_one"), "false");
     assert_eq!(rule_display(&resp, "exactly_three"), "true");
 
-    let resp = run_spec(&engine, "qty_cmp", &[("weight", "10 kilogram")]);
+    let resp = run_spec(&engine, "quantity_cmp", &[("weight", "10 kilogram")]);
     assert_eq!(rule_display(&resp, "over_five"), "true");
 }
 
@@ -242,7 +242,7 @@ fn hunt_money_precision() {
             r#"
 spec money_test
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
 
@@ -250,7 +250,7 @@ data price: money -> default 19.99 eur
 data tax_rate: 21%
 
 rule tax_amount: price * tax_rate
-rule total: price + tax_rate
+rule total: price + tax_amount
 rule ten_items: price * 10
 "#,
             src("money.lemma"),
@@ -505,7 +505,7 @@ rule b: a + 1
 }
 
 // ===========================================================================
-// BUG HUNT 13: Unless with comparison to quantity (mixed units)
+// BUG HUNT 13: Unless with comparison to measure (mixed units)
 // 5 kilogram > 3000 gram — cross-unit comparison
 // ===========================================================================
 

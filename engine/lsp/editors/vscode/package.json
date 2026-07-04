@@ -2,7 +2,7 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.8.20",
+  "version": "0.8.21",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "icon": "lemma_128.png",
@@ -48,7 +48,7 @@
       {
         "id": "controlKeyword",
         "superType": "keyword",
-        "description": "Control flow keywords (unless, then, uses, and, not, in, veto, …)"
+        "description": "Control flow keywords (unless, then, not, and, in, type, veto, now, past, future, stray repo)"
       },
       {
         "id": "dataBody",
@@ -64,6 +64,11 @@
         "id": "reference",
         "superType": "variable",
         "description": "Identifiers referenced in rule and spec bodies"
+      },
+      {
+        "id": "declarationKeyword",
+        "superType": "keyword",
+        "description": "Declaration keywords (spec, data, with, rule, repo, uses, meta)"
       }
     ],
     "semanticTokenScopes": [
@@ -81,7 +86,8 @@
           "controlKeyword": ["keyword.control.lemma"],
           "dataBody": ["string.unquoted.lemma"],
           "punctuation": ["punctuation.definition.tag.lemma"],
-          "reference": ["support.type.property-name.lemma"]
+          "reference": ["support.type.property-name.lemma"],
+          "declarationKeyword": ["keyword.declaration.lemma"]
         }
       }
     ],
@@ -102,18 +108,19 @@
         "editor.defaultFormatter": "lemma.lemma-language",
         "editor.semanticTokenColorCustomizations": {
           "rules": {
-            "namespace":      "#BD8EBB",
-            "class":          "#5DBDAA",
-            "property":       "#A3B5DF",
-            "function":       "#A3B5DF",
-            "string":         "#D07868",
-            "comment":        "#595945",
-            "keyword":        "#6BA0C2",
-            "operator":       "#80807A",
-            "controlKeyword": "#726B83",
-            "dataBody":       "#D07868",
-            "punctuation":    "#79987F",
-            "reference":      "#A59582"
+            "namespace":          "#BD8EBB",
+            "class":              "#5DBDAA",
+            "property":           "#A3B5DF",
+            "function":           "#A3B5DF",
+            "string":             "#D07868",
+            "comment":            "#595945",
+            "keyword":            "#6BA0C2",
+            "operator":           "#80807A",
+            "controlKeyword":     "#726B83",
+            "dataBody":           "#D07868",
+            "punctuation":        "#79987F",
+            "reference":          "#A59582",
+            "declarationKeyword": "#80807A"
           }
         }
       }

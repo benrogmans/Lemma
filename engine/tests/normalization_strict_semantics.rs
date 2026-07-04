@@ -62,36 +62,36 @@ rule r: x * 0
 }
 
 #[test]
-fn multiply_quantity_data_by_zero_keeps_unit() {
+fn multiply_measure_data_by_zero_keeps_unit() {
     let engine = load(
         r#"
-spec strict_quantity_multiply
-data money: quantity -> unit eur 1
+spec strict_measure_multiply
+data money: measure -> unit eur 1
 data price: money
 rule r: price * 0
 "#,
     );
 
-    let response = run(&engine, "strict_quantity_multiply", &[("price", "5 eur")]);
+    let response = run(&engine, "strict_measure_multiply", &[("price", "5 eur")]);
     let result = rule_result(&response, "r");
     assert!(!result.vetoed);
     assert_eq!(
         result.display.as_deref(),
         Some("0 eur"),
-        "the runtime multiply must keep the quantity's unit"
+        "the runtime multiply must keep the measure's unit"
     );
 
-    let missing = run(&engine, "strict_quantity_multiply", &[]);
+    let missing = run(&engine, "strict_measure_multiply", &[]);
     let result = rule_result(&missing, "r");
     assert!(result.vetoed, "price is missing: the multiply must veto");
 }
 
 #[test]
-fn multiply_quantity_literal_by_zero_folds_to_typed_zero() {
+fn multiply_measure_literal_by_zero_folds_to_typed_zero() {
     let engine = load(
         r#"
-spec folded_quantity_multiply
-data money: quantity -> unit eur 1
+spec folded_measure_multiply
+data money: measure -> unit eur 1
 data rate: 5 eur
 rule r: rate * 0
 "#,
@@ -99,7 +99,7 @@ rule r: rate * 0
 
     // `rate` is bound in the spec, so the inlined literal product folds at
     // planning time; the folded zero must keep the unit signature.
-    let response = run(&engine, "folded_quantity_multiply", &[]);
+    let response = run(&engine, "folded_measure_multiply", &[]);
     let result = rule_result(&response, "r");
     assert!(!result.vetoed);
     assert_eq!(result.display.as_deref(), Some("0 eur"));

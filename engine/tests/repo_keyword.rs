@@ -15,7 +15,7 @@ fn engine_run_resolves_unambiguous_spec_from_any_repo() {
     let mut engine = Engine::new();
     engine
         .load(
-            "repo scoped\nspec tax\ndata rate: 21%\ndata price: 100\nrule total: price * (1 + rate)",
+            "repo scoped\nspec tax\ndata rate: 21%\ndata price: 100\nrule tax_amount: price * rate\nrule total: price + tax_amount",
             SourceType::Volatile,
         )
         .expect("parse and plan must succeed for named-repo specs");

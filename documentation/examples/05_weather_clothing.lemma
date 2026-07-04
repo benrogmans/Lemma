@@ -6,7 +6,7 @@ Shows how rules can make decisions based on conditions.
 Simple logic that's easy to understand.
 """
 
-data temperature: quantity
+data temperature: measure
   -> unit celsius 1.0
   -> minimum -70 celsius
   -> maximum 70 celsius

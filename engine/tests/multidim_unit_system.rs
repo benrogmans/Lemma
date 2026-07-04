@@ -37,7 +37,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     result.display.clone().expect("display")
 }
 
-fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> Decimal {
+fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> Decimal {
     let mut engine = Engine::new();
     engine.load(code, source()).expect("Should parse and plan");
     let now = DateTimeValue::now();
@@ -62,13 +62,13 @@ fn eval_rule_quantity_unit(code: &str, spec_name: &str, rule_name: &str, unit: &
         );
         return Decimal::from_str(&calendar.value).expect("calendar value decimal");
     }
-    let quantity = result.quantity.as_ref().expect("quantity map");
+    let measure = result.measure.as_ref().expect("measure map");
     Decimal::from_str(
-        quantity
+        measure
             .get(unit)
-            .unwrap_or_else(|| panic!("quantity map missing unit '{unit}'")),
+            .unwrap_or_else(|| panic!("measure map missing unit '{unit}'")),
     )
-    .expect("quantity map decimal")
+    .expect("measure map decimal")
 }
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
@@ -96,23 +96,23 @@ fn expect_plan_error(code: &str, expected_fragment: &str) {
 }
 
 // =============================================================================
-// D1: Base quantity decomposition — each base quantity gets {quantity_name: 1}
+// D1: Base measure decomposition — each base measure gets {measure_name: 1}
 // =============================================================================
 
 #[test]
-fn d1_base_quantity_decomposition_self_cancels() {
-    // Same-family Quantity / Quantity cancels to dimensionless Number.
+fn d1_base_measure_decomposition_self_cancels() {
+    // Same-family Measure / Measure cancels to dimensionless Number.
     let code = r#"spec d1
-data money: quantity -> unit eur 1.00 -> unit cent 0.01
+data money: measure -> unit eur 1.00 -> unit cent 0.01
 data price1: 10 eur
 data price2: 5 eur
-rule ratio: price1 / price2"#;
-    let val = eval_rule(code, "d1", "ratio");
+rule price_ratio: price1 / price2"#;
+    let val = eval_rule(code, "d1", "price_ratio");
     assert!(val.contains('2'), "Expected 2 (10/5), got: {val}");
-    // The result must be a plain number, not a quantity value.
+    // The result must be a plain number, not a measure value.
     assert!(
         !val.to_lowercase().contains("eur"),
-        "Same-family quantity/quantity should cancel to number, got: {val}"
+        "Same-family measure/measure should cancel to number, got: {val}"
     );
 }
 
@@ -120,11 +120,11 @@ rule ratio: price1 / price2"#;
 fn d1_cross_unit_same_family_cancels() {
     // 100 cent / 1 eur — cross-unit within the same family, should still cancel to Number.
     let code = r#"spec d1b
-data money: quantity -> unit eur 1.00 -> unit cent 0.01
+data money: measure -> unit eur 1.00 -> unit cent 0.01
 data price_cents: 100 cent
 data price_eur: 1 eur
-rule ratio: price_cents / price_eur"#;
-    let val = eval_rule(code, "d1b", "ratio");
+rule price_ratio: price_cents / price_eur"#;
+    let val = eval_rule(code, "d1b", "price_ratio");
     assert!(
         val.contains('1'),
         "Expected 1.00 (100 cent == 1 eur), got: {val}"
@@ -141,8 +141,8 @@ fn d2_velocity_compound_unit_decomposition() {
     // 100 meter / 20 second → anonymous {length:1, duration:-1} → `as mps` → 5 mps.
     let code = r#"spec d2
 uses lemma units
-data length: quantity -> unit meter 1 -> unit kilometer 1000
-data velocity: quantity -> unit mps meter/second -> unit kmh kilometer/hour
+data length: measure -> unit meter 1 -> unit kilometer 1000
+data velocity: measure -> unit mps meter/second -> unit kmh kilometer/hour
 data dist: 100 meter
 data secs: 20 seconds
 rule speed: (dist / secs) as mps"#;
@@ -160,19 +160,19 @@ fn d2_velocity_in_kmh_conversion() {
     // 5 m/s × (3600 s/h ÷ 1000 m/km) = 18 km/h exactly.
     let code = r#"spec d2b
 uses lemma units
-data length: quantity -> unit meter 1 -> unit kilometer 1000
-data velocity: quantity -> unit mps meter/second -> unit kmh kilometer/hour
+data length: measure -> unit meter 1 -> unit kilometer 1000
+data velocity: measure -> unit mps meter/second -> unit kmh kilometer/hour
 data dist: 100 meter
 data secs: 20 seconds
 rule speed_kmh: (dist / secs) as kmh"#;
     assert_eq!(
-        eval_rule_quantity_unit(code, "d2b", "speed_kmh", "kmh"),
+        eval_rule_measure_unit(code, "d2b", "speed_kmh", "kmh"),
         Decimal::from(18)
     );
 }
 
 // =============================================================================
-// D3: Inconsistent unit decompositions within a quantity type are rejected
+// D3: Inconsistent unit decompositions within a measure type are rejected
 // =============================================================================
 
 #[test]
@@ -180,43 +180,43 @@ fn d3_inconsistent_unit_decompositions_rejected() {
     // One unit is `meter/second` (velocity), another is `meter` (length) — inconsistent.
     let code = r#"spec d3
 uses lemma units
-data length: quantity -> unit meter 1
-data velocity: quantity -> unit mps meter/second -> unit just_meters meter"#;
+data length: measure -> unit meter 1
+data velocity: measure -> unit mps meter/second -> unit just_meters meter"#;
     expect_plan_error(code, "inconsistent");
 }
 
 // =============================================================================
-// D4: Same-quantity unit reference is rejected
+// D4: Same-measure unit reference is rejected
 // =============================================================================
 
 #[test]
-fn d4_same_quantity_self_reference_rejected() {
-    // A quantity type cannot use its own units in a compound expression.
+fn d4_same_measure_self_reference_rejected() {
+    // A measure type cannot use its own units in a compound expression.
     // When the reference is to the type name rather than a unit name, the error is
     // "not a known unit" (the type name is not registered as a unit).
-    // When the reference is to a unit of the same type, it's "same quantity type".
+    // When the reference is to a unit of the same type, it's "same measure type".
     // Both cases are rejected at plan time.
     let code = r#"spec d4
 uses lemma units
-data velocity: quantity -> unit mps velocity/second"#;
+data velocity: measure -> unit mps velocity/second"#;
     expect_plan_error(code, "");
 }
 
 // =============================================================================
-// D5: `uses` does NOT contribute base quantity types for compound unit declarations
+// D5: `uses` does NOT contribute base measure types for compound unit declarations
 // =============================================================================
 
 #[test]
-fn d5_uses_does_not_import_quantity_types_for_compound_units() {
+fn d5_uses_does_not_import_measure_types_for_compound_units() {
     // `uses spec_b` only imports rule references and data binding — not type definitions.
-    // Compound unit `meter/second` in `velocity` requires `meter` to be an in-scope quantity unit,
+    // Compound unit `meter/second` in `velocity` requires `meter` to be an in-scope measure unit,
     // but `uses` only brings in spec references, so this should fail.
     let code = r#"spec spec_b
-data length: quantity -> unit meter 1
+data length: measure -> unit meter 1
 
 spec spec_a
 uses lb: spec_b
-data velocity: quantity -> unit mps meter/second"#;
+data velocity: measure -> unit mps meter/second"#;
     expect_plan_error(code, "");
 }
 
@@ -229,13 +229,13 @@ fn d6_uses_and_qualified_parent_makes_type_available_for_compound_units() {
     // `uses spec_b` plus `data length: spec_b.length` imports the `length` type (including its `meter` unit)
     // and makes `meter` available for compound unit expressions in `spec_a`.
     let code = r#"spec spec_b
-data length: quantity -> unit meter 1
+data length: measure -> unit meter 1
 
 spec spec_a
 uses lemma units
 uses spec_b
 data length: spec_b.length
-data velocity: quantity -> unit mps meter/second
+data velocity: measure -> unit mps meter/second
 data dist: 100 meter
 data secs: 20 seconds
 rule speed: (dist / secs) as mps"#;
@@ -248,18 +248,18 @@ rule speed: (dist / secs) as mps"#;
 // =============================================================================
 
 #[test]
-fn d7_cross_library_same_named_quantity_resolves_speed_literal() {
+fn d7_cross_library_same_named_measure_resolves_speed_literal() {
     // Two `length` types from different specs: `spec_a` defines its own `length` and
     // imports `velocity` from `spec_b`. Anonymous `dist / secs` must still cast to
     // the imported `mps` unit; planning and evaluation complete without error.
     let code = r#"spec spec_b
 uses lemma units
-data length: quantity -> unit meter 1
-data velocity: quantity -> unit mps meter/second
+data length: measure -> unit meter 1
+data velocity: measure -> unit mps meter/second
 
 spec spec_a
 uses lemma units
-data length: quantity -> unit meter 1
+data length: measure -> unit meter 1
 uses spec_b_ref: spec_b
 data velocity: spec_b_ref.velocity
 data dist: 100 meter
@@ -290,8 +290,8 @@ fn d8_compound_unit_with_numeric_prefix() {
     // 40 hours * standard rate = 40 * 3600 s * (28.50/3600 eur/s) = 40 * 28.50 = 1140 eur.
     let code = r#"spec d8
 uses lemma units
-data money: quantity -> unit eur 1.00
-data wage_rate: quantity
+data money: measure -> unit eur 1.00
+data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit standard 28.50 eur/hour
 data hours_worked: 40 hours
@@ -302,16 +302,16 @@ rule total: (rate * hours_worked)"#;
 }
 
 // =============================================================================
-// D9: Quantity with no factor-1 unit is rejected
+// D9: Measure with no factor-1 unit is rejected
 // =============================================================================
 
 #[test]
-fn d9_quantity_without_factor_one_unit_accepted() {
+fn d9_measure_without_factor_one_unit_accepted() {
     let code = r#"spec d9
-data length: quantity -> unit kilometer 1000 -> unit mile 1609
+data length: measure -> unit kilometer 1000 -> unit mile 1609
 data dist: 5 kilometer
 rule miles: dist as mile"#;
-    let miles = eval_rule_quantity_unit(code, "d9", "miles", "mile");
+    let miles = eval_rule_measure_unit(code, "d9", "miles", "mile");
     assert!(
         miles > Decimal::from(3) && miles < Decimal::from(4),
         "5 km ≈ 3.1 mile, got: {miles}"
@@ -324,22 +324,22 @@ rule miles: dist as mile"#;
 
 #[test]
 fn d10_calendar_unit_cross_axis_arithmetic_at_rule_boundary() {
-    // `sales / month` where `sales` is a money quantity produces an anonymous intermediate
+    // `sales / month` where `sales` is a money measure produces an anonymous intermediate
     // {money:1, calendar:-1}. At the rule boundary this is rejected as anonymous.
     let code = r#"spec d10
 uses lemma units
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data sales: 1200 eur
 rule rate: sales / 1 month"#;
     expect_plan_error(code, "anonymous intermediate");
 }
 
 #[test]
-fn d10_calendar_unit_in_derived_quantity_definition_allowed() {
+fn d10_calendar_unit_in_derived_measure_definition_allowed() {
     let code = r#"spec d10b
 uses lemma units
-data money: quantity -> unit eur 1.00
-data monthly_rate: quantity
+data money: measure -> unit eur 1.00
+data monthly_rate: measure
   -> unit eur_per_month eur/month
 data sales: 1200 eur
 data months: 1 month
@@ -356,8 +356,8 @@ rule rate: (sales / months)"#;
 fn d10_calendar_literal_inline_with_rate_type_promotes() {
     let code = r#"spec d10_inline
 uses lemma units
-data money: quantity -> unit eur 1.00
-data monthly_rate: quantity
+data money: measure -> unit eur 1.00
+data monthly_rate: measure
   -> unit eur_per_month eur/month
 data sales: 1200 eur
 rule rate: sales / 1 month"#;
@@ -372,8 +372,8 @@ rule rate: sales / 1 month"#;
 fn d10_exact_duration_compound_cast_allowed() {
     let code = r#"spec d10c
 uses lemma units
-data money: quantity -> unit eur 1.00
-data per_second_rate: quantity
+data money: measure -> unit eur 1.00
+data per_second_rate: measure
   -> unit eur_per_second eur/second
 data sales: 1200 eur
 data seconds: 1 second
@@ -385,15 +385,15 @@ rule rate: (sales / seconds)"#;
     );
 }
 
-/// Inverse of `d10_calendar_unit_in_derived_quantity_definition_allowed`:
+/// Inverse of `d10_calendar_unit_in_derived_measure_definition_allowed`:
 /// balance / monthly burn rate → months of runway (not eur/month).
-/// Fails until calendar quantity trait + `uses lemma units` exist.
+/// Fails until calendar measure trait + `uses lemma units` exist.
 #[test]
 fn d10_runway_balance_over_monthly_rate_as_month() {
     let code = r#"spec d10_runway
 uses lemma units
-data money: quantity -> unit eur 1.00
-data money_flow: quantity
+data money: measure -> unit eur 1.00
+data money_flow: measure
   -> unit eur_month eur/month
 data balance: 120000 eur
 data burn_rate: 8000 eur_month
@@ -431,13 +431,13 @@ data d1: 3 month
 data d2: 9 month
 rule total: d1 + d2"#;
     assert_eq!(
-        eval_rule_quantity_unit(code, "d11", "total", "month"),
+        eval_rule_measure_unit(code, "d11", "total", "month"),
         Decimal::from(12)
     );
 }
 
 // =============================================================================
-// D12: `duration` keyword resolves to built-in quantity (stretch goal)
+// D12: `duration` keyword resolves to built-in measure (stretch goal)
 // =============================================================================
 
 #[test]
@@ -446,8 +446,8 @@ fn d12_duration_keyword_in_compound_unit() {
     // This is the basic mechanism that makes velocity `meter/second` work.
     let code = r#"spec d12
 uses lemma units
-data length: quantity -> unit meter 1
-data velocity: quantity -> unit mps meter/second
+data length: measure -> unit meter 1
+data velocity: measure -> unit mps meter/second
 data dist: 200 meter
 data secs: 40 seconds
 rule speed: (dist / secs) as mps"#;
@@ -463,16 +463,16 @@ rule speed: (dist / secs) as mps"#;
 fn integration_velocity_basic() {
     let code = r#"spec phys
 uses lemma units
-data length: quantity -> unit meter 1 -> unit kilometer 1000
-data velocity: quantity -> unit mps meter/second -> unit kmh kilometer/hour
+data length: measure -> unit meter 1 -> unit kilometer 1000
+data velocity: measure -> unit mps meter/second -> unit kmh kilometer/hour
 data dist: 1000 meter
-data time: 200 seconds
-rule speed_mps: (dist / time) as mps
-rule speed_kmh: (dist / time) as kmh"#;
+data elapsed: 200 seconds
+rule speed_mps: (dist / elapsed) as mps
+rule speed_kmh: (dist / elapsed) as kmh"#;
     let mps = eval_rule(code, "phys", "speed_mps");
     assert!(mps.contains('5'), "Expected 5 mps, got: {mps}");
     assert_eq!(
-        eval_rule_quantity_unit(code, "phys", "speed_kmh", "kmh"),
+        eval_rule_measure_unit(code, "phys", "speed_kmh", "kmh"),
         Decimal::from(18)
     );
 }
@@ -485,8 +485,8 @@ rule speed_kmh: (dist / time) as kmh"#;
 fn integration_wage_rate() {
     let code = r#"spec wage
 uses lemma units
-data money: quantity -> unit eur 1.00 -> unit cent 0.01
-data wage_rate: quantity
+data money: measure -> unit eur 1.00 -> unit cent 0.01
+data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
 data hours: 8 hours
@@ -506,10 +506,10 @@ fn integration_anonymous_at_rule_boundary_rejected() {
     // `dist / time` without `as mps` produces an anonymous intermediate at the rule boundary.
     let code = r#"spec phys
 uses lemma units
-data length: quantity -> unit meter 1
+data length: measure -> unit meter 1
 data dist: 100 meter
-data time: 20 seconds
-rule speed: dist / time"#;
+data elapsed: 20 seconds
+rule speed: dist / elapsed"#;
     expect_plan_error(code, "anonymous intermediate");
 }
 
@@ -518,22 +518,22 @@ fn integration_as_number_on_anonymous_rejected() {
     // Using `as number` to strip an anonymous compound is rejected.
     let code = r#"spec phys
 uses lemma units
-data length: quantity -> unit meter 1
+data length: measure -> unit meter 1
 data dist: 100 meter
-data time: 20 seconds
-rule speed: (dist / time) as number"#;
+data elapsed: 20 seconds
+rule speed: (dist / elapsed) as number"#;
     expect_plan_error(code, "anonymous intermediate");
 }
 
 // =============================================================================
-// Integration: same-family quantity * quantity rejected (anonymous at rule boundary)
+// Integration: same-family measure * measure rejected (anonymous at rule boundary)
 // =============================================================================
 
 #[test]
-fn integration_same_family_quantity_multiply_rejected() {
+fn integration_same_family_measure_multiply_rejected() {
     // money * money produces {money:2} which is anonymous at rule boundary.
     let code = r#"spec t
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data a: 10 eur
 data b: 5 eur
 rule product: a * b"#;
@@ -541,10 +541,10 @@ rule product: a * b"#;
 }
 
 #[test]
-fn integration_same_family_quantity_multiply_via_as_number() {
-    // (a as number) * (b as number) strips the quantity first — valid.
+fn integration_same_family_measure_multiply_via_as_number() {
+    // (a as number) * (b as number) strips the measure first — valid.
     let code = r#"spec t
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data a: 10 eur
 data b: 5 eur
 rule product: (a as eur as number) * (b as eur as number)"#;
@@ -553,17 +553,17 @@ rule product: (a as eur as number) * (b as eur as number)"#;
 }
 
 // =============================================================================
-// Integration: Quantity / Quantity (same family) → Number (dimensionless)
+// Integration: Measure / Measure (same family) → Number (dimensionless)
 // =============================================================================
 
 #[test]
-fn integration_quantity_divide_quantity_same_family() {
+fn integration_measure_divide_measure_same_family() {
     let code = r#"spec t
-data money: quantity -> unit eur 1.00 -> unit cent 0.01
+data money: measure -> unit eur 1.00 -> unit cent 0.01
 data a: 100 eur
 data b: 25 eur
-rule ratio: a / b"#;
-    let val = eval_rule(code, "t", "ratio");
+rule price_ratio: a / b"#;
+    let val = eval_rule(code, "t", "price_ratio");
     assert!(val.contains('4'), "Expected 4, got: {val}");
     assert!(
         !val.to_lowercase().contains("eur"),
@@ -572,7 +572,7 @@ rule ratio: a / b"#;
 }
 
 // =============================================================================
-// Integration: TypedefCast — anonymous intermediate cast to named quantity unit
+// Integration: TypedefCast — anonymous intermediate cast to named measure unit
 // =============================================================================
 
 #[test]
@@ -580,22 +580,22 @@ fn integration_typedef_cast_dimension_mismatch_rejected() {
     // Cross-dimension cast is rejected: {length:1, duration:-1} cannot be cast to `money`.
     let code = r#"spec phys
 uses lemma units
-data length: quantity -> unit meter 1
-data money: quantity -> unit eur 1.00
+data length: measure -> unit meter 1
+data money: measure -> unit eur 1.00
 data dist: 100 meter
-data time: 20 seconds
-rule speed_as_eur: (dist / time)"#;
+data elapsed: 20 seconds
+rule speed_as_eur: (dist / elapsed)"#;
     expect_plan_error(code, "anonymous intermediate");
 }
 
 // =============================================================================
-// Integration: Quantity ^ Number with integer literal exponent
+// Integration: Measure ^ Number with integer literal exponent
 // =============================================================================
 
 #[test]
-fn integration_quantity_power_integer_literal() {
+fn integration_measure_power_integer_literal() {
     let code = r#"spec t
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data a: 3 eur
 rule cube: a ^ 3"#;
     let val = eval_rule(code, "t", "cube");
@@ -603,18 +603,18 @@ rule cube: a ^ 3"#;
 }
 
 #[test]
-fn integration_quantity_power_fractional_rejected() {
+fn integration_measure_power_fractional_rejected() {
     let code = r#"spec t
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data a: 4 eur
 rule frac_pow: a ^ 0.5"#;
     expect_plan_error(code, "fractional");
 }
 
 #[test]
-fn integration_quantity_power_variable_rejected() {
+fn integration_measure_power_variable_rejected() {
     let code = r#"spec t
-data money: quantity -> unit eur 1.00
+data money: measure -> unit eur 1.00
 data a: 4 eur
 data exponent: 2
 rule powered: a ^ exponent"#;
@@ -622,18 +622,18 @@ rule powered: a ^ exponent"#;
 }
 
 // =============================================================================
-// Dimensionless derived quantities referenced in compound types
+// Dimensionless derived measures referenced in compound types
 // =============================================================================
 
 #[test]
-fn dimensionless_derived_quantity_referenced_in_compound_type_loads() {
+fn dimensionless_derived_measure_referenced_in_compound_type_loads() {
     let code = r#"spec units
-data mass_type: quantity
+data mass_type: measure
   -> unit kg 1
   -> unit gram 0.001
-data ratio_type: quantity
+data ratio_type: measure
   -> unit mass_ratio kg/kg
-data scaled_mass_type: quantity
+data scaled_mass_type: measure
   -> unit scaled_kg mass_ratio*kg
 data base_mass: 10 kg
 data scale: 2 mass_ratio
@@ -644,9 +644,9 @@ rule result: (base_mass * scale) as scaled_kg"#;
 #[test]
 fn dimensionless_compound_unit_evaluates_to_correct_magnitude() {
     let code = r#"spec units
-data mass_type: quantity
+data mass_type: measure
   -> unit kg 1
-data ratio_type: quantity
+data ratio_type: measure
   -> unit mass_ratio kg/kg
 data m: 5 kg
 data r: 3 mass_ratio

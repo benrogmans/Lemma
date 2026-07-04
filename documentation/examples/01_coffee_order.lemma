@@ -6,7 +6,7 @@ A simple example showing how data and rules work together.
 Perfect for understanding the basics of Lemma.
 """
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1.00
   -> unit gbp 1.17

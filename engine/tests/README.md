@@ -50,7 +50,7 @@ cargo nextest run -p lemma-engine --tests
 | `temporal_interface_deep_slice.rs` | Deep temporal interface |
 | `temporal_boundary_explosion.rs` | Boundary cases |
 | `temporal_cycle_panic.rs` | Invalid temporal cycles |
-| `spec_reference_scenarios.rs` | Composability contracts (unpinned/pinned `uses`, coverage, self-ref, `with`; see [spec_composability.md](../documentation/spec_composability.md)) |
+| `spec_reference_scenarios.rs` | Composability contracts (unpinned/pinned `uses`, coverage, self-ref, `with`; see [composing_specs.md](../documentation/learn/composing_specs.md)) |
 | `temporal_self_uses.rs` | Cross-temporal same-name `uses` (implicit or explicit alias) |
 | `type_import_temporal.rs` | Type-only deps + temporal versions |
 | `spec_name_repository_plan_collision.rs` | Cross-repo spec name collision (regression) |
@@ -78,16 +78,16 @@ cargo nextest run -p lemma-engine --tests
 
 | File | Focus |
 |------|--------|
-| `arithmetic_exactness.rs` | Division planning/runtime behavior; quantity wage integration |
+| `arithmetic_exactness.rs` | Division planning/runtime behavior; measure wage integration |
 | `arithmetic_type_combinations.rs` | Typed arithmetic matrix |
 | `math_ops.rs` | Math operators |
 | `modulo_power.rs` | `%` and power |
 | `equal_operator.rs` | Equality |
 | `type_aware_arithmetic.rs` | Type-aware ops |
-| `quantity_unit_conversion.rs` | Unit conversion + validation bounds |
-| `quantity_number_refactoring.rs` | Quantity/number interactions |
-| `quantity_duration_arithmetic_types.rs` | Quantity + duration types |
-| `ratio_quantity_units.rs` | Ratio vs quantity units |
+| `measure_unit_conversion.rs` | Unit conversion + validation bounds |
+| `measure_number_refactoring.rs` | Measure/number interactions |
+| `measure_duration_arithmetic_types.rs` | Measure + duration types |
+| `ratio_measure_units.rs` | Ratio vs measure units |
 | `ratio_runtime_input.rs` | Runtime ratio input grammar |
 | `multidim_unit_system.rs` | Multi-dimensional units |
 | `unit_percentage_operations.rs` | Percentage on units |
@@ -223,7 +223,7 @@ Prefer adding **unit** tests beside the module when testing private helpers; add
 | `parsing/` (lexer, ast, mod) | Heavy (~110+) | `expression_syntax`, `error_messages`, `data_literals_coverage` |
 | `planning/` (graph, normalize, semantics, execution_plan) | Heavy (~150+) | `temporal_*`, `validator_*`, `uses_lemma_*`, `type_definitions` |
 | `inversion/` | Moderate (~45) | `inversion_*`, `test_discount_inversion`, `veto_inversion` |
-| `computation/datetime`, `rational`, `units` | datetime/rational heavy | `datetime_*`, `arithmetic_*`, `quantity_*`, `ratio_*` |
+| `computation/datetime`, `rational`, `units` | datetime/rational heavy | `datetime_*`, `arithmetic_*`, `measure_*`, `ratio_*` |
 | `computation/arithmetic`, `comparison`, `range` | **None** | `arithmetic_type_combinations`, `math_ops`, `range_*`, `equal_operator` |
 | `evaluation/expression`, `explanation` | **None** | E2E via `run` in most files |
 | `engine.rs` | ~32 | `integration_*`, `coffee_order`, registry repros |
@@ -239,8 +239,8 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 |---------|--------|
 | Datetime eval | `datetime_sugar`, `datetime_edge_cases`, `datetime_edge_hunting`, `timezone`, `date_range` |
 | Duration trait | `duration_trait_anonymous`, `_arithmetic`, `_precision`, `_temporal`, `_planning` |
-| Quantity / ratio | `quantity_unit_conversion`, `quantity_number_refactoring`, `quantity_duration_arithmetic_types`, `ratio_quantity_units`, `ratio_runtime_input`, `unit_percentage_operations`, `type_aware_arithmetic`, `multidim_unit_system` |
-| Decimal eval precision | `quantity_unit_conversion` (`precision_*` stress: prime chains from 37, API unit toggles, mixed `*`/`/`); `arithmetic_exactness` (`runtime_data_ten_divide_three_*`) |
+| Measure / ratio | `measure_unit_conversion`, `measure_number_refactoring`, `measure_duration_arithmetic_types`, `ratio_measure_units`, `ratio_runtime_input`, `unit_percentage_operations`, `type_aware_arithmetic`, `multidim_unit_system` |
+| Decimal eval precision | `measure_unit_conversion` (`precision_*` stress: prime chains from 37, API unit toggles, mixed `*`/`/`); `arithmetic_exactness` (`runtime_data_ten_divide_three_*`) |
 | Arithmetic | `arithmetic_type_combinations`, `arithmetic_exactness`, `math_ops`, `modulo_power`, `equal_operator` |
 | Range | `range_generic`, `range_semantics_table`, `date_range` |
 | Spec graph | `nested_spec_references`, `cross_spec_references`, `required_data_names_nested_spec`, `inline_type_imports` |

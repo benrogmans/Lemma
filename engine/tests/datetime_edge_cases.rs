@@ -598,6 +598,63 @@ rule april: start_date + 1 month
 }
 
 #[test]
+fn time_plus_extreme_duration_vetoes_instead_of_panic() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+data t: 12:00:00+00:00
+rule result: t + 9999999999999 seconds
+    "#;
+    engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect("parse");
+    let now = lemma::DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            std::collections::HashMap::new(),
+            false,
+            Some(&["result".to_string()]),
+        )
+        .expect("run");
+    let rule_result = response.get("result").expect("rule exists");
+    assert!(rule_result.vetoed, "extreme duration must veto, not panic");
+}
+
+#[test]
+fn time_minus_extreme_duration_vetoes_instead_of_panic() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+data t: 12:00:00+00:00
+rule result: t - 9999999999999 seconds
+    "#;
+    engine
+        .load(code, lemma::SourceType::Volatile)
+        .expect("parse");
+    let now = lemma::DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            std::collections::HashMap::new(),
+            false,
+            Some(&["result".to_string()]),
+        )
+        .expect("run");
+    let rule_result = response.get("result").expect("rule exists");
+    assert!(
+        rule_result.vetoed,
+        "extreme duration subtraction must veto, not panic"
+    );
+}
+
+#[test]
 fn test_dec_31_plus_1_month() {
     let mut engine = Engine::new();
     let code = r#"

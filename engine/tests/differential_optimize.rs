@@ -59,7 +59,7 @@ fn arithmetic_and_unless_chain_streams_agree() {
     let code = r#"
 spec calc
 
-data money: quantity
+data money: measure
   -> decimals 2
   -> unit eur 1
 
@@ -95,16 +95,16 @@ fn unit_conversions_and_compound_signatures_streams_agree() {
     let code = r#"
 spec delivery
 
-data distance: quantity
+data distance: measure
   -> unit meter 1
   -> unit kilometer 1000
   -> unit mile 1609.34
 
-data money: quantity
+data money: measure
   -> unit eur 1.00
   -> unit usd 0.84
 
-data distance_rate: quantity
+data distance_rate: measure
   -> unit eur_per_km eur/kilometer
   -> unit usd_per_mile usd/mile
 

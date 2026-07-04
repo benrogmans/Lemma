@@ -430,7 +430,7 @@
             if (kind === 'boolean') return v.boolean === true;
             if (kind === 'number') return v.number != null ? String(v.number) : display;
             if (kind === 'text') return typeof v.text === 'string' ? v.text : display;
-            if (kind === 'quantity') {
+            if (kind === 'measure') {
                 if (display) {
                     const parts = display.trim().split(/\s+/);
                     if (parts.length >= 2) {
@@ -438,9 +438,9 @@
                     }
                     if (parts.length === 1) return { amount: parts[0], unit: '' };
                 }
-                if (v.quantity && typeof v.quantity === 'object' && Array.isArray(v.quantity.signature)) {
-                    const sig = v.quantity.signature;
-                    const value = String(v.quantity.value ?? '');
+                if (v.measure && typeof v.measure === 'object' && Array.isArray(v.measure.signature)) {
+                    const sig = v.measure.signature;
+                    const value = String(v.measure.value ?? '');
                     if (sig.length === 1 && Array.isArray(sig[0]) && sig[0].length === 2 && sig[0][1] === 1) {
                         return { amount: value, unit: String(sig[0][0]) };
                     }
@@ -479,7 +479,7 @@
                     continue;
                 }
 
-                if (kind === 'quantity') {
+                if (kind === 'measure') {
                     if (typeof entry === 'object' && entry !== null) {
                         const amount = (entry.amount || '').toString().trim();
                         const unit = (entry.unit || '').toString().trim();
@@ -626,7 +626,7 @@
                 });
                 inputGroup.appendChild(input);
 
-            } else if (kind === 'quantity') {
+            } else if (kind === 'measure') {
                 const units = (spec && Array.isArray(spec.units)) ? spec.units : [];
                 const storedEntry = (typeof currentValue === 'object' && currentValue !== null) ? currentValue : {};
 
@@ -1269,12 +1269,12 @@
                 if (!editorEl) throw new Error('DOM element #editor not found');
 
                 const initialValue = `spec pricing
-                            type money: quantity
+                            type money: measure
                             -> unit eur 1
                             -> unit usd 1.19
 
                             data price     : [money]
-                            data quantity  : number -> minimum 0]
+                            data measure  : number -> minimum 0]
                             data is_member : false
 
                             rule discount:
@@ -1283,8 +1283,14 @@
                             unless quantity >= 50 then 20%
                             unless is_member then 15%
 
+                            rule subtotal:
+                            price * measure
+
+                            rule discount_amount:
+                            subtotal * discount
+
                             rule total:
-                            price * quantity - discount
+                            subtotal - discount_amount
                             unless price > 100 usd then veto "This price is too high."
                     `;
                 const model = monaco.editor.createModel(initialValue, 'lemma', monaco.Uri.parse(DOC_URI));
