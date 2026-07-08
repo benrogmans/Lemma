@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from business_rules.rational import Rational, parse_rational
 
+TERMINAL_RULE = "total"
+
 
 @dataclass(frozen=True, slots=True)
 class Inputs:
@@ -61,3 +63,7 @@ def compute(inputs: Inputs) -> Outputs:
         discount_amount=discount_amount,
         total=total,
     )
+
+
+def compute_terminal(inputs: Inputs) -> Rational:
+    return compute(inputs).total

@@ -27,6 +27,16 @@ fn effective() -> DateTimeValue {
     }
 }
 
+/// Terminal rule timed in the latency benches (`evaluate`, `memory`).
+#[allow(dead_code)]
+pub fn terminal_rule(spec_name: &str) -> &'static str {
+    match spec_name {
+        "bench_shipping" | "bench_pricing" => "total",
+        "bench_order_pipeline" => "grand_total",
+        other => panic!("BUG: no terminal rule for bench spec '{other}'"),
+    }
+}
+
 pub fn fixtures() -> Vec<Fixture> {
     vec![
         Fixture {

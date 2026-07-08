@@ -38,11 +38,11 @@ rule product: max_val * two
     assert_eq!(
         rule.veto_reason.as_deref(),
         Some("Calculated result exceeds decimal value limit"),
-        "BigInt intermediate multiply must reach commit boundary, not fail with numeric overflow"
+        "response materialization must veto uncommittable rule output, not fail with numeric overflow"
     );
     assert_ne!(
         rule.veto_reason.as_deref(),
         Some("numeric overflow"),
-        "must not spuriously veto during exact intermediate arithmetic"
+        "must not spuriously veto during exact rational evaluation before response materialization"
     );
 }

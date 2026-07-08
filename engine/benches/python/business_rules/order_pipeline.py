@@ -1,8 +1,11 @@
 """Port of engine/benches/specs/order_pipeline.lemma."""
 
 from dataclasses import dataclass
+from typing import cast
 
 from business_rules.rational import Rational, parse_rational
+
+TERMINAL_RULE = "grand_total"
 
 
 @dataclass(frozen=True, slots=True)
@@ -10,7 +13,7 @@ class Inputs:
     customer_tier: str
     payment_method: str
     shipping_zone: str
-    measure: Rational
+    quantity: Rational
     unit_price: Rational
     package_weight: Rational
     delivery_distance: Rational
@@ -72,7 +75,7 @@ def build_inputs(raw: dict[str, str]) -> Inputs:
         customer_tier=raw["customer_tier"],
         payment_method=raw["payment_method"],
         shipping_zone=raw["shipping_zone"],
-        measure=parse_rational(raw["measure"]),
+        quantity=parse_rational(raw["quantity"]),
         unit_price=parse_rational(raw["unit_price"]),
         package_weight=parse_rational(raw["package_weight"]),
         delivery_distance=parse_rational(raw["delivery_distance"]),
@@ -86,22 +89,22 @@ def build_inputs(raw: dict[str, str]) -> Inputs:
     )
 
 
-def compute(inputs: Inputs) -> Outputs:
+def _eval_through_grand_total(inputs: Inputs) -> dict[str, object]:
     is_standard = inputs.customer_tier == "standard"
     is_silver = inputs.customer_tier == "silver"
     is_gold = inputs.customer_tier == "gold"
     is_platinum = inputs.customer_tier == "platinum"
 
-    subtotal = inputs.unit_price * inputs.measure
+    subtotal = inputs.unit_price * inputs.quantity
 
     volume_discount_rate = Rational(0)
-    if inputs.measure >= 5:
+    if inputs.quantity >= 5:
         volume_discount_rate = Rational("0.03")
-    if inputs.measure >= 25:
+    if inputs.quantity >= 25:
         volume_discount_rate = Rational("0.07")
-    if inputs.measure >= 100:
+    if inputs.quantity >= 100:
         volume_discount_rate = Rational("0.12")
-    if inputs.measure >= 500:
+    if inputs.quantity >= 500:
         volume_discount_rate = Rational("0.18")
 
     tier_discount_rate = Rational(0)
@@ -205,36 +208,81 @@ def compute(inputs: Inputs) -> Outputs:
         tax_rate = Rational(0)
 
     tax_amount = pre_tax_total * tax_rate
+    grand_total = pre_tax_total + tax_amount
+
+    return {
+        "is_standard": is_standard,
+        "is_silver": is_silver,
+        "is_gold": is_gold,
+        "is_platinum": is_platinum,
+        "subtotal": subtotal,
+        "volume_discount_rate": volume_discount_rate,
+        "tier_discount_rate": tier_discount_rate,
+        "coupon_rate": coupon_rate,
+        "first_time_rate": first_time_rate,
+        "loyalty_rate": loyalty_rate,
+        "combined_discount_rate": combined_discount_rate,
+        "discount_amount": discount_amount,
+        "net_price": net_price,
+        "base_shipping": base_shipping,
+        "distance_fee": distance_fee,
+        "zone_multiplier": zone_multiplier,
+        "fragile_fee": fragile_fee,
+        "express_multiplier": express_multiplier,
+        "hazardous_fee": hazardous_fee,
+        "gift_wrap_fee": gift_wrap_fee,
+        "total_shipping": total_shipping,
+        "pays_credit": pays_credit,
+        "pays_debit": pays_debit,
+        "pays_cash": pays_cash,
+        "pays_transfer": pays_transfer,
+        "processing_fee": processing_fee,
+        "pre_tax_total": pre_tax_total,
+        "tax_rate": tax_rate,
+        "tax_amount": tax_amount,
+        "grand_total": grand_total,
+    }
+
+
+def _eval_remaining_rules(inputs: Inputs, values: dict[str, object]) -> None:
+    is_silver = values["is_silver"]
+    is_platinum = values["is_platinum"]
+    subtotal = values["subtotal"]
+    discount_amount = values["discount_amount"]
+    grand_total = values["grand_total"]
+    total_shipping = values["total_shipping"]
+    pre_tax_total = values["pre_tax_total"]
 
     loyalty_credit_rate = Rational("0.01")
     if is_silver:
         loyalty_credit_rate = Rational("0.02")
-    if is_gold:
+    if values["is_gold"]:
         loyalty_credit_rate = Rational("0.03")
     if is_platinum:
         loyalty_credit_rate = Rational("0.05")
 
-    loyalty_credit_earned = pre_tax_total * loyalty_credit_rate
-    grand_total = pre_tax_total + tax_amount
+    values["loyalty_credit_rate"] = loyalty_credit_rate
+    values["loyalty_credit_earned"] = pre_tax_total * loyalty_credit_rate
 
     meets_minimum = subtotal >= 25
+    values["meets_minimum"] = meets_minimum
 
     order_valid = meets_minimum
     order_valid_veto: str | None = None
     if not meets_minimum:
         order_valid = False
         order_valid_veto = "Order subtotal below the minimum of 25"
+    values["order_valid"] = order_valid
+    values["order_valid_veto"] = order_valid_veto
 
-    savings_total = discount_amount
-    savings_percent = savings_total / subtotal
+    values["savings_total"] = discount_amount
+    values["savings_percent"] = discount_amount / subtotal
 
     is_high_value = grand_total > 500
+    values["is_high_value"] = is_high_value
 
-    is_express_eligible = False
-    if total_shipping >= 25:
-        is_express_eligible = True
-    if inputs.is_express:
-        is_express_eligible = True
+    is_express_eligible = total_shipping >= 25 or inputs.is_express
+    values["is_express_eligible"] = is_express_eligible
 
     order_summary = "standard order"
     if is_high_value:
@@ -245,46 +293,14 @@ def compute(inputs: Inputs) -> Outputs:
         order_summary = "platinum customer order"
     if inputs.is_express:
         order_summary = "express order"
+    values["order_summary"] = order_summary
 
-    return Outputs(
-        is_standard=is_standard,
-        is_silver=is_silver,
-        is_gold=is_gold,
-        is_platinum=is_platinum,
-        subtotal=subtotal,
-        volume_discount_rate=volume_discount_rate,
-        tier_discount_rate=tier_discount_rate,
-        coupon_rate=coupon_rate,
-        first_time_rate=first_time_rate,
-        loyalty_rate=loyalty_rate,
-        combined_discount_rate=combined_discount_rate,
-        discount_amount=discount_amount,
-        net_price=net_price,
-        base_shipping=base_shipping,
-        distance_fee=distance_fee,
-        zone_multiplier=zone_multiplier,
-        fragile_fee=fragile_fee,
-        express_multiplier=express_multiplier,
-        hazardous_fee=hazardous_fee,
-        gift_wrap_fee=gift_wrap_fee,
-        total_shipping=total_shipping,
-        pays_credit=pays_credit,
-        pays_debit=pays_debit,
-        pays_cash=pays_cash,
-        pays_transfer=pays_transfer,
-        processing_fee=processing_fee,
-        pre_tax_total=pre_tax_total,
-        tax_rate=tax_rate,
-        tax_amount=tax_amount,
-        loyalty_credit_rate=loyalty_credit_rate,
-        loyalty_credit_earned=loyalty_credit_earned,
-        grand_total=grand_total,
-        meets_minimum=meets_minimum,
-        order_valid=order_valid,
-        order_valid_veto=order_valid_veto,
-        savings_total=savings_total,
-        savings_percent=savings_percent,
-        is_high_value=is_high_value,
-        is_express_eligible=is_express_eligible,
-        order_summary=order_summary,
-    )
+
+def compute_terminal(inputs: Inputs) -> Rational:
+    return cast(Rational, _eval_through_grand_total(inputs)["grand_total"])
+
+
+def compute(inputs: Inputs) -> Outputs:
+    values = _eval_through_grand_total(inputs)
+    _eval_remaining_rules(inputs, values)
+    return Outputs(**values)

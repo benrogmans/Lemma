@@ -4,11 +4,13 @@ from dataclasses import dataclass
 
 from business_rules.rational import Rational, parse_rational
 
+TERMINAL_RULE = "total"
+
 
 @dataclass(frozen=True, slots=True)
 class Inputs:
     product_type: str
-    measure: Rational
+    quantity: Rational
     unit_price: Rational
     coupon_percent: Rational
     loyalty_years: Rational
@@ -39,7 +41,7 @@ class Outputs:
 def build_inputs(raw: dict[str, str]) -> Inputs:
     return Inputs(
         product_type=raw["product_type"],
-        measure=parse_rational(raw["measure"]),
+        quantity=parse_rational(raw["quantity"]),
         unit_price=parse_rational(raw["unit_price"]),
         coupon_percent=parse_rational(raw["coupon_percent"]),
         loyalty_years=parse_rational(raw["loyalty_years"]),
@@ -55,11 +57,11 @@ def compute(inputs: Inputs) -> Outputs:
     is_luxury = inputs.product_type == "luxury"
 
     volume_discount = Rational(0)
-    if inputs.measure >= 10:
+    if inputs.quantity >= 10:
         volume_discount = Rational("0.05")
-    if inputs.measure >= 50:
+    if inputs.quantity >= 50:
         volume_discount = Rational("0.10")
-    if inputs.measure >= 100:
+    if inputs.quantity >= 100:
         volume_discount = Rational("0.15")
 
     tier_discount = Rational(0)
@@ -90,7 +92,7 @@ def compute(inputs: Inputs) -> Outputs:
         + coupon_discount
     )
 
-    subtotal = inputs.unit_price * inputs.measure
+    subtotal = inputs.unit_price * inputs.quantity
     discount_amount = subtotal * combined_discount
     taxable = subtotal - discount_amount
 
@@ -118,3 +120,7 @@ def compute(inputs: Inputs) -> Outputs:
         tax=tax,
         total=total,
     )
+
+
+def compute_terminal(inputs: Inputs) -> Rational:
+    return compute(inputs).total

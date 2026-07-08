@@ -1,7 +1,9 @@
 """Benchmark the Python ports of the Lemma bench specs.
 
-Per-call measured boundary: typed inputs -> Outputs in memory. Fixture
-JSON is parsed once per spec before warmup.
+Per-call measured boundary: pre-built typed Inputs -> terminal rule value.
+Fixture JSON is parsed once per spec before warmup; the timed loop calls
+``compute_terminal(inputs)`` only. A separate pass runs ``compute(inputs)``
+for the full rule output dump used in numerical accuracy comparison.
 
 Emits one JSON document to stdout:
 
@@ -89,10 +91,12 @@ def render_outputs(outputs: Any) -> dict[str, str]:
 def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     raw_dict = json.loads((SPECS_DIR / inputs_file).read_bytes())
     build_inputs = module.build_inputs
+    compute_terminal = module.compute_terminal
     compute = module.compute
+    inputs = build_inputs(raw_dict)
 
     for _ in range(WARMUP_ITERATIONS):
-        compute(build_inputs(raw_dict))
+        compute_terminal(inputs)
 
     samples: list[int] = [0] * LATENCY_ITERATIONS
     perf_counter_ns = time.perf_counter_ns
@@ -101,7 +105,7 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     try:
         for i in range(LATENCY_ITERATIONS):
             start = perf_counter_ns()
-            compute(build_inputs(raw_dict))
+            compute_terminal(inputs)
             samples[i] = perf_counter_ns() - start
     finally:
         gc.enable()
@@ -109,7 +113,7 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     median_ns = statistics.median(samples)
     std_dev_ns = statistics.pstdev(samples)
 
-    outputs = compute(build_inputs(raw_dict))
+    outputs = compute(inputs)
     rendered = render_outputs(outputs)
 
     return {

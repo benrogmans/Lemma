@@ -10,18 +10,18 @@ Numbers are produced by `cargo benchmarks engine`. Lemma and the hand-written Py
 
 ## Methodology
 
-- Per-call boundary on both sides: typed inputs -> outputs in memory. Fixture JSON is loaded once per spec before warmup.
+- Per-call boundary on both sides: pre-built typed inputs -> terminal rule value in memory. Fixture JSON is loaded once per spec before warmup.
 - Lemma per-call work: clone a pre-built `HashMap<String, DataValueInput>`, then `Engine::run_plan(plan, Some(&effective), data, explain: false, Some(&[terminal_rule]))` where `terminal_rule` is `total` (shipping, pricing) or `grand_total` (order_pipeline). One VM pass per call. `run_plan` applies declared defaults via `DataOverlay::resolve`, converts data values to typed `LiteralValue`, evaluates the requested rule(s), and constructs a `Response` (explanation trees omitted).
-- Python per-call work: `compute(build_inputs(raw_dict))` where `raw_dict` is the pre-parsed `dict[str, str]` from the fixture JSON. `build_inputs` lifts string values to exact `fractions.Fraction`; `compute` returns a typed `Outputs` dataclass with one field per Lemma rule.
+- Python per-call work: `compute_terminal(inputs)` where `inputs` is a pre-built `Inputs` dataclass lifted from the fixture JSON before warmup. Shipping and pricing evaluate through `total`; order_pipeline evaluates only through `grand_total` (same terminal rule as Lemma).
 - Effective pinned to `2026-01-01T00:00:00Z` (no timezone) on the Lemma side; Python rules carry no temporal logic.
 - Latency: Criterion (3s warmup, 5s measurement) for Lemma; 1_000 warmup + 100_000 measured `time.perf_counter_ns()` samples with `gc.disable()` bracketing for Python. Median and standard deviation reported.
-- Numerical precision: Lemma evaluates with exact arbitrary-precision rationals internally; API output commits rationals to decimal strings. Python ports use exact `fractions.Fraction` arithmetic and commit to decimal strings at the output boundary. The accuracy table compares both sides via `rust_decimal::Decimal` (28-digit precision).
+- Numerical precision: a separate pass compares all rule outputs. Lemma's `outputs` bench evaluates every local rule with explanations; Python's `compute(inputs)` returns a full `Outputs` dataclass. Both sides use exact rational arithmetic internally and commit to decimal strings at the output boundary. The accuracy table compares both sides via `rust_decimal::Decimal` (28-digit precision).
 - API note: `Engine::run_plan` accepts `HashMap<String, DataValueInput>`. The benchmark mirrors what native callers pay after constructing typed inputs; JSON parsing at API boundaries (CLI, WASM) is out of scope.
 
 ## Environment
 
 - Host: `Linux 6.17.0-35-generic x86_64`
-- Lemma git SHA: `94f8ad42c9644b65a80a29e13d5ef53afcc0f9de`
+- Lemma git SHA: `259f0735a3186e33725b7076b534b830119b0443`
 - Python: `Python 3.12.3`
 - Rustc:
 
@@ -39,9 +39,9 @@ LLVM version: 21.1.3
 
 | Spec | Terminal rule | Lemma median | Lemma std dev | Python median | Python iter | Python std dev | Python / Lemma |
 |------|---------------|-------------:|--------------:|--------------:|------------:|---------------:|---------------:|
-| `bench_shipping` | `total` | 19.50 us | 555 ns | 6.87 us | 100000 | 1.57 us | 0.3524 |
-| `bench_pricing` | `total` | 70.01 us | 1.74 us | 27.72 us | 100000 | 5.46 us | 0.3960 |
-| `bench_order_pipeline` | `grand_total` | 167.44 us | 4.20 us | 59.01 us | 100000 | 9.66 us | 0.3524 |
+| `bench_shipping` | `total` | 17.26 us | 173 ns | 4.75 us | 100000 | 2.24 us | 0.2750 |
+| `bench_pricing` | `total` | 64.54 us | 664 ns | 20.82 us | 100000 | 3.50 us | 0.3227 |
+| `bench_order_pipeline` | `grand_total` | 162.70 us | 4.52 us | 36.31 us | 100000 | 5.36 us | 0.2232 |
 
 ## Numerical accuracy
 
@@ -49,15 +49,15 @@ LLVM version: 21.1.3
 
 ## Python implementation
 
-Hand-written ports of the three Lemma specs live in [`../../../engine/benches/python/business_rules/`](../../../engine/benches/python/business_rules). Each module exports `Inputs`, `Outputs`, `build_inputs(raw)`, `compute(inputs)`. Standard library only (`decimal`, `dataclasses`, `json`, `time`, `gc`, `pathlib`, `statistics`). The Python benchmark harness is [`../../../engine/benches/python/benchmark.py`](../../../engine/benches/python/benchmark.py).
+Hand-written ports of the three Lemma specs live in [`../../engine/benches/python/business_rules/`](../../engine/benches/python/business_rules). Each module exports `Inputs`, `Outputs`, `TERMINAL_RULE`, `build_inputs(raw)`, `compute_terminal(inputs)`, and `compute(inputs)`. Standard library only (`fractions`, `dataclasses`, `json`, `time`, `gc`, `pathlib`, `statistics`). The Python benchmark harness is [`../../engine/benches/python/benchmark.py`](../../engine/benches/python/benchmark.py).
 
 ## Inputs
 
-All fixtures share `effective = 2026-01-01T00:00:00Z` (no timezone). Data values are JSON strings; the benchmark parses them into the engine's `HashMap<String, serde_json::Value>` on every iteration.
+All fixtures share `effective = 2026-01-01T00:00:00Z` (no timezone). Fixture JSON is parsed once per spec at setup into typed inputs on both sides.
 
 ### `bench_shipping`
 
-Source: [`engine/benches/specs/shipping.lemma`](../../../engine/benches/specs/shipping.lemma). Inputs: [`engine/benches/specs/shipping.inputs.json`](../../../engine/benches/specs/shipping.inputs.json).
+Source: [`engine/benches/specs/shipping.lemma`](../../engine/benches/specs/shipping.lemma). Inputs: [`engine/benches/specs/shipping.inputs.json`](../../engine/benches/specs/shipping.inputs.json).
 
 ```json
 {
@@ -69,7 +69,7 @@ Source: [`engine/benches/specs/shipping.lemma`](../../../engine/benches/specs/sh
 
 ### `bench_pricing`
 
-Source: [`engine/benches/specs/pricing.lemma`](../../../engine/benches/specs/pricing.lemma). Inputs: [`engine/benches/specs/pricing.inputs.json`](../../../engine/benches/specs/pricing.inputs.json).
+Source: [`engine/benches/specs/pricing.lemma`](../../engine/benches/specs/pricing.lemma). Inputs: [`engine/benches/specs/pricing.inputs.json`](../../engine/benches/specs/pricing.inputs.json).
 
 ```json
 {
@@ -86,7 +86,7 @@ Source: [`engine/benches/specs/pricing.lemma`](../../../engine/benches/specs/pri
 
 ### `bench_order_pipeline`
 
-Source: [`engine/benches/specs/order_pipeline.lemma`](../../../engine/benches/specs/order_pipeline.lemma). Inputs: [`engine/benches/specs/order_pipeline.inputs.json`](../../../engine/benches/specs/order_pipeline.inputs.json).
+Source: [`engine/benches/specs/order_pipeline.lemma`](../../engine/benches/specs/order_pipeline.lemma). Inputs: [`engine/benches/specs/order_pipeline.inputs.json`](../../engine/benches/specs/order_pipeline.inputs.json).
 
 ```json
 {

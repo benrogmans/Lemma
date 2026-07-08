@@ -135,8 +135,8 @@ rule huge: 10 ^ 100
 
     let explanation = result.explanation.as_ref().expect("explanation built");
     assert!(
-        explanation.result.vetoed(),
-        "explanation.result must carry the same decimal-limit veto as the response"
+        !explanation.result.vetoed(),
+        "explanation.result reflects exact rule_results storage; response materialization veto is separate"
     );
 }
 
