@@ -368,7 +368,7 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
 
     out.push_str("## Methodology\n\n");
     out.push_str(
-        "- Per-call boundary on both sides: typed inputs -> outputs in memory. \
+        "- Per-call boundary on both sides: pre-built typed inputs -> terminal rule value in memory. \
          Fixture JSON is loaded once per spec before warmup.\n",
     );
     out.push_str(
@@ -380,11 +380,10 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
          constructs a `Response` (explanation trees omitted).\n",
     );
     out.push_str(
-        "- Python per-call work: `compute(build_inputs(raw_dict))` where \
-         `raw_dict` is the pre-parsed `dict[str, str]` from the fixture JSON. \
-         `build_inputs` lifts string values to exact `fractions.Fraction`; \
-         `compute` returns a typed `Outputs` dataclass with one field per \
-         Lemma rule.\n",
+        "- Python per-call work: `compute_terminal(inputs)` where `inputs` is a pre-built \
+         `Inputs` dataclass lifted from the fixture JSON before warmup. \
+         Shipping and pricing evaluate through `total`; order_pipeline evaluates \
+         only through `grand_total` (same terminal rule as Lemma).\n",
     );
     out.push_str(&format!(
         "- Effective pinned to `{BENCH_EFFECTIVE_ISO}` (no timezone) on the Lemma side; Python rules carry no temporal logic.\n",
@@ -395,10 +394,11 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
          `gc.disable()` bracketing for Python. Median and standard deviation reported.\n",
     );
     out.push_str(
-        "- Numerical precision: Lemma evaluates with exact arbitrary-precision \
-         rationals internally; API output commits rationals to decimal strings. Python ports use \
-         exact `fractions.Fraction` arithmetic and commit to decimal strings at \
-         the output boundary. The accuracy table compares both sides via \
+        "- Numerical precision: a separate pass compares all rule outputs. Lemma's \
+         `outputs` bench evaluates every local rule with explanations; Python's \
+         `compute(inputs)` returns a full `Outputs` dataclass. Both sides use exact \
+         rational arithmetic internally and commit to decimal strings at the output \
+         boundary. The accuracy table compares both sides via \
          `rust_decimal::Decimal` (28-digit precision).\n",
     );
     out.push_str(
@@ -460,8 +460,9 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     out.push_str(
         "Hand-written ports of the three Lemma specs live in \
          [`../../engine/benches/python/business_rules/`](../../engine/benches/python/business_rules). \
-         Each module exports `Inputs`, `Outputs`, `build_inputs(raw)`, `compute(inputs)`. \
-         Standard library only (`decimal`, `dataclasses`, `json`, `time`, \
+         Each module exports `Inputs`, `Outputs`, `TERMINAL_RULE`, `build_inputs(raw)`, \
+         `compute_terminal(inputs)`, and `compute(inputs)`. \
+         Standard library only (`fractions`, `dataclasses`, `json`, `time`, \
          `gc`, `pathlib`, `statistics`). \
          The Python benchmark harness is [`../../engine/benches/python/benchmark.py`](../../engine/benches/python/benchmark.py).\n\n",
     );
@@ -469,8 +470,7 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     out.push_str("## Inputs\n\n");
     out.push_str(&format!(
         "All fixtures share `effective = {BENCH_EFFECTIVE_ISO}` (no timezone). \
-         Data values are JSON strings; the benchmark parses them into the \
-         engine's `HashMap<String, serde_json::Value>` on every iteration.\n\n",
+         Fixture JSON is parsed once per spec at setup into typed inputs on both sides.\n\n",
     ));
     for fixture in FIXTURES {
         let inputs = read_relative(root, fixture.inputs_path)?;
@@ -591,5 +591,42 @@ mod tests {
 
         assert!(report.contains("cargo benchmarks engine"));
         assert!(report.contains("../../engine/benches/specs/shipping.lemma"));
+    }
+
+    #[test]
+    fn python_benchmark_emits_json_for_all_fixtures() {
+        use std::process::{Command, Stdio};
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let output = Command::new("python3")
+            .current_dir(&root)
+            .arg(PYTHON_BENCH_RELATIVE)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn python3 benchmark");
+        assert!(
+            output.status.success(),
+            "python benchmark failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: PythonReport = serde_json::from_str(
+            String::from_utf8(output.stdout)
+                .expect("stdout utf-8")
+                .trim(),
+        )
+        .expect("python benchmark stdout must be valid JSON");
+        let spec_names: std::collections::BTreeSet<&str> = report
+            .fixtures
+            .iter()
+            .map(|f| f.spec_name.as_str())
+            .collect();
+        for fixture in FIXTURES {
+            assert!(
+                spec_names.contains(fixture.spec_name),
+                "python benchmark missing spec '{}'",
+                fixture.spec_name
+            );
+        }
     }
 }

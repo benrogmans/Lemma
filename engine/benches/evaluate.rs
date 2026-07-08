@@ -1,21 +1,13 @@
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 mod common;
 
-fn latency_target_rule(spec_name: &str) -> &'static str {
-    match spec_name {
-        "bench_shipping" | "bench_pricing" => "total",
-        "bench_order_pipeline" => "grand_total",
-        other => panic!("BUG: no latency target rule for bench spec '{other}'"),
-    }
-}
-
 fn bench_fixture(criterion: &mut Criterion, fixture: &common::Fixture) {
     let engine = common::build_engine(fixture);
     let plan = engine
         .get_plan(None, fixture.spec_name, Some(&fixture.effective))
         .expect("BUG: bench fixture must produce execution plan");
     let data_template = &fixture.data;
-    let target_rule = latency_target_rule(fixture.spec_name).to_string();
+    let target_rule = common::terminal_rule(fixture.spec_name).to_string();
 
     let mut group = criterion.benchmark_group(fixture.spec_name);
     group.throughput(Throughput::Elements(1));

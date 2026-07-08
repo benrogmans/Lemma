@@ -28,39 +28,6 @@ pub use response::{DataGroup, Response, RuleResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub(crate) const DECIMAL_VALUE_LIMIT_VETO_MESSAGE: &str =
-    "Calculated result exceeds decimal value limit";
-
-fn literal_value_committable_to_decimal(value: &LiteralValue) -> bool {
-    use crate::computation::rational::commit_rational_to_decimal;
-
-    match &value.value {
-        ValueKind::Number(rational)
-        | ValueKind::Ratio(rational, _)
-        | ValueKind::Measure(rational, _) => commit_rational_to_decimal(rational).is_ok(),
-        ValueKind::Range(left, right) => {
-            literal_value_committable_to_decimal(left)
-                && literal_value_committable_to_decimal(right)
-        }
-        ValueKind::Text(_) | ValueKind::Date(_) | ValueKind::Time(_) | ValueKind::Boolean(_) => {
-            true
-        }
-    }
-}
-
-fn ensure_rule_result_within_decimal_limit(result: OperationResult) -> OperationResult {
-    match result {
-        OperationResult::Value(value) => {
-            if literal_value_committable_to_decimal(&value) {
-                OperationResult::Value(value)
-            } else {
-                OperationResult::Veto(VetoType::computation(DECIMAL_VALUE_LIMIT_VETO_MESSAGE))
-            }
-        }
-        OperationResult::Veto(veto) => OperationResult::Veto(veto),
-    }
-}
-
 /// Evaluation context for storing intermediate results during one plan run.
 ///
 /// Borrows the [`ExecutionPlan`] for expression-scope units ([`ExecutionPlan::expression_unit_index`])
@@ -959,10 +926,6 @@ impl Evaluator {
             } else {
                 execute_instructions(&exec_rule.instructions, &mut context, None)
             };
-            // The decimal limit applies before the result is stored: every
-            // consumer — downstream rule-target references, `is veto`
-            // checks, explanations, and the response — sees the same value.
-            let result = ensure_rule_result_within_decimal_limit(result);
             context
                 .rule_results
                 .insert(exec_rule.path.clone(), result.clone());

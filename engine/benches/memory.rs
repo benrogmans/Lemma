@@ -7,14 +7,6 @@ static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 mod common;
 
-fn latency_target_rule(spec_name: &str) -> &'static str {
-    match spec_name {
-        "bench_shipping" | "bench_pricing" => "total",
-        "bench_order_pipeline" => "grand_total",
-        other => panic!("BUG: no latency target rule for bench spec '{other}'"),
-    }
-}
-
 const WARMUP_ITERATIONS: usize = 1_000;
 const MEASURED_ITERATIONS: usize = 10_000;
 
@@ -37,7 +29,7 @@ fn main() {
             .get_plan(None, fixture.spec_name, Some(&fixture.effective))
             .expect("BUG: bench fixture must produce execution plan");
         let data_template = &fixture.data;
-        let target_rule = latency_target_rule(fixture.spec_name).to_string();
+        let target_rule = common::terminal_rule(fixture.spec_name).to_string();
 
         for _ in 0..WARMUP_ITERATIONS {
             let data = data_template.clone();

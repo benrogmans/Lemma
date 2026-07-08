@@ -19,14 +19,20 @@ pyproject.toml
 
 Each `business_rules/<spec>.py` module exposes:
 
+- `TERMINAL_RULE`: the rule name timed on the Python side (`total` or
+  `grand_total`), matching Lemma's latency bench.
 - `Inputs`: a `@dataclass(frozen=True, slots=True)` with one field per
   Lemma `data` declaration.
 - `Outputs`: a `@dataclass(frozen=True, slots=True)` with one field per
   Lemma `rule`.
 - `build_inputs(raw: dict[str, str]) -> Inputs`: lifts fixture string
   values to `Fraction`/`bool`/`str`. Raises on missing or malformed input.
-- `compute(inputs: Inputs) -> Outputs`: the rule pipeline. Pure function,
-  no I/O.
+- `compute_terminal(inputs: Inputs) -> Fraction`: returns the terminal rule
+  value. For shipping and pricing every rule is on the path to `total`, so
+  this is `compute(inputs).total`. For order_pipeline the latency path
+  evaluates only through `grand_total` (skips loyalty credit and tail rules).
+- `compute(inputs: Inputs) -> Outputs`: the full rule pipeline. Used for
+  numerical accuracy comparison. Pure function, no I/O.
 
 Numeric values use stdlib `fractions.Fraction` for exact rational
 arithmetic, aligned with Lemma's internal arbitrary-precision rational
@@ -59,8 +65,10 @@ numerical-accuracy tables side by side.
 
 ## Per-call boundary
 
-Fixture JSON is loaded once per spec before warmup. The timed loop measures
-`compute(build_inputs(raw_dict))` where `raw_dict` is the pre-parsed
-`dict[str, str]`. The Rust side clones a pre-built
-`HashMap<String, DataValueInput>` and calls `Engine::run_plan`. JSON parsing
-at API boundaries (CLI, WASM) is out of scope.
+Fixture JSON is loaded once per spec before warmup. Inputs are lifted to a
+typed `Inputs` dataclass once. The timed loop measures
+`compute_terminal(inputs)` only — the same terminal rule Lemma requests via
+`Engine::run_plan(..., Some(&[terminal_rule]))`. A separate pass runs
+`compute(inputs)` for the full rule output dump. The Rust side clones a
+pre-built `HashMap<String, DataValueInput>` per timed call. JSON parsing at
+API boundaries (CLI, WASM) is out of scope.

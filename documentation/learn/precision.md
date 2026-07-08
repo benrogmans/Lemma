@@ -26,7 +26,7 @@ spec → parse (decimal literal → ℚ) → plan → evaluate (ℚ) → commit 
 | Literals, JSON input, API input | Magnitude ±79,228,162,514,264,337,593,543,950,335 (~7.92×10²⁸); at most 28 decimal digits (`rust_decimal`) |
 | Internal compute (ℚ) | Arbitrary precision; bounded by available memory (all BigInt allocation is fallible) |
 
-Intermediate values during evaluation may exceed the decimal range or use more precision than 28 digits. Only top-level Rule results committed for output must fit `rust_decimal`. Oversized or uncommittable final results Veto with `Calculated result exceeds decimal value limit`.
+Intermediate values during evaluation may exceed the decimal range or use more precision than 28 digits. Only top-level Rule results committed for output must fit `rust_decimal`. Oversized or uncommittable final results Veto with `Calculated result exceeds decimal value limit`. Decimal commit-or-veto applies when materializing a rule for the response envelope, not when storing in `rule_results` (which keeps exact ℚ values).
 
 When an exact rational grows past what memory allows, evaluation Vetoes with `out of memory` instead of crashing the process. This is resource exhaustion, not a decimal commit failure.
 

@@ -1,7 +1,8 @@
 use crate::computation::rational::NumericFailure;
 use crate::evaluation::explanations::Explanation;
 use crate::evaluation::operations::{OperationResult, VetoType};
-use crate::evaluation::DECIMAL_VALUE_LIMIT_VETO_MESSAGE;
+
+const DECIMAL_VALUE_LIMIT_VETO_MESSAGE: &str = "Calculated result exceeds decimal value limit";
 use crate::parsing::ast::DateTimeValue;
 use crate::planning::semantics::{
     range_element_type_specification, DataPath, LemmaType, LiteralValue, RulePath,
@@ -185,8 +186,13 @@ impl RuleResult {
                             }),
                             explanation,
                         },
-                        _ => {
-                            vetoed_rule_result_for_decimal_limit(rule, rule_type_name, explanation)
+                        (Err(failure), _) | (_, Err(failure)) => {
+                            vetoed_rule_result_for_materialization_failure(
+                                rule,
+                                rule_type_name,
+                                explanation,
+                                failure,
+                            )
                         }
                     }
                 }
@@ -209,9 +215,12 @@ impl RuleResult {
                         range: None,
                         explanation,
                     },
-                    Err(_) => {
-                        vetoed_rule_result_for_decimal_limit(rule, rule_type_name, explanation)
-                    }
+                    Err(failure) => vetoed_rule_result_for_materialization_failure(
+                        rule,
+                        rule_type_name,
+                        explanation,
+                        failure,
+                    ),
                 },
             },
         }
@@ -430,12 +439,54 @@ fn endpoint_materialization_type(
     }
 }
 
-fn vetoed_rule_result_for_decimal_limit(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaterializationFailure {
+    DecimalLimit,
+    NumericOverflow,
+    OutOfMemory,
+}
+
+fn map_commit_failure(failure: NumericFailure) -> MaterializationFailure {
+    match failure {
+        NumericFailure::Overflow => MaterializationFailure::DecimalLimit,
+        NumericFailure::OutOfMemory => MaterializationFailure::OutOfMemory,
+        NumericFailure::DivisionByZero => {
+            panic!("BUG: decimal commit encountered division by zero during materialization")
+        }
+        NumericFailure::Irrational => {
+            panic!("BUG: decimal commit encountered irrational result during materialization")
+        }
+    }
+}
+
+fn map_unit_conversion_failure(failure: NumericFailure) -> MaterializationFailure {
+    match failure {
+        NumericFailure::Overflow => MaterializationFailure::NumericOverflow,
+        NumericFailure::OutOfMemory => MaterializationFailure::OutOfMemory,
+        NumericFailure::DivisionByZero => {
+            panic!("BUG: unit conversion encountered division by zero during materialization")
+        }
+        NumericFailure::Irrational => {
+            panic!("BUG: unit conversion encountered irrational result during materialization")
+        }
+    }
+}
+
+fn materialization_failure_message(failure: MaterializationFailure) -> &'static str {
+    match failure {
+        MaterializationFailure::DecimalLimit => DECIMAL_VALUE_LIMIT_VETO_MESSAGE,
+        MaterializationFailure::NumericOverflow => "numeric overflow",
+        MaterializationFailure::OutOfMemory => "out of memory",
+    }
+}
+
+fn vetoed_rule_result_for_materialization_failure(
     rule: EvaluatedRule,
     rule_type_name: String,
     explanation: Option<Explanation>,
+    failure: MaterializationFailure,
 ) -> RuleResult {
-    let veto = VetoType::computation(DECIMAL_VALUE_LIMIT_VETO_MESSAGE);
+    let veto = VetoType::computation(materialization_failure_message(failure).to_string());
     RuleResult {
         rule,
         veto_detail: Some(veto.clone()),
@@ -460,16 +511,18 @@ fn materialize_payload(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
     _expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
-) -> Result<RuleResultPayload, NumericFailure> {
+) -> Result<RuleResultPayload, MaterializationFailure> {
     match &literal.value {
         ValueKind::Measure(rational, sig) if literal.lemma_type.is_calendar_like() => {
             let unit =
                 crate::planning::semantics::semantic_calendar_unit_from_measure_signature(sig);
+            let value = literal
+                .lemma_type
+                .try_materialize_rational_as_decimal_string(rational)
+                .map_err(map_commit_failure)?;
             Ok(RuleResultPayload {
                 calendar: Some(CalendarResult {
-                    value: literal
-                        .lemma_type
-                        .try_materialize_rational_as_decimal_string(rational)?,
+                    value,
                     unit: unit.to_string(),
                 }),
                 ..RuleResultPayload::default()
@@ -483,10 +536,15 @@ fn materialize_payload(
             ratio: Some(ratio_to_unit_map(literal, result_type)?),
             ..RuleResultPayload::default()
         }),
-        ValueKind::Number(rational) => Ok(RuleResultPayload {
-            number: Some(result_type.try_materialize_rational_as_decimal_string(rational)?),
-            ..RuleResultPayload::default()
-        }),
+        ValueKind::Number(rational) => {
+            let number = result_type
+                .try_materialize_rational_as_decimal_string(rational)
+                .map_err(map_commit_failure)?;
+            Ok(RuleResultPayload {
+                number: Some(number),
+                ..RuleResultPayload::default()
+            })
+        }
         ValueKind::Boolean(b) => Ok(RuleResultPayload {
             boolean: Some(*b),
             ..RuleResultPayload::default()
@@ -512,7 +570,9 @@ fn materialize_payload(
 fn measure_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
-) -> Result<BTreeMap<String, String>, NumericFailure> {
+) -> Result<BTreeMap<String, String>, MaterializationFailure> {
+    use crate::computation::rational::checked_div;
+
     let unit_names = result_type
         .measure_unit_names()
         .expect("BUG: rule result measure must have declared units");
@@ -521,8 +581,12 @@ fn measure_to_unit_map(
     };
     let mut map = BTreeMap::new();
     for unit_name in unit_names {
-        let materialized =
-            result_type.try_materialize_measure_canonical_in_unit(magnitude, unit_name)?;
+        let unit_factor = result_type.measure_unit_factor(unit_name);
+        let magnitude_in_unit =
+            checked_div(magnitude, unit_factor).map_err(map_unit_conversion_failure)?;
+        let materialized = result_type
+            .try_materialize_rational_as_decimal_string(&magnitude_in_unit)
+            .map_err(map_commit_failure)?;
         map.insert(unit_name.to_string(), materialized);
     }
     Ok(map)
@@ -531,7 +595,8 @@ fn measure_to_unit_map(
 fn ratio_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
-) -> Result<BTreeMap<String, String>, NumericFailure> {
+) -> Result<BTreeMap<String, String>, MaterializationFailure> {
+    use crate::computation::rational::checked_mul;
     let materialization_type = match &result_type.specifications {
         TypeSpecification::Ratio { .. } => result_type,
         TypeSpecification::RatioRange { .. } => {
@@ -576,8 +641,11 @@ fn ratio_to_unit_map(
     }
     let mut map = BTreeMap::new();
     for unit in units.iter() {
-        let materialized =
-            materialization_type.try_materialize_ratio_canonical_in_unit(canonical, &unit.name)?;
+        let magnitude_in_unit =
+            checked_mul(canonical, &unit.value).map_err(map_unit_conversion_failure)?;
+        let materialized = materialization_type
+            .try_materialize_rational_as_decimal_string(&magnitude_in_unit)
+            .map_err(map_commit_failure)?;
         map.insert(unit.name.clone(), materialized);
     }
     Ok(map)
@@ -755,6 +823,35 @@ mod tests {
             None,
         );
         assert_eq!(veto.veto_reason.as_deref(), Some("Vetoed"));
+    }
+
+    #[test]
+    fn materialization_out_of_memory_is_not_decimal_limit_veto() {
+        let result = vetoed_rule_result_for_materialization_failure(
+            dummy_evaluated_rule("rule", primitive_number()),
+            "number".to_string(),
+            None,
+            MaterializationFailure::OutOfMemory,
+        );
+        assert_eq!(result.veto_reason.as_deref(), Some("out of memory"));
+        assert_ne!(
+            result.veto_reason.as_deref(),
+            Some(DECIMAL_VALUE_LIMIT_VETO_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn materialization_decimal_limit_uses_commit_message() {
+        let result = vetoed_rule_result_for_materialization_failure(
+            dummy_evaluated_rule("rule", primitive_number()),
+            "number".to_string(),
+            None,
+            MaterializationFailure::DecimalLimit,
+        );
+        assert_eq!(
+            result.veto_reason.as_deref(),
+            Some(DECIMAL_VALUE_LIMIT_VETO_MESSAGE)
+        );
     }
 
     fn test_money_type() -> LemmaType {
