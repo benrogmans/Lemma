@@ -16,8 +16,8 @@ use crate::computation::{
 use crate::evaluation::operations::VetoType;
 use crate::evaluation::response::EvaluatedRule;
 use crate::planning::execution_plan::{
-    build_known_values, validate_value_against_type, DataOverlay, ExecutionPlan, Instruction,
-    Instructions, INSTRUCTIONS_VERSION,
+    validate_value_against_type, DataOverlay, ExecutionPlan, Instruction, Instructions,
+    INSTRUCTIONS_VERSION,
 };
 use crate::planning::semantics::{
     Data, DataDefinition, DataPath, DataValue, LiteralValue, ReferenceTarget, RulePath, ValueKind,
@@ -111,7 +111,21 @@ pub(crate) struct RuleRecording {
 
 impl<'plan> EvaluationContext<'plan> {
     fn new(plan: &'plan ExecutionPlan, overlay: &DataOverlay, now: LiteralValue) -> Self {
-        let mut data_values = build_known_values(plan, overlay);
+        let mut data_values: HashMap<DataPath, LiteralValue> = plan
+            .data
+            .iter()
+            .filter_map(|(path, definition)| {
+                if overlay.violated.contains_key(path) {
+                    return None;
+                }
+                definition
+                    .value()
+                    .map(|value| (path.clone(), value.clone()))
+            })
+            .collect();
+        for (path, value) in &overlay.values {
+            data_values.insert(path.clone(), value.clone());
+        }
 
         for (path, definition) in &plan.data {
             if data_values.contains_key(path) || overlay.violated.contains_key(path) {
@@ -983,7 +997,7 @@ impl Evaluator {
             .filter_map(|path| {
                 context.get_data_value(path).map(|value| Data {
                     path: path.clone(),
-                    value: DataValue::from_bound_literal(value.clone()),
+                    value: DataValue::from_literal(value.clone()),
                     source: None,
                 })
             })

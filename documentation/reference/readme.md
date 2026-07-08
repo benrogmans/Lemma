@@ -290,7 +290,7 @@ Every input slot and every named type is declared with **`data`**. The right-han
 
 ### Values
 
-A literal fixes the value; Lemma infers the type:
+A literal **prefills** the slot; Lemma infers the type. Callers may override at evaluation time; interactive UIs typically skip review for prefilled fields (including literal `with` bindings on templates):
 
 ```lemma
 spec employment
@@ -308,7 +308,7 @@ data salary:     75_000
 
 ### Open inputs
 
-Declare a type without a value to request input at evaluation time (`lemma run`, HTTP, `with`). Add constraints on the same declaration:
+Declare a type without a value to request input at evaluation time (`lemma run`, HTTP, `with`). Add constraints on the same declaration. Use `-> default` for a **suggestion** UIs should prompt for (Enter to accept); this differs from a literal prefilled value or a template `with alias.field: literal` binding:
 
 ```lemma
 spec loan_application

@@ -793,15 +793,18 @@ pub(crate) fn build_execution_plan(
 /// this contract. Plan hashes are complementary: they lock full behavior.
 /// One data input in a [`SpecSchema`].
 ///
-/// A named struct instead of a `(type, bound, default)` tuple so JSON-native consumers
-/// (TypeScript, Python, ...) get stable field names. `bound_value` holds a spec or
-/// caller-fixed literal; `default` is only a `-> default ...` suggestion.
+/// A named struct instead of a tuple so JSON-native consumers (TypeScript, Python, ...)
+/// get stable field names. `prefilled` is a spec literal or literal `with` binding;
+/// `supplied` is caller overlay when building schema; `default` is a `-> default ...`
+/// suggestion only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DataEntry {
     #[serde(rename = "type")]
     pub lemma_type: LemmaType,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub bound_value: Option<LiteralValue>,
+    pub prefilled: Option<LiteralValue>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub supplied: Option<LiteralValue>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub default: Option<LiteralValue>,
 }
@@ -909,48 +912,25 @@ impl DataOverlay {
     pub fn is_empty(&self) -> bool {
         self.values.is_empty() && self.violated.is_empty()
     }
+
+    /// Caller-supplied value for branch-skip analysis.
+    ///
+    /// Returns `None` when the path is missing or listed in [`Self::violated`].
+    pub(crate) fn supplied_value(&self, data_path: &DataPath) -> Option<&LiteralValue> {
+        if self.violated.contains_key(data_path) {
+            None
+        } else {
+            self.values.get(data_path)
+        }
+    }
 }
 
-/// Values known for partial branch pruning and schema display.
-///
-/// Priority: spec literals, then overlay values, then declared defaults.
-/// Values definitively known from the spec and caller overlay.
-///
-/// Spec literals and overlay values only. Defaults are NOT included — the
-/// evaluator applies those natively in its own context.
-pub(crate) fn build_known_values(
-    plan: &ExecutionPlan,
-    overlay: &DataOverlay,
-) -> HashMap<DataPath, LiteralValue> {
-    let mut known_values: HashMap<DataPath, LiteralValue> = plan
-        .data
-        .iter()
-        .filter_map(|(path, definition)| {
-            if overlay.violated.contains_key(path) {
-                return None;
-            }
-            definition
-                .value()
-                .map(|value| (path.clone(), value.clone()))
-        })
-        .collect();
-
-    for (path, value) in &overlay.values {
-        known_values.insert(path.clone(), value.clone());
-    }
-
-    known_values
+fn schema_prefilled(data: &DataDefinition) -> Option<LiteralValue> {
+    data.prefilled_value().cloned()
 }
 
-fn schema_bound_value(
-    path: &DataPath,
-    data: &DataDefinition,
-    overlay: &DataOverlay,
-) -> Option<LiteralValue> {
-    if let Some(value) = overlay.values.get(path) {
-        return Some(value.clone());
-    }
-    data.bound_value().cloned()
+fn schema_supplied(path: &DataPath, overlay: &DataOverlay) -> Option<LiteralValue> {
+    overlay.supplied_value(path).cloned()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1004,8 +984,11 @@ impl std::fmt::Display for SpecSchema {
                 if !help.is_empty() {
                     write!(f, "\n    help: {}", help)?;
                 }
-                if let Some(val) = &entry.bound_value {
-                    write!(f, "\n    value: {}", val)?;
+                if let Some(val) = &entry.prefilled {
+                    write!(f, "\n    prefilled: {}", val)?;
+                }
+                if let Some(val) = &entry.supplied {
+                    write!(f, "\n    supplied: {}", val)?;
                 }
                 if let Some(val) = &entry.default {
                     write!(f, "\n    default: {}", val)?;
@@ -1205,7 +1188,8 @@ impl ExecutionPlan {
                     .schema_type()
                     .expect("BUG: filter above ensured schema_type is Some")
                     .clone();
-                let bound_value = schema_bound_value(path, data, overlay);
+                let prefilled = schema_prefilled(data);
+                let supplied = schema_supplied(path, overlay);
                 let default = data.default_suggestion();
                 (
                     path.segments.len(),
@@ -1213,7 +1197,8 @@ impl ExecutionPlan {
                     path.input_key(),
                     DataEntry {
                         lemma_type,
-                        bound_value,
+                        prefilled,
+                        supplied,
                         default,
                     },
                 )
@@ -1285,7 +1270,8 @@ impl ExecutionPlan {
             .filter(|(_, data)| !matches!(data, DataDefinition::Reference { .. }))
             .filter_map(|(path, data)| {
                 let lemma_type = data.schema_type()?.clone();
-                let bound_value = schema_bound_value(path, data, overlay);
+                let prefilled = schema_prefilled(data);
+                let supplied = schema_supplied(path, overlay);
                 let default = data.default_suggestion();
                 Some((
                     path.segments.len(),
@@ -1293,7 +1279,8 @@ impl ExecutionPlan {
                     path.input_key(),
                     DataEntry {
                         lemma_type,
-                        bound_value,
+                        prefilled,
+                        supplied,
                         default,
                     },
                 ))
@@ -1365,8 +1352,8 @@ impl ExecutionPlan {
     ///
     /// Walks the live branches of each named rule transitively: rule-target
     /// data references extend the walk to the referenced rules. Branches whose
-    /// conditions are definitively decided by overlay-known values are pruned,
-    /// mirroring [`ExecutionPlan::schema_for_rules`].
+    /// conditions are definitively decided by caller-supplied overlay values
+    /// are skipped, mirroring [`ExecutionPlan::schema_for_rules`].
     ///
     /// Returns `Err` if any rule name is not found in the plan.
     pub fn collect_needed_data_paths(
@@ -1374,8 +1361,6 @@ impl ExecutionPlan {
         rule_names: &[String],
         overlay: &DataOverlay,
     ) -> Result<HashSet<DataPath>, Error> {
-        let known_values = build_known_values(self, overlay);
-
         let mut needed_data: HashSet<DataPath> = HashSet::new();
         let mut visited_rules: HashSet<RulePath> = HashSet::new();
         let mut rule_worklist: Vec<RulePath> = Vec::new();
@@ -1410,27 +1395,23 @@ impl ExecutionPlan {
 
             for (branch_index, branch) in rule.branches.iter().enumerate() {
                 if branch_index == 0 {
-                    let any_unless_definitely_true =
-                        rule.branches[1..].iter().any(|unless_branch| {
-                            let unless_condition = unless_branch
-                                .condition
-                                .as_ref()
-                                .expect("BUG: unless branch missing condition");
-                            crate::evaluation::partial::try_evaluate_condition(
-                                unless_condition,
-                                &known_values,
-                                self,
-                            ) == Some(true)
-                        });
-                    if any_unless_definitely_true {
+                    let any_unless_applies = rule.branches[1..].iter().any(|unless_branch| {
+                        let unless_condition = unless_branch
+                            .condition
+                            .as_ref()
+                            .expect("BUG: unless branch missing condition");
+                        crate::evaluation::partial::unless_condition_truth(
+                            unless_condition,
+                            self,
+                            overlay,
+                        ) == Some(true)
+                    });
+                    if any_unless_applies {
                         continue;
                     }
                 } else if let Some(condition) = &branch.condition {
-                    if crate::evaluation::partial::try_evaluate_condition(
-                        condition,
-                        &known_values,
-                        self,
-                    ) == Some(false)
+                    if crate::evaluation::partial::unless_condition_truth(condition, self, overlay)
+                        == Some(false)
                     {
                         continue;
                     }
@@ -3115,8 +3096,12 @@ mod tests {
             "bridge_height exposes `-> default` as schema default suggestion"
         );
         assert!(
-            bh.get("bound_value").is_none(),
-            "bridge_height is not a spec-bound literal"
+            bh.get("prefilled").is_none(),
+            "bridge_height is not prefilled from spec"
+        );
+        assert!(
+            bh.get("supplied").is_none(),
+            "bridge_height has no caller overlay"
         );
 
         let ty = &bh["type"];
@@ -3140,8 +3125,12 @@ mod tests {
             "quantity has no default suggestion"
         );
         assert!(
-            quantity.get("bound_value").is_none(),
-            "quantity has no bound literal"
+            quantity.get("prefilled").is_none(),
+            "quantity has no prefilled literal"
+        );
+        assert!(
+            quantity.get("supplied").is_none(),
+            "quantity has no caller overlay"
         );
 
         let cost = &value["rules"]["cost"];

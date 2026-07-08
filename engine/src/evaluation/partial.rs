@@ -1,50 +1,47 @@
-//! Three-valued partial expression evaluation for branch liveness analysis.
+//! Partial expression evaluation for schema branch skip.
 //!
-//! These functions determine whether a normalized branch condition is definitely
-//! false given already-known data values. They are conservative: any unknown
-//! operand or unsupported expression form returns [`None`] (indeterminate),
-//! which keeps the branch alive. Only `Some(false)` means a branch is dead.
+//! [`DataPath`](crate::planning::semantics::DataPath) operands use
+//! [`DataOverlay::supplied_value`](crate::planning::execution_plan::DataOverlay) only;
+//! spec prefilled values are ignored. Used by
+//! [`ExecutionPlan::collect_needed_data_paths`](crate::planning::execution_plan::ExecutionPlan)
+//! to skip branch arms whose unless conditions are already decided — not by the VM.
 //!
-//! Reuses the same computation functions as the full evaluator so precision
-//! guarantees (exact rational arithmetic, unit conversion) are identical.
+//! # Three-valued results
+//!
+//! - `Some(false)` — unless arm cannot apply; skip branch.
+//! - `Some(true)` — unless arm definitely applies (default arm skipped when any unless is true).
+//! - `None` — indeterminate; keep branch (conservative).
+//!
+//! # Boolean short-circuit
+//!
+//! Symmetric AND/OR short-circuit is intentional for unless-arm analysis
+//! (e.g. `flag and (1 > 2)` is `Some(false)` even when `flag` is unbound).
 
 use crate::computation::{
     arithmetic_operation, comparison_operation, convert_unit, UnitResolutionContext,
 };
 use crate::evaluation::OperationResult;
-use crate::planning::semantics::{DataPath, Expression, ExpressionKind, LiteralValue, ValueKind};
-use crate::planning::ExecutionPlan;
-use std::collections::HashMap;
+use crate::planning::execution_plan::{DataOverlay, ExecutionPlan};
+use crate::planning::semantics::{Expression, ExpressionKind, LiteralValue, ValueKind};
 
-/// Attempt to resolve an expression to a concrete [`LiteralValue`] given a set
-/// of already-known data values.
-///
-/// Returns `None` when any required operand is missing from `known_values`, when
-/// the expression references a rule result (unavailable at schema time), or when
-/// the expression kind is not supported for partial evaluation (date-relative,
-/// range containment, mathematical functions, etc.). Conservative: `None` means
-/// the expression cannot be simplified, not that it is invalid.
-///
-/// Boolean-producing operators (`LogicalAnd`, `LogicalOr`, `LogicalNegation`)
-/// are intentionally excluded here — use [`try_evaluate_condition`] for those.
-pub(crate) fn try_resolve_value(
-    expr: &Expression,
-    known_values: &HashMap<DataPath, LiteralValue>,
+pub(crate) fn resolve_expression_value(
+    expression: &Expression,
     plan: &ExecutionPlan,
+    overlay: &DataOverlay,
 ) -> Option<LiteralValue> {
     let unit_index = plan.expression_unit_index();
 
-    match &expr.kind {
+    match &expression.kind {
         ExpressionKind::Literal(literal) => Some(*literal.clone()),
 
-        ExpressionKind::DataPath(data_path) => known_values.get(data_path).cloned(),
+        ExpressionKind::DataPath(data_path) => overlay.supplied_value(data_path).cloned(),
 
-        ExpressionKind::Comparison(left_expr, op, right_expr) => {
-            let left_value = try_resolve_value(left_expr, known_values, plan)?;
-            let right_value = try_resolve_value(right_expr, known_values, plan)?;
+        ExpressionKind::Comparison(left_expression, operator, right_expression) => {
+            let left_value = resolve_expression_value(left_expression, plan, overlay)?;
+            let right_value = resolve_expression_value(right_expression, plan, overlay)?;
             match comparison_operation(
                 &left_value,
-                op,
+                operator,
                 &right_value,
                 UnitResolutionContext::WithIndex(unit_index),
             ) {
@@ -53,12 +50,12 @@ pub(crate) fn try_resolve_value(
             }
         }
 
-        ExpressionKind::Arithmetic(left_expr, op, right_expr) => {
-            let left_value = try_resolve_value(left_expr, known_values, plan)?;
-            let right_value = try_resolve_value(right_expr, known_values, plan)?;
+        ExpressionKind::Arithmetic(left_expression, operator, right_expression) => {
+            let left_value = resolve_expression_value(left_expression, plan, overlay)?;
+            let right_value = resolve_expression_value(right_expression, plan, overlay)?;
             match arithmetic_operation(
                 &left_value,
-                op,
+                operator,
                 &right_value,
                 unit_index,
                 &plan.signature_index,
@@ -68,32 +65,24 @@ pub(crate) fn try_resolve_value(
             }
         }
 
-        ExpressionKind::UnitConversion(inner_expr, target) => {
-            let inner_value = try_resolve_value(inner_expr, known_values, plan)?;
+        ExpressionKind::UnitConversion(inner_expression, target) => {
+            let inner_value = resolve_expression_value(inner_expression, plan, overlay)?;
             match convert_unit(&inner_value, target) {
                 OperationResult::Value(result) => Some(result),
                 OperationResult::Veto(_) => None,
             }
         }
 
-        // Rule results are unavailable at schema time.
         ExpressionKind::RulePath(_)
-        // Veto expressions do not produce a value.
         | ExpressionKind::Veto(_)
-        // `now` requires an evaluation-time date.
         | ExpressionKind::Now
-        // Date-relative and calendar period expressions require evaluation-time date.
         | ExpressionKind::DateRelative(_, _)
         | ExpressionKind::DateCalendar(_, _, _)
         | ExpressionKind::PastFutureRange(_, _)
-        // Range construction and containment require dedicated range logic.
         | ExpressionKind::RangeLiteral(_, _)
         | ExpressionKind::RangeContainment(_, _)
-        // Mathematical functions (sqrt, abs, etc.) are not needed for condition pruning.
         | ExpressionKind::MathematicalComputation(_, _)
-        // ResultIsVeto requires evaluating a rule result.
         | ExpressionKind::ResultIsVeto(_)
-        // Boolean operators belong to try_evaluate_condition, not here.
         | ExpressionKind::LogicalAnd(_, _)
         | ExpressionKind::LogicalOr(_, _)
         | ExpressionKind::LogicalNegation(_, _)
@@ -101,26 +90,18 @@ pub(crate) fn try_resolve_value(
     }
 }
 
-/// Attempt to evaluate a boolean condition using three-valued logic.
+/// Three-valued truth of a unless condition using supplied overlay values only.
 ///
-/// - `Some(false)` — condition is definitely false; branch is dead and can be pruned.
-/// - `Some(true)` — condition is definitely true; branch is definitely live.
-/// - `None` — indeterminate (some operand unknown or expression unsupported);
-///   branch is kept alive to remain conservative.
-///
-/// Short-circuit rules applied before both sides are fully evaluated:
-/// - `AND`: either side `Some(false)` → `Some(false)` (dominates).
-/// - `OR`: either side `Some(true)` → `Some(true)` (dominates).
-/// - `NOT`: negates a deterministic result; `None` propagates as `None`.
-pub(crate) fn try_evaluate_condition(
-    expr: &Expression,
-    known_values: &HashMap<DataPath, LiteralValue>,
+/// `Some(true)` = arm applies, `Some(false)` = arm cannot apply, `None` = still possible.
+pub(crate) fn unless_condition_truth(
+    expression: &Expression,
     plan: &ExecutionPlan,
+    overlay: &DataOverlay,
 ) -> Option<bool> {
-    match &expr.kind {
-        ExpressionKind::LogicalAnd(left_expr, right_expr) => {
-            let left_result = try_evaluate_condition(left_expr, known_values, plan);
-            let right_result = try_evaluate_condition(right_expr, known_values, plan);
+    match &expression.kind {
+        ExpressionKind::LogicalAnd(left_expression, right_expression) => {
+            let left_result = unless_condition_truth(left_expression, plan, overlay);
+            let right_result = unless_condition_truth(right_expression, plan, overlay);
             match (left_result, right_result) {
                 (Some(false), _) | (_, Some(false)) => Some(false),
                 (Some(true), Some(true)) => Some(true),
@@ -128,9 +109,9 @@ pub(crate) fn try_evaluate_condition(
             }
         }
 
-        ExpressionKind::LogicalOr(left_expr, right_expr) => {
-            let left_result = try_evaluate_condition(left_expr, known_values, plan);
-            let right_result = try_evaluate_condition(right_expr, known_values, plan);
+        ExpressionKind::LogicalOr(left_expression, right_expression) => {
+            let left_result = unless_condition_truth(left_expression, plan, overlay);
+            let right_result = unless_condition_truth(right_expression, plan, overlay);
             match (left_result, right_result) {
                 (Some(true), _) | (_, Some(true)) => Some(true),
                 (Some(false), Some(false)) => Some(false),
@@ -138,17 +119,160 @@ pub(crate) fn try_evaluate_condition(
             }
         }
 
-        ExpressionKind::LogicalNegation(inner_expr, _negation_type) => {
-            try_evaluate_condition(inner_expr, known_values, plan).map(|b| !b)
+        ExpressionKind::LogicalNegation(inner_expression, _negation_type) => {
+            unless_condition_truth(inner_expression, plan, overlay).map(|boolean| !boolean)
         }
 
-        // For any other expression kind, delegate to value resolution and extract boolean.
         _ => {
-            let value = try_resolve_value(expr, known_values, plan)?;
+            let value = resolve_expression_value(expression, plan, overlay)?;
             match value.value {
                 ValueKind::Boolean(boolean) => Some(boolean),
                 _ => None,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parsing::ast::DateTimeValue;
+    use crate::planning::data_input::DataValueInput;
+    use crate::Engine;
+    use crate::SourceType;
+
+    fn unless_condition_from_plan(
+        plan: &ExecutionPlan,
+        rule_name: &str,
+        unless_index: usize,
+    ) -> Expression {
+        let rule = plan.get_rule(rule_name).expect("rule must exist in plan");
+        let branch_index = unless_index + 1;
+        rule.branches[branch_index]
+            .condition
+            .clone()
+            .expect("unless branch must have condition")
+    }
+
+    fn load_spec(source: &str) -> (Engine, ExecutionPlan) {
+        let mut engine = Engine::new();
+        engine
+            .load(source, SourceType::Volatile)
+            .expect("spec must load");
+        let now = DateTimeValue::now();
+        let plan = engine
+            .get_plan(None, "t", Some(&now))
+            .expect("plan must build")
+            .clone();
+        (engine, plan)
+    }
+
+    #[test]
+    fn unless_truth_none_without_supplied_value() {
+        let source = r#"
+spec t
+data is_member: boolean
+rule discount: 0%
+  unless is_member then 20%
+"#;
+        let (_engine, plan) = load_spec(source);
+        let condition = unless_condition_from_plan(&plan, "discount", 0);
+        let overlay = DataOverlay::default();
+        assert_eq!(
+            unless_condition_truth(&condition, &plan, &overlay),
+            None,
+            "spec prefilled value must not make unless is_member definitely false"
+        );
+    }
+
+    #[test]
+    fn unless_truth_false_when_conjunct_constant_false() {
+        let source = r#"
+spec t
+data flag: boolean
+rule discount: 0%
+  unless flag and (1 > 2) then 20%
+"#;
+        let (_engine, plan) = load_spec(source);
+        let condition = unless_condition_from_plan(&plan, "discount", 0);
+        let overlay = DataOverlay::default();
+        assert_eq!(
+            unless_condition_truth(&condition, &plan, &overlay),
+            Some(false),
+            "unless arm cannot apply when (1 > 2) is false regardless of flag"
+        );
+    }
+
+    #[test]
+    fn unless_truth_true_when_supplied_text_matches() {
+        let source = r#"
+spec t
+data mode: text -> options "simple" "complex"
+rule result: 0
+  unless mode is "simple" then 1
+"#;
+        let (engine, plan) = load_spec(source);
+        let condition = unless_condition_from_plan(&plan, "result", 0);
+        let overlay = DataOverlay::resolve(
+            &plan,
+            [(
+                "mode".to_string(),
+                DataValueInput::convenience("simple".to_string()),
+            )]
+            .into(),
+            engine.limits(),
+        )
+        .expect("overlay must resolve");
+        assert_eq!(
+            unless_condition_truth(&condition, &plan, &overlay),
+            Some(true),
+            "unless condition truth must follow caller-supplied mode"
+        );
+    }
+
+    #[test]
+    fn unless_truth_true_when_supplied_overrides_prefilled_false() {
+        let source = r#"
+spec t
+data is_member: false
+rule discount: 0%
+  unless is_member then 20%
+"#;
+        let (engine, plan) = load_spec(source);
+        let condition = unless_condition_from_plan(&plan, "discount", 0);
+        let overlay = DataOverlay::resolve(
+            &plan,
+            [("is_member".to_string(), DataValueInput::Boolean(true))].into(),
+            engine.limits(),
+        )
+        .expect("overlay must resolve");
+        assert_eq!(
+            unless_condition_truth(&condition, &plan, &overlay),
+            Some(true),
+            "caller-supplied true must decide unless arm despite spec prefilled false"
+        );
+    }
+
+    #[test]
+    fn unless_truth_false_when_supplied_matches_prefilled_false() {
+        let source = r#"
+spec t
+data is_member: false
+rule discount: 0%
+  unless is_member then 20%
+"#;
+        let (engine, plan) = load_spec(source);
+        let condition = unless_condition_from_plan(&plan, "discount", 0);
+        let overlay = DataOverlay::resolve(
+            &plan,
+            [("is_member".to_string(), DataValueInput::Boolean(false))].into(),
+            engine.limits(),
+        )
+        .expect("overlay must resolve");
+        assert_eq!(
+            unless_condition_truth(&condition, &plan, &overlay),
+            Some(false),
+            "caller-supplied false must prune unless arm when overlay commits the value"
+        );
     }
 }

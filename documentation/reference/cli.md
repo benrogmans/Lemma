@@ -45,7 +45,7 @@ lemma run '@iso/countries' alpha2
 
 ### `lemma schema`: spec schema (data types, constraints, and rules)
 
-Shows data inputs with types and constraints (minimum, maximum, units, decimals, text options), bound values, defaults, and rule result types.
+Shows data inputs with types and constraints (minimum, maximum, units, decimals, text options), prefilled values, defaults, supplied caller values (when overlay is applied), and rule result types.
 
 ```bash
 lemma schema [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]

@@ -228,12 +228,11 @@ fn prompt_data(
             _ => base_plan.schema(&overlay),
         };
 
-        // Find the next data field that still needs a value from the user.
-        // Fields that are bound (provided_data or collected) appear as bound_value.is_some().
+        // Skip fields prefilled in the spec or already supplied by the caller.
         let next = schema
             .data
             .iter()
-            .find(|(_, entry)| entry.bound_value.is_none());
+            .find(|(_, entry)| entry.prefilled.is_none() && entry.supplied.is_none());
 
         let (name, entry) = match next {
             Some(pair) => pair,

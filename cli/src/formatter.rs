@@ -181,10 +181,12 @@ impl Formatter {
                 line.push_str(&format!(" ({})", type_name));
             }
         }
-        if let Some(bound) = &entry.bound_value {
-            line.push_str(&format!(" = {}", bound));
+        if let Some(v) = &entry.prefilled {
+            line.push_str(&format!(" = {}", v));
+        } else if let Some(v) = &entry.supplied {
+            line.push_str(&format!(" = {} (supplied)", v));
         } else if let Some(default) = &entry.default {
-            line.push_str(&format!(" = {}", default));
+            line.push_str(&format!(" = {} (default)", default));
         }
         line
     }
@@ -257,7 +259,7 @@ impl Formatter {
 
         for data in &group.data {
             let value_str = match &data.value {
-                BindingDataValue::Definition { bound_value, .. } => bound_value
+                BindingDataValue::Definition { value, .. } => value
                     .as_ref()
                     .map(|lit| self.format_literal(lit))
                     .unwrap_or_default(),

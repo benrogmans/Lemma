@@ -210,8 +210,10 @@ struct InputData {
     name: String,
     /// The resolved Lemma type for this data.
     lemma_type: LemmaType,
-    /// Literal bound in the spec (`data x: literal`).
-    bound_value: Option<lemma::LiteralValue>,
+    /// Spec literal or literal `with` binding.
+    prefilled: Option<lemma::LiteralValue>,
+    /// Caller overlay when schema was built with supplied values.
+    supplied: Option<lemma::LiteralValue>,
     /// Suggestion from `-> default ...` (evaluator applies it when no overlay value is provided).
     suggestion_default: Option<lemma::LiteralValue>,
 }
@@ -228,7 +230,8 @@ fn collect_input_data_from_schema(schema: &lemma::SpecSchema) -> Vec<InputData> 
         .map(|(name, entry)| InputData {
             name: name.clone(),
             lemma_type: entry.lemma_type.clone(),
-            bound_value: entry.bound_value.clone(),
+            prefilled: entry.prefilled.clone(),
+            supplied: entry.supplied.clone(),
             suggestion_default: entry.default.clone(),
         })
         .collect()
@@ -750,14 +753,16 @@ fn build_post_request_schema(data: &[InputData]) -> Value {
 
     for data in data {
         let default_for_docs = data
-            .bound_value
+            .prefilled
             .as_ref()
+            .or(data.supplied.as_ref())
             .or(data.suggestion_default.as_ref());
         properties.insert(
             data.name.clone(),
             build_post_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.bound_value.is_none() && data.suggestion_default.is_none() {
+        if data.prefilled.is_none() && data.supplied.is_none() && data.suggestion_default.is_none()
+        {
             required.push(Value::String(data.name.clone()));
         }
     }
@@ -813,14 +818,16 @@ fn build_post_form_request_schema(data: &[InputData]) -> Value {
 
     for data in data {
         let default_for_docs = data
-            .bound_value
+            .prefilled
             .as_ref()
+            .or(data.supplied.as_ref())
             .or(data.suggestion_default.as_ref());
         properties.insert(
             data.name.clone(),
             build_post_form_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.bound_value.is_none() && data.suggestion_default.is_none() {
+        if data.prefilled.is_none() && data.supplied.is_none() && data.suggestion_default.is_none()
+        {
             required.push(Value::String(data.name.clone()));
         }
     }

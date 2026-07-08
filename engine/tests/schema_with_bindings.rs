@@ -122,8 +122,8 @@ rule r: i.v
         .expect("literal with still surfaces in schema for documentation");
 
     assert!(
-        entry.bound_value.is_some(),
-        "literal with is bound_value; CLI skips, not a free input"
+        entry.prefilled.is_some(),
+        "literal with is prefilled; CLI skips, not a free input"
     );
 }
 
@@ -177,7 +177,7 @@ rule r: i.v
 }
 
 /// Spec that has genuinely different data requirements per branch — used to
-/// verify that partial evaluation prunes the unreachable data.
+/// verify that partial unless condition truth (supplied overlay only) prunes unreachable data.
 const CHOOSER_LEMMA: &str = r#"
 spec chooser
 
@@ -363,8 +363,8 @@ rule total_price: bag.total_price
         .get("type_of_nut")
         .expect("type_of_nut must be in schema");
     assert!(
-        type_of_nut_entry.bound_value.is_some(),
-        "type_of_nut must be bound after providing it"
+        type_of_nut_entry.supplied.is_some(),
+        "caller overlay must appear as supplied, not prefilled"
     );
 
     assert!(

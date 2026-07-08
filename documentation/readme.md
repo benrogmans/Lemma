@@ -10,17 +10,18 @@ Lemma is a pure, declarative and open source programming language for business r
 ```lemma
 spec pricing 2026-01-01
 """
-Applies a tiered discount and VAT to the base price, effective from 2026-01-01.
+Applies a tiered discount and VAT to the base price, 
+effective from 2026-01-01.
 """
 
 data base_price: 100
 data is_member:  false
-data quantity:        number
+data quantity:   number
 
 rule discount: 0%
   unless quantity >= 10  then 10%
   unless quantity >= 50  then 15%
-  unless is_member  then 20%
+  unless is_member       then 20%
 
 rule discount_amount: base_price * discount
 rule discounted_price: base_price - discount_amount
