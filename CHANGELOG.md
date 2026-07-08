@@ -303,7 +303,7 @@ rule net_salary: contract.net
 
 ### Changed
 
-- **Schema: bound value vs default suggestion**: Stored execution plans keep `-> default ...` on `TypeDeclaration` / reference `local_default` instead of folding them into `Value` during planning. `SpecSchema` `DataEntry` now has `bound_value` (explicit spec literal or caller override) and `default` (suggestion only). `ExecutionPlan::with_defaults` materializes suggestions before evaluation; `Engine::run` and `Engine::run_plan` invoke it after `ExecutionPlan::set_data_values`. `Engine::run_plan_without_defaults` skips materialization (CLI interactive trial runs, inversion).
+- **Schema: prefilled vs default vs supplied**: `SpecSchema` `DataEntry` replaces `bound_value` with `prefilled` (spec literal or literal `with` binding), adds `supplied` (caller overlay when building schema), and keeps `default` (`-> default ...` suggestion only). Branch-skip analysis still uses caller overlay only; prefilled values do not prune unless arms.
 - **Evaluator**: Reference resolution copies only from the target path's binding; it does not read `local_default` (defaults are plan-prep only).
 - **npm release workflow**: `publish-npm` now uses npm Trusted Publishing (OIDC) via `npm/publish@v1.0.1` with `id-token: write`, eliminating the long-lived `NPM_TOKEN` secret and the `EOTP` 2FA failure mode for automation.
 - **npm package metadata**: `engine/packages/npm/build.js` emits `repository.url` as `git+https://github.com/lemma/lemma.git`, silencing npm's autocorrect warning on publish.

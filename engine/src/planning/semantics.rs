@@ -3920,24 +3920,24 @@ impl LiteralValue {
     }
 }
 
-/// Response/UI row for spec data: [`LemmaType`] plus optional bound literal (mirrors parse-time `Definition`).
+/// Response/UI row for spec data: [`LemmaType`] plus optional evaluated literal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataValue {
     Definition {
         schema_type: LemmaType,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        bound_value: Option<LiteralValue>,
+        value: Option<LiteralValue>,
     },
 }
 
 impl DataValue {
     #[must_use]
-    pub fn from_bound_literal(value: LiteralValue) -> Self {
+    pub fn from_literal(value: LiteralValue) -> Self {
         let schema_type = value.get_type().clone();
         Self::Definition {
             schema_type,
-            bound_value: Some(value),
+            value: Some(value),
         }
     }
 }
@@ -4034,11 +4034,10 @@ impl DataDefinition {
         }
     }
 
-    /// Literal explicitly bound in the spec (`data x: literal`) or supplied
-    /// by the caller via [`crate::planning::execution_plan::DataOverlay`].
+    /// Spec literal (`data x: literal`) or literal `with` binding at plan time.
     /// Not a suggestion; see [`Self::default_suggestion`].
     #[inline]
-    pub fn bound_value(&self) -> Option<&LiteralValue> {
+    pub fn prefilled_value(&self) -> Option<&LiteralValue> {
         self.value()
     }
 

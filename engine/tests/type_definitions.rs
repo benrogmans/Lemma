@@ -167,7 +167,7 @@ fn test_measure_type_default_before_unit_declarations() {
         other => panic!("expected Measure, got {:?}", other),
     }
     assert!(
-        entry.default.is_some() && entry.bound_value.is_none(),
+        entry.default.is_some() && entry.prefilled.is_none(),
         "typedef money default must surface on price as schema suggestion"
     );
 }
@@ -210,7 +210,7 @@ fn test_measure_type_default_after_unit_declarations() {
         other => panic!("expected Measure, got {:?}", other),
     }
     assert!(
-        entry.default.is_some() && entry.bound_value.is_none(),
+        entry.default.is_some() && entry.prefilled.is_none(),
         "typedef money default must surface on price as schema suggestion"
     );
 }
@@ -278,7 +278,7 @@ fn test_schema_for_rules_returns_data_in_definition_order() {
 }
 
 #[test]
-fn test_schema_splits_bound_literal_and_default_suggestion() {
+fn test_schema_splits_prefilled_literal_and_default_suggestion() {
     let mut engine = Engine::new();
 
     engine
@@ -303,20 +303,20 @@ fn test_schema_splits_bound_literal_and_default_suggestion() {
 
     let quantity = schema.data.get("quantity").expect("quantity should exist");
     assert!(
-        quantity.default.is_some() && quantity.bound_value.is_none(),
+        quantity.default.is_some() && quantity.prefilled.is_none(),
         "type-level default is a suggestion only"
     );
 
     let name = schema.data.get("name").expect("name should exist");
     assert!(
-        name.default.is_none() && name.bound_value.is_none(),
-        "type-only data without default has no bound value or suggestion"
+        name.default.is_none() && name.prefilled.is_none(),
+        "type-only data without default has no prefilled value or suggestion"
     );
 
     let price = schema.data.get("price").expect("price should exist");
     assert!(
-        price.bound_value.is_some() && price.default.is_none(),
-        "explicit literal is a bound value, not a default suggestion"
+        price.prefilled.is_some() && price.default.is_none(),
+        "explicit literal is prefilled, not a default suggestion"
     );
 }
 
@@ -347,7 +347,7 @@ fn test_schema_measure_default_is_value() {
 
     let salary = schema.data.get("salary").expect("salary should exist");
     assert!(
-        salary.default.is_some() && salary.bound_value.is_none(),
+        salary.default.is_some() && salary.prefilled.is_none(),
         "measure typedef default must surface as schema suggestion on salary"
     );
 }
@@ -383,7 +383,7 @@ fn test_typedef_default_inherits_through_extension_chain() {
         .get("final_price")
         .expect("final_price should exist");
     assert!(
-        final_price.default.is_some() && final_price.bound_value.is_none(),
+        final_price.default.is_some() && final_price.prefilled.is_none(),
         "typedef default declared on ancestor type must inherit as suggestion on leaf binding"
     );
 }

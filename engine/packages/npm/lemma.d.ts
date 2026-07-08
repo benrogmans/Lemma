@@ -205,9 +205,11 @@ export type LemmaType =
 /** One input declared in a spec. Omitted fields are absent (not `null`). */
 export interface DataEntry {
   type: LemmaType;
-  /** Literal bound in the source (`data x: literal`). */
-  bound_value?: LiteralValue;
-  /** `-> default ...` suggestion; omitted from `bound_value` until evaluation applies it. */
+  /** Spec literal or literal `with` binding; UIs may skip review. */
+  prefilled?: LiteralValue;
+  /** Caller overlay when schema was built with supplied values. */
+  supplied?: LiteralValue;
+  /** `-> default ...` suggestion; prompt with prefill in interactive UIs. */
   default?: LiteralValue;
 }
 

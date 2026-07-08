@@ -1033,14 +1033,18 @@
                     data.push({
                         name: name,
                         required:
-                            !(entry.bound_value != null || entry.default != null),
+                            !(entry.prefilled != null
+                                || entry.supplied != null
+                                || entry.default != null),
                         schemaType: entry.type,
                         defaultValue:
-                            entry.bound_value != null
-                                ? entry.bound_value
-                                : entry.default != null
-                                  ? entry.default
-                                  : null
+                            entry.prefilled != null
+                                ? entry.prefilled
+                                : entry.supplied != null
+                                  ? entry.supplied
+                                  : entry.default != null
+                                    ? entry.default
+                                    : null
                     });
                 }
             }
