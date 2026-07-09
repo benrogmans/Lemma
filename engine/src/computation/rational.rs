@@ -40,6 +40,28 @@ impl RationalInteger {
         &self.denom
     }
 
+    pub fn try_reduce_ref(rational: &RationalInteger) -> Result<Self, NumericFailure> {
+        if rational.denom().is_zero() {
+            return Err(NumericFailure::DivisionByZero);
+        }
+        let mut numer = rational.numer().clone();
+        let mut denom = rational.denom().clone();
+        if denom.is_negative() {
+            numer = numer.try_neg().map_err(map_alloc)?;
+            denom = denom.try_neg().map_err(map_alloc)?;
+        }
+        if numer.is_zero() {
+            return Ok(Self {
+                numer: BigInt::zero(),
+                denom: BigInt::one(),
+            });
+        }
+        let gcd = numer.try_abs()?.try_gcd(&denom.try_abs()?)?;
+        numer = numer.try_div_trunc(&gcd)?;
+        denom = denom.try_div_trunc(&gcd)?;
+        Ok(Self { numer, denom })
+    }
+
     pub fn try_reduce(mut self) -> Result<Self, NumericFailure> {
         if self.denom.is_zero() {
             return Err(NumericFailure::DivisionByZero);
@@ -172,7 +194,7 @@ pub fn decimal_to_rational(decimal: Decimal) -> Result<RationalInteger, NumericF
 }
 
 pub fn commit_rational_to_decimal(rational: &RationalInteger) -> Result<Decimal, NumericFailure> {
-    let reduced = rational.clone().try_reduce()?;
+    let reduced = RationalInteger::try_reduce_ref(rational)?;
     let numerator = reduced.numer();
     let denominator = reduced.denom();
     if denominator.is_zero() {

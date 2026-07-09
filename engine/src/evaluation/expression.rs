@@ -7,6 +7,7 @@ use crate::computation::measure_math::{
     mathematical_computation_preserves_measure_magnitude, measure_magnitude_math,
 };
 use crate::planning::semantics::{LiteralValue, MathematicalComputation, ValueKind};
+use std::sync::Arc;
 
 pub(crate) fn evaluate_mathematical_operator(
     op: &MathematicalComputation,
@@ -61,7 +62,7 @@ pub(crate) fn evaluate_mathematical_operator(
                 .expect("BUG: transcendental result must lift back to stored rational");
             let result_value =
                 LiteralValue::number_with_type(result_rational, value.lemma_type.clone());
-            OperationResult::Value(result_value)
+            OperationResult::from_literal(result_value)
         }
         _ => unreachable!(
             "BUG: mathematical operator with non-number operand; planning should have rejected this"
@@ -77,7 +78,7 @@ pub(crate) fn resolve_data_path_value<'plan>(
         return OperationResult::Veto(veto.clone());
     }
     if let Some(value) = context.get_data_value(data_path) {
-        return OperationResult::Value(value.clone());
+        return OperationResult::from_literal_arc(Arc::clone(value));
     }
     if let Some(rule_path) = crate::planning::normalize::follow_data_reference_to_rule_target(
         &context.plan().data,

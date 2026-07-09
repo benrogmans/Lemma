@@ -78,7 +78,7 @@ pub fn measure_magnitude_math(
             }
         };
 
-    OperationResult::Value(LiteralValue::measure_with_type(
+    OperationResult::from_literal(LiteralValue::measure_with_type(
         new_canonical,
         unit_name,
         value.lemma_type.clone(),

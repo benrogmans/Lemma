@@ -381,6 +381,205 @@ pub fn validate_instructions(instructions: &Instructions) -> Result<(), String> 
         }
     }
 
+    validate_register_consumption(&instructions.code)?;
+
+    Ok(())
+}
+
+struct InstructionRegisterEffect {
+    uses: Vec<u16>,
+    kills: Vec<u16>,
+    defines: Option<u16>,
+}
+
+fn instruction_register_effect(instruction: &Instruction) -> InstructionRegisterEffect {
+    match instruction {
+        Instruction::LoadConstant {
+            destination_register,
+            ..
+        }
+        | Instruction::LoadData {
+            destination_register,
+            ..
+        }
+        | Instruction::LoadNow {
+            destination_register,
+        }
+        | Instruction::UserVeto {
+            destination_register,
+            ..
+        } => InstructionRegisterEffect {
+            uses: Vec::new(),
+            kills: Vec::new(),
+            defines: Some(*destination_register),
+        },
+        Instruction::Arithmetic {
+            destination_register,
+            left_register,
+            right_register,
+            ..
+        }
+        | Instruction::Comparison {
+            destination_register,
+            left_register,
+            right_register,
+            ..
+        }
+        | Instruction::RangeLiteral {
+            destination_register,
+            left_register,
+            right_register,
+        } => InstructionRegisterEffect {
+            uses: vec![*left_register, *right_register],
+            kills: vec![*left_register, *right_register],
+            defines: Some(*destination_register),
+        },
+        Instruction::UnitConversion {
+            destination_register,
+            source_register,
+            ..
+        }
+        | Instruction::Mathematical {
+            destination_register,
+            source_register,
+            ..
+        }
+        | Instruction::DateRelative {
+            destination_register,
+            source_register,
+            ..
+        }
+        | Instruction::DateCalendar {
+            destination_register,
+            source_register,
+            ..
+        }
+        | Instruction::PastFutureRange {
+            destination_register,
+            source_register,
+            ..
+        } => InstructionRegisterEffect {
+            uses: vec![*source_register],
+            kills: vec![*source_register],
+            defines: Some(*destination_register),
+        },
+        Instruction::RangeContainment {
+            destination_register,
+            value_register,
+            range_register,
+        } => InstructionRegisterEffect {
+            uses: vec![*value_register, *range_register],
+            kills: vec![*value_register, *range_register],
+            defines: Some(*destination_register),
+        },
+        Instruction::ResultIsVeto {
+            destination_register,
+            source_register,
+        } => InstructionRegisterEffect {
+            uses: vec![*source_register],
+            kills: Vec::new(),
+            defines: Some(*destination_register),
+        },
+        Instruction::MoveRegister {
+            destination_register,
+            source_register,
+        } => InstructionRegisterEffect {
+            uses: vec![*source_register],
+            kills: vec![*source_register],
+            defines: Some(*destination_register),
+        },
+        Instruction::JumpIfFalse {
+            condition_register, ..
+        } => InstructionRegisterEffect {
+            uses: vec![*condition_register],
+            kills: Vec::new(),
+            defines: None,
+        },
+        Instruction::Return { source_register } => InstructionRegisterEffect {
+            uses: vec![*source_register],
+            kills: vec![*source_register],
+            defines: None,
+        },
+        Instruction::Jump { .. } => InstructionRegisterEffect {
+            uses: Vec::new(),
+            kills: Vec::new(),
+            defines: None,
+        },
+    }
+}
+
+/// Prove that registers consumed by move/destroy instructions are not live on any
+/// successor path. Enables the VM to `take` operand registers without cloning.
+fn validate_register_consumption(code: &[Instruction]) -> Result<(), String> {
+    let len = code.len();
+    if len == 0 {
+        return Ok(());
+    }
+
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); len];
+    for (pc, instruction) in code.iter().enumerate() {
+        match instruction {
+            Instruction::Jump { target_instruction } => {
+                successors[pc].push(*target_instruction as usize);
+            }
+            Instruction::JumpIfFalse {
+                target_instruction, ..
+            } => {
+                successors[pc].push(*target_instruction as usize);
+                if pc + 1 < len {
+                    successors[pc].push(pc + 1);
+                }
+            }
+            Instruction::Return { .. } => {}
+            _ => {
+                if pc + 1 < len {
+                    successors[pc].push(pc + 1);
+                }
+            }
+        }
+    }
+
+    let mut live_in: Vec<std::collections::HashSet<u16>> =
+        vec![std::collections::HashSet::new(); len];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for pc in (0..len).rev() {
+            let mut live_out = std::collections::HashSet::new();
+            for succ in &successors[pc] {
+                if *succ < len {
+                    live_out.extend(live_in[*succ].iter().copied());
+                }
+            }
+
+            let effect = instruction_register_effect(&code[pc]);
+            for register in &effect.kills {
+                if live_out.contains(register) {
+                    return Err(format!(
+                        "instruction {pc} consumes register r{register} but r{register} is live on a successor path"
+                    ));
+                }
+            }
+
+            let mut next_live_in =
+                std::collections::HashSet::from_iter(effect.uses.iter().copied());
+            if let Some(def) = effect.defines {
+                for register in live_out {
+                    if register != def {
+                        next_live_in.insert(register);
+                    }
+                }
+            } else {
+                next_live_in.extend(live_out);
+            }
+
+            if live_in[pc] != next_live_in {
+                live_in[pc] = next_live_in;
+                changed = true;
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -391,7 +590,8 @@ pub struct Instructions {
     pub register_count: u16,
     #[serde(with = "register_types_serde")]
     pub register_types: Vec<Arc<LemmaType>>,
-    pub constants: Vec<LiteralValue>,
+    #[serde(with = "constants_serde")]
+    pub constants: Vec<Arc<LiteralValue>>,
     pub data_manifest: Vec<DataPath>,
     pub veto_messages: Vec<String>,
     pub code: Vec<Instruction>,
@@ -456,6 +656,28 @@ mod register_types_serde {
         D: Deserializer<'de>,
     {
         let values: Vec<LemmaType> = Vec::deserialize(deserializer)?;
+        Ok(values.into_iter().map(Arc::new).collect())
+    }
+}
+
+mod constants_serde {
+    use super::LiteralValue;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(values: &[Arc<LiteralValue>], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let refs: Vec<&LiteralValue> = values.iter().map(|v| v.as_ref()).collect();
+        refs.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Arc<LiteralValue>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values: Vec<LiteralValue> = Vec::deserialize(deserializer)?;
         Ok(values.into_iter().map(Arc::new).collect())
     }
 }
@@ -817,7 +1039,7 @@ pub struct DataEntry {
 #[derive(Debug, Clone, Default)]
 pub struct DataOverlay {
     /// Successfully parsed and validated values supplied by the caller.
-    pub values: HashMap<DataPath, LiteralValue>,
+    pub values: HashMap<DataPath, Arc<LiteralValue>>,
     /// Values that failed parse or constraint validation. Rules that read
     /// these paths produce [`crate::evaluation::VetoType::Computation`] vetoes.
     pub violated: HashMap<DataPath, String>,
@@ -903,7 +1125,7 @@ impl DataOverlay {
                 continue;
             }
 
-            overlay.values.insert(data_path, literal_value);
+            overlay.values.insert(data_path, Arc::new(literal_value));
         }
 
         Ok(overlay)
@@ -920,7 +1142,7 @@ impl DataOverlay {
         if self.violated.contains_key(data_path) {
             None
         } else {
-            self.values.get(data_path)
+            self.values.get(data_path).map(|value| value.as_ref())
         }
     }
 }
@@ -2027,7 +2249,7 @@ mod tests {
         let values = input_data(&[("age", "30")]);
 
         let overlay = DataOverlay::resolve(plan, values, &default_limits()).unwrap();
-        let updated_value = overlay.values.get(&data_path).unwrap();
+        let updated_value = overlay.values.get(&data_path).unwrap().as_ref();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
                 assert_eq!(n, &rational_new(30, 1));
@@ -2123,7 +2345,7 @@ mod tests {
             }],
             data: "base_price".to_string(),
         };
-        let updated_value = overlay.values.get(&data_path).unwrap();
+        let updated_value = overlay.values.get(&data_path).unwrap().as_ref();
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
                 assert_eq!(n, &rational_new(100, 1));
@@ -2164,7 +2386,7 @@ mod tests {
             version: INSTRUCTIONS_VERSION,
             register_count: 1,
             register_types: vec![Arc::clone(&literal.lemma_type)],
-            constants: vec![literal],
+            constants: vec![Arc::new(literal)],
             data_manifest: Vec::new(),
             veto_messages: Vec::new(),
             arm_tags: Vec::new(),

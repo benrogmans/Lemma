@@ -211,11 +211,10 @@ fn conversion_rule_step_text(
 fn format_explanation_multiplier(
     rational: &crate::computation::rational::RationalInteger,
 ) -> String {
-    use crate::computation::rational::{commit_rational_to_decimal, decimal_to_rational};
-    let reduced = rational
-        .clone()
-        .try_reduce()
-        .unwrap_or_else(|_| rational.clone());
+    use crate::computation::rational::{
+        commit_rational_to_decimal, decimal_to_rational, RationalInteger,
+    };
+    let reduced = RationalInteger::try_reduce_ref(rational).unwrap_or_else(|_| rational.clone());
     if reduced.denom() == &crate::computation::rational::BigInt::one() {
         return reduced.numer().to_string();
     }
@@ -729,7 +728,7 @@ fn operand_leaf_value(expr: &Expression, ctx: &ExplainCtx<'_, '_>) -> Option<Lit
     match &expr.kind {
         ExpressionKind::Literal(lit) => Some((**lit).clone()),
         ExpressionKind::DataPath(path) => match resolve_data_path_value(path, ctx.context) {
-            OperationResult::Value(value) => Some(value),
+            OperationResult::Value(value) => Some(value.as_ref().clone()),
             OperationResult::Veto(_) => None,
         },
         ExpressionKind::RulePath(path) => ctx
@@ -948,9 +947,9 @@ fn build_conversion_node(
         Some((OperationResult::Value(operand_value), OperationResult::Value(converted_value))) => {
             let data_ref = data_path_in_expression(value_expr);
             build_conversion_steps(
-                &operand_value,
+                operand_value.as_ref(),
                 target,
-                &converted_value,
+                converted_value.as_ref(),
                 data_ref.as_ref(),
                 UnitResolutionContext::WithIndex(ctx.plan.expression_unit_index()),
             )

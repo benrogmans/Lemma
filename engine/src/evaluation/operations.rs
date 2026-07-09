@@ -1,6 +1,7 @@
 //! Operation types and result handling for evaluation
 
 use std::fmt;
+use std::sync::Arc;
 
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, DataPath, LemmaType, LiteralValue,
@@ -57,12 +58,20 @@ impl Serialize for VetoType {
 #[serde(rename_all = "snake_case")]
 pub enum OperationResult {
     /// Operation produced a value
-    Value(LiteralValue),
+    Value(Arc<LiteralValue>),
     /// Operation was vetoed (valid result, no value)
     Veto(VetoType),
 }
 
 impl OperationResult {
+    pub fn from_literal(value: LiteralValue) -> Self {
+        Self::Value(Arc::new(value))
+    }
+
+    pub fn from_literal_arc(value: Arc<LiteralValue>) -> Self {
+        Self::Value(value)
+    }
+
     pub fn vetoed(&self) -> bool {
         matches!(self, OperationResult::Veto(_))
     }
@@ -70,13 +79,21 @@ impl OperationResult {
     #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {
-            OperationResult::Value(v) => Some(v),
+            OperationResult::Value(value) => Some(value.as_ref()),
+            OperationResult::Veto(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn value_arc(&self) -> Option<&Arc<LiteralValue>> {
+        match self {
+            OperationResult::Value(value) => Some(value),
             OperationResult::Veto(_) => None,
         }
     }
 
     pub fn number(number: rust_decimal::Decimal) -> Self {
-        Self::Value(LiteralValue::number_from_decimal(number))
+        Self::from_literal(LiteralValue::number_from_decimal(number))
     }
 
     pub fn measure(
@@ -106,29 +123,29 @@ impl OperationResult {
         };
         let canonical = checked_mul(&rational, &factor)
             .expect("BUG: measure canonicalization overflow in OperationResult::measure");
-        Self::Value(LiteralValue::measure_with_type(
+        Self::from_literal(LiteralValue::measure_with_type(
             canonical, unit_name, lemma_type,
         ))
     }
 
     pub fn text(text: impl Into<String>) -> Self {
-        Self::Value(LiteralValue::text(text.into()))
+        Self::from_literal(LiteralValue::text(text.into()))
     }
 
     pub fn date(date: impl Into<SemanticDateTime>) -> Self {
-        Self::Value(LiteralValue::date(date.into()))
+        Self::from_literal(LiteralValue::date(date.into()))
     }
 
     pub fn time(time: impl Into<SemanticTime>) -> Self {
-        Self::Value(LiteralValue::time(time.into()))
+        Self::from_literal(LiteralValue::time(time.into()))
     }
 
     pub fn boolean(boolean: bool) -> Self {
-        Self::Value(LiteralValue::from_bool(boolean))
+        Self::from_literal(LiteralValue::from_bool(boolean))
     }
 
     pub fn ratio(rational: rust_decimal::Decimal) -> Self {
-        Self::Value(LiteralValue::ratio_from_decimal(rational, None))
+        Self::from_literal(LiteralValue::ratio_from_decimal(rational, None))
     }
 
     pub fn veto(veto: impl Into<String>) -> Self {

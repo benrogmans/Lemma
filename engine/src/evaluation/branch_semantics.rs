@@ -148,7 +148,7 @@ mod tests {
     use crate::planning::semantics::{DataPath, LiteralValue};
 
     fn boolean(value: bool) -> OperationResult {
-        OperationResult::Value(LiteralValue::from_bool(value))
+        OperationResult::from_literal(LiteralValue::from_bool(value))
     }
 
     fn user_veto() -> OperationResult {

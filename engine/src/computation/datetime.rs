@@ -13,6 +13,7 @@ use chrono::{
     DateTime, Datelike, Duration as ChronoDuration, FixedOffset, NaiveDate, NaiveDateTime,
     NaiveTime, TimeZone, Timelike,
 };
+use std::sync::Arc;
 
 const SECONDS_PER_HOUR: i32 = 3600;
 const SECONDS_PER_MINUTE: i32 = 60;
@@ -62,7 +63,7 @@ pub fn datetime_arithmetic(
                 Some(d) => d,
                 None => return OperationResult::Veto(VetoType::computation("Date overflow")),
             };
-            OperationResult::Value(LiteralValue::date_with_type(
+            OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
                 left.lemma_type.clone(),
             ))
@@ -81,7 +82,7 @@ pub fn datetime_arithmetic(
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
 
-            OperationResult::Value(LiteralValue::date_with_type(
+            OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
                 left.lemma_type.clone(),
             ))
@@ -105,7 +106,7 @@ pub fn datetime_arithmetic(
                 Some(d) => d,
                 None => return OperationResult::Veto(VetoType::computation("Date overflow")),
             };
-            OperationResult::Value(LiteralValue::date_with_type(
+            OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
                 left.lemma_type.clone(),
             ))
@@ -126,7 +127,7 @@ pub fn datetime_arithmetic(
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
 
-            OperationResult::Value(LiteralValue::date_with_type(
+            OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
                 left.lemma_type.clone(),
             ))
@@ -148,7 +149,7 @@ pub fn datetime_arithmetic(
                 Some(d) => d,
                 None => return OperationResult::Veto(VetoType::computation("Date overflow")),
             };
-            OperationResult::Value(LiteralValue::date_with_type(
+            OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
                 right.lemma_type.clone(),
             ))
@@ -167,7 +168,7 @@ pub fn datetime_arithmetic(
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
 
-            OperationResult::Value(LiteralValue::date_with_type(
+            OperationResult::from_literal(LiteralValue::date_with_type(
                 chrono_to_semantic_datetime(new_dt),
                 right.lemma_type.clone(),
             ))
@@ -226,7 +227,7 @@ pub fn datetime_arithmetic(
                 Ok(value) => value,
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
-            OperationResult::Value(LiteralValue {
+            OperationResult::from_literal(LiteralValue {
                 value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
                 lemma_type: std::sync::Arc::new(
                     crate::planning::semantics::LemmaType::anonymous_for_decomposition(
@@ -390,7 +391,7 @@ pub fn compute_date_calendar_difference(
     let value = rational_new(i64::from(abs_months), 1);
     let _ = unit;
 
-    OperationResult::Value(LiteralValue::calendar(value, unit.clone(), lemma_type))
+    OperationResult::from_literal(LiteralValue::calendar(value, unit.clone(), lemma_type))
 }
 
 fn signed_full_months_between(left: &DateTime<FixedOffset>, right: &DateTime<FixedOffset>) -> i32 {
@@ -445,12 +446,14 @@ pub fn evaluate_past_future_range(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
+    let shifted_owned =
+        Arc::try_unwrap(shifted_value).unwrap_or_else(|shared| shared.as_ref().clone());
     let range_value = match kind {
-        DateRelativeKind::InPast => LiteralValue::range(shifted_value.clone(), now_value),
-        DateRelativeKind::InFuture => LiteralValue::range(now_value, shifted_value.clone()),
+        DateRelativeKind::InPast => LiteralValue::range(shifted_owned, now_value),
+        DateRelativeKind::InFuture => LiteralValue::range(now_value, shifted_owned),
     };
 
-    OperationResult::Value(range_value)
+    OperationResult::from_literal(range_value)
 }
 
 /// Perform date/datetime comparisons, returning OperationResult (Veto on error)
@@ -482,7 +485,7 @@ pub fn datetime_comparison(
                 ComparisonComputation::IsNot => l_utc != r_utc,
             };
 
-            OperationResult::Value(LiteralValue::from_bool(result))
+            OperationResult::from_literal(LiteralValue::from_bool(result))
         }
 
         _ => unreachable!(
@@ -520,7 +523,7 @@ pub fn time_comparison(
                 ComparisonComputation::IsNot => l_utc != r_utc,
             };
 
-            OperationResult::Value(LiteralValue::from_bool(result))
+            OperationResult::from_literal(LiteralValue::from_bool(result))
         }
         _ => unreachable!(
             "BUG: time_comparison called with non-time operands; this should be enforced by planning and dispatch"
@@ -551,7 +554,7 @@ pub fn time_arithmetic(
                 Some(d) => d,
                 None => return OperationResult::Veto(VetoType::computation("Time overflow")),
             };
-            OperationResult::Value(LiteralValue::time_with_type(
+            OperationResult::from_literal(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
                 left.lemma_type.clone(),
             ))
@@ -575,7 +578,7 @@ pub fn time_arithmetic(
                 Some(d) => d,
                 None => return OperationResult::Veto(VetoType::computation("Time overflow")),
             };
-            OperationResult::Value(LiteralValue::time_with_type(
+            OperationResult::from_literal(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
                 left.lemma_type.clone(),
             ))
@@ -597,7 +600,7 @@ pub fn time_arithmetic(
                 Some(d) => d,
                 None => return OperationResult::Veto(VetoType::computation("Time overflow")),
             };
-            OperationResult::Value(LiteralValue::time_with_type(
+            OperationResult::from_literal(LiteralValue::time_with_type(
                 chrono_datetime_to_semantic_time(result_dt),
                 right.lemma_type.clone(),
             ))
@@ -657,7 +660,7 @@ pub fn time_arithmetic(
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
 
-            OperationResult::Value(LiteralValue {
+            OperationResult::from_literal(LiteralValue {
                 value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
                 lemma_type: std::sync::Arc::new(
                     crate::planning::semantics::LemmaType::anonymous_for_decomposition(
@@ -727,7 +730,7 @@ use crate::parsing::ast::{CalendarPeriodUnit, DateCalendarKind, DateRelativeKind
 use crate::planning::semantics::primitive_boolean_arc;
 
 fn bool_result(b: bool) -> OperationResult {
-    OperationResult::Value(LiteralValue {
+    OperationResult::from_literal(LiteralValue {
         value: ValueKind::Boolean(b),
         lemma_type: primitive_boolean_arc().clone(),
     })
