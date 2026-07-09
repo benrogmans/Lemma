@@ -9,6 +9,7 @@ const PLATFORM_PACKAGES = {
   'darwin-x64': '@lemmabase/cli-darwin-x64',
   'darwin-arm64': '@lemmabase/cli-darwin-arm64',
   'win32-x64': '@lemmabase/cli-win32-x64',
+  'win32-arm64': '@lemmabase/cli-win32-arm64',
 };
 
 const key = `${process.platform}-${process.arch}`;

@@ -7,7 +7,7 @@ nav_order: 20
 
 `lemma_engine` provides precompiled NIFs for Elixir (>= 1.14). Erlang and Gleam use the same package.
 
-Precompiled binaries are downloaded automatically for macOS (arm64/x86_64), Linux (gnu x86_64 and arm64), and Windows (x86_64).
+Precompiled binaries are downloaded automatically for macOS (arm64/x86_64), Linux (gnu x86_64 and arm64), and Windows (arm64/x86_64).
 
 ## Install
 

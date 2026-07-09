@@ -2,6 +2,12 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [Unreleased]
+
+### Added
+
+- **Windows ARM64 prebuilt binaries**: release workflow builds CLI and Hex NIF for `aarch64-pc-windows-msvc` on `windows-11-vs2026-arm`; npm publishes `@lemmabase/cli-win32-arm64`.
+
 ## [0.8.21] - 2026-07-04
 
 0.8.21 renames `quantity` to `measure` throughout the language and API, hardens all server boundaries against resource exhaustion, fixes the ISO-week rollover bug, guarantees deterministic planning order, and adds granular LSP semantic tokens.

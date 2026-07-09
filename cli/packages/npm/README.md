@@ -17,7 +17,7 @@ lemma --help
 
 ## How it works
 
-This package is a thin Node.js launcher. The actual `lemma` binary is shipped as a platform-specific optional dependency (one of `@lemmabase/cli-linux-x64`, `@lemmabase/cli-linux-arm64`, `@lemmabase/cli-darwin-x64`, `@lemmabase/cli-darwin-arm64`, `@lemmabase/cli-win32-x64`). npm installs only the package matching your OS and CPU; the launcher then `exec`s the native binary directly. No download steps, no `postinstall` scripts, works offline.
+This package is a thin Node.js launcher. The actual `lemma` binary is shipped as a platform-specific optional dependency (one of `@lemmabase/cli-linux-x64`, `@lemmabase/cli-linux-arm64`, `@lemmabase/cli-darwin-x64`, `@lemmabase/cli-darwin-arm64`, `@lemmabase/cli-win32-x64`, `@lemmabase/cli-win32-arm64`). npm installs only the package matching your OS and CPU; the launcher then `exec`s the native binary directly. No download steps, no `postinstall` scripts, works offline.
 
 ## Supported platforms
 
@@ -26,6 +26,7 @@ This package is a thin Node.js launcher. The actual `lemma` binary is shipped as
 - macOS x86_64
 - macOS aarch64 (Apple Silicon)
 - Windows x86_64
+- Windows aarch64 (ARM64)
 
 If your platform is not supported, install via Cargo instead:
 
