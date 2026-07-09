@@ -3415,7 +3415,7 @@ fn compute_arithmetic_result_type_recursive(
         (TypeSpecification::NumberRange { .. }, TypeSpecification::Number { .. })
         | (TypeSpecification::RatioRange { .. }, TypeSpecification::Ratio { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                range_measure_type_for_operand(&left_type, &right_type)
+                range_span_type(&left_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
@@ -3423,13 +3423,13 @@ fn compute_arithmetic_result_type_recursive(
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
                 if range_matches_measure_type(&left_type, &right_type) =>
             {
-                range_measure_type_for_operand(&left_type, &right_type)
+                range_span_type(&left_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
         (TypeSpecification::Number { .. }, TypeSpecification::NumberRange { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                range_measure_type_for_operand(&right_type, &left_type)
+                range_span_type(&right_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
@@ -3437,13 +3437,13 @@ fn compute_arithmetic_result_type_recursive(
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
                 if range_matches_measure_type(&right_type, &left_type) =>
             {
-                range_measure_type_for_operand(&right_type, &left_type)
+                range_span_type(&right_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
         (TypeSpecification::Ratio { .. }, TypeSpecification::RatioRange { .. }) => match op {
             ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                range_measure_type_for_operand(&right_type, &left_type)
+                range_span_type(&right_type)
             }
             _ => Arc::new(LemmaType::undetermined_type()),
         },
@@ -3452,7 +3452,7 @@ fn compute_arithmetic_result_type_recursive(
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_measure_type_for_operand(&left_type, &right_type)
+                    range_span_type(&left_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
@@ -3462,7 +3462,7 @@ fn compute_arithmetic_result_type_recursive(
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_measure_type_for_operand(&left_type, &right_type)
+                    Arc::clone(&left_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
@@ -3472,7 +3472,7 @@ fn compute_arithmetic_result_type_recursive(
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_measure_type_for_operand(&right_type, &left_type)
+                    range_span_type(&right_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
@@ -3482,7 +3482,7 @@ fn compute_arithmetic_result_type_recursive(
         {
             match op {
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
-                    range_measure_type_for_operand(&right_type, &left_type)
+                    Arc::clone(&right_type)
                 }
                 _ => Arc::new(LemmaType::undetermined_type()),
             }
@@ -3515,39 +3515,18 @@ fn range_span_type(range_type: &LemmaType) -> Arc<LemmaType> {
             duration_decomposition(),
         )),
         TypeSpecification::NumberRange { .. } => primitive_number_arc().clone(),
-        TypeSpecification::MeasureRange { units, .. } => {
-            Arc::new(LemmaType::primitive(TypeSpecification::Measure {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: units.clone(),
-                traits: Vec::new(),
-                decomposition: None,
-                help: String::new(),
-            }))
-        }
-        TypeSpecification::RatioRange { units, .. } => {
-            Arc::new(LemmaType::primitive(TypeSpecification::Ratio {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: units.clone(),
-                help: String::new(),
-            }))
+        TypeSpecification::MeasureRange { .. } | TypeSpecification::RatioRange { .. } => {
+            let element_spec = range_type
+                .specifications
+                .element_from_range()
+                .expect("BUG: MeasureRange and RatioRange always define element_from_range");
+            Arc::new(LemmaType {
+                name: range_type.name.clone(),
+                specifications: element_spec,
+                extends: range_type.extends.clone(),
+            })
         }
         _ => Arc::new(LemmaType::undetermined_type()),
-    }
-}
-
-fn range_measure_type_for_operand(
-    range_type: &LemmaType,
-    other_type: &LemmaType,
-) -> Arc<LemmaType> {
-    let _ = other_type;
-    if range_type.is_range() {
-        Arc::new(range_type.clone())
-    } else {
-        range_span_type(range_type)
     }
 }
 
@@ -11377,5 +11356,227 @@ rule t: f * d
             }
             other => panic!("expected Unique(alpha torque) via unit_index, got {other:?}"),
         }
+    }
+
+    fn weight_measure_type() -> Arc<LemmaType> {
+        use crate::computation::rational::{decimal_to_rational, rational_one};
+        use rust_decimal::Decimal;
+        Arc::new(LemmaType::new(
+            "weight".to_string(),
+            TypeSpecification::Measure {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: MeasureUnits(vec![
+                    MeasureUnit {
+                        name: "gram".to_string(),
+                        factor: rational_one(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: Default::default(),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                    },
+                    MeasureUnit {
+                        name: "kilogram".to_string(),
+                        factor: decimal_to_rational(Decimal::from(1000))
+                            .expect("BUG: kilogram factor must be rational"),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: Default::default(),
+                        minimum: None,
+                        maximum: None,
+                        default_magnitude: None,
+                    },
+                ]),
+                traits: Vec::new(),
+                decomposition: None,
+                help: String::new(),
+            },
+            TypeExtends::Primitive,
+        ))
+    }
+
+    fn weight_measure_range_type() -> Arc<LemmaType> {
+        let weight = weight_measure_type();
+        Arc::new(LemmaType {
+            name: weight.name.clone(),
+            specifications: weight
+                .specifications
+                .range_from_element()
+                .expect("BUG: weight measure defines MeasureRange"),
+            extends: weight.extends.clone(),
+        })
+    }
+
+    fn duration_like_measure_type() -> Arc<LemmaType> {
+        Arc::new(LemmaType::anonymous_for_decomposition(
+            duration_decomposition(),
+        ))
+    }
+
+    fn calendar_like_measure_type() -> Arc<LemmaType> {
+        use crate::computation::rational::rational_one;
+        use crate::planning::semantics::MeasureTrait;
+        Arc::new(LemmaType::new(
+            "calendar".to_string(),
+            TypeSpecification::Measure {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: MeasureUnits(vec![MeasureUnit {
+                    name: "month".to_string(),
+                    factor: rational_one(),
+                    derived_measure_factors: Vec::new(),
+                    decomposition: calendar_decomposition(),
+                    minimum: None,
+                    maximum: None,
+                    default_magnitude: None,
+                }]),
+                traits: vec![MeasureTrait::Calendar],
+                decomposition: Some(calendar_decomposition()),
+                help: String::new(),
+            },
+            TypeExtends::Primitive,
+        ))
+    }
+
+    #[test]
+    fn range_span_type_date_range_is_duration_span_not_date_range() {
+        let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
+        let span = range_span_type(&date_range);
+        assert!(span.is_duration_like_measure());
+        assert!(!span.is_date_range());
+        assert!(!span.is_date());
+    }
+
+    #[test]
+    fn range_span_type_time_range_is_duration_span() {
+        let time_range = Arc::new(LemmaType::primitive(TypeSpecification::time_range()));
+        let span = range_span_type(&time_range);
+        assert!(span.is_duration_like_measure());
+        assert!(!span.is_time_range());
+        assert!(!span.is_time());
+    }
+
+    #[test]
+    fn range_span_type_number_range_is_number() {
+        let number_range = Arc::new(LemmaType::primitive(TypeSpecification::number_range()));
+        let span = range_span_type(&number_range);
+        assert!(span.is_number());
+    }
+
+    #[test]
+    fn range_span_type_measure_range_preserves_name_and_extends() {
+        let weight_range = weight_measure_range_type();
+        let span = range_span_type(&weight_range);
+        assert!(span.is_measure());
+        assert!(!span.is_measure_range());
+        assert_eq!(span.name.as_deref(), Some("weight"));
+        assert_eq!(span.extends, weight_range.extends);
+        assert!(span.same_measure_family(weight_measure_type().as_ref()));
+    }
+
+    #[test]
+    fn range_span_type_anonymous_measure_range_preserves_units() {
+        use crate::computation::rational::{decimal_to_rational, rational_one};
+        use rust_decimal::Decimal;
+        let units = MeasureUnits(vec![
+            MeasureUnit {
+                name: "gram".to_string(),
+                factor: rational_one(),
+                derived_measure_factors: Vec::new(),
+                decomposition: Default::default(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: None,
+            },
+            MeasureUnit {
+                name: "kilogram".to_string(),
+                factor: decimal_to_rational(Decimal::from(1000))
+                    .expect("BUG: kilogram factor must be rational"),
+                derived_measure_factors: Vec::new(),
+                decomposition: Default::default(),
+                minimum: None,
+                maximum: None,
+                default_magnitude: None,
+            },
+        ]);
+        let measure_range = Arc::new(LemmaType::without_name(
+            TypeSpecification::MeasureRange {
+                units: units.clone(),
+                decomposition: None,
+                help: String::new(),
+            },
+            TypeExtends::Primitive,
+        ));
+        let span = range_span_type(&measure_range);
+        assert!(span.is_measure());
+        assert!(span.is_anonymous_measure());
+        match &span.specifications {
+            TypeSpecification::Measure {
+                units: span_units, ..
+            } => {
+                assert_eq!(span_units, &units);
+            }
+            other => panic!("expected Measure span, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn range_span_type_ratio_range_is_ratio() {
+        let ratio_range = Arc::new(LemmaType::primitive(TypeSpecification::ratio_range()));
+        let span = range_span_type(&ratio_range);
+        assert!(span.is_ratio());
+    }
+
+    #[test]
+    fn range_span_type_non_range_is_undetermined() {
+        let boolean = Arc::new(LemmaType::primitive(TypeSpecification::boolean()));
+        let span = range_span_type(&boolean);
+        assert!(span.is_undetermined());
+    }
+
+    #[test]
+    fn arithmetic_measure_range_plus_measure_yields_named_measure_span() {
+        let weight_range = weight_measure_range_type();
+        let gram = weight_measure_type();
+        let result =
+            compute_arithmetic_result_type(weight_range, &ArithmeticComputation::Add, gram);
+        assert!(result.is_measure());
+        assert!(!result.is_measure_range());
+        assert_eq!(result.name.as_deref(), Some("weight"));
+        assert!(result.same_measure_family(weight_measure_type().as_ref()));
+    }
+
+    #[test]
+    fn arithmetic_measure_range_minus_measure_yields_named_measure_span() {
+        let weight_range = weight_measure_range_type();
+        let gram = weight_measure_type();
+        let result =
+            compute_arithmetic_result_type(weight_range, &ArithmeticComputation::Subtract, gram);
+        assert!(result.is_measure());
+        assert!(!result.is_measure_range());
+        assert_eq!(result.name.as_deref(), Some("weight"));
+        assert!(result.same_measure_family(weight_measure_type().as_ref()));
+    }
+
+    #[test]
+    fn arithmetic_date_range_plus_duration_yields_duration_span_not_date_range() {
+        let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
+        let duration = duration_like_measure_type();
+        let result =
+            compute_arithmetic_result_type(date_range, &ArithmeticComputation::Add, duration);
+        assert!(result.is_duration_like_measure());
+        assert!(!result.is_date_range());
+        assert!(!result.is_date());
+    }
+
+    #[test]
+    fn arithmetic_date_range_plus_calendar_yields_date_range() {
+        let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
+        let calendar = calendar_like_measure_type();
+        let result =
+            compute_arithmetic_result_type(date_range, &ArithmeticComputation::Add, calendar);
+        assert!(result.is_date_range());
     }
 }

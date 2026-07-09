@@ -400,6 +400,105 @@ rule r: x`,
       assert(eur === 84, `expected 84 eur, got ${eur}`);
     });
 
+    await run('cost_price measure defaults and response JSON', () => {
+      engine.load(
+        `spec cost_price
+uses lemma units
+data money: measure
+  -> unit eur 1.00
+  -> unit inr 0.0092
+  -> decimals 2
+data labor_cost: measure
+  -> unit eur_per_hour eur/hour
+  -> unit inr_per_hour inr/hour
+  -> default 25 eur_per_hour
+data product_cost: measure
+  -> unit eur_per_kg eur/kilogram
+  -> unit inr_per_kg inr/kilogram
+  -> default 4 eur_per_kg
+data throughput: measure
+  -> unit kg_per_hour kilogram/hour
+  -> default 12 kg_per_hour
+rule cost_price: product_cost + labor_cost / throughput`,
+        'cost_price.lemma'
+      );
+      const schema = engine.schema(null, 'cost_price', null);
+      const laborDefault = schema.data.labor_cost.default;
+      assert(laborDefault != null, 'labor_cost default must exist');
+      assert(
+        laborDefault.value.measure.value === '25',
+        `labor_cost default measure.value must be per-unit 25, got ${laborDefault.value.measure.value}`
+      );
+      const throughputDefault = schema.data.throughput.default;
+      assert(
+        throughputDefault.value.measure.value === '12',
+        `throughput default measure.value must be 12, got ${throughputDefault.value.measure.value}`
+      );
+      const r = runEx(
+        engine,
+        'cost_price',
+        null,
+        {
+          product_cost: { eur_per_kg: '4' },
+          labor_cost: { eur_per_hour: '25' },
+          throughput: { kg_per_hour: '12' },
+        },
+        null
+      );
+      assertResponseShape(r, 'cost_price');
+      JSON.stringify(r);
+    });
+
+    await run('ratio default JSON emits per-unit percent magnitude', () => {
+      engine.load(
+        `spec policy
+data margin: ratio -> default 15%
+rule m: margin`,
+        'policy.lemma'
+      );
+      const schema = engine.schema(null, 'policy', null);
+      const marginDefault = schema.data.margin.default;
+      assert(marginDefault != null, 'margin default must exist');
+      assert(
+        marginDefault.value.ratio.value === '15',
+        `margin default ratio.value must be per-unit 15, got ${marginDefault.value.ratio.value}`
+      );
+      const r = runEx(engine, 'policy', null, { margin: '15%' }, null);
+      assertResponseShape(r, 'policy');
+      JSON.stringify(r);
+    });
+
+    await run('ratio basis_points schema and response JSON wire', () => {
+      engine.load(
+        `spec policy_bps
+data bps: ratio
+  -> unit basis_points 10000
+  -> default 500 basis_points
+rule m: bps`,
+        'policy_bps.lemma'
+      );
+      const schema = engine.schema(null, 'policy_bps', null);
+      const bpsDefault = schema.data.bps.default;
+      assert(bpsDefault != null, 'bps default must exist');
+      assert(
+        bpsDefault.value.ratio.value === '500',
+        `bps default ratio.value must be per-unit 500, got ${bpsDefault.value.ratio.value}`
+      );
+      assert(
+        bpsDefault.value.ratio.unit === 'basis_points',
+        `bps default ratio.unit must be basis_points, got ${bpsDefault.value.ratio.unit}`
+      );
+      const r = runEx(
+        engine,
+        'policy_bps',
+        null,
+        { bps: { basis_points: '500' } },
+        null
+      );
+      assertResponseShape(r, 'policy_bps');
+      JSON.stringify(r);
+    });
+
     await run('multiple specs', () => {
       engine.load('spec spec1\ndata x: 1', 's1.lemma');
       engine.load('spec spec2\ndata y: 2', 's2.lemma');

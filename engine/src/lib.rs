@@ -103,8 +103,8 @@ pub use planning::execution_plan::{
 };
 pub use planning::plan;
 pub use planning::semantics::{
-    DataDefinition, DataPath, LemmaType, LiteralValue, MeasureUnit, MeasureUnits, RatioUnit,
-    RatioUnits, RulePath, Source as PlanningSource, TypeSpecification, ValueKind,
+    api_wire_literal, DataDefinition, DataPath, LemmaType, LiteralValue, MeasureUnit, MeasureUnits,
+    RatioUnit, RatioUnits, RulePath, Source as PlanningSource, TypeSpecification, ValueKind,
 };
 pub use planning::spec_set::LemmaSpecSet;
 

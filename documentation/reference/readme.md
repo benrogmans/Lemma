@@ -266,19 +266,30 @@ rule span_years: (1990-05-20...2024-06-15) as years
 
 ### Range arithmetic and comparison
 
-Ranges support comparison and arithmetic consistent with their kind:
+Ranges support comparison and arithmetic consistent with their kind.
+
+`+` and `-` on the **right endpoint** are part of the range literal (endpoint extension):
 
 ```lemma
 spec range_arithmetic
 
 uses lemma units
 
+data start: date
+data length: units.calendar
+
 rule long_enough: 2024-06-01...2024-06-15 >= 7 days
 
 rule shifted: 18 years...67 years + 2 years
 
 rule extended: 2024-01-01...2024-06-15 + 1 months
+
+rule membership: now in start...start + length
+
+rule span_days: ((2024-02-15...2024-03-15) + 1 day) as days
 ```
+
+**Span arithmetic** (adding to the width of an interval, not shifting an endpoint) requires parentheses around the range, as in `span_days` above.
 
 Date endpoints can be built from separate `date` values: `hire_date...today`.
 
@@ -645,6 +656,13 @@ spec number_to_ratio
 
 rule discount_as_percent: 0.25 as percent
 ```
+
+## Test coverage
+
+- [Engine test coverage](coverage/engine.md)
+- [CLI test coverage](coverage/cli.md)
+
+Regenerate with `cargo coverage all` (requires [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)).
 
 ## Benchmarks
 

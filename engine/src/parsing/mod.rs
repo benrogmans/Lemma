@@ -684,21 +684,52 @@ data period_end: 2026-01-02
     }
 
     #[test]
-    fn parse_range_in_additive_term_before_plus() {
+    fn parse_range_additive_right_endpoint_binds_inside_literal() {
         let expression = rule_expression(
             r#"spec test
 uses lemma units
-data period_start: 2026-01-01
-data period_end: 2026-01-02
-rule span: period_start...period_end + 1 day"#,
-            "span",
+data start: date
+data length: units.duration
+rule valid: now in start...start + length"#,
+            "valid",
         );
-        let ExpressionKind::Arithmetic(left, ArithmeticComputation::Add, right) = &expression.kind
-        else {
-            panic!("expected Add, got {:?}", expression.kind);
+        let ExpressionKind::RangeContainment(value, range) = &expression.kind else {
+            panic!("expected RangeContainment, got {:?}", expression.kind);
         };
-        assert!(matches!(left.kind, ExpressionKind::RangeLiteral(..)));
-        assert!(!matches!(right.kind, ExpressionKind::RangeLiteral(..)));
+        assert!(
+            matches!(value.kind, ExpressionKind::Now),
+            "expected now as containment value, got {:?}",
+            value.kind
+        );
+        let ExpressionKind::RangeLiteral(left, right) = &range.kind else {
+            panic!(
+                "expected RangeLiteral as containment range, got {:?}",
+                range.kind
+            );
+        };
+        assert!(
+            matches!(left.kind, ExpressionKind::Reference(..)),
+            "expected start reference as left endpoint, got {:?}",
+            left.kind
+        );
+        let ExpressionKind::Arithmetic(add_left, ArithmeticComputation::Add, add_right) =
+            &right.kind
+        else {
+            panic!(
+                "expected start + length as right endpoint, got {:?}",
+                right.kind
+            );
+        };
+        assert!(
+            matches!(add_left.kind, ExpressionKind::Reference(..)),
+            "expected start reference in right endpoint add, got {:?}",
+            add_left.kind
+        );
+        assert!(
+            matches!(add_right.kind, ExpressionKind::Reference(..)),
+            "expected length reference in right endpoint add, got {:?}",
+            add_right.kind
+        );
     }
 
     #[test]
