@@ -12,7 +12,7 @@ default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.8.21"
+version = "0.8.22"
 edition = "2021"
 authors = ["Ben Rogmans <ben@lemmabase.com>"]
 description = "A pure, declarative language for business rules."

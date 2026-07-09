@@ -1,4 +1,5 @@
 mod benchmarks;
+mod coverage;
 mod hex_standalone;
 mod lsp;
 mod versions;
@@ -144,12 +145,18 @@ fn precommit() {
     eprintln!("xtask: npm wasm package");
     run_npm_wasm_precommit();
     run_deny_precommit();
+    eprintln!("xtask: coverage --check");
+    let root = versions::workspace_root();
+    if let Err(e) = coverage::run(&root, &[String::from("all"), String::from("--check")]) {
+        eprintln!("coverage: {e}");
+        std::process::exit(1);
+    }
     eprintln!("xtask: done");
 }
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>"
+        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>\n  cargo coverage <engine|cli|all> [--check] | cargo run -p xtask -- coverage <engine|cli|all> [--check]"
     );
 }
 
@@ -217,6 +224,15 @@ fn main() {
             let root = versions::workspace_root();
             if let Err(e) = benchmarks::run(&root, &rest) {
                 eprintln!("benchmarks: {e}");
+                usage();
+                std::process::exit(1);
+            }
+        }
+        Some("coverage") => {
+            let rest: Vec<String> = args.collect();
+            let root = versions::workspace_root();
+            if let Err(e) = coverage::run(&root, &rest) {
+                eprintln!("coverage: {e}");
                 usage();
                 std::process::exit(1);
             }

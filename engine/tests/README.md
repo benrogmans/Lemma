@@ -2,6 +2,8 @@
 
 Rust integration tests for `lemma-engine`. Each `*.rs` file here is a separate test binary (public API only). Unit tests belong in `engine/src/**` under `#[cfg(test)]` (or the shared `engine/src/tests/` harness for private helpers).
 
+Published line-coverage totals and per-module tables: [`documentation/reference/coverage/engine.md`](../../documentation/reference/coverage/engine.md) (regenerate with `cargo coverage engine`).
+
 Run:
 
 ```bash

@@ -2306,8 +2306,9 @@ impl Parser {
     }
 
     /// Atom or range-typed value: `...` binds before `^`, `*`, `/`, `%` on the same operand.
-    /// Endpoints use [`Self::parse_range_ellipsis_bound`] (`+`/`-` only) so `now - 7 days...now` is valid
-    /// and `rate * period_start...period_end` keeps `*` outside the range.
+    /// Both endpoints use [`Self::parse_range_ellipsis_bound`] (`+`/`-` only) so
+    /// `now - 7 days...now` and `start...start + length` are valid, and
+    /// `rate * period_start...period_end` keeps `*` outside the range.
     fn parse_range_operand(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
         let checkpoint = self.checkpoint();
@@ -2318,7 +2319,7 @@ impl Parser {
         }
 
         self.next()?;
-        let right = self.parse_power_for_range_bound()?;
+        let right = self.parse_range_ellipsis_bound()?;
         let end_span = right
             .source_location
             .as_ref()

@@ -211,5 +211,7 @@ Resource limits control parse-time and planning-time budgets. These are security
 - [Installation](../installation.md)
 - [Language reference](readme.md)
 - [LemmaBase](registry.md)
+- [Engine test coverage](coverage/engine.md)
+- [CLI test coverage](coverage/cli.md)
 - [CLI benchmarks](benchmarks/cli.md)
 - [Engine benchmarks](benchmarks/engine.md)

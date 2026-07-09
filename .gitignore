@@ -11,9 +11,10 @@ engine/fuzz/artifacts/
 engine/fuzz/corpus/
 engine/fuzz/target/
 
-# Coverage artifacts
-coverage/
-*.info
+# Coverage artifacts (repo-root llvm-cov output only; not documentation/reference/coverage/)
+/coverage/
+coverage.info
+lcov.info
 *.profraw
 
 # Python bytecode (benchmark harness in engine/benches/python/)

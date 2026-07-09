@@ -3489,6 +3489,120 @@ impl LemmaType {
         self.try_materialize_rational_as_decimal_string(&magnitude_in_unit)
     }
 
+    /// Wire-form [`ValueKind`] for API JSON (schema defaults, response data echo).
+    pub fn value_kind_for_api_wire(&self, canonical: &ValueKind) -> Result<ValueKind, String> {
+        match canonical {
+            ValueKind::Measure(canonical_magnitude, signature) => {
+                let unit_name = LiteralValue::single_measure_signature_unit_name(signature)
+                    .ok_or_else(|| {
+                        format!(
+                            "BUG: API measure literal on type '{}' must have exactly one signature unit with exponent 1, got {signature:?}",
+                            self.name()
+                        )
+                    })?;
+                let per_unit_decimal = self
+                    .try_materialize_measure_canonical_in_unit(canonical_magnitude, unit_name)
+                    .map_err(|failure| failure.to_string())?;
+                let per_unit_rational = crate::literals::rational_from_parsed_decimal(
+                    decimal_from_serialized_str(&per_unit_decimal)?,
+                )?;
+                Ok(ValueKind::Measure(per_unit_rational, signature.clone()))
+            }
+            ValueKind::Ratio(canonical_magnitude, unit) => match unit.as_deref() {
+                Some(unit_name) => {
+                    let per_unit_decimal = self
+                        .try_materialize_ratio_canonical_in_unit(canonical_magnitude, unit_name)
+                        .map_err(|failure| failure.to_string())?;
+                    let per_unit_rational = crate::literals::rational_from_parsed_decimal(
+                        decimal_from_serialized_str(&per_unit_decimal)?,
+                    )?;
+                    Ok(ValueKind::Ratio(per_unit_rational, unit.clone()))
+                }
+                None => Ok(ValueKind::Ratio(canonical_magnitude.clone(), None)),
+            },
+            ValueKind::Number(rational) => {
+                let decimal_string = self
+                    .try_materialize_rational_as_decimal_string(rational)
+                    .map_err(|failure| failure.to_string())?;
+                let decimal = decimal_from_serialized_str(&decimal_string)?;
+                Ok(ValueKind::Number(
+                    crate::literals::rational_from_parsed_decimal(decimal)?,
+                ))
+            }
+            ValueKind::Range(left, right) => {
+                let element_spec = range_element_type_specification(&self.specifications)
+                    .ok_or_else(|| {
+                        format!(
+                            "BUG: range literal on type '{}' has no element specification",
+                            self.name()
+                        )
+                    })?;
+                let element_type = Arc::new(LemmaType::primitive(element_spec));
+                Ok(ValueKind::Range(
+                    Box::new(LiteralValue {
+                        value: element_type.value_kind_for_api_wire(&left.value)?,
+                        lemma_type: Arc::clone(&element_type),
+                    }),
+                    Box::new(LiteralValue {
+                        value: element_type.value_kind_for_api_wire(&right.value)?,
+                        lemma_type: Arc::clone(&element_type),
+                    }),
+                ))
+            }
+            other => Ok(other.clone()),
+        }
+    }
+
+    /// Restore in-memory canonical storage after API JSON deserialization.
+    pub fn value_kind_from_api_wire(&self, wire: ValueKind) -> Result<ValueKind, String> {
+        match (&self.specifications, wire) {
+            (TypeSpecification::Measure { .. }, ValueKind::Measure(per_unit, signature)) => {
+                let unit_name = LiteralValue::single_measure_signature_unit_name(&signature)
+                    .ok_or_else(|| {
+                        format!(
+                            "measure literal on type '{}' must have exactly one signature unit with exponent 1",
+                            self.name()
+                        )
+                    })?;
+                let decimal = crate::computation::rational::commit_rational_to_decimal(&per_unit)
+                    .map_err(|failure| failure.to_string())?;
+                number_with_unit_to_value_kind(decimal, unit_name, self)
+            }
+            (TypeSpecification::Ratio { .. }, ValueKind::Ratio(per_unit, unit)) => {
+                match unit.as_deref() {
+                    Some(unit_name) => {
+                        let decimal =
+                            crate::computation::rational::commit_rational_to_decimal(&per_unit)
+                                .map_err(|failure| failure.to_string())?;
+                        number_with_unit_to_value_kind(decimal, unit_name, self)
+                    }
+                    None => Ok(ValueKind::Ratio(per_unit, unit)),
+                }
+            }
+            (_, ValueKind::Range(left, right)) => {
+                let element_spec = range_element_type_specification(&self.specifications)
+                    .ok_or_else(|| {
+                        format!(
+                            "BUG: range literal on type '{}' has no element specification",
+                            self.name()
+                        )
+                    })?;
+                let element_type = Arc::new(LemmaType::primitive(element_spec));
+                Ok(ValueKind::Range(
+                    Box::new(LiteralValue {
+                        value: element_type.value_kind_from_api_wire(left.value.clone())?,
+                        lemma_type: Arc::clone(&element_type),
+                    }),
+                    Box::new(LiteralValue {
+                        value: element_type.value_kind_from_api_wire(right.value.clone())?,
+                        lemma_type: Arc::clone(&element_type),
+                    }),
+                ))
+            }
+            (_, other) => Ok(other),
+        }
+    }
+
     /// Get an example value string for this type, suitable for UI help text
     pub fn example_value(&self) -> &'static str {
         match &self.specifications {
@@ -3627,6 +3741,96 @@ pub struct LiteralValue {
     pub lemma_type: Arc<LemmaType>,
 }
 
+impl LiteralValue {
+    fn single_measure_signature_unit_name(signature: &[(String, i32)]) -> Option<&str> {
+        match signature {
+            [(unit_name, 1)] => Some(unit_name.as_str()),
+            _ => None,
+        }
+    }
+}
+
+/// API-only serde for [`LiteralValue`]: per-unit wire magnitudes on schema/response fields.
+pub mod api_wire_literal {
+    use super::{Arc, LemmaType, LiteralValue, ValueKind};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        literal: &LiteralValue,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let wire_value = literal
+            .lemma_type
+            .value_kind_for_api_wire(&literal.value)
+            .map_err(serde::ser::Error::custom)?;
+        let mut state = serializer.serialize_struct("LiteralValue", 3)?;
+        state.serialize_field("value", &wire_value)?;
+        state.serialize_field("lemma_type", literal.lemma_type.as_ref())?;
+        state.serialize_field("display_value", &literal.display_value())?;
+        state.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<LiteralValue, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            value: ValueKind,
+            lemma_type: LemmaType,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let lemma_type = Arc::new(raw.lemma_type);
+        let value = lemma_type
+            .value_kind_from_api_wire(raw.value)
+            .map_err(serde::de::Error::custom)?;
+        Ok(LiteralValue { value, lemma_type })
+    }
+
+    pub fn serialize_option<S: Serializer>(
+        literal: &Option<LiteralValue>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match literal {
+            Some(value) => serialize(value, serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize_option<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<LiteralValue>, D::Error> {
+        use serde::de::{self, Visitor};
+        use std::fmt;
+
+        struct OptionVisitor;
+
+        impl<'de> Visitor<'de> for OptionVisitor {
+            type Value = Option<LiteralValue>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("optional API-wire literal")
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(None)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                deserialize(deserializer).map(Some)
+            }
+        }
+
+        deserializer.deserialize_option(OptionVisitor)
+    }
+}
+
 impl Serialize for LiteralValue {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -3749,23 +3953,32 @@ impl LiteralValue {
     /// Magnitude string for decimal input prompts (number, single-unit measure, ratio with percent/permille scaling).
     #[must_use]
     pub fn magnitude_default_for_decimal_prompt(&self) -> Option<String> {
-        use crate::computation::rational::{checked_mul, rational_to_display_str};
         match &self.value {
-            ValueKind::Number(n) => Some(rational_to_display_str(n)),
-            ValueKind::Measure(n, signature) if signature.len() == 1 && signature[0].1 == 1 => {
-                Some(rational_to_display_str(n))
+            ValueKind::Number(n) => Some(
+                self.lemma_type
+                    .try_materialize_rational_as_decimal_string(n)
+                    .expect("BUG: stored number literal must materialize for decimal prompt"),
+            ),
+            ValueKind::Measure(n, signature) => {
+                let unit_name = Self::single_measure_signature_unit_name(signature).expect(
+                    "BUG: measure prompt requires exactly one signature unit with exponent 1",
+                );
+                Some(
+                    self.lemma_type
+                        .try_materialize_measure_canonical_in_unit(n, unit_name)
+                        .expect("BUG: stored measure literal must materialize for decimal prompt"),
+                )
             }
-            ValueKind::Ratio(n, Some(unit)) if unit == "percent" => {
-                checked_mul(n, &rational_new(100, 1))
-                    .ok()
-                    .map(|scaled| rational_to_display_str(&scaled))
-            }
-            ValueKind::Ratio(n, Some(unit)) if unit == "permille" => {
-                checked_mul(n, &rational_new(1000, 1))
-                    .ok()
-                    .map(|scaled| rational_to_display_str(&scaled))
-            }
-            ValueKind::Ratio(n, _) => Some(rational_to_display_str(n)),
+            ValueKind::Ratio(n, Some(unit_name)) => Some(
+                self.lemma_type
+                    .try_materialize_ratio_canonical_in_unit(n, unit_name)
+                    .expect("BUG: stored ratio literal must materialize for decimal prompt"),
+            ),
+            ValueKind::Ratio(n, None) => Some(
+                self.lemma_type
+                    .try_materialize_rational_as_decimal_string(n)
+                    .expect("BUG: stored bare ratio literal must materialize for decimal prompt"),
+            ),
             _ => None,
         }
     }
@@ -3926,7 +4139,12 @@ impl LiteralValue {
 pub enum DataValue {
     Definition {
         schema_type: LemmaType,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "api_wire_literal::serialize_option",
+            deserialize_with = "api_wire_literal::deserialize_option"
+        )]
         value: Option<LiteralValue>,
     },
 }
@@ -5824,6 +6042,54 @@ mod tests {
                 );
             }
             other => panic!("expected Measure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn element_from_range_returns_element_for_every_range_primitive() {
+        type RangeElementMatcher = fn(&TypeSpecification) -> bool;
+        let cases: [(PrimitiveKind, RangeElementMatcher); 5] = [
+            (PrimitiveKind::NumberRange, |element| {
+                matches!(element, TypeSpecification::Number { .. })
+            }),
+            (PrimitiveKind::MeasureRange, |element| {
+                matches!(element, TypeSpecification::Measure { .. })
+            }),
+            (PrimitiveKind::RatioRange, |element| {
+                matches!(element, TypeSpecification::Ratio { .. })
+            }),
+            (PrimitiveKind::DateRange, |element| {
+                matches!(element, TypeSpecification::Date { .. })
+            }),
+            (PrimitiveKind::TimeRange, |element| {
+                matches!(element, TypeSpecification::Time { .. })
+            }),
+        ];
+        for (kind, matches_element) in cases {
+            let range_spec = type_spec_for_primitive(kind);
+            let element = range_spec
+                .element_from_range()
+                .unwrap_or_else(|| panic!("{kind:?} must define element_from_range"));
+            assert!(
+                matches_element(&element),
+                "{kind:?} element must match documented mapping, got {element:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn element_from_range_returns_none_for_non_range_primitives() {
+        let non_range = [
+            type_spec_for_primitive(PrimitiveKind::Boolean),
+            type_spec_for_primitive(PrimitiveKind::Measure),
+            TypeSpecification::Undetermined,
+            TypeSpecification::veto(),
+        ];
+        for spec in non_range {
+            assert!(
+                spec.element_from_range().is_none(),
+                "{spec:?} must not define element_from_range"
+            );
         }
     }
 }

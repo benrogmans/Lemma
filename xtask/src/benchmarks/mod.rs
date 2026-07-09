@@ -14,7 +14,7 @@
 //! aborts the run; no partial reports.
 
 mod cli;
-mod common;
+pub mod common;
 mod engine;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

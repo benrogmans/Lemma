@@ -48,7 +48,7 @@ cargo deny check --config .cargo/deny.toml
    cargo precommit
    ```
 
-   Same pipeline as CI: versions-verify, fmt, clippy, nextest (including ignored benches), WASM npm build+test, cargo-deny. Requires `cargo-nextest`, `cargo-deny`, Node.js, and `wasm-pack`.
+   Same pipeline as CI: versions-verify, fmt, clippy, nextest (including ignored benches), WASM npm build+test, cargo-deny, `cargo coverage all --check`. Requires `cargo-nextest`, `cargo-deny`, Node.js, and `wasm-pack`. Regenerate coverage with `cargo coverage all` when engine/cli sources change (`cargo-llvm-cov` required).
 
 ### Release version (maintainers)
 
@@ -68,7 +68,7 @@ Automated checks that must pass:
 - Formatting (rustfmt)
 - Security audit (cargo-deny)
 - Quick fuzz tests (30s)
-- Coverage threshold (50%+)
+- Coverage reports up to date (`cargo coverage all --check`)
 
 ## Project structure
 

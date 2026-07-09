@@ -4,9 +4,31 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [Unreleased]
 
+## [0.8.22] - 2026-07-09
+
+0.8.22 adds Windows ARM64 release artifacts and published coverage reports, defines API wire format for ratio and measure literals (canonical in the VM, per-unit on schema and response JSON), sharpens schema/data overlay semantics for interactive and API prompts, defers decimal commit vetoes to response materialization, speeds up evaluation with shared VM values, and fixes range-containment parsing plus last-match-wins unless schema pruning.
+
 ### Added
 
 - **Windows ARM64 prebuilt binaries**: release workflow builds CLI and Hex NIF for `aarch64-pc-windows-msvc` on `windows-11-vs2026-arm`; npm publishes `@lemmabase/cli-win32-arm64`.
+- **Published test coverage reports**: `cargo coverage <engine|cli|all>` regenerates [`documentation/reference/coverage/`](documentation/reference/coverage/) from `cargo-llvm-cov` + nextest; `cargo coverage all --check` verifies reports match inputs; `cargo precommit` runs the check at the end.
+- **`prefilled` / `supplied` / `default` schema fields**: API and interactive schema distinguish spec literals, caller overlay values, and `-> default` suggestions; only caller-supplied values decide unless-arm pruning.
+- **API wire format contract tests**: `engine/tests/api_wire_format.rs` encodes ratio, measure, and range wire rules, plan-persistence separation, and overlay behavior; npm WASM tests mirror schema and response JSON serialization.
+
+### Changed
+
+- **API wire format for literals**: schema defaults and `response.data` emit per-unit magnitudes for measure and named-unit ratios (for example `"25"` for `eur_per_hour`, `"15"` for percent, `"500"` for basis_points); bare ratios stay canonical (`"0.5"`). Evaluation and VM plan constants keep canonical rationals in memory.
+- **Wire serde boundary**: canonical `LiteralValue` serde restored for execution-plan constants; API-only wire adapters on `DataEntry` and response data values (`api_wire_literal`).
+- **Decimal commit veto deferred to materialization**: evaluation keeps exact rationals in the VM; decimal-scale overflow vetoes happen when building the response, not mid-evaluation.
+- **Shared VM operand values**: rule and intermediate results use `Arc<LiteralValue>` with borrow-based operand reads, cutting allocation churn on large specs (order_pipeline benchmark allocs roughly halved).
+
+### Fixed
+
+- **Ratio and measure JSON serialization**: global wire patching on `LiteralValue` leaked per-unit magnitudes into execution-plan constants and mis-serialized percent and basis_points; WASM `JSON.stringify(response)` no longer crashes or double-scales measure values.
+- **Decimal prompt defaults**: `magnitude_default_for_decimal_prompt` uses the same per-unit materialization as API wire (basis_points prompts show `"500"`, not `"0.05"`).
+- **Measure overlay rejects double-canonical input**: per-unit API magnitudes supplied as full-precision canonical values are rejected at overlay resolution instead of silently evaluating wrong results.
+- **Range endpoint parsing**: `start...start + length` binds `+ length` inside the range literal (matches expression precedence); parenthesized span-add with `in` is rejected at planning time.
+- **Unless schema pruning respects last-match-wins**: `collect_needed_data_paths` walks unless arms in reverse source order, so a decided later unless arm no longer pulls in data only needed by earlier arms (fixes interactive over-prompting for imported spec fields).
 
 ## [0.8.21] - 2026-07-04
 

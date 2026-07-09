@@ -1023,11 +1023,26 @@ pub(crate) fn build_execution_plan(
 pub struct DataEntry {
     #[serde(rename = "type")]
     pub lemma_type: LemmaType,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        serialize_with = "crate::planning::semantics::api_wire_literal::serialize_option",
+        deserialize_with = "crate::planning::semantics::api_wire_literal::deserialize_option"
+    )]
     pub prefilled: Option<LiteralValue>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        serialize_with = "crate::planning::semantics::api_wire_literal::serialize_option",
+        deserialize_with = "crate::planning::semantics::api_wire_literal::deserialize_option"
+    )]
     pub supplied: Option<LiteralValue>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        serialize_with = "crate::planning::semantics::api_wire_literal::serialize_option",
+        deserialize_with = "crate::planning::semantics::api_wire_literal::deserialize_option"
+    )]
     pub default: Option<LiteralValue>,
 }
 
@@ -1573,9 +1588,9 @@ impl ExecutionPlan {
     /// Collect the data paths statically referenced by the named local rules.
     ///
     /// Walks the live branches of each named rule transitively: rule-target
-    /// data references extend the walk to the referenced rules. Branches whose
-    /// conditions are definitively decided by caller-supplied overlay values
-    /// are skipped, mirroring [`ExecutionPlan::schema_for_rules`].
+    /// data references extend the walk to the referenced rules. Unless arms use
+    /// last-match-wins semantics (reverse source order, matching runtime
+    /// piecewise rule evaluation).
     ///
     /// Returns `Err` if any rule name is not found in the plan.
     pub fn collect_needed_data_paths(
@@ -1615,29 +1630,10 @@ impl ExecutionPlan {
                 )
             });
 
-            for (branch_index, branch) in rule.branches.iter().enumerate() {
-                if branch_index == 0 {
-                    let any_unless_applies = rule.branches[1..].iter().any(|unless_branch| {
-                        let unless_condition = unless_branch
-                            .condition
-                            .as_ref()
-                            .expect("BUG: unless branch missing condition");
-                        crate::evaluation::partial::unless_condition_truth(
-                            unless_condition,
-                            self,
-                            overlay,
-                        ) == Some(true)
-                    });
-                    if any_unless_applies {
-                        continue;
-                    }
-                } else if let Some(condition) = &branch.condition {
-                    if crate::evaluation::partial::unless_condition_truth(condition, self, overlay)
-                        == Some(false)
-                    {
-                        continue;
-                    }
-                }
+            let live_branch_indices = live_piecewise_branch_indices(rule, self, overlay);
+
+            for branch_index in live_branch_indices {
+                let branch = &rule.branches[branch_index];
 
                 let mut branch_data: HashSet<DataPath> = HashSet::new();
                 if let Some(condition) = &branch.condition {
@@ -1680,6 +1676,37 @@ impl ExecutionPlan {
     }
 }
 
+/// Branch indices that may affect a rule result under last-match-wins unless semantics.
+fn live_piecewise_branch_indices(
+    rule: &ExecutableRule,
+    plan: &ExecutionPlan,
+    overlay: &DataOverlay,
+) -> Vec<usize> {
+    if rule.branches.len() <= 1 {
+        return vec![0];
+    }
+
+    let mut indices = Vec::new();
+
+    for branch_index in (1..rule.branches.len()).rev() {
+        let condition = rule.branches[branch_index]
+            .condition
+            .as_ref()
+            .expect("BUG: unless branch missing condition");
+        match crate::evaluation::partial::unless_condition_truth(condition, plan, overlay) {
+            Some(true) => {
+                indices.push(branch_index);
+                return indices;
+            }
+            Some(false) => continue,
+            None => indices.push(branch_index),
+        }
+    }
+
+    indices.push(0);
+    indices
+}
+
 pub(crate) fn validate_value_against_type(
     expected_type: &LemmaType,
     value: &LiteralValue,
@@ -1714,6 +1741,9 @@ pub(crate) fn validate_value_against_type(
             },
             ValueKind::Number(n),
         ) => {
+            if commit_rational_to_decimal(n).is_err() {
+                return Err("Calculated result exceeds decimal value limit".to_string());
+            }
             if let Some(d) = decimals {
                 if exceeds_decimal_places(n, *d) {
                     return Err(format!(
@@ -1752,6 +1782,9 @@ pub(crate) fn validate_value_against_type(
             },
             ValueKind::Measure(magnitude, signature),
         ) => {
+            if commit_rational_to_decimal(magnitude).is_err() {
+                return Err("Calculated result exceeds decimal value limit".to_string());
+            }
             use crate::computation::rational::checked_div;
             use crate::planning::semantics::measure_declared_bound_canonical;
             let unit = signature
@@ -1855,6 +1888,9 @@ pub(crate) fn validate_value_against_type(
             },
             ValueKind::Ratio(r, unit_name),
         ) => {
+            if commit_rational_to_decimal(r).is_err() {
+                return Err("Calculated result exceeds decimal value limit".to_string());
+            }
             use crate::computation::rational::checked_mul;
 
             if let Some(d) = decimals {

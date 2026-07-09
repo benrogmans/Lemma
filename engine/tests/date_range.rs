@@ -957,3 +957,68 @@ rule older: (dob + 12 year)...now as year as number"#;
     let val = eval_rule_with_effective(code, "test", "older", &effective(2026, 1, 1, 0, 0, 0));
     assert_contains_all(&val, &["14"]);
 }
+
+// =============================================================================
+// N. premium_membership containment
+// =============================================================================
+
+const PREMIUM_MEMBERSHIP_SPEC: &str = r#"spec premium_membership
+uses lemma units
+data start: date
+data length: units.duration
+rule valid: now in start...start + length
+"#;
+
+#[test]
+fn premium_membership_outside_period() {
+    let mut data = HashMap::new();
+    data.insert("start".to_string(), "2026-07-01".to_string());
+    data.insert("length".to_string(), "10 days".to_string());
+    let val = eval_bool_with_data(
+        PREMIUM_MEMBERSHIP_SPEC,
+        "premium_membership",
+        "valid",
+        &effective(2027, 2, 14, 12, 0, 0),
+        data,
+    );
+    assert!(!val, "2027-02-14 is outside [2026-07-01, 2026-07-11)");
+}
+
+#[test]
+fn premium_membership_inside_period() {
+    let mut data = HashMap::new();
+    data.insert("start".to_string(), "2026-07-01".to_string());
+    data.insert("length".to_string(), "10 days".to_string());
+    let val = eval_bool_with_data(
+        PREMIUM_MEMBERSHIP_SPEC,
+        "premium_membership",
+        "valid",
+        &effective(2026, 7, 5, 12, 0, 0),
+        data,
+    );
+    assert!(val, "2026-07-05 is inside [2026-07-01, 2026-07-11)");
+}
+
+#[test]
+fn premium_membership_rejects_parenthesized_span_add_with_in() {
+    let code = r#"spec premium_membership_bad
+uses lemma units
+data start: date
+data length: units.duration
+rule bad: now in (start...start) + length
+"#;
+    expect_plan_error(code, "Right side of 'in' must be a range");
+}
+
+fn eval_bool_with_data(
+    code: &str,
+    spec_name: &str,
+    rule_name: &str,
+    effective: &DateTimeValue,
+    data: HashMap<String, String>,
+) -> bool {
+    match eval_literal_with_data(code, spec_name, rule_name, effective, data).value {
+        ValueKind::Boolean(val) => val,
+        other => panic!("Expected Boolean, got {:?}", other),
+    }
+}
