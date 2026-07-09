@@ -34,7 +34,7 @@ const PLATFORMS_DIST = join(DIST, 'platforms');
 
 const REPOSITORY = 'https://github.com/lemma/lemma';
 const LICENSE = 'Apache-2.0';
-const AUTHOR = 'Ben Rogmans <ben@amrai.nl>';
+const AUTHOR = 'Ben Rogmans <ben@lemmabase.com>';
 const UMBRELLA_DESCRIPTION = 'A pure, declarative language for business rules.';
 const UMBRELLA_KEYWORDS = [
   'lemma',
