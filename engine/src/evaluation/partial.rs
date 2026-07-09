@@ -45,7 +45,7 @@ pub(crate) fn resolve_expression_value(
                 &right_value,
                 UnitResolutionContext::WithIndex(unit_index),
             ) {
-                OperationResult::Value(result) => Some(result),
+                OperationResult::Value(result) => Some(result.as_ref().clone()),
                 OperationResult::Veto(_) => None,
             }
         }
@@ -60,7 +60,7 @@ pub(crate) fn resolve_expression_value(
                 unit_index,
                 &plan.signature_index,
             ) {
-                OperationResult::Value(result) => Some(result),
+                OperationResult::Value(result) => Some(result.as_ref().clone()),
                 OperationResult::Veto(_) => None,
             }
         }
@@ -68,7 +68,7 @@ pub(crate) fn resolve_expression_value(
         ExpressionKind::UnitConversion(inner_expression, target) => {
             let inner_value = resolve_expression_value(inner_expression, plan, overlay)?;
             match convert_unit(&inner_value, target) {
-                OperationResult::Value(result) => Some(result),
+                OperationResult::Value(result) => Some(result.as_ref().clone()),
                 OperationResult::Veto(_) => None,
             }
         }

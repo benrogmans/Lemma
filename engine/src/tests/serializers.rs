@@ -29,7 +29,7 @@ fn number_rule_result(name: &str, value: Decimal) -> RuleResult {
     let expression_units = std::collections::HashMap::new();
     RuleResult::from_operation_result(
         dummy_rule(name),
-        OperationResult::Value(LiteralValue::number_from_decimal(value)),
+        &OperationResult::from_literal(LiteralValue::number_from_decimal(value)),
         crate::planning::semantics::primitive_number(),
         &expression_units,
         None,

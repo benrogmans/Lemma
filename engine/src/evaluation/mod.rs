@@ -11,7 +11,7 @@ pub(crate) mod partial;
 pub mod response;
 
 use crate::computation::{
-    arithmetic_operation, comparison_operation, convert_unit, UnitResolutionContext,
+    arithmetic_operation, comparison_operation, convert_unit_operand, UnitResolutionContext,
 };
 use crate::evaluation::operations::VetoType;
 use crate::evaluation::response::EvaluatedRule;
@@ -34,14 +34,14 @@ use std::sync::Arc;
 /// and signature disambiguation. Rule-result materialization uses each rule's [`ExecutableRule::rule_type`].
 pub(crate) struct EvaluationContext<'plan> {
     plan: &'plan ExecutionPlan,
-    data_values: HashMap<DataPath, LiteralValue>,
+    data_values: HashMap<DataPath, Arc<LiteralValue>>,
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
     /// Recorded executions of each rule's source-shaped instruction stream;
     /// populated only when explanations are requested. Explanations read all
     /// runtime facts (register values, branch decisions, winning arm) from
     /// here — never by re-evaluating expressions.
     pub(crate) recordings: HashMap<RulePath, RuleRecording>,
-    now: LiteralValue,
+    now: Arc<LiteralValue>,
     /// Computation vetoes on data paths that cannot be read.
     vetoes: HashMap<DataPath, VetoType>,
     /// Register file for compiled instruction execution; sized from plan
@@ -78,7 +78,7 @@ pub(crate) struct RuleRecording {
 
 impl<'plan> EvaluationContext<'plan> {
     fn new(plan: &'plan ExecutionPlan, overlay: &DataOverlay, now: LiteralValue) -> Self {
-        let mut data_values: HashMap<DataPath, LiteralValue> = plan
+        let mut data_values: HashMap<DataPath, Arc<LiteralValue>> = plan
             .data
             .iter()
             .filter_map(|(path, definition)| {
@@ -87,11 +87,11 @@ impl<'plan> EvaluationContext<'plan> {
                 }
                 definition
                     .value()
-                    .map(|value| (path.clone(), value.clone()))
+                    .map(|value| (path.clone(), Arc::new(value.clone())))
             })
             .collect();
         for (path, value) in &overlay.values {
-            data_values.insert(path.clone(), value.clone());
+            data_values.insert(path.clone(), Arc::clone(value));
         }
 
         for (path, definition) in &plan.data {
@@ -99,7 +99,7 @@ impl<'plan> EvaluationContext<'plan> {
                 continue;
             }
             if let Some(default) = definition.default_suggestion() {
-                data_values.insert(path.clone(), default);
+                data_values.insert(path.clone(), Arc::new(default));
             }
         }
 
@@ -129,7 +129,7 @@ impl<'plan> EvaluationContext<'plan> {
                         };
                         match validate_value_against_type(resolved_type.as_ref(), &value) {
                             Ok(()) => {
-                                data_values.insert(reference_path.clone(), value);
+                                data_values.insert(reference_path.clone(), Arc::new(value));
                             }
                             Err(msg) => {
                                 vetoes.insert(
@@ -146,7 +146,7 @@ impl<'plan> EvaluationContext<'plan> {
                             value: dv.clone(),
                             lemma_type: Arc::clone(resolved_type),
                         };
-                        data_values.insert(reference_path.clone(), value);
+                        data_values.insert(reference_path.clone(), Arc::new(value));
                     }
                 }
                 Some(DataDefinition::Reference {
@@ -166,7 +166,7 @@ impl<'plan> EvaluationContext<'plan> {
             data_values,
             rule_results: HashMap::new(),
             recordings: HashMap::new(),
-            now,
+            now: Arc::new(now),
             vetoes,
             register_values: Vec::with_capacity(plan.max_register_count as usize),
         }
@@ -177,10 +177,10 @@ impl<'plan> EvaluationContext<'plan> {
     }
 
     pub(crate) fn now(&self) -> &LiteralValue {
-        &self.now
+        self.now.as_ref()
     }
 
-    pub(crate) fn get_data_value(&self, data_path: &DataPath) -> Option<&LiteralValue> {
+    pub(crate) fn get_data_value(&self, data_path: &DataPath) -> Option<&Arc<LiteralValue>> {
         self.data_values.get(data_path)
     }
 
@@ -193,6 +193,25 @@ impl<'plan> EvaluationContext<'plan> {
             Some(Some(value)) => value.clone(),
             Some(None) => panic!("BUG: read of unset register r{register}"),
             None => panic!("BUG: read of out-of-bounds register r{register}"),
+        }
+    }
+
+    fn take_register(&mut self, register: u16) -> OperationResult {
+        let index = register as usize;
+        match self.register_values.get_mut(index) {
+            Some(Some(_)) => self.register_values[index]
+                .take()
+                .expect("BUG: take of unset register slot"),
+            Some(None) => panic!("BUG: take of unset register r{register}"),
+            None => panic!("BUG: take of out-of-bounds register r{register}"),
+        }
+    }
+
+    fn consume_register(&mut self, register: u16, preserve_for_recording: bool) -> OperationResult {
+        if preserve_for_recording {
+            self.read_register(register)
+        } else {
+            self.take_register(register)
         }
     }
 
@@ -216,10 +235,20 @@ fn operand_value(result: OperationResult) -> OperationResult {
     result
 }
 
-fn unwrap_literal(result: OperationResult, operand: &str) -> LiteralValue {
-    result.value().cloned().unwrap_or_else(|| {
-        panic!("BUG: {operand} passed veto check but has no value");
-    })
+fn borrow_literal<'a>(result: &'a OperationResult, operand: &str) -> &'a LiteralValue {
+    match result {
+        OperationResult::Value(arc) => arc.as_ref(),
+        OperationResult::Veto(_) => panic!("BUG: {operand} passed veto check but has no value"),
+    }
+}
+
+fn unwrap_owned_literal(result: OperationResult, operand: &str) -> LiteralValue {
+    match result {
+        OperationResult::Value(arc) => {
+            Arc::try_unwrap(arc).unwrap_or_else(|shared| shared.as_ref().clone())
+        }
+        OperationResult::Veto(_) => panic!("BUG: {operand} passed veto check but has no value"),
+    }
 }
 
 pub(crate) fn execute_instructions(
@@ -238,9 +267,7 @@ pub(crate) fn execute_instructions(
         .register_values
         .resize(instructions.register_count as usize, None);
 
-    let unit_index = context.plan().resolved_types.unit_index.clone();
-    let signature_index = context.plan().signature_index.clone();
-    let unit_ctx = UnitResolutionContext::WithIndex(&unit_index);
+    let preserve_registers_for_recording = recording.is_some();
 
     // Compiled instruction streams are loop-free: every jump target is
     // forward, so a legitimate execution runs each instruction at most once.
@@ -271,7 +298,7 @@ pub(crate) fn execute_instructions(
                     .expect("BUG: invalid constant_index");
                 context.write_register(
                     *destination_register,
-                    OperationResult::Value(constant.clone()),
+                    OperationResult::from_literal_arc(Arc::clone(constant)),
                 );
             }
             Instruction::LoadData {
@@ -290,7 +317,7 @@ pub(crate) fn execute_instructions(
             } => {
                 context.write_register(
                     *destination_register,
-                    OperationResult::Value(context.now().clone()),
+                    OperationResult::from_literal_arc(Arc::clone(&context.now)),
                 );
             }
             Instruction::Arithmetic {
@@ -299,25 +326,31 @@ pub(crate) fn execute_instructions(
                 left_register,
                 right_register,
             } => {
-                let left = operand_value(context.read_register(*left_register));
+                let left = operand_value(
+                    context.consume_register(*left_register, preserve_registers_for_recording),
+                );
                 if left.vetoed() {
                     context.write_register(*destination_register, left);
                     continue;
                 }
-                let right = operand_value(context.read_register(*right_register));
+                let right = operand_value(
+                    context.consume_register(*right_register, preserve_registers_for_recording),
+                );
                 if right.vetoed() {
                     context.write_register(*destination_register, right);
                     continue;
                 }
-                let left_val = unwrap_literal(left, "left operand");
-                let right_val = unwrap_literal(right, "right operand");
-                let result = arithmetic_operation(
-                    &left_val,
-                    operation,
-                    &right_val,
-                    &unit_index,
-                    &signature_index,
-                );
+                let result = {
+                    let unit_index = &context.plan.resolved_types.unit_index;
+                    let signature_index = &context.plan.signature_index;
+                    arithmetic_operation(
+                        borrow_literal(&left, "left operand"),
+                        operation,
+                        borrow_literal(&right, "right operand"),
+                        unit_index,
+                        signature_index,
+                    )
+                };
                 context.write_register(*destination_register, result);
             }
             Instruction::Comparison {
@@ -326,19 +359,30 @@ pub(crate) fn execute_instructions(
                 left_register,
                 right_register,
             } => {
-                let left = operand_value(context.read_register(*left_register));
+                let left = operand_value(
+                    context.consume_register(*left_register, preserve_registers_for_recording),
+                );
                 if left.vetoed() {
                     context.write_register(*destination_register, left);
                     continue;
                 }
-                let right = operand_value(context.read_register(*right_register));
+                let right = operand_value(
+                    context.consume_register(*right_register, preserve_registers_for_recording),
+                );
                 if right.vetoed() {
                     context.write_register(*destination_register, right);
                     continue;
                 }
-                let left_val = unwrap_literal(left, "left operand");
-                let right_val = unwrap_literal(right, "right operand");
-                let result = comparison_operation(&left_val, operation, &right_val, unit_ctx);
+                let result = {
+                    let unit_ctx =
+                        UnitResolutionContext::WithIndex(&context.plan.resolved_types.unit_index);
+                    comparison_operation(
+                        borrow_literal(&left, "left operand"),
+                        operation,
+                        borrow_literal(&right, "right operand"),
+                        unit_ctx,
+                    )
+                };
                 context.write_register(*destination_register, result);
             }
             Instruction::UnitConversion {
@@ -346,13 +390,19 @@ pub(crate) fn execute_instructions(
                 source_register,
                 target,
             } => {
-                let source = operand_value(context.read_register(*source_register));
+                let source = operand_value(
+                    context.consume_register(*source_register, preserve_registers_for_recording),
+                );
                 if source.vetoed() {
                     context.write_register(*destination_register, source);
                     continue;
                 }
-                let source_val = unwrap_literal(source, "operand");
-                let result = convert_unit(&source_val, target);
+                let result = match source {
+                    OperationResult::Value(arc) => convert_unit_operand(arc, target),
+                    OperationResult::Veto(_) => {
+                        panic!("BUG: operand passed veto check but is vetoed")
+                    }
+                };
                 context.write_register(*destination_register, result);
             }
             Instruction::Mathematical {
@@ -360,13 +410,17 @@ pub(crate) fn execute_instructions(
                 operation,
                 source_register,
             } => {
-                let source = operand_value(context.read_register(*source_register));
+                let source = operand_value(
+                    context.consume_register(*source_register, preserve_registers_for_recording),
+                );
                 if source.vetoed() {
                     context.write_register(*destination_register, source);
                     continue;
                 }
-                let source_val = unwrap_literal(source, "operand");
-                let result = expression::evaluate_mathematical_operator(operation, &source_val);
+                let result = expression::evaluate_mathematical_operator(
+                    operation,
+                    borrow_literal(&source, "operand"),
+                );
                 context.write_register(*destination_register, result);
             }
             Instruction::DateRelative {
@@ -374,13 +428,14 @@ pub(crate) fn execute_instructions(
                 kind,
                 source_register,
             } => {
-                let source = operand_value(context.read_register(*source_register));
+                let source = operand_value(
+                    context.consume_register(*source_register, preserve_registers_for_recording),
+                );
                 if source.vetoed() {
                     context.write_register(*destination_register, source);
                     continue;
                 }
-                let date_val = unwrap_literal(source, "date operand");
-                let date_semantic = match &date_val.value {
+                let date_semantic = match &borrow_literal(&source, "date operand").value {
                     ValueKind::Date(dt) => dt,
                     other => panic!("BUG: date-relative operand expected date, got {other:?}"),
                 };
@@ -401,13 +456,14 @@ pub(crate) fn execute_instructions(
                 unit,
                 source_register,
             } => {
-                let source = operand_value(context.read_register(*source_register));
+                let source = operand_value(
+                    context.consume_register(*source_register, preserve_registers_for_recording),
+                );
                 if source.vetoed() {
                     context.write_register(*destination_register, source);
                     continue;
                 }
-                let date_val = unwrap_literal(source, "date operand");
-                let date_semantic = match &date_val.value {
+                let date_semantic = match &borrow_literal(&source, "date operand").value {
                     ValueKind::Date(dt) => dt,
                     other => panic!("BUG: date-calendar operand expected date, got {other:?}"),
                 };
@@ -428,28 +484,37 @@ pub(crate) fn execute_instructions(
                 left_register,
                 right_register,
             } => {
-                let left = operand_value(context.read_register(*left_register));
+                let left = operand_value(
+                    context.consume_register(*left_register, preserve_registers_for_recording),
+                );
                 if left.vetoed() {
                     context.write_register(*destination_register, left);
                     continue;
                 }
-                let right = operand_value(context.read_register(*right_register));
+                let right = operand_value(
+                    context.consume_register(*right_register, preserve_registers_for_recording),
+                );
                 if right.vetoed() {
                     context.write_register(*destination_register, right);
                     continue;
                 }
                 let range_value = LiteralValue::range(
-                    unwrap_literal(left, "left endpoint"),
-                    unwrap_literal(right, "right endpoint"),
+                    unwrap_owned_literal(left, "left endpoint"),
+                    unwrap_owned_literal(right, "right endpoint"),
                 );
-                context.write_register(*destination_register, OperationResult::Value(range_value));
+                context.write_register(
+                    *destination_register,
+                    OperationResult::from_literal(range_value),
+                );
             }
             Instruction::PastFutureRange {
                 destination_register,
                 kind,
                 source_register,
             } => {
-                let source = operand_value(context.read_register(*source_register));
+                let source = operand_value(
+                    context.consume_register(*source_register, preserve_registers_for_recording),
+                );
                 if source.vetoed() {
                     context.write_register(*destination_register, source);
                     continue;
@@ -458,10 +523,9 @@ pub(crate) fn execute_instructions(
                     ValueKind::Date(dt) => dt,
                     other => panic!("BUG: context.now() must be a date, got {other:?}"),
                 };
-                let offset_val = unwrap_literal(source, "offset operand");
                 let result = crate::computation::datetime::evaluate_past_future_range(
                     kind,
-                    &offset_val,
+                    borrow_literal(&source, "offset operand"),
                     now_semantic,
                 );
                 context.write_register(*destination_register, result);
@@ -471,22 +535,25 @@ pub(crate) fn execute_instructions(
                 value_register,
                 range_register,
             } => {
-                let value = operand_value(context.read_register(*value_register));
+                let value = operand_value(
+                    context.consume_register(*value_register, preserve_registers_for_recording),
+                );
                 if value.vetoed() {
                     context.write_register(*destination_register, value);
                     continue;
                 }
-                let range = operand_value(context.read_register(*range_register));
+                let range = operand_value(
+                    context.consume_register(*range_register, preserve_registers_for_recording),
+                );
                 if range.vetoed() {
                     context.write_register(*destination_register, range);
                     continue;
                 }
-                let value_literal = unwrap_literal(value, "value operand");
-                let range_literal = unwrap_literal(range, "range operand");
+                let range_literal = borrow_literal(&range, "range operand");
                 let result = match &range_literal.value {
                     ValueKind::Range(range_left, range_right) => {
                         crate::computation::range::check_containment(
-                            &value_literal,
+                            borrow_literal(&value, "value operand"),
                             range_left.as_ref(),
                             range_right.as_ref(),
                         )
@@ -502,14 +569,15 @@ pub(crate) fn execute_instructions(
                 let source = context.read_register(*source_register);
                 context.write_register(
                     *destination_register,
-                    OperationResult::Value(LiteralValue::from_bool(source.vetoed())),
+                    OperationResult::from_literal(LiteralValue::from_bool(source.vetoed())),
                 );
             }
             Instruction::MoveRegister {
                 destination_register,
                 source_register,
             } => {
-                let value = context.read_register(*source_register);
+                let value =
+                    context.consume_register(*source_register, preserve_registers_for_recording);
                 context.write_register(*destination_register, value);
             }
             Instruction::UserVeto {
@@ -539,7 +607,7 @@ pub(crate) fn execute_instructions(
                         if let Some(rec) = recording.as_deref_mut() {
                             rec.branch_decisions
                                 .push((current_pc, BranchDecision::Veto));
-                            rec.registers = context.register_values.clone();
+                            rec.registers = std::mem::take(&mut context.register_values);
                         }
                         return result;
                     }
@@ -566,7 +634,8 @@ pub(crate) fn execute_instructions(
                     rec.returned_pc = Some(current_pc);
                     rec.registers = context.register_values.clone();
                 }
-                return context.read_register(*source_register);
+                return context
+                    .consume_register(*source_register, preserve_registers_for_recording);
             }
         }
     }
@@ -620,7 +689,7 @@ mod vm_tests {
                 Arc::clone(primitive_boolean_arc()),
                 Arc::clone(primitive_boolean_arc()),
             ],
-            constants,
+            constants: constants.into_iter().map(Arc::new).collect(),
             data_manifest: Vec::new(),
             veto_messages: Vec::new(),
             arm_tags: Vec::new(),
@@ -853,11 +922,13 @@ rule r: i.slot
             .expect("EvaluationContext must populate reference path with the copied value");
 
         assert_eq!(
-            stored.lemma_type, resolved_type,
+            stored.as_ref().lemma_type,
+            resolved_type,
             "stored LiteralValue must carry the reference's resolved_type \
              (LHS-merged), not the target's loose type. \
              stored = {:?}, resolved = {:?}",
-            stored.lemma_type, resolved_type
+            stored.as_ref().lemma_type,
+            resolved_type,
         );
     }
 }
@@ -926,26 +997,25 @@ impl Evaluator {
             } else {
                 execute_instructions(&exec_rule.instructions, &mut context, None)
             };
-            context
-                .rule_results
-                .insert(exec_rule.path.clone(), result.clone());
-
-            if !exec_rule.path.segments.is_empty() || !response_rules.contains(&exec_rule.name) {
-                continue;
+            let in_response =
+                exec_rule.path.segments.is_empty() && response_rules.contains(&exec_rule.name);
+            if in_response {
+                response.add_result(RuleResult::from_operation_result(
+                    EvaluatedRule {
+                        name: exec_rule.name.clone(),
+                        path: exec_rule.path.clone(),
+                        source_location: exec_rule.source.clone(),
+                        rule_type: (*exec_rule.rule_type).clone(),
+                    },
+                    &result,
+                    exec_rule.rule_type.as_ref(),
+                    plan.expression_unit_index(),
+                    None,
+                ));
+                context.rule_results.insert(exec_rule.path.clone(), result);
+            } else {
+                context.rule_results.insert(exec_rule.path.clone(), result);
             }
-
-            response.add_result(RuleResult::from_operation_result(
-                EvaluatedRule {
-                    name: exec_rule.name.clone(),
-                    path: exec_rule.path.clone(),
-                    source_location: exec_rule.source.clone(),
-                    rule_type: (*exec_rule.rule_type).clone(),
-                },
-                result,
-                exec_rule.rule_type.as_ref(),
-                plan.expression_unit_index(),
-                None,
-            ));
         }
 
         let response_rule_names: Vec<String> = response_rules.iter().cloned().collect();
@@ -960,7 +1030,7 @@ impl Evaluator {
             .filter_map(|path| {
                 context.get_data_value(path).map(|value| Data {
                     path: path.clone(),
-                    value: DataValue::from_literal(value.clone()),
+                    value: DataValue::from_literal(value.as_ref().clone()),
                     source: None,
                 })
             })
@@ -991,10 +1061,10 @@ impl Evaluator {
 
         for exec_rule in &plan.rules {
             let explanation = build_explanation(exec_rule, context, plan, &built);
-            built.insert(exec_rule.path.clone(), explanation.clone());
+            built.insert(exec_rule.path.clone(), explanation);
 
             if let Some(result) = response.results.get_mut(&exec_rule.name) {
-                result.explanation = Some(explanation);
+                result.explanation = built.get(&exec_rule.path).cloned();
             }
         }
     }

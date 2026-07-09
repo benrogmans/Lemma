@@ -127,7 +127,7 @@ impl RuleResult {
     /// Declared units on `rule_type` are used first; the expression index covers compound signatures.
     pub fn from_operation_result(
         rule: EvaluatedRule,
-        operation_result: OperationResult,
+        operation_result: &OperationResult,
         rule_type: &LemmaType,
         expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
         explanation: Option<Explanation>,
@@ -196,7 +196,7 @@ impl RuleResult {
                         }
                     }
                 }
-                _ => match materialize_payload(&literal, rule_type, expression_units) {
+                _ => match materialize_payload(literal, rule_type, expression_units) {
                     Ok(payload) => Self {
                         rule,
                         veto_detail: None,
@@ -729,7 +729,9 @@ mod tests {
             "test_rule".to_string(),
             RuleResult::from_operation_result(
                 dummy_evaluated_rule("test_rule", primitive_number()),
-                OperationResult::Value(LiteralValue::number_from_decimal(Decimal::from(42))),
+                &OperationResult::from_literal(LiteralValue::number_from_decimal(Decimal::from(
+                    42,
+                ))),
                 primitive_number(),
                 &expression_units,
                 None,
@@ -763,7 +765,7 @@ mod tests {
             "third".to_string(),
             RuleResult::from_operation_result(
                 dummy_evaluated_rule("third", primitive_number()),
-                OperationResult::Value(LiteralValue::number_from_decimal(
+                &OperationResult::from_literal(LiteralValue::number_from_decimal(
                     commit_rational_to_decimal(&rational).unwrap(),
                 )),
                 primitive_number(),
@@ -803,7 +805,7 @@ mod tests {
         let expression_units = std::collections::HashMap::new();
         let missing = RuleResult::from_operation_result(
             dummy_evaluated_rule("rule3", &LemmaType::veto_type()),
-            OperationResult::Veto(VetoType::MissingData {
+            &OperationResult::Veto(VetoType::MissingData {
                 data: DataPath::new(vec![], "data1".to_string()),
             }),
             &LemmaType::veto_type(),
@@ -815,7 +817,7 @@ mod tests {
 
         let veto = RuleResult::from_operation_result(
             dummy_evaluated_rule("rule4", &LemmaType::veto_type()),
-            OperationResult::Veto(VetoType::UserDefined {
+            &OperationResult::Veto(VetoType::UserDefined {
                 message: Some("Vetoed".to_string()),
             }),
             &LemmaType::veto_type(),
@@ -911,7 +913,7 @@ mod tests {
         let expression_units = HashMap::new();
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("total", &money),
-            OperationResult::Value(ten_usd),
+            &OperationResult::from_literal(ten_usd),
             &money,
             &expression_units,
             None,
@@ -934,7 +936,7 @@ mod tests {
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("total", &money),
-            OperationResult::Value(ten_eur),
+            &OperationResult::from_literal(ten_eur),
             &money,
             &expression_units,
             None,
@@ -991,7 +993,7 @@ mod tests {
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("delivery_cost", &money),
-            OperationResult::Value(three_twelve_eur),
+            &OperationResult::from_literal(three_twelve_eur),
             &money,
             &HashMap::new(),
             None,
@@ -1043,7 +1045,7 @@ mod tests {
         };
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("rate_out", &ratio_type),
-            OperationResult::Value(lit),
+            &OperationResult::from_literal(lit),
             &ratio_type,
             &expression_units,
             None,
@@ -1121,7 +1123,7 @@ data money: measure
         let literal = LiteralValue::number_from_decimal(Decimal::from(42));
         let rule_result = RuleResult::from_operation_result(
             dummy_evaluated_rule("answer", primitive_number()),
-            OperationResult::Value(literal.clone()),
+            &OperationResult::from_literal(literal.clone()),
             primitive_number(),
             &expression_units,
             None,
@@ -1140,7 +1142,7 @@ data money: measure
         );
         let rule_result = RuleResult::from_operation_result(
             dummy_evaluated_rule("pay", &money),
-            OperationResult::Value(literal.clone()),
+            &OperationResult::from_literal(literal.clone()),
             &money,
             &expression_units,
             None,

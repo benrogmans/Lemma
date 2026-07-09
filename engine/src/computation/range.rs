@@ -62,17 +62,17 @@ fn absolute_span(span: OperationResult) -> OperationResult {
     let OperationResult::Value(literal) = span else {
         return span;
     };
-    let magnitude = stored_magnitude(&literal);
+    let magnitude = stored_magnitude(literal.as_ref());
     match magnitude.try_cmp(&rational_zero()) {
         Ok(std::cmp::Ordering::Less) => {}
-        Ok(_) => return OperationResult::Value(literal),
+        Ok(_) => return OperationResult::from_literal_arc(literal),
         Err(e) => return OperationResult::Veto(VetoType::computation(e.to_string())),
     }
-    let negated = match negate_stored_magnitude(&literal) {
+    let negated = match negate_stored_magnitude(literal.as_ref()) {
         Ok(magnitude) => magnitude,
         Err(failure) => return OperationResult::Veto(VetoType::computation(failure.message())),
     };
-    OperationResult::Value(rebuild_literal_with_magnitude(&literal, negated))
+    OperationResult::from_literal(rebuild_literal_with_magnitude(literal.as_ref(), negated))
 }
 
 fn stored_magnitude(literal: &LiteralValue) -> RationalInteger {
@@ -90,11 +90,9 @@ fn stored_magnitude(literal: &LiteralValue) -> RationalInteger {
 fn negate_stored_magnitude(
     literal: &LiteralValue,
 ) -> Result<RationalInteger, super::arithmetic::NumberArithmeticFailure> {
-    super::arithmetic::number_arithmetic(
-        rational_zero(),
-        &ArithmeticComputation::Subtract,
-        stored_magnitude(literal),
-    )
+    let zero = rational_zero();
+    let magnitude = stored_magnitude(literal);
+    super::arithmetic::number_arithmetic(&zero, &ArithmeticComputation::Subtract, &magnitude)
 }
 
 fn rebuild_literal_with_magnitude(
@@ -136,7 +134,7 @@ fn compute_elapsed_duration_span(
         Ok(s) => s,
         Err(failure) => return OperationResult::Veto(VetoType::computation(failure.to_string())),
     };
-    OperationResult::Value(LiteralValue {
+    OperationResult::from_literal(LiteralValue {
         value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
         lemma_type: std::sync::Arc::new(
             crate::planning::semantics::LemmaType::anonymous_for_decomposition(
@@ -148,8 +146,8 @@ fn compute_elapsed_duration_span(
 
 fn comparison_boolean_result(result: OperationResult, context: &str) -> Result<bool, VetoType> {
     match result {
-        OperationResult::Value(literal) => match literal.value {
-            ValueKind::Boolean(value) => Ok(value),
+        OperationResult::Value(literal) => match &literal.value {
+            ValueKind::Boolean(value) => Ok(*value),
             other => {
                 unreachable!("BUG: {context} expected boolean comparison result, got {other:?}")
             }
@@ -159,7 +157,7 @@ fn comparison_boolean_result(result: OperationResult, context: &str) -> Result<b
 }
 
 /// Half-open interval `[lo, hi)` where `lo` and `hi` are the ordered range endpoints.
-/// Returns `OperationResult::Value(Boolean)` or propagates a Veto from inner comparisons.
+/// Returns `OperationResult::from_literal(Boolean)` or propagates a Veto from inner comparisons.
 pub fn check_containment(
     value: &LiteralValue,
     range_left: &LiteralValue,
@@ -201,7 +199,7 @@ pub fn check_containment(
         Err(v) => return OperationResult::Veto(v),
     };
 
-    OperationResult::Value(LiteralValue::from_bool(lower_ok && upper_ok))
+    OperationResult::from_literal(LiteralValue::from_bool(lower_ok && upper_ok))
 }
 
 #[cfg(test)]
@@ -225,8 +223,8 @@ mod tests {
 
     fn assert_contained(value: &LiteralValue, left: &LiteralValue, right: &LiteralValue) -> bool {
         match check_containment(value, left, right) {
-            OperationResult::Value(lit) => match lit.value {
-                ValueKind::Boolean(b) => b,
+            OperationResult::Value(lit) => match &lit.value {
+                ValueKind::Boolean(b) => *b,
                 other => panic!("expected Boolean, got {other:?}"),
             },
             OperationResult::Veto(v) => panic!("unexpected veto: {v:?}"),

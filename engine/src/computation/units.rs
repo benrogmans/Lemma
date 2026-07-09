@@ -29,12 +29,12 @@ pub enum UnitResolutionContext<'a> {
 pub fn convert_unit(value: &LiteralValue, target: &SemanticConversionTarget) -> OperationResult {
     match target {
         SemanticConversionTarget::Type(PrimitiveKind::Number) => cast_to_number(value),
-        SemanticConversionTarget::Type(PrimitiveKind::Text) => OperationResult::Value(
+        SemanticConversionTarget::Type(PrimitiveKind::Text) => OperationResult::from_literal(
             LiteralValue::text_with_type(value.display_value(), primitive_text_arc().clone()),
         ),
         SemanticConversionTarget::Type(PrimitiveKind::Boolean) => {
             if value.lemma_type.is_boolean() {
-                OperationResult::Value(value.clone())
+                OperationResult::from_literal(value.clone())
             } else {
                 unreachable!(
                     "BUG: boolean cast on non-boolean; planning should have rejected {:?}",
@@ -44,7 +44,7 @@ pub fn convert_unit(value: &LiteralValue, target: &SemanticConversionTarget) -> 
         }
         SemanticConversionTarget::Type(target_kind) => {
             if same_primitive_kind(value, *target_kind) {
-                OperationResult::Value(value.clone())
+                OperationResult::from_literal(value.clone())
             } else {
                 unreachable!(
                     "BUG: invalid identity cast {:?} -> {:?} reached runtime",
@@ -57,6 +57,33 @@ pub fn convert_unit(value: &LiteralValue, target: &SemanticConversionTarget) -> 
             unit_name,
             owning_type,
         } => cast_to_unit(value, unit_name, owning_type),
+    }
+}
+
+/// Apply a type cast when the operand is already held as `Arc<LiteralValue>`.
+pub fn convert_unit_operand(
+    value: Arc<LiteralValue>,
+    target: &SemanticConversionTarget,
+) -> OperationResult {
+    match target {
+        SemanticConversionTarget::Type(PrimitiveKind::Boolean) => {
+            if value.lemma_type.is_boolean() {
+                OperationResult::Value(value)
+            } else {
+                unreachable!(
+                    "BUG: boolean cast on non-boolean; planning should have rejected {:?}",
+                    value.lemma_type.name()
+                );
+            }
+        }
+        SemanticConversionTarget::Type(target_kind) => {
+            if same_primitive_kind(value.as_ref(), *target_kind) {
+                OperationResult::Value(value)
+            } else {
+                convert_unit(value.as_ref(), target)
+            }
+        }
+        _ => convert_unit(value.as_ref(), target),
     }
 }
 
@@ -104,7 +131,7 @@ fn cast_number_to_unit(
     owning_type: &Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
     if owning_type.is_ratio() {
-        return OperationResult::Value(LiteralValue::ratio_with_type(
+        return OperationResult::from_literal(LiteralValue::ratio_with_type(
             magnitude,
             Some(unit_name.to_string()),
             Arc::clone(owning_type),
@@ -119,7 +146,7 @@ fn cast_number_to_unit(
             ))
         }
     };
-    OperationResult::Value(LiteralValue::measure_with_type(
+    OperationResult::from_literal(LiteralValue::measure_with_type(
         canonical,
         unit_name.to_string(),
         Arc::clone(owning_type),
@@ -131,7 +158,7 @@ fn cast_measure_to_unit(
     unit_name: &str,
     owning_type: &Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
-    OperationResult::Value(LiteralValue::measure_with_type(
+    OperationResult::from_literal(LiteralValue::measure_with_type(
         magnitude,
         unit_name.to_string(),
         Arc::clone(owning_type),
@@ -143,7 +170,7 @@ fn cast_ratio_to_unit(
     unit_name: &str,
     owning_type: &Arc<crate::planning::semantics::LemmaType>,
 ) -> OperationResult {
-    OperationResult::Value(LiteralValue::ratio_with_type(
+    OperationResult::from_literal(LiteralValue::ratio_with_type(
         magnitude,
         Some(unit_name.to_string()),
         Arc::clone(owning_type),
@@ -223,12 +250,12 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             let factor = value.lemma_type.measure_unit_factor(unit_name).clone();
             let in_unit = checked_div(magnitude, &factor)
                 .expect("BUG: calendar de-canonicalization by unit factor must not fail");
-            OperationResult::Value(LiteralValue::number_with_type(
+            OperationResult::from_literal(LiteralValue::number_with_type(
                 in_unit,
                 primitive_number_arc().clone(),
             ))
         }
-        ValueKind::Number(number) => OperationResult::Value(LiteralValue::number_with_type(
+        ValueKind::Number(number) => OperationResult::from_literal(LiteralValue::number_with_type(
             number.clone(),
             primitive_number_arc().clone(),
         )),
@@ -238,12 +265,12 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             } else {
                 rational_new(0, 1)
             };
-            OperationResult::Value(LiteralValue::number_with_type(
+            OperationResult::from_literal(LiteralValue::number_with_type(
                 n,
                 primitive_number_arc().clone(),
             ))
         }
-        ValueKind::Ratio(rational_value, _) => OperationResult::Value(
+        ValueKind::Ratio(rational_value, _) => OperationResult::from_literal(
             LiteralValue::number_with_type(rational_value.clone(), primitive_number_arc().clone()),
         ),
         ValueKind::Measure(magnitude, signature) => {
@@ -256,7 +283,7 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             };
             let in_unit = checked_div(magnitude, &factor)
                 .expect("BUG: de-canonicalization by unit factor must not fail");
-            OperationResult::Value(LiteralValue::number_with_type(
+            OperationResult::from_literal(LiteralValue::number_with_type(
                 in_unit,
                 primitive_number_arc().clone(),
             ))

@@ -74,10 +74,10 @@ pub fn comparison_operation(
 
         (ValueKind::Boolean(l), ValueKind::Boolean(r)) => match op {
             ComparisonComputation::Is => {
-                OperationResult::Value(LiteralValue::from_bool(l == r))
+                OperationResult::from_literal(LiteralValue::from_bool(l == r))
             }
             ComparisonComputation::IsNot => {
-                OperationResult::Value(LiteralValue {
+                OperationResult::from_literal(LiteralValue {
                     value: ValueKind::Boolean(l != r),
                     lemma_type: primitive_boolean_arc().clone(),
                 })
@@ -90,10 +90,10 @@ pub fn comparison_operation(
 
         (ValueKind::Text(l), ValueKind::Text(r)) => match op {
             ComparisonComputation::Is => {
-                OperationResult::Value(LiteralValue::from_bool(l == r))
+                OperationResult::from_literal(LiteralValue::from_bool(l == r))
             }
             ComparisonComputation::IsNot => {
-                OperationResult::Value(LiteralValue {
+                OperationResult::from_literal(LiteralValue {
                     value: ValueKind::Boolean(l != r),
                     lemma_type: primitive_boolean_arc().clone(),
                 })
@@ -188,7 +188,7 @@ fn compare_stored_rationals(
         ComparisonComputation::Is => ordering == std::cmp::Ordering::Equal,
         ComparisonComputation::IsNot => ordering != std::cmp::Ordering::Equal,
     };
-    OperationResult::Value(LiteralValue::from_bool(result))
+    OperationResult::from_literal(LiteralValue::from_bool(result))
 }
 
 fn compare_with_operation_result(

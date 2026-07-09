@@ -81,6 +81,7 @@ pub fn run(root: &Path) -> Result<(), String> {
     require_python3()?;
 
     run_criterion_bench(root, "lemma-engine", "evaluate")?;
+    let memory_stdout = run_memory_bench(root)?;
     let outputs_stdout = run_outputs_bench(root)?;
     let outputs_report: OutputsReport = serde_json::from_str(outputs_stdout.trim())
         .map_err(|error| format!("outputs bench stdout was not valid JSON: {error}"))?;
@@ -89,9 +90,12 @@ pub fn run(root: &Path) -> Result<(), String> {
         .map_err(|error| format!("python benchmark stdout was not valid JSON: {error}"))?;
 
     let mut latency_rows: BTreeMap<&'static str, LatencyRow> = BTreeMap::new();
+    let mut explain_latency_rows: BTreeMap<&'static str, LatencyRow> = BTreeMap::new();
     for fixture in FIXTURES {
         let untraced = read_latency_estimate(root, fixture.spec_name, "run_plan")?;
         latency_rows.insert(fixture.spec_name, untraced);
+        let explain = read_latency_estimate(root, fixture.spec_name, "run_plan_explain")?;
+        explain_latency_rows.insert(fixture.spec_name, explain);
     }
 
     let python_by_spec: BTreeMap<String, &PythonFixture> = python_report
@@ -120,6 +124,7 @@ pub fn run(root: &Path) -> Result<(), String> {
     }
 
     let accuracy = compute_accuracy(&outputs_by_spec, &python_by_spec)?;
+    let memory_rows = parse_memory_bench_stdout(&memory_stdout)?;
     let env = capture_environment(root)?;
     let python_version = capture_stdout("python3", &["--version"], None)?;
 
@@ -128,8 +133,10 @@ pub fn run(root: &Path) -> Result<(), String> {
         env: &env,
         python_version: &python_version,
         latency_rows: &latency_rows,
+        explain_latency_rows: &explain_latency_rows,
         python_by_spec: &python_by_spec,
         accuracy: &accuracy,
+        memory_rows: &memory_rows,
     })?;
 
     write_report(root, RESULTS_RELATIVE, &report)
@@ -150,6 +157,74 @@ fn require_python3() -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn run_memory_bench(root: &Path) -> Result<String, String> {
+    let output = Command::new("cargo")
+        .current_dir(root)
+        .args(["bench", "-p", "lemma-engine", "--bench", "memory"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| format!("failed to spawn cargo bench memory: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cargo bench memory exited with code {:?}",
+            output.status.code()
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map_err(|error| format!("memory bench stdout was not UTF-8: {error}"))
+}
+
+fn parse_memory_bench_stdout(stdout: &str) -> Result<Vec<MemoryRow>, String> {
+    let mut rows = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with("| bench_") {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        if cells.len() < 7 {
+            return Err(format!("BUG: malformed memory bench row: {line}"));
+        }
+        let spec_name = cells[1];
+        let iterations = cells[2]
+            .parse::<usize>()
+            .map_err(|error| format!("BUG: memory iterations parse failed: {error}"))?;
+        let allocations_per_eval = cells[3]
+            .parse::<f64>()
+            .map_err(|error| format!("BUG: allocations/eval parse failed: {error}"))?;
+        let bytes_allocated_per_eval = cells[4]
+            .parse::<f64>()
+            .map_err(|error| format!("BUG: bytes allocated/eval parse failed: {error}"))?;
+        let reallocations_per_eval = cells[5]
+            .parse::<f64>()
+            .map_err(|error| format!("BUG: reallocations/eval parse failed: {error}"))?;
+        let net_bytes_retained_per_eval = cells[6]
+            .parse::<f64>()
+            .map_err(|error| format!("BUG: net bytes retained/eval parse failed: {error}"))?;
+        let fixture = FIXTURES
+            .iter()
+            .find(|fixture| fixture.spec_name == spec_name)
+            .ok_or_else(|| format!("memory bench reported unknown spec '{spec_name}'"))?;
+        rows.push(MemoryRow {
+            spec_name: fixture.spec_name,
+            iterations,
+            allocations_per_eval,
+            bytes_allocated_per_eval,
+            reallocations_per_eval,
+            net_bytes_retained_per_eval,
+        });
+    }
+    if rows.len() != FIXTURES.len() {
+        return Err(format!(
+            "memory bench reported {} rows, expected {}",
+            rows.len(),
+            FIXTURES.len()
+        ));
+    }
+    Ok(rows)
 }
 
 fn run_outputs_bench(root: &Path) -> Result<String, String> {
@@ -336,8 +411,19 @@ struct ComposeReportContext<'a> {
     env: &'a EnvironmentInfo,
     python_version: &'a str,
     latency_rows: &'a BTreeMap<&'static str, LatencyRow>,
+    explain_latency_rows: &'a BTreeMap<&'static str, LatencyRow>,
     python_by_spec: &'a BTreeMap<String, &'a PythonFixture>,
     accuracy: &'a (AccuracyStats, Vec<AccuracyDeviation>),
+    memory_rows: &'a [MemoryRow],
+}
+
+struct MemoryRow {
+    spec_name: &'static str,
+    iterations: usize,
+    allocations_per_eval: f64,
+    bytes_allocated_per_eval: f64,
+    reallocations_per_eval: f64,
+    net_bytes_retained_per_eval: f64,
 }
 
 fn lemma_display_repr(lemma: &LemmaOutput) -> String {
@@ -353,8 +439,10 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
         env,
         python_version,
         latency_rows,
+        explain_latency_rows,
         python_by_spec,
         accuracy,
+        memory_rows,
     } = ctx;
     let (stats, deviations) = accuracy;
     let mut out = String::new();
@@ -404,7 +492,20 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     out.push_str(
         "- API note: `Engine::run_plan` accepts `HashMap<String, DataValueInput>`. \
          The benchmark mirrors what native callers pay after constructing typed inputs; \
-         JSON parsing at API boundaries (CLI, WASM) is out of scope.\n\n",
+         JSON parsing at API boundaries (CLI, WASM) is out of scope.\n",
+    );
+    out.push_str(
+        "- Memory: `stats_alloc` over 1_000 warmup + 10_000 measured `run_plan` calls per fixture \
+         (`cargo bench -p lemma-engine --bench memory`). Allocations and bytes are totals divided by iteration count.\n",
+    );
+    out.push_str(
+        "- Profiling: install [`cargo-flamegraph`](https://github.com/flamegraph-rs/flamegraph) \
+         and run `cargo flamegraph -p lemma-engine --bench evaluate -- --bench bench_order_pipeline/run_plan` \
+         to attribute CPU time inside a single fixture.\n",
+    );
+    out.push_str(
+        "- Micro-benchmarks: `cargo bench -p lemma-engine --bench internal_micro` isolates \
+         `DataOverlay::resolve` and full `run_plan` on `bench_order_pipeline`.\n\n",
     );
 
     push_environment_block(&mut out, env, Some(python_version));
@@ -430,6 +531,59 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
             terminal_rule,
             lemma,
             python,
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("## Explain latency (`run_plan_explain`)\n\n");
+    out.push_str(
+        "Same fixtures and terminal rules as the latency table, with `explain: true` \
+         (source-shaped bytecode, full rule VM, explanation recording). \
+         Ratio is explain median divided by `run_plan` median on the same machine run.\n\n",
+    );
+    out.push_str(
+        "| Spec | Terminal rule | `run_plan` median | `run_plan_explain` median | Explain / `run_plan` |\n",
+    );
+    out.push_str(
+        "|------|---------------|------------------:|--------------------------:|---------------------:|\n",
+    );
+    for fixture in FIXTURES {
+        let terminal_rule = latency_terminal_rule(fixture.spec_name);
+        let base = latency_rows
+            .get(fixture.spec_name)
+            .copied()
+            .ok_or_else(|| format!("missing latency row for {}", fixture.spec_name))?;
+        let explain = explain_latency_rows
+            .get(fixture.spec_name)
+            .copied()
+            .ok_or_else(|| format!("missing explain latency row for {}", fixture.spec_name))?;
+        out.push_str(&format!(
+            "| `{}` | `{}` | {} | {} | {} |\n",
+            fixture.spec_name,
+            terminal_rule,
+            format_latency_ns(base.median_ns),
+            format_latency_ns(explain.median_ns),
+            format_ratio(explain.median_ns, base.median_ns),
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("## Memory (per `run_plan` call)\n\n");
+    out.push_str(
+        "| Spec | Iterations | Allocations/eval | Bytes allocated/eval | Reallocations/eval | Net bytes retained/eval |\n",
+    );
+    out.push_str(
+        "|------|-----------:|-----------------:|---------------------:|-------------------:|------------------------:|\n",
+    );
+    for row in memory_rows {
+        out.push_str(&format!(
+            "| `{}` | {} | {:.2} | {:.0} | {:.2} | {:.2} |\n",
+            row.spec_name,
+            row.iterations,
+            row.allocations_per_eval,
+            row.bytes_allocated_per_eval,
+            row.reallocations_per_eval,
+            row.net_bytes_retained_per_eval,
         ));
     }
     out.push('\n');
@@ -573,8 +727,10 @@ mod tests {
             })
             .collect();
         let mut python_by_spec = BTreeMap::new();
+        let mut explain_latency_rows = BTreeMap::new();
         for (fixture, python) in FIXTURES.iter().zip(python_owned.iter()) {
             latency_rows.insert(fixture.spec_name, row);
+            explain_latency_rows.insert(fixture.spec_name, row);
             python_by_spec.insert(fixture.spec_name.to_string(), python);
         }
         let accuracy = (AccuracyStats::default(), Vec::new());
@@ -584,8 +740,10 @@ mod tests {
             env: &env,
             python_version: "Python 3.12.3",
             latency_rows: &latency_rows,
+            explain_latency_rows: &explain_latency_rows,
             python_by_spec: &python_by_spec,
             accuracy: &accuracy,
+            memory_rows: &[],
         })
         .expect("compose");
 

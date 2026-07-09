@@ -273,7 +273,7 @@ fn normal_form_exceeds_node_budget(nf: &NormalForm, budget: usize) -> bool {
 
 struct CompileContext<'a> {
     register_types: Vec<Arc<LemmaType>>,
-    constants: Vec<LiteralValue>,
+    constants: Vec<Arc<LiteralValue>>,
     data_manifest: Vec<DataPath>,
     veto_messages: Vec<String>,
     code: Vec<Instruction>,
@@ -321,17 +321,18 @@ impl<'a> CompileContext<'a> {
         // carry signatures runtime arithmetic understands. This is lowering,
         // not rewriting: deterministic per literal given the unit index.
         let value = expand_named_measure_literal(&value, Some(self.unit_ctx)).unwrap_or(value);
+        let arc = Arc::new(value);
         if let Some((idx, _)) = self
             .constants
             .iter()
             .enumerate()
-            .find(|(_, existing)| **existing == value)
+            .find(|(_, existing)| existing.as_ref() == arc.as_ref())
         {
             return idx as u16;
         }
         let idx = self.constants.len();
         assert!(idx < u16::MAX as usize, "BUG: constant table overflow");
-        self.constants.push(value);
+        self.constants.push(arc);
         idx as u16
     }
 

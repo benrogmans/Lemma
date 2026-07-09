@@ -35,16 +35,16 @@ fn promote_anonymous_measure_result(
         return result;
     };
     let ValueKind::Measure(magnitude, raw_signature) = &value.value else {
-        return OperationResult::Value(value);
+        return OperationResult::from_literal_arc(value);
     };
     if !value.lemma_type.is_anonymous_measure() {
-        return OperationResult::Value(value);
+        return OperationResult::from_literal_arc(value);
     }
     let expanded = expand_signature_to_base_units(raw_signature, unit_index);
     let Some((unit_name, owning_type)) = signature_index.get(&expanded) else {
-        return OperationResult::Value(value);
+        return OperationResult::from_literal_arc(value);
     };
-    OperationResult::Value(LiteralValue::measure_with_type(
+    OperationResult::from_literal(LiteralValue::measure_with_type(
         magnitude.clone(),
         unit_name.clone(),
         owning_type.clone(),
@@ -147,43 +147,43 @@ pub(crate) fn expand_signature_to_base_units(
 }
 
 fn number_op_on_stored_rationals(
-    left: RationalInteger,
+    left: &RationalInteger,
     operator: &ArithmeticComputation,
-    right: RationalInteger,
+    right: &RationalInteger,
     lemma_type: Arc<LemmaType>,
 ) -> OperationResult {
     match number_arithmetic(left, operator, right) {
         Ok(rational) => {
-            OperationResult::Value(LiteralValue::number_with_type(rational, lemma_type))
+            OperationResult::from_literal(LiteralValue::number_with_type(rational, lemma_type))
         }
         Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
     }
 }
 
 fn number_op_on_stored_rationals_primitive(
-    left: RationalInteger,
+    left: &RationalInteger,
     operator: &ArithmeticComputation,
-    right: RationalInteger,
+    right: &RationalInteger,
 ) -> OperationResult {
     number_op_on_stored_rationals(left, operator, right, primitive_number_arc().clone())
 }
 
 fn number_ratio_arithmetic(
-    left: RationalInteger,
+    left: &RationalInteger,
     op: &ArithmeticComputation,
-    right: RationalInteger,
+    right: &RationalInteger,
 ) -> Result<RationalInteger, NumberArithmeticFailure> {
     match op {
         ArithmeticComputation::Multiply | ArithmeticComputation::Divide => {
-            rational_operation_with_fallback(&left, numeric_operation_from_arithmetic(op), &right)
+            rational_operation_with_fallback(left, numeric_operation_from_arithmetic(op), right)
                 .map_err(map_numeric_failure)
         }
         ArithmeticComputation::Power => {
-            rational_operation_with_fallback(&left, NumericOperation::Power, &right)
+            rational_operation_with_fallback(left, NumericOperation::Power, right)
                 .map_err(map_numeric_failure)
         }
         ArithmeticComputation::Modulo => {
-            rational_operation_with_fallback(&left, NumericOperation::Modulo, &right).map_err(|f| {
+            rational_operation_with_fallback(left, NumericOperation::Modulo, right).map_err(|f| {
                 if matches!(f, NumericFailure::DivisionByZero) {
                     NumberArithmeticFailure::ModuloByZero
                 } else {
@@ -198,15 +198,15 @@ fn number_ratio_arithmetic(
 }
 
 fn calendar_from_months_arithmetic(
-    left: RationalInteger,
+    left: &RationalInteger,
     left_unit: &SemanticCalendarUnit,
     operator: &ArithmeticComputation,
-    right: RationalInteger,
+    right: &RationalInteger,
     _right_unit: &SemanticCalendarUnit,
     result_lemma_type: Arc<LemmaType>,
 ) -> OperationResult {
     let result_months = match operator {
-        ArithmeticComputation::Add => match checked_add(&left, &right) {
+        ArithmeticComputation::Add => match checked_add(left, right) {
             Ok(r) => r,
             Err(failure) => {
                 return OperationResult::Veto(VetoType::computation(
@@ -214,7 +214,7 @@ fn calendar_from_months_arithmetic(
                 ))
             }
         },
-        ArithmeticComputation::Subtract => match checked_sub(&left, &right) {
+        ArithmeticComputation::Subtract => match checked_sub(left, right) {
             Ok(r) => r,
             Err(failure) => {
                 return OperationResult::Veto(VetoType::computation(
@@ -229,7 +229,7 @@ fn calendar_from_months_arithmetic(
     };
 
     let result_unit = left_unit.clone();
-    OperationResult::Value(LiteralValue::calendar_with_type(
+    OperationResult::from_literal(LiteralValue::calendar_with_type(
         result_months,
         result_unit,
         result_lemma_type,
@@ -262,7 +262,7 @@ pub fn arithmetic_operation(
             shift_calendar_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                value.clone(),
+                value,
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
                 &CalendarRangeShiftIndexes {
@@ -285,7 +285,7 @@ pub fn arithmetic_operation(
             shift_calendar_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                value.clone(),
+                value,
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
                 &CalendarRangeShiftIndexes {
@@ -308,10 +308,10 @@ pub fn arithmetic_operation(
             shift_date_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                value.clone(),
+                value,
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
-                right.lemma_type.clone(),
+                Arc::clone(&right.lemma_type),
             )
         }
 
@@ -328,10 +328,10 @@ pub fn arithmetic_operation(
             shift_date_range_right_endpoint(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                value.clone(),
+                value,
                 &unit,
                 matches!(op, ArithmeticComputation::Add),
-                left.lemma_type.clone(),
+                Arc::clone(&left.lemma_type),
             )
         }
 
@@ -391,7 +391,7 @@ pub fn arithmetic_operation(
         }
 
         (ValueKind::Number(l), ValueKind::Number(r)) => {
-            number_op_on_stored_rationals(l.clone(), op, r.clone(), left.lemma_type.clone())
+            number_op_on_stored_rationals(l, op, r, Arc::clone(&left.lemma_type))
         }
 
         (ValueKind::Date(_), _) | (_, ValueKind::Date(_)) => promote_anonymous_measure_result(
@@ -407,38 +407,32 @@ pub fn arithmetic_operation(
         ),
 
         // Number op Ratio → Number (multiply is symmetric; divide/power/modulo preserve order)
-        (ValueKind::Number(n), ValueKind::Ratio(r, _)) => {
-            match number_ratio_arithmetic(n.clone(), op, r.clone()) {
-                Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
+        (ValueKind::Number(n), ValueKind::Ratio(r, _)) => match number_ratio_arithmetic(n, op, r) {
+            Ok(rational) => OperationResult::from_literal(LiteralValue::number_with_type(
+                rational,
+                primitive_number_arc().clone(),
+            )),
+            Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
+        },
+        // Ratio op Number → result type depends on operator
+        (ValueKind::Ratio(r, ru), ValueKind::Number(n)) => match op {
+            ArithmeticComputation::Multiply => match number_ratio_arithmetic(r, op, n) {
+                Ok(rational) => OperationResult::from_literal(LiteralValue::number_with_type(
                     rational,
                     primitive_number_arc().clone(),
                 )),
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
-            }
-        }
-        // Ratio op Number → result type depends on operator
-        (ValueKind::Ratio(r, ru), ValueKind::Number(n)) => match op {
-            ArithmeticComputation::Multiply => {
-                match number_ratio_arithmetic(r.clone(), op, n.clone()) {
-                    Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
-                        rational,
-                        primitive_number_arc().clone(),
-                    )),
-                    Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
-                }
-            }
+            },
             ArithmeticComputation::Divide
             | ArithmeticComputation::Power
-            | ArithmeticComputation::Modulo => {
-                match number_ratio_arithmetic(r.clone(), op, n.clone()) {
-                    Ok(rational) => OperationResult::Value(LiteralValue::ratio_with_type(
-                        rational,
-                        ru.clone(),
-                        left.lemma_type.clone(),
-                    )),
-                    Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
-                }
-            }
+            | ArithmeticComputation::Modulo => match number_ratio_arithmetic(r, op, n) {
+                Ok(rational) => OperationResult::from_literal(LiteralValue::ratio_with_type(
+                    rational,
+                    ru.clone(),
+                    Arc::clone(&left.lemma_type),
+                )),
+                Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
+            },
             _ => unreachable!(
                 "BUG: ratio {:?} number; add/subtract rejected during planning",
                 op
@@ -446,16 +440,14 @@ pub fn arithmetic_operation(
         },
 
         // Ratio op Ratio → Ratio
-        (ValueKind::Ratio(l, lu), ValueKind::Ratio(r, _ru)) => {
-            match number_arithmetic(l.clone(), op, r.clone()) {
-                Ok(rational) => OperationResult::Value(LiteralValue::ratio_with_type(
-                    rational,
-                    lu.clone(),
-                    left.lemma_type.clone(),
-                )),
-                Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
-            }
-        }
+        (ValueKind::Ratio(l, lu), ValueKind::Ratio(r, _ru)) => match number_arithmetic(l, op, r) {
+            Ok(rational) => OperationResult::from_literal(LiteralValue::ratio_with_type(
+                rational,
+                lu.clone(),
+                Arc::clone(&left.lemma_type),
+            )),
+            Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
+        },
         // Measure operations with Measure
         (ValueKind::Measure(l_val, l_signature), ValueKind::Measure(r_val, r_signature)) => {
             if left.lemma_type.is_calendar_like() != right.lemma_type.is_calendar_like() {
@@ -466,32 +458,22 @@ pub fn arithmetic_operation(
                 if !is_multiply && !is_divide {
                     unreachable!("BUG: measure {:?} calendar is rejected during planning", op);
                 }
-                let (l_val, l_sig, r_val, r_sig) = if is_measure_left {
-                    (
-                        l_val.clone(),
-                        l_signature.clone(),
-                        r_val.clone(),
-                        r_signature.clone(),
-                    )
+                let (l_val_ref, l_sig_ref, r_val_ref, r_sig_ref) = if is_measure_left {
+                    (l_val, l_signature, r_val, r_signature)
                 } else {
-                    (
-                        r_val.clone(),
-                        r_signature.clone(),
-                        l_val.clone(),
-                        l_signature.clone(),
-                    )
+                    (r_val, r_signature, l_val, l_signature)
                 };
-                if is_divide && crate::computation::rational::rational_is_zero(&r_val) {
+                if is_divide && crate::computation::rational::rational_is_zero(r_val_ref) {
                     return OperationResult::Veto(VetoType::computation("Division by zero"));
                 }
                 let raw_result = match rational_operation_with_fallback(
-                    &l_val,
+                    l_val_ref,
                     if is_multiply {
                         NumericOperation::Multiply
                     } else {
                         NumericOperation::Divide
                     },
-                    &r_val,
+                    r_val_ref,
                 ) {
                     Ok(p) => p,
                     Err(failure) => {
@@ -500,7 +482,7 @@ pub fn arithmetic_operation(
                         ))
                     }
                 };
-                let raw_signature = combine_signatures(&l_sig, &r_sig, is_multiply);
+                let raw_signature = combine_signatures(l_sig_ref, r_sig_ref, is_multiply);
                 let q_decomp = if is_measure_left {
                     left.lemma_type.measure_type_decomposition()
                 } else {
@@ -514,20 +496,20 @@ pub fn arithmetic_operation(
                     is_multiply,
                 );
                 if combined.is_empty() {
-                    return OperationResult::Value(LiteralValue::number_with_type(
+                    return OperationResult::from_literal(LiteralValue::number_with_type(
                         raw_result,
                         primitive_number_arc().clone(),
                     ));
                 }
                 let expanded_signature = expand_signature_to_base_units(&raw_signature, unit_index);
                 if let Some((unit_name, owning_type)) = signature_index.get(&expanded_signature) {
-                    return OperationResult::Value(LiteralValue::measure_with_type(
+                    return OperationResult::from_literal(LiteralValue::measure_with_type(
                         raw_result,
                         unit_name.clone(),
                         owning_type.clone(),
                     ));
                 }
-                return OperationResult::Value(LiteralValue {
+                return OperationResult::from_literal(LiteralValue {
                     value: ValueKind::Measure(raw_result, raw_signature),
                     lemma_type: Arc::new(LemmaType::anonymous_for_decomposition(combined)),
                 });
@@ -542,18 +524,18 @@ pub fn arithmetic_operation(
                 return match op {
                     ArithmeticComputation::Add | ArithmeticComputation::Subtract => {
                         calendar_from_months_arithmetic(
-                            l_val.clone(),
+                            l_val,
                             &lu,
                             op,
-                            r_val.clone(),
+                            r_val,
                             &ru,
-                            left.lemma_type.clone(),
+                            Arc::clone(&left.lemma_type),
                         )
                     }
                     ArithmeticComputation::Divide => number_op_on_stored_rationals_primitive(
-                        l_val.clone(),
+                        l_val,
                         &ArithmeticComputation::Divide,
-                        r_val.clone(),
+                        r_val,
                     ),
                     _ => unreachable!(
                         "BUG: calendar * calendar with op {:?}; planning should have rejected this",
@@ -567,24 +549,28 @@ pub fn arithmetic_operation(
                         l_signature,
                     );
                 if let ValueKind::Number(n) = &right.value {
-                    return match number_arithmetic(l_val.clone(), op, n.clone()) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
-                            rational,
-                            unit,
-                            left.lemma_type.clone(),
-                        )),
+                    return match number_arithmetic(l_val, op, n) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::calendar_with_type(
+                                rational,
+                                unit,
+                                left.lemma_type.clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
                 if let ValueKind::Ratio(r, _) = &right.value {
-                    return match number_ratio_arithmetic(l_val.clone(), op, r.clone()) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
-                            rational,
-                            unit,
-                            left.lemma_type.clone(),
-                        )),
+                    return match number_ratio_arithmetic(l_val, op, r) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::calendar_with_type(
+                                rational,
+                                unit,
+                                left.lemma_type.clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -597,35 +583,41 @@ pub fn arithmetic_operation(
                         r_signature,
                     );
                 if let (ValueKind::Number(n), ArithmeticComputation::Multiply) = (&left.value, op) {
-                    return match number_arithmetic(n.clone(), op, r_val.clone()) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
-                            rational,
-                            unit,
-                            right.lemma_type.clone(),
-                        )),
+                    return match number_arithmetic(n, op, r_val) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::calendar_with_type(
+                                rational,
+                                unit,
+                                right.lemma_type.clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
                 if let ValueKind::Number(n) = &left.value {
-                    return match number_arithmetic(n.clone(), op, r_val.clone()) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
-                            rational,
-                            primitive_number_arc().clone(),
-                        )),
+                    return match number_arithmetic(n, op, r_val) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::number_with_type(
+                                rational,
+                                primitive_number_arc().clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
                     };
                 }
                 if let ValueKind::Ratio(r, _) = &left.value {
-                    return match number_ratio_arithmetic(r_val.clone(), op, r.clone()) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::calendar_with_type(
-                            rational,
-                            unit,
-                            right.lemma_type.clone(),
-                        )),
+                    return match number_ratio_arithmetic(r_val, op, r) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::calendar_with_type(
+                                rational,
+                                unit,
+                                right.lemma_type.clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -645,9 +637,9 @@ pub fn arithmetic_operation(
                         right.lemma_type.name()
                     );
                     }
-                    match measure_add_subtract(l_val.clone(), op, r_val.clone()) {
+                    match measure_add_subtract(l_val, op, r_val) {
                         Ok(rational) => {
-                            OperationResult::Value(LiteralValue::measure_with_signature(
+                            OperationResult::from_literal(LiteralValue::measure_with_signature(
                                 rational,
                                 l_signature.clone(),
                                 left.lemma_type.clone(),
@@ -697,7 +689,7 @@ pub fn arithmetic_operation(
                         matches!(op, ArithmeticComputation::Multiply),
                     );
                     if combined_decomposition.is_empty() {
-                        OperationResult::Value(LiteralValue::number_with_type(
+                        OperationResult::from_literal(LiteralValue::number_with_type(
                             raw_result,
                             primitive_number_arc().clone(),
                         ))
@@ -707,13 +699,13 @@ pub fn arithmetic_operation(
                         if let Some((unit_name, owning_type)) =
                             signature_index.get(&expanded_signature)
                         {
-                            OperationResult::Value(LiteralValue::measure_with_type(
+                            OperationResult::from_literal(LiteralValue::measure_with_type(
                                 raw_result,
                                 unit_name.clone(),
                                 owning_type.clone(),
                             ))
                         } else {
-                            OperationResult::Value(LiteralValue {
+                            OperationResult::from_literal(LiteralValue {
                                 value: ValueKind::Measure(raw_result, raw_signature),
                                 lemma_type: Arc::new(LemmaType::anonymous_for_decomposition(
                                     combined_decomposition,
@@ -728,11 +720,13 @@ pub fn arithmetic_operation(
         // Measure op Ratio → Measure (multiply/divide; add/subtract rejected at planning)
         (ValueKind::Measure(q_val, q_sig), ValueKind::Ratio(r, _)) => {
             match measure_ratio_arithmetic(q_val.clone(), op, r.clone()) {
-                Ok(rational) => OperationResult::Value(LiteralValue::measure_with_signature(
-                    rational,
-                    q_sig.clone(),
-                    left.lemma_type.clone(),
-                )),
+                Ok(rational) => {
+                    OperationResult::from_literal(LiteralValue::measure_with_signature(
+                        rational,
+                        q_sig.clone(),
+                        left.lemma_type.clone(),
+                    ))
+                }
                 Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
             }
         }
@@ -740,11 +734,13 @@ pub fn arithmetic_operation(
         (ValueKind::Ratio(r, _), ValueKind::Measure(q_val, q_sig)) => match op {
             ArithmeticComputation::Multiply => {
                 match measure_ratio_arithmetic(q_val.clone(), op, r.clone()) {
-                    Ok(rational) => OperationResult::Value(LiteralValue::measure_with_signature(
-                        rational,
-                        q_sig.clone(),
-                        right.lemma_type.clone(),
-                    )),
+                    Ok(rational) => {
+                        OperationResult::from_literal(LiteralValue::measure_with_signature(
+                            rational,
+                            q_sig.clone(),
+                            right.lemma_type.clone(),
+                        ))
+                    }
                     Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
                 }
             }
@@ -771,7 +767,7 @@ pub fn arithmetic_operation(
                 let factor = left.lemma_type.measure_unit_factor(unit_name);
                 let in_unit = checked_div(measure_val, factor)
                     .expect("BUG: measure de-canonicalization for modulo must not fail");
-                let modded = match number_arithmetic(in_unit, op, n.clone()) {
+                let modded = match number_arithmetic(&in_unit, op, n) {
                     Ok(value) => value,
                     Err(failure) => {
                         return OperationResult::Veto(VetoType::computation(failure.message()))
@@ -780,14 +776,14 @@ pub fn arithmetic_operation(
                 checked_mul(&modded, factor)
                     .expect("BUG: measure re-canonicalization after modulo must not fail")
             } else {
-                match number_arithmetic(measure_val.clone(), op, n.clone()) {
+                match number_arithmetic(measure_val, op, n) {
                     Ok(value) => value,
                     Err(failure) => {
                         return OperationResult::Veto(VetoType::computation(failure.message()))
                     }
                 }
             };
-            OperationResult::Value(LiteralValue::measure_with_signature(
+            OperationResult::from_literal(LiteralValue::measure_with_signature(
                 rational,
                 measure_signature.clone(),
                 left.lemma_type.clone(),
@@ -795,16 +791,16 @@ pub fn arithmetic_operation(
         }
         // Number op Measure → Measure for multiply; for divide, negate signature if anonymous measure.
         (ValueKind::Number(n), ValueKind::Measure(measure_val, measure_signature)) => match op {
-            ArithmeticComputation::Multiply => {
-                match number_arithmetic(n.clone(), op, measure_val.clone()) {
-                    Ok(rational) => OperationResult::Value(LiteralValue::measure_with_signature(
+            ArithmeticComputation::Multiply => match number_arithmetic(n, op, measure_val) {
+                Ok(rational) => {
+                    OperationResult::from_literal(LiteralValue::measure_with_signature(
                         rational,
                         measure_signature.clone(),
                         right.lemma_type.clone(),
-                    )),
-                    Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
+                    ))
                 }
-            }
+                Err(failure) => OperationResult::Veto(VetoType::computation(failure.message())),
+            },
             ArithmeticComputation::Divide => {
                 if right.lemma_type.is_duration_like_measure()
                     || right.lemma_type.is_calendar_like()
@@ -820,11 +816,13 @@ pub fn arithmetic_operation(
                     let factor = right.lemma_type.measure_unit_factor(unit_name);
                     let in_unit = checked_div(measure_val, factor)
                         .expect("BUG: measure de-canonicalization for divide must not fail");
-                    return match number_arithmetic(n.clone(), op, in_unit) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
-                            rational,
-                            primitive_number_arc().clone(),
-                        )),
+                    return match number_arithmetic(n, op, &in_unit) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::number_with_type(
+                                rational,
+                                primitive_number_arc().clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -835,11 +833,13 @@ pub fn arithmetic_operation(
                     .measure_type_decomposition()
                     .expect("BUG: decomposition must be resolved after planning");
                 if measure_decomp.is_empty() {
-                    match number_arithmetic(n.clone(), op, measure_val.clone()) {
-                        Ok(rational) => OperationResult::Value(LiteralValue::number_with_type(
-                            rational,
-                            primitive_number_arc().clone(),
-                        )),
+                    match number_arithmetic(n, op, measure_val) {
+                        Ok(rational) => {
+                            OperationResult::from_literal(LiteralValue::number_with_type(
+                                rational,
+                                primitive_number_arc().clone(),
+                            ))
+                        }
                         Err(failure) => {
                             OperationResult::Veto(VetoType::computation(failure.message()))
                         }
@@ -847,7 +847,7 @@ pub fn arithmetic_operation(
                 } else {
                     let negated_signature =
                         crate::planning::semantics::negate_signature(measure_signature);
-                    match number_arithmetic(n.clone(), op, measure_val.clone()) {
+                    match number_arithmetic(n, op, measure_val) {
                         Ok(rational) => {
                             if let Some((unit_name, owning_type)) =
                                 signature_index.get(&negated_signature)
@@ -858,19 +858,19 @@ pub fn arithmetic_operation(
                                     &rational,
                                     &target_factor,
                                 ) {
-                                    Ok(magnitude) => {
-                                        OperationResult::Value(LiteralValue::measure_with_type(
+                                    Ok(magnitude) => OperationResult::from_literal(
+                                        LiteralValue::measure_with_type(
                                             magnitude,
                                             unit_name.clone(),
                                             owning_type.clone(),
-                                        ))
-                                    }
+                                        ),
+                                    ),
                                     Err(failure) => OperationResult::Veto(VetoType::computation(
                                         failure.to_string(),
                                     )),
                                 }
                             } else {
-                                OperationResult::Value(LiteralValue::number_with_type(
+                                OperationResult::from_literal(LiteralValue::number_with_type(
                                     rational,
                                     primitive_number_arc().clone(),
                                 ))
@@ -894,7 +894,7 @@ pub fn arithmetic_operation(
                 let factor = right.lemma_type.measure_unit_factor(unit_name);
                 let in_unit = checked_div(measure_val, factor)
                     .expect("BUG: measure de-canonicalization for modulo must not fail");
-                number_op_on_stored_rationals_primitive(n.clone(), op, in_unit)
+                number_op_on_stored_rationals_primitive(n, op, &in_unit)
             }
             _ => unreachable!(
                 "BUG: Number {:?} Measure should be rejected during planning",
@@ -980,24 +980,24 @@ fn measure_ratio_arithmetic(
 }
 
 fn measure_add_subtract(
-    left_value: RationalInteger,
+    left_value: &RationalInteger,
     operator: &ArithmeticComputation,
-    right_value: RationalInteger,
+    right_value: &RationalInteger,
 ) -> Result<RationalInteger, NumberArithmeticFailure> {
     rational_operation_with_fallback(
-        &left_value,
+        left_value,
         numeric_operation_from_arithmetic(operator),
-        &right_value,
+        right_value,
     )
     .map_err(map_numeric_failure)
 }
 
 pub(crate) fn number_arithmetic(
-    left: RationalInteger,
+    left: &RationalInteger,
     operator: &ArithmeticComputation,
-    right: RationalInteger,
+    right: &RationalInteger,
 ) -> Result<RationalInteger, NumberArithmeticFailure> {
-    rational_operation_with_fallback(&left, numeric_operation_from_arithmetic(operator), &right)
+    rational_operation_with_fallback(left, numeric_operation_from_arithmetic(operator), right)
         .map_err(|failure| {
             if matches!(operator, ArithmeticComputation::Modulo) {
                 map_numeric_failure_modulo(failure)
@@ -1022,7 +1022,13 @@ fn operate_on_operation_results(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(&left_value, op, &right_value, unit_index, signature_index)
+    arithmetic_operation(
+        left_value.as_ref(),
+        op,
+        right_value.as_ref(),
+        unit_index,
+        signature_index,
+    )
 }
 
 fn operate_with_left_result(
@@ -1036,7 +1042,7 @@ fn operate_with_left_result(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(&left_value, op, right, unit_index, signature_index)
+    arithmetic_operation(left_value.as_ref(), op, right, unit_index, signature_index)
 }
 
 fn operate_with_right_result(
@@ -1050,13 +1056,13 @@ fn operate_with_right_result(
         OperationResult::Value(value) => value,
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
-    arithmetic_operation(left, op, &right_value, unit_index, signature_index)
+    arithmetic_operation(left, op, right_value.as_ref(), unit_index, signature_index)
 }
 
 fn shift_date_range_right_endpoint(
     range_left: &LiteralValue,
     range_right: &LiteralValue,
-    calendar_value: RationalInteger,
+    calendar_value: &RationalInteger,
     calendar_unit: &SemanticCalendarUnit,
     add: bool,
     calendar_lemma_type: Arc<LemmaType>,
@@ -1067,8 +1073,11 @@ fn shift_date_range_right_endpoint(
         );
     };
 
-    let calendar_literal =
-        LiteralValue::calendar(calendar_value, calendar_unit.clone(), calendar_lemma_type);
+    let calendar_literal = LiteralValue::calendar(
+        calendar_value.clone(),
+        calendar_unit.clone(),
+        calendar_lemma_type,
+    );
     let shifted_right = match super::datetime::datetime_arithmetic(
         range_right,
         if add {
@@ -1082,16 +1091,16 @@ fn shift_date_range_right_endpoint(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    OperationResult::Value(LiteralValue::range(
+    OperationResult::from_literal(LiteralValue::range(
         range_left.clone(),
-        shifted_right.clone(),
+        shifted_right.as_ref().clone(),
     ))
 }
 
 fn shift_calendar_range_right_endpoint(
     range_left: &LiteralValue,
     range_right: &LiteralValue,
-    calendar_value: RationalInteger,
+    calendar_value: &RationalInteger,
     calendar_unit: &SemanticCalendarUnit,
     add: bool,
     indexes: &CalendarRangeShiftIndexes<'_>,
@@ -1110,9 +1119,9 @@ fn shift_calendar_range_right_endpoint(
     }
 
     let calendar_literal = LiteralValue::calendar(
-        calendar_value,
+        calendar_value.clone(),
         calendar_unit.clone(),
-        range_right.lemma_type.clone(),
+        Arc::clone(&range_right.lemma_type),
     );
     let op = if add {
         ArithmeticComputation::Add
@@ -1130,9 +1139,9 @@ fn shift_calendar_range_right_endpoint(
         OperationResult::Veto(reason) => return OperationResult::Veto(reason),
     };
 
-    OperationResult::Value(LiteralValue::range(
+    OperationResult::from_literal(LiteralValue::range(
         range_left.clone(),
-        shifted_right.clone(),
+        shifted_right.as_ref().clone(),
     ))
 }
 
@@ -1150,23 +1159,17 @@ mod tests {
 
     #[test]
     fn number_arithmetic_add_on_stored_decimals() {
-        let sum = number_arithmetic(
-            rational_new(1, 1),
-            &ArithmeticComputation::Add,
-            rational_new(2, 1),
-        )
-        .unwrap();
+        let left = rational_new(1, 1);
+        let right = rational_new(2, 1);
+        let sum = number_arithmetic(&left, &ArithmeticComputation::Add, &right).unwrap();
         assert_eq!(sum, rational_new(3, 1));
     }
 
     #[test]
     fn number_arithmetic_divide_ten_by_three_returns_value_decimal() {
-        let quotient = number_arithmetic(
-            rational_new(10, 1),
-            &ArithmeticComputation::Divide,
-            rational_new(3, 1),
-        )
-        .unwrap();
+        let left = rational_new(10, 1);
+        let right = rational_new(3, 1);
+        let quotient = number_arithmetic(&left, &ArithmeticComputation::Divide, &right).unwrap();
         let decimal = crate::computation::rational::commit_rational_to_decimal(&quotient).unwrap();
         assert!(decimal > Decimal::from(3));
         assert!(decimal < Decimal::from(4));
@@ -1174,12 +1177,9 @@ mod tests {
 
     #[test]
     fn number_arithmetic_division_by_zero_returns_failure() {
-        let failure = number_arithmetic(
-            rational_new(10, 1),
-            &ArithmeticComputation::Divide,
-            rational_new(0, 1),
-        )
-        .unwrap_err();
+        let left = rational_new(10, 1);
+        let right = rational_new(0, 1);
+        let failure = number_arithmetic(&left, &ArithmeticComputation::Divide, &right).unwrap_err();
         assert_eq!(failure, NumberArithmeticFailure::DivisionByZero);
     }
 
@@ -1217,7 +1217,7 @@ mod tests {
         let result = operate_on_operation_results(
             left,
             &ArithmeticComputation::Add,
-            OperationResult::Value(right),
+            OperationResult::from_literal(right),
             &unit_index,
             &signature_index,
         );
