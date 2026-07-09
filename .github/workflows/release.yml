@@ -130,6 +130,8 @@ jobs:
             target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+          - os: windows-11-vs2026-arm
+            target: aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
 
@@ -202,6 +204,7 @@ jobs:
             }
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
           - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-vs2026-arm }
     steps:
       - uses: actions/checkout@v4
 
@@ -384,24 +387,28 @@ jobs:
             "$ROOT/linux-arm64" \
             "$ROOT/darwin-x64" \
             "$ROOT/darwin-arm64" \
-            "$ROOT/win32-x64"
+            "$ROOT/win32-x64" \
+            "$ROOT/win32-arm64"
 
           gh release download "$TAG" -p "lemma-x86_64-unknown-linux-musl.tar.gz"   -D /tmp
           gh release download "$TAG" -p "lemma-aarch64-unknown-linux-musl.tar.gz"  -D /tmp
           gh release download "$TAG" -p "lemma-x86_64-apple-darwin.tar.gz"         -D /tmp
           gh release download "$TAG" -p "lemma-aarch64-apple-darwin.tar.gz"        -D /tmp
           gh release download "$TAG" -p "lemma-x86_64-pc-windows-msvc.zip"         -D /tmp
+          gh release download "$TAG" -p "lemma-aarch64-pc-windows-msvc.zip"        -D /tmp
 
           tar xzf /tmp/lemma-x86_64-unknown-linux-musl.tar.gz  -C "$ROOT/linux-x64"
           tar xzf /tmp/lemma-aarch64-unknown-linux-musl.tar.gz -C "$ROOT/linux-arm64"
           tar xzf /tmp/lemma-x86_64-apple-darwin.tar.gz        -C "$ROOT/darwin-x64"
           tar xzf /tmp/lemma-aarch64-apple-darwin.tar.gz       -C "$ROOT/darwin-arm64"
           unzip -o /tmp/lemma-x86_64-pc-windows-msvc.zip       -d "$ROOT/win32-x64"
+          unzip -o /tmp/lemma-aarch64-pc-windows-msvc.zip      -d "$ROOT/win32-arm64"
 
           for d in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
             test -f "$ROOT/$d/lemma" || { echo "missing $ROOT/$d/lemma"; exit 1; }
           done
           test -f "$ROOT/win32-x64/lemma.exe" || { echo "missing $ROOT/win32-x64/lemma.exe"; exit 1; }
+          test -f "$ROOT/win32-arm64/lemma.exe" || { echo "missing $ROOT/win32-arm64/lemma.exe"; exit 1; }
 
       - name: Build npm packages
         run: node cli/packages/npm/build.js --binaries /tmp/lemma-binaries
@@ -410,7 +417,7 @@ jobs:
         working-directory: cli/packages/npm/dist/platforms
         run: |
           set -euo pipefail
-          for d in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64; do
+          for d in linux-x64 linux-arm64 darwin-x64 darwin-arm64 win32-x64 win32-arm64; do
             echo "Publishing @lemmabase/cli-$d"
             (cd "$d" && npm publish --provenance --access public)
           done

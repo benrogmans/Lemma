@@ -57,6 +57,7 @@ const PLATFORMS = [
   { key: 'darwin-x64', os: 'darwin', cpu: 'x64', exe: 'lemma' },
   { key: 'darwin-arm64', os: 'darwin', cpu: 'arm64', exe: 'lemma' },
   { key: 'win32-x64', os: 'win32', cpu: 'x64', exe: 'lemma.exe' },
+  { key: 'win32-arm64', os: 'win32', cpu: 'arm64', exe: 'lemma.exe' },
 ];
 
 function parseArgs(argv) {
@@ -71,7 +72,7 @@ function parseArgs(argv) {
       console.log(
         'Usage: node build.js --binaries <dir> [--allow-partial]\n\n' +
           'The <dir> must contain subdirectories named after each platform key\n' +
-          '(linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64),\n' +
+          '(linux-x64, linux-arm64, darwin-x64, darwin-arm64, win32-x64, win32-arm64),\n' +
           'each holding the corresponding `lemma` (or `lemma.exe`) binary.'
       );
       process.exit(0);

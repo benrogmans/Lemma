@@ -14,6 +14,7 @@ defmodule Lemma.Native do
       aarch64-unknown-linux-gnu
       x86_64-unknown-linux-gnu
       x86_64-pc-windows-msvc
+      aarch64-pc-windows-msvc
     )
 
   def lemma_new(_limits), do: :erlang.nif_error(:nif_not_loaded)
