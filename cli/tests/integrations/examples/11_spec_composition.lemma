@@ -9,7 +9,7 @@ Foundation pricing rules that can be referenced and customized.
 
 data standard_discount : 5%
 data tax_rate          : 21%
-data base_price        : number -> minimum 0 -> default 100
+data base_price        : number -> minimum 0 -> suggest 100
 
 rule tax_amount:
   base_price * tax_rate
@@ -101,7 +101,7 @@ Combines pricing with measure calculations.
 Demonstrates nested spec references and multi-level data access.
 """
 
-data quantity : number -> minimum 0 -> default 10
+data quantity : number -> minimum 0 -> suggest 10
 
 uses pricing: base_config
 

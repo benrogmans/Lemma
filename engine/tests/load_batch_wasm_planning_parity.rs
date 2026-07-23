@@ -1,13 +1,12 @@
-//! Parity targets for WasmEngine-style loading: [`Engine::load_batch`] with a dependency id
-//! tags every repository parsed from that batch as that dependency (see `Engine::add_sources_inner`).
+//! Parity targets for WasmEngine-style loading: dependency-tagged [`Engine::load`] bundles
+//! tag every repository parsed from that batch as that dependency (see `Engine::add_sources_inner`).
 //! Browser stacks often load sources that way; plain CLI `load` keeps workspace `name: None`.
 //!
-//! These tests exercise `get_plan` + `schema` at several effective instants (mirrors
-//! `WasmEngine::schema` defaulting effective to [`DateTimeValue::now`]) and cross-load patterns
+//! These tests exercise `show` at several effective instants (mirrors
+//! `WasmEngine::show` defaulting effective to [`DateTimeValue::now`]) and cross-load patterns
 //! that stress type resolution after a dependency batch.
 
 use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 fn path_source(path: &str) -> SourceType {
@@ -57,7 +56,7 @@ fn wasm_style_instants() -> [DateTimeValue; 4] {
 }
 
 #[test]
-fn dependency_batch_get_plan_and_schema_via_repo_qualifier() {
+fn dependency_batch_show_via_repo_qualifier() {
     let mut engine = Engine::new();
     let bundle = r#"
 spec alpha2
@@ -70,24 +69,19 @@ with C.code: "NL"
 rule country: C.code
 "#;
     engine
-        .load_batch(
-            HashMap::from([(SourceType::Volatile, bundle.to_string())]),
-            Some("@iso/countries"),
-        )
-        .expect("dependency-tag load_batch should parse and plan");
+        .load([(
+            SourceType::Dependency("@iso/countries".to_string()),
+            bundle.to_string(),
+        )])
+        .expect("dependency-tag load should parse and plan");
 
     for instant in wasm_style_instants() {
-        let plan = engine
-            .get_plan(Some("@iso/countries"), "cashier", Some(&instant))
-            .expect("get_plan(Some(dep), cashier) mirrors wasm.schema with repository set");
-        let _ = plan.schema(&lemma::DataOverlay::default());
-
         engine
-            .schema(Some("@iso/countries"), "cashier", Some(&instant))
-            .expect("Engine::schema same path as WasmEngine.schema");
+            .show(Some("@iso/countries"), "cashier", Some(&instant))
+            .expect("Engine::show same path as WasmEngine.show");
         engine
-            .schema(Some("@iso/countries"), "alpha2", Some(&instant))
-            .expect("alpha2 exposes schema inside dependency-qualified repository");
+            .show(Some("@iso/countries"), "alpha2", Some(&instant))
+            .expect("alpha2 exposes show inside dependency-qualified repository");
     }
 }
 
@@ -95,45 +89,33 @@ rule country: C.code
 fn workspace_consumer_after_dependency_batch_resolves_country_type() {
     let mut engine = Engine::new();
     engine
-        .load_batch(
-            HashMap::from([(
-                path_source("deps/countries.lemma"),
-                r#"spec alpha2
+        .load([(
+            SourceType::Dependency("@iso/countries".to_string()),
+            r#"spec alpha2
 data code: text
   -> option "NL"
   -> option "BE"
 "#
-                .to_string(),
-            )]),
-            Some("@iso/countries"),
-        )
+            .to_string(),
+        )])
         .expect("registry dependency bundle loads under @iso/countries");
 
     engine
-        .load(
+        .load([(
+            path_source("kiosk.lemma"),
             r#"spec kiosk
 uses @iso/countries alpha2
 data country: alpha2.code
 rule tally: country
-"#,
-            path_source("kiosk.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .expect("workspace kiosk uses registry-style qualifier line like examples/12_registry_references");
 
     for instant in wasm_style_instants() {
-        let plan = engine.get_plan(None, "kiosk", Some(&instant));
-        match plan {
-            Ok(p) => {
-                let _ = p.schema(&lemma::DataOverlay::default());
-                let _ = engine.schema(None, "kiosk", Some(&instant));
-            }
-            Err(e) => {
-                panic!(
-                    "kiosk should plan across instants once dependency types resolve — error: {}",
-                    e
-                );
-            }
-        }
+        engine
+            .show(None, "kiosk", Some(&instant))
+            .expect("kiosk should plan across instants once dependency types resolve");
     }
 }
 
@@ -141,37 +123,35 @@ rule tally: country
 fn duplicate_named_finance_across_named_repositories_plan_without_panic() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            path_source("a.lemma"),
             r#"repo tier_a
 
 spec finance
 data x: number
 rule gross: x
-"#,
-            path_source("a.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .expect("tier_a repository loads");
 
     engine
-        .load_batch(
-            HashMap::from([(
-                path_source("tier_b/bundle.lemma"),
-                r#"repo tier_b
+        .load([(
+            SourceType::Dependency("tier_b_dep".to_string()),
+            r#"repo tier_b
 
 spec finance
 data y: number
 rule gross: y
 "#
-                .to_string(),
-            )]),
-            Some("tier_b_dep"),
-        )
+            .to_string(),
+        )])
         .expect("tier_b dependency bundle loads with duplicate bare spec name `finance`");
 
     let counts: Vec<(Option<String>, usize)> = engine
         .list()
         .iter()
-        .map(|entry| (entry.repository.name.clone(), entry.specs.len()))
+        .map(|entry| (entry.repository.clone(), entry.specs.len()))
         .collect();
 
     assert!(
@@ -191,16 +171,9 @@ rule gross: y
 
     let now = DateTimeValue::now();
     engine
-        .get_plan(Some("tier_a"), "finance", Some(&now))
-        .expect("finance in tier_a");
+        .show(Some("tier_a"), "finance", Some(&now))
+        .expect("show tier_a finance");
     engine
-        .get_plan(Some("tier_b"), "finance", Some(&now))
-        .expect("finance in tier_b");
-
-    engine
-        .schema(Some("tier_a"), "finance", Some(&now))
-        .expect("schema tier_a finance");
-    engine
-        .schema(Some("tier_b"), "finance", Some(&now))
-        .expect("schema tier_b finance");
+        .show(Some("tier_b"), "finance", Some(&now))
+        .expect("show tier_b finance");
 }

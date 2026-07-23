@@ -244,11 +244,11 @@ rule result: x
     assert_eq!(body["results"]["result"]["number"].as_str(), Some("42"));
 }
 
-/// GET `/` must return one entry per loaded spec: `{name, schema}` on success
-/// or `{name, error}` when the schema cannot be produced at the requested
-/// effective date. No spec may silently disappear from the list.
+/// GET `/` returns the same JSON as [`Engine::list`]: workspace and dependency
+/// repositories with listed spec rows (name, optional effective_from/effective_to).
+/// Temporal show failures belong on GET `/{spec}`, not on the list route.
 #[test]
-fn list_specs_surfaces_per_spec_errors() {
+fn list_returns_engine_list_wire() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("specs.lemma"),
@@ -281,7 +281,7 @@ rule result: y
         panic!("server did not start within timeout");
     }
 
-    let url = format!("http://127.0.0.1:{}/?effective=2025-06-01", port);
+    let url = format!("http://127.0.0.1:{}/", port);
     let resp = reqwest::blocking::get(&url).expect("GET request");
     let status = resp.status();
     let body_text = resp.text().expect("response body");
@@ -294,26 +294,83 @@ rule result: y
     );
     let body: serde_json::Value = serde_json::from_str(&body_text)
         .unwrap_or_else(|e| panic!("invalid JSON: {e}; {body_text}"));
-    let entries = body
+    let repositories = body
         .as_array()
-        .unwrap_or_else(|| panic!("list response must be an array: {body}"));
+        .unwrap_or_else(|| panic!("list response must be ResolvedRepository[]: {body}"));
 
-    let available = entries
+    let workspace = repositories
         .iter()
-        .find(|e| e["name"].as_str() == Some("always_available"))
-        .unwrap_or_else(|| panic!("always_available missing from list: {body}"));
+        .find(|r| r.get("repository").is_none_or(|v| v.is_null()))
+        .unwrap_or_else(|| panic!("workspace repository group missing: {body}"));
+    let spec_names: Vec<&str> = workspace["specs"]
+        .as_array()
+        .expect("workspace specs array")
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .collect();
     assert!(
-        available.get("schema").is_some(),
-        "resolvable spec must carry a schema entry: {available}"
+        spec_names.contains(&"always_available"),
+        "always_available must appear in list: {body}"
     );
-
-    let future = entries
-        .iter()
-        .find(|e| e["name"].as_str() == Some("future_only"))
-        .unwrap_or_else(|| panic!("future_only must not silently disappear: {body}"));
     assert!(
-        future.get("error").is_some(),
-        "unresolvable spec must carry an error entry: {future}"
+        spec_names.contains(&"future_only"),
+        "future_only must appear in list regardless of effective instant: {body}"
+    );
+}
+
+/// GET `/{spec}` before a spec's effective_from must fail (temporal show error),
+/// not disappear from GET `/`.
+#[test]
+fn get_show_before_effective_from_returns_error() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("specs.lemma"),
+        r#"spec future_only 2030-01-01
+data y: number
+rule result: y
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 9;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("http://127.0.0.1:{}/future_only", port);
+    let resp = client
+        .get(&url)
+        .header("Accept-Datetime", "2025-06-01")
+        .send()
+        .expect("GET request");
+    let status = resp.status();
+    let body_text = resp.text().expect("response body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        !status.is_success(),
+        "GET /future_only before effective_from must not return 2xx, got {status}: {body_text}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}; {body_text}"));
+    assert!(
+        body.get("error").is_some(),
+        "show failure must carry error field: {body}"
     );
 }
 
@@ -441,12 +498,20 @@ fn evaluation_timeout_returns_503() {
     );
 }
 
+fn json_date_ymd(v: &serde_json::Value) -> Option<(i64, u64, u64)> {
+    Some((
+        v["year"].as_i64()?,
+        v["month"].as_u64()?,
+        v["day"].as_u64()?,
+    ))
+}
+
 /// GET `/{spec}` must expose each temporal version's half-open
 /// `[effective_from, effective_to)` range. The latest version's `effective_to`
 /// is `null` (no successor); earlier versions' `effective_to` equals the next
 /// version's `effective_from`.
 #[test]
-fn get_schema_versions_expose_effective_to_range() {
+fn get_show_versions_expose_effective_to_range() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("temporal.lemma"),
@@ -504,24 +569,149 @@ rule total: base
 
     let earlier = &versions[0];
     assert_eq!(
-        earlier["effective_from"].as_str(),
-        Some("2025-01-01"),
+        json_date_ymd(&earlier["effective_from"]),
+        Some((2025, 1, 1)),
         "earlier version effective_from: {earlier}"
     );
     assert_eq!(
-        earlier["effective_to"].as_str(),
-        Some("2026-01-01"),
+        json_date_ymd(&earlier["effective_to"]),
+        Some((2026, 1, 1)),
         "earlier version effective_to equals next version's effective_from: {earlier}"
     );
 
     let latest = &versions[1];
     assert_eq!(
-        latest["effective_from"].as_str(),
-        Some("2026-01-01"),
+        json_date_ymd(&latest["effective_from"]),
+        Some((2026, 1, 1)),
         "latest version effective_from: {latest}"
     );
     assert!(
         latest["effective_to"].is_null(),
         "latest version effective_to must be null (no successor): {latest}"
+    );
+}
+
+#[test]
+fn post_evaluate_without_explanations_exposes_rule_missing_data() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("suggest.lemma"),
+        r#"spec suggest_demo
+data n: number -> suggest 42
+rule r: n
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 10;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("http://127.0.0.1:{}/suggest_demo", port);
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .expect("POST request");
+    let status = resp.status();
+    let body: serde_json::Value =
+        serde_json::from_str(&resp.text().expect("response body")).expect("JSON body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        status.is_success(),
+        "POST without explanations should return 2xx, got {status}: {body}"
+    );
+    assert!(
+        body.get("data").is_none(),
+        "evaluate body must not include top-level data: {body}"
+    );
+    let rule = body["results"]["r"].as_object().expect("rule r in results");
+    assert!(
+        rule.get("explanation").is_none(),
+        "explanation must stay omitted without x-explanations: {rule:?}"
+    );
+    let missing = rule["missing_data"]
+        .as_array()
+        .expect("results.r.missing_data");
+    assert!(
+        missing.iter().any(|v| v.as_str() == Some("n")),
+        "unbound n must appear in missing_data: {missing:?}"
+    );
+}
+
+#[test]
+fn post_evaluate_incomplete_rule_exposes_results_missing_data() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("incomplete.lemma"),
+        r#"spec incomplete
+data a: number
+data b: number
+rule main: a + b
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 11;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    if !wait_for_port(port, SERVER_STARTUP_TIMEOUT) {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("http://127.0.0.1:{}/incomplete", port);
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .expect("POST request");
+    let status = resp.status();
+    let body: serde_json::Value =
+        serde_json::from_str(&resp.text().expect("response body")).expect("JSON body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        status.is_success(),
+        "POST should return 2xx, got {status}: {body}"
+    );
+    let missing = body["results"]["main"]["missing_data"]
+        .as_array()
+        .expect("results.main.missing_data must be an array");
+    let keys: Vec<&str> = missing.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["a", "b"],
+        "smoke: missing_data must list unbound inputs: {body}"
     );
 }

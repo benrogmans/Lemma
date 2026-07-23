@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lemma WASM Playground</title>
+    <title>Lemma Playground</title>
     <script src="vendor/vs/loader.js"></script>
     <style>
         body {
@@ -271,7 +271,7 @@
 </head>
 
 <body>
-    <h1>Lemma WASM Playground</h1>
+    <h1>Lemma Playground</h1>
 
     <div class="section">
         <div class="editor-wrap">
@@ -311,11 +311,11 @@
         let loadTimer = null;
         let lspClient = null;
         let lspVersion = 0;
-        const DOC_URI = 'file:///playground/wasm.lemma';
+        const DOC_URI = 'file:///playground/playground.lemma';
 
         const state = {
             specs: [],
-            schemas: {},
+            shows: {},
             dataValues: {},
             evalResults: {},
         };
@@ -349,7 +349,7 @@
             return s;
         }
 
-        function effectiveFromToSchemaParam(effective_from) {
+        function effectiveFromToShowParam(effective_from) {
             if (!effective_from || typeof effective_from !== 'object') return null;
             if (Object.prototype.hasOwnProperty.call(effective_from, 'Origin')) return null;
             if (effective_from.DateTimeValue) {
@@ -359,7 +359,7 @@
         }
 
         function specKey(entry) {
-            var repo = entry.repository && entry.repository.name ? entry.repository.name : '';
+            var repo = entry.repository != null && entry.repository !== '' ? entry.repository : '';
             var base = repo ? repo + '::' + entry.name : entry.name;
             var ef = entry.effective_from;
             if (!ef || typeof ef !== 'object') return base;
@@ -373,7 +373,7 @@
         function specEffective(key) {
             var entry = state.specs.find(function (d) { return specKey(d) === key; });
             if (!entry) return null;
-            return effectiveFromToSchemaParam(entry.effective_from);
+            return effectiveFromToShowParam(entry.effective_from);
         }
 
         function dataValuesStorageKey(specName) {
@@ -416,11 +416,11 @@
         }
 
         // ---------------------------------------------------------------
-        // Schema introspection
+        // Show introspection
         // ---------------------------------------------------------------
 
-        function specKind(schemaType) {
-            return (schemaType && typeof schemaType.kind === 'string') ? schemaType.kind : null;
+        function specKind(entryType) {
+            return (entryType && typeof entryType.kind === 'string') ? entryType.kind : null;
         }
 
         function storedFromLiteralValue(lit, kind) {
@@ -462,17 +462,18 @@
             const values = state.dataValues[specName];
             if (!values) return {};
 
-            const schema = state.schemas[specName];
-            if (!schema || !Array.isArray(schema.data)) return {};
+            const show = state.shows[specName];
+            if (!show || !show.data || typeof show.data !== 'object' || Array.isArray(show.data)) {
+                return {};
+            }
 
             const result = {};
 
-            for (const data of schema.data) {
-                const name = data.name;
+            for (const [name, data] of Object.entries(show.data)) {
                 const entry = values[name];
                 if (entry === undefined || entry === null) continue;
 
-                const kind = specKind(data.schemaType);
+                const kind = specKind(data.entryType);
 
                 if (kind === 'boolean') {
                     result[name] = entry === true;
@@ -529,13 +530,12 @@
         // DOM: Build a data input row
         // ---------------------------------------------------------------
 
-        function buildDataRow(specName, data) {
-            const name = data.name;
-            const schemaType = data.schemaType;
-            const kind = specKind(schemaType);
+        function buildDataRow(specName, name, data) {
+            const entryType = data.entryType;
+            const kind = specKind(entryType);
             // Kind-specific fields now live directly on the type object
             // (`minimum`, `maximum`, `units`, `options`, `help`, ...).
-            const spec = schemaType;
+            const spec = entryType;
 
             const row = document.createElement('div');
             row.className = 'data-row';
@@ -854,8 +854,11 @@
 
         function buildPageCard(key) {
             loadDataValuesFromStorage(key);
-            const schema = state.schemas[key];
-            const data = (schema && Array.isArray(schema.data)) ? schema.data : [];
+            const show = state.shows[key];
+            const data =
+                show && show.data && typeof show.data === 'object' && !Array.isArray(show.data)
+                    ? show.data
+                    : {};
 
             const card = document.createElement('div');
             card.className = 'spec-card';
@@ -867,8 +870,8 @@
 
             const dataGrid = document.createElement('div');
             dataGrid.className = 'data-grid';
-            for (const data of data) {
-                dataGrid.appendChild(buildDataRow(key, data));
+            for (const [name, entry] of Object.entries(data)) {
+                dataGrid.appendChild(buildDataRow(key, name, entry));
             }
             card.appendChild(dataGrid);
 
@@ -900,72 +903,8 @@
         }
 
         // ---------------------------------------------------------------
-        // Schema diffing and DOM patching
+        // Spec list / selected page
         // ---------------------------------------------------------------
-
-        function patchDataInputs(specName, card, oldData, newData) {
-            const dataGrid = card.querySelector('.data-grid');
-            if (!dataGrid) return;
-
-            const oldByName = {};
-            for (const data of oldData) {
-                oldByName[data.name] = data;
-            }
-
-            const newByName = {};
-            for (const data of newData) {
-                newByName[data.name] = data;
-            }
-
-            // Remove data that no longer exist
-            for (const oldName of Object.keys(oldByName)) {
-                if (!newByName[oldName]) {
-                    const existingRow = dataGrid.querySelector('[data-data-name="' + CSS.escape(oldName) + '"]');
-                    if (existingRow) {
-                        dataGrid.removeChild(existingRow);
-                    }
-                    if (state.dataValues[specName]) {
-                        delete state.dataValues[specName][oldName];
-                    }
-                }
-            }
-
-            // Add or update data
-            for (const newData of newData) {
-                const name = newData.name;
-                const oldData = oldByName[name];
-                const existingRow = dataGrid.querySelector('[data-data-name="' + CSS.escape(name) + '"]');
-
-                if (oldData && existingRow) {
-                    const oldKind = specKind(oldData.schemaType);
-                    const newKind = specKind(newData.schemaType);
-
-                    if (oldKind === newKind) {
-                        // Same type kind: keep the existing input and its state value
-                        continue;
-                    }
-
-                    // Different type kind: replace input, delete old state value
-                    if (state.dataValues[specName]) {
-                        delete state.dataValues[specName][name];
-                    }
-                    const newRow = buildDataRow(specName, newData);
-                    dataGrid.replaceChild(newRow, existingRow);
-                } else if (!existingRow) {
-                    // New data: add input
-                    const newRow = buildDataRow(specName, newData);
-                    dataGrid.appendChild(newRow);
-                }
-            }
-
-            // Reorder rows to match new schema order
-            for (const newData of newData) {
-                const row = dataGrid.querySelector('[data-data-name="' + CSS.escape(newData.name) + '"]');
-                if (row) {
-                    dataGrid.appendChild(row);
-                }
-            }
-        }
 
         function patchPageCards() {
             const select = document.getElementById('spec-select');
@@ -1000,7 +939,7 @@
             const key = select.value;
             detail.textContent = '';
 
-            if (!key || !state.schemas[key]) return;
+            if (!key || !state.shows[key]) return;
 
             const card = buildPageCard(key);
             detail.appendChild(card);
@@ -1010,45 +949,38 @@
         // Engine interaction
         // ---------------------------------------------------------------
 
-        function fetchSchema(key) {
+        function fetchShow(key) {
             if (!engine) return null;
             var entry = state.specs.find(function (d) { return specKey(d) === key; });
             if (!entry) return null;
-            var repo = entry.repository && entry.repository.name ? entry.repository.name : null;
+            var repo = entry.repository != null && entry.repository !== '' ? entry.repository : null;
             var name = entry.name;
             var effectiveStr = specEffective(key);
             try {
-                var schema = engine.schema(repo, name, effectiveStr);
-                return normalizeSchema(schema);
+                var show = engine.show(repo, name, effectiveStr);
+                return normalizeShow(show);
             } catch (e) {
-                console.error('fetchSchema exception for', key, e);
+                console.error('fetchShow exception for', key, e);
                 return null;
             }
         }
 
-        function normalizeSchema(schema) {
-            const data = [];
-            if (schema.data && typeof schema.data === 'object') {
-                for (const [name, entry] of Object.entries(schema.data)) {
-                    data.push({
-                        name: name,
-                        required:
-                            !(entry.prefilled != null
-                                || entry.supplied != null
-                                || entry.default != null),
-                        schemaType: entry.type,
+        function normalizeShow(show) {
+            const data = {};
+            if (show.data && typeof show.data === 'object' && !Array.isArray(show.data)) {
+                for (const [name, entry] of Object.entries(show.data)) {
+                    data[name] = {
+                        entryType: entry.type,
                         defaultValue:
                             entry.prefilled != null
                                 ? entry.prefilled
-                                : entry.supplied != null
-                                  ? entry.supplied
-                                  : entry.default != null
-                                    ? entry.default
-                                    : null
-                    });
+                                : entry.suggestion != null
+                                  ? entry.suggestion
+                                  : null
+                    };
                 }
             }
-            return { spec: schema.spec, data: data, rules: schema.rules };
+            return { spec: show.spec, data: data, rules: show.rules };
         }
 
         async function loadCode() {
@@ -1059,7 +991,7 @@
             engine = new Engine();
 
             try {
-                await engine.load(code, 'wasm.lemma');
+                engine.load(code);
             } catch (errs) {
                 var loadMsg = Array.isArray(errs) ? errs.join('\n') : String(errs);
                 setStatus('err', 'Load failed', loadMsg);
@@ -1089,11 +1021,8 @@
                 var g = specGroups[gi];
                 var repository = g.repository;
                 for (var si = 0; si < g.specs.length; si++) {
-                    var specSet = g.specs[si];
-                    for (var vi = 0; vi < specSet.specs.length; vi++) {
-                        var lemmaSpec = specSet.specs[vi];
-                        specEntries.push(Object.assign({}, lemmaSpec, { repository: repository }));
-                    }
+                    var lemmaSpec = g.specs[si];
+                    specEntries.push(Object.assign({}, lemmaSpec, { repository: repository }));
                 }
             }
             const newKeys = specEntries.map(specKey);
@@ -1101,7 +1030,7 @@
 
             for (const oldK of oldKeys) {
                 if (newKeys.indexOf(oldK) === -1) {
-                    delete state.schemas[oldK];
+                    delete state.shows[oldK];
                     delete state.dataValues[oldK];
                     delete state.evalResults[oldK];
                 }
@@ -1112,9 +1041,9 @@
             for (const entry of specEntries) {
                 const key = specKey(entry);
                 try {
-                    const repo = entry.repository && entry.repository.name ? entry.repository.name : null;
-                    const rawSchema = engine.schema(repo, entry.name, entry.effective_from);
-                    state.schemas[key] = normalizeSchema(rawSchema);
+                    const repo = entry.repository != null && entry.repository !== '' ? entry.repository : null;
+                    const rawShow = engine.show(repo, entry.name, entry.effective_from);
+                    state.shows[key] = normalizeShow(rawShow);
                 } catch (e) { console.error('show failed for', key, e); }
             }
 
@@ -1150,7 +1079,7 @@
             const entry = state.specs.find(function (d) { return specKey(d) === key; });
             if (!entry) return;
             const name = entry.name;
-            const repo = entry.repository && entry.repository.name ? entry.repository.name : null;
+            const repo = entry.repository != null && entry.repository !== '' ? entry.repository : null;
             const effective = specEffective(key);
             const dataObj = serializeDataValues(key);
 
@@ -1207,12 +1136,15 @@
             const dataGrid = card.querySelector('.data-grid');
             if (!dataGrid) return;
 
-            const schema = state.schemas[specName];
-            const data = (schema && Array.isArray(schema.data)) ? schema.data : [];
+            const show = state.shows[specName];
+            const data =
+                show && show.data && typeof show.data === 'object' && !Array.isArray(show.data)
+                    ? show.data
+                    : {};
 
             dataGrid.textContent = '';
-            for (const data of data) {
-                dataGrid.appendChild(buildDataRow(specName, data));
+            for (const [name, entry] of Object.entries(data)) {
+                dataGrid.appendChild(buildDataRow(specName, name, entry));
             }
 
             const resultsContainer = card.querySelector('.results-container');
@@ -1235,14 +1167,14 @@
             showError('Unhandled error', event.reason);
         });
 
-        const wasmReady = (async function () {
+        const engineReady = (async function () {
             try {
-                setStatus('warn', 'Initializing WASM…');
+                setStatus('warn', 'Initializing…');
                 await init();
                 engine = new Engine();
                 setStatus('warn', 'Loading Monaco…');
             } catch (error) {
-                showError('WASM failed', error);
+                showError('Engine failed to start', error);
                 throw error;
             }
         })();
@@ -1266,7 +1198,7 @@
             if (editorReady) return;
             clearEditorLoading();
             try {
-                await wasmReady;
+                await engineReady;
                 registerLemmaLanguage(monaco);
 
                 const editorEl = document.getElementById('editor');

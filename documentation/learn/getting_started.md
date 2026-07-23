@@ -5,7 +5,7 @@ nav_order: 10
 
 # Getting started
 
-Lemma is a pure, declarative language for business rules that stakeholders can read and systems can evaluate precisely. Rules live in Specs: named collections of Data (inputs) and Rules (computed outputs). Lemma validates every Spec before evaluation; after that, each Rule returns a value or a Veto (no value), and every result carries an explanation.
+Lemma is a pure, declarative language for business rules that stakeholders can read and systems can evaluate precisely. Rules live in Specs: named collections of Data (inputs) and Rules (computed outputs). Lemma validates every Spec before evaluation; after that, each Rule returns a value or a Veto (no value). Explanations are opt-in (`lemma run -x` / `explain: true`).
 
 This chapter walks through installation, your first Spec, and running it from the CLI.
 
@@ -34,7 +34,7 @@ spec shipping
 
 data money: measure
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.91
   -> decimals 2
   -> minimum 0 eur
 
@@ -115,13 +115,13 @@ Machine-readable output.
 lemma run shipping -x
 ```
 
-Show the explanation trace (how each Rule was evaluated).
+Show how each Rule was evaluated (human reasoning table; with `--json`, per-rule `explanation` objects per [explanation.v1.json](../schemas/explanation.v1.json)).
 
 ```bash
-lemma schema shipping
+lemma show shipping
 ```
 
-List required inputs.
+Show the static interface (data types, constraints, and rules reachable after normalize). Overlay-aware needs for a concrete `run` come from each rule's `missing_data`; static types and suggestions are on `lemma show` only.
 
 See [CLI reference](../reference/cli.md) for all commands and flags.
 

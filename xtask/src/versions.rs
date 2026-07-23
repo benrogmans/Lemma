@@ -1,4 +1,4 @@
-//! Bump and verify the workspace release version across Rust, Elixir, docs, and VS Code.
+//! Bump and verify the workspace release version across Rust, Elixir, Maven, docs, and VS Code.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,7 @@ mod tracked {
     ];
 
     pub const HEX_MIX: &str = "engine/packages/hex/mix.exs";
+    pub const MAVEN_POM: &str = "engine/packages/maven/pom.xml";
     pub const ENGINE_README: &str = "engine/README.md";
     pub const VSCODE_PACKAGE_JSON: &str = "engine/lsp/editors/vscode/package.json";
 }
@@ -29,6 +30,10 @@ fn mix_needle(v: &str) -> String {
 
 fn readme_needle(v: &str) -> String {
     format!(r#"lemma-engine = "{v}""#)
+}
+
+fn pom_project_version_block(v: &str) -> String {
+    format!("<artifactId>lemma-engine</artifactId>\n  <version>{v}</version>")
 }
 
 /// Paths relative to workspace root that must carry the same release version as `[workspace.package]`.
@@ -123,6 +128,15 @@ fn replace_readme_engine_line(content: &str, old: &str, new: &str) -> String {
     content.replace(&from, &to)
 }
 
+fn replace_pom_project_version(content: &str, old: &str, new: &str) -> Result<String, String> {
+    let from = pom_project_version_block(old);
+    let to = pom_project_version_block(new);
+    if !content.contains(&from) {
+        return Err(format!("expected `{from}`"));
+    }
+    Ok(content.replacen(&from, &to, 1))
+}
+
 fn bump_package_json_version(path: &Path, old: &str, new: &str) -> Result<(), String> {
     let raw = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let from = format!(r#""version": "{old}""#);
@@ -177,6 +191,12 @@ pub fn versions_bump(root: &Path, new: &str) -> Result<(), String> {
         ));
     }
     fs::write(&mix, mix2).map_err(|e| format!("{}: {e}", mix.display()))?;
+
+    let pom = root.join(tracked::MAVEN_POM);
+    let pom_raw = fs::read_to_string(&pom).map_err(|e| format!("{}: {e}", pom.display()))?;
+    let pom2 = replace_pom_project_version(&pom_raw, &old, new)
+        .map_err(|e| format!("{}: {e}", pom.display()))?;
+    fs::write(&pom, pom2).map_err(|e| format!("{}: {e}", pom.display()))?;
 
     let readme = root.join(tracked::ENGINE_README);
     let rm = fs::read_to_string(&readme).map_err(|e| format!("{}: {e}", readme.display()))?;
@@ -299,6 +319,17 @@ pub fn versions_verify(root: &Path) -> Result<(), String> {
         Err(e) => errs.push(format!("{}: {e}", mix.display())),
     }
 
+    let pom = root.join(tracked::MAVEN_POM);
+    match fs::read_to_string(&pom) {
+        Ok(s) => {
+            let needle = pom_project_version_block(&v);
+            if !s.contains(&needle) {
+                errs.push(format!("{}: expected `{needle}`", pom.display()));
+            }
+        }
+        Err(e) => errs.push(format!("{}: {e}", pom.display())),
+    }
+
     let readme = root.join(tracked::ENGINE_README);
     match fs::read_to_string(&readme) {
         Ok(s) => {
@@ -368,5 +399,19 @@ version = "0.8.4"
         let s = r#"lemma = { version = "=0.8.4", path = ".." }"#;
         let out = replace_dep_pins(s, "0.8.4", "0.8.5");
         assert!(out.contains("=0.8.5"));
+    }
+
+    #[test]
+    fn replace_pom_project_version_replaces_once() {
+        let t = r#"  <artifactId>lemma-engine</artifactId>
+  <version>0.9.0</version>
+  <dependency>
+    <version>2.18.2</version>
+  </dependency>
+"#;
+        let out = replace_pom_project_version(t, "0.9.0", "0.9.1").unwrap();
+        assert!(out.contains("<version>0.9.1</version>"));
+        assert!(out.contains("<version>2.18.2</version>"));
+        assert!(!out.contains("lemma-engine</artifactId>\n  <version>0.9.0</version>"));
     }
 }

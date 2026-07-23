@@ -12,7 +12,7 @@ data base: 100
 rule usage: nonexistent + 1
 "#;
 
-    let result = engine.load(lemma_code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, lemma_code.to_string())]);
     assert!(
         result.is_err(),
         "Reference to non-existent name should fail"
@@ -43,7 +43,7 @@ rule ambiguous: 20
 rule usage: ambiguous + 1
 "#;
 
-    let result = engine.load(lemma_code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, lemma_code.to_string())]);
     assert!(
         result.is_err(),
         "Reference that is both data and rule should fail"

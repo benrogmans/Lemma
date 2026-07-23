@@ -51,15 +51,17 @@ fn repeated_load_produces_identical_json_responses() {
     let mut jsons = Vec::new();
     for _ in 0..5 {
         let mut engine = Engine::new();
-        engine.load(SPEC, lemma::SourceType::Volatile).unwrap();
+        engine
+            .load([(lemma::SourceType::Volatile, SPEC.to_string())])
+            .unwrap();
         let response = engine
             .run(
                 None,
                 "determinism_test",
                 Some(&eff),
                 data.clone(),
-                true,
                 None,
+                true,
             )
             .unwrap();
         let json = serde_json::to_string_pretty(&response).unwrap();
@@ -75,22 +77,24 @@ fn repeated_load_produces_identical_json_responses() {
 }
 
 #[test]
-fn repeated_schema_is_identical() {
+fn repeated_show_is_identical() {
     let eff = effective_utc(2026, 6, 15);
 
-    let mut schemas = Vec::new();
+    let mut shows = Vec::new();
     for _ in 0..5 {
         let mut engine = Engine::new();
-        engine.load(SPEC, lemma::SourceType::Volatile).unwrap();
-        let schema = engine.schema(None, "determinism_test", Some(&eff)).unwrap();
-        let json = serde_json::to_string_pretty(&schema).unwrap();
-        schemas.push(json);
+        engine
+            .load([(lemma::SourceType::Volatile, SPEC.to_string())])
+            .unwrap();
+        let show = engine.show(None, "determinism_test", Some(&eff)).unwrap();
+        let json = serde_json::to_string_pretty(&show).unwrap();
+        shows.push(json);
     }
 
-    for (i, schema) in schemas.iter().enumerate().skip(1) {
+    for (i, show_json) in shows.iter().enumerate().skip(1) {
         assert_eq!(
-            &schemas[0], schema,
-            "Schema run 0 vs run {i} produced different JSON"
+            &shows[0], show_json,
+            "Show run 0 vs run {i} produced different JSON"
         );
     }
 }

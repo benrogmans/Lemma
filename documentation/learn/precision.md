@@ -11,30 +11,32 @@ Lemma stores and computes numbers as exact rationals. This chapter explains how 
 
 Lemma uses three layers:
 
-1. Compute (ℚ): magnitudes stored as exact rationals (arbitrary-precision `BigInt` numerator/denominator). Arithmetic, comparisons, and unit conversions run in ℚ. No per-step decimal rounding.
-2. Commit (decimal): a single conversion to `rust_decimal` at boundaries: API/JSON output, schema checks, transcendental functions.
-3. Output (decimal string): API responses send magnitudes as JSON strings (`"37"`, `"99.50"`), never JSON number literals.
+1. **Compute (ℚ):** magnitudes stored as exact rationals (arbitrary-precision `BigInt` numerator/denominator). Arithmetic, comparisons, and unit conversions run in ℚ. No per-step decimal rounding.
+2. **Materialize (decimal):** a single conversion to `rust_decimal` at boundaries: API/JSON output, show/API serialization, transcendental function operands.
+3. **Output (decimal string):** API responses send magnitudes as JSON strings (`"37"`, `"99.50"`), never JSON number literals.
 
 ```
-spec → parse (decimal literal → ℚ) → plan → evaluate (ℚ) → commit → decimal string
+spec → parse (Decimal → ℚ) → plan → evaluate (ℚ) → try_to_decimal → decimal string
 ```
+
+Input parsing and output materialization both enforce [`Decimal::MAX_SCALE`](https://docs.rs/rust_decimal/latest/rust_decimal/struct.Decimal.html#associatedconstant.MAX_SCALE) (28 decimal digits).
 
 ## Limits
 
 | Layer | Constraint |
 |-------|------------|
-| Literals, JSON input, API input | Magnitude ±79,228,162,514,264,337,593,543,950,335 (~7.92×10²⁸); at most 28 decimal digits (`rust_decimal`) |
+| Literals, JSON input, API input | Magnitude ±79,228,162,514,264,337,593,543,950,335 (~7.92×10²⁸); at most 28 decimal digits (`Decimal::MAX_SCALE`) |
 | Internal compute (ℚ) | Arbitrary precision; bounded by available memory (all BigInt allocation is fallible) |
 
-Intermediate values during evaluation may exceed the decimal range or use more precision than 28 digits. Only top-level Rule results committed for output must fit `rust_decimal`. Oversized or uncommittable final results Veto with `Calculated result exceeds decimal value limit`. Decimal commit-or-veto applies when materializing a rule for the response envelope, not when storing in `rule_results` (which keeps exact ℚ values).
+Intermediate values during evaluation may exceed the decimal range or use more precision than 28 digits. Internal computation never precision-fails. Only top-level rule results materialized for the response envelope are rounded to `Decimal::MAX_SCALE`. Magnitude overflow (`|value| > Decimal::MAX`) vetoes with `Calculated result exceeds decimal value limit`. Materialization applies when building the response envelope, not when storing in `rule_results` (which keeps exact ℚ values).
 
-When an exact rational grows past what memory allows, evaluation Vetoes with `out of memory` instead of crashing the process. This is resource exhaustion, not a decimal commit failure.
+When an exact rational grows past what memory allows, evaluation vetoes with `out of memory` instead of crashing the process. This is resource exhaustion, not a decimal materialization failure.
 
 JSON/API output never emits fraction strings (`"37/47"`) or scientific notation.
 
 ## Display vs API output
 
-CLI and human-readable formatting may show `numer/denom` when a value cannot commit to decimal (for debugging or edge cases). JSON and API surfaces use decimal strings only; uncommittable top-level Rule results Veto instead of emitting a fraction.
+CLI and human-readable formatting show a decimal when [`RationalInteger::try_to_decimal`] succeeds. On magnitude overflow only, display falls back to `numer/denom` (debugging). JSON and API surfaces use decimal strings only; oversized top-level rule results veto instead of emitting a fraction.
 
 ## Exact paths
 
@@ -51,8 +53,8 @@ Long conversion chains telescope in ℚ. Example: `37 base` through fourteen pri
 
 | Case | Behavior |
 |------|----------|
-| `^` on irrationals (e.g. `2 ^ 0.5`) | ~28-significant-digit Decimal fallback when no exact root |
-| `sqrt`, `sin`, `cos`, `log`, … | ~28-significant-digit Decimal; inputs must commit to decimal |
+| `^` on irrationals (e.g. `2 ^ 0.5`) | `Decimal::MAX_SCALE` digit fallback when no exact root |
+| `sqrt`, `sin`, `cos`, `log`, … | `Decimal::MAX_SCALE` digit semantics; operands materialized via `try_to_decimal` |
 | `floor`, `ceil`, `round` on measures | Operate at Decimal precision |
 | ℚ allocation failure | Veto (`out of memory`); no decimal fallback |
 | Division by zero | Literal zero divisor in a Rule (e.g. `1 / 0`) → planning Error. Zero from runtime Data → Veto (never approximated) |
@@ -67,9 +69,9 @@ All API surfaces enforce a uniform rule for numeric data inputs:
 | Decimal / float (native number) | **Rejected** | IEEE 754 f64 cannot represent most decimals exactly |
 | String `"0.1"`, `"99.50"` | Yes | Parsed as exact decimal → ℚ |
 
-This applies identically to the WASM/JavaScript API, the HTTP/JSON API, and the Elixir NIF. Non-integer numeric values are rejected with `"decimal values must be passed as strings to preserve exactness"`. Rust callers using `Engine::run` directly are unaffected (they already provide string magnitudes).
+This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elixir NIF, and the Java Maven package (`BigDecimal`). Non-integer numeric values are rejected with `"decimal values must be passed as strings to preserve exactness"` (JS/HTTP/Elixir). Rust callers using `Engine::run` directly are unaffected (they already provide string magnitudes). Java callers use `BigDecimal` / string factories on `FactValues` — never `double`/`float` for domain decimals.
 
-## Clients (JavaScript / Python)
+## Clients (JavaScript / HTTP / Maven)
 
 **Sending data:** pass decimal values as strings, integers may be native numbers:
 
@@ -77,33 +79,22 @@ This applies identically to the WASM/JavaScript API, the HTTP/JSON API, and the 
 engine.run(null, "pricing", null, { quantity: 42, rate: "0.075" });
 ```
 
-```python
-engine.run("pricing", data={"quantity": 42, "rate": "0.075"})
-```
+HTTP/JSON uses the same rule (integers as numbers, decimals as strings in the request body). On Maven, use `FactValues` with `BigDecimal` or decimal strings — see [Maven](../tools/maven.md).
 
 **Reading results:** parse numeric fields as decimal strings, not floats:
 
-JavaScript:
-
 ```javascript
 import Decimal from "decimal.js";
-const n = new Decimal(json.results.price.result.value.value.number);
+const n = new Decimal(json.results.price.number);
 ```
 
-Python:
-
-```python
-from decimal import Decimal
-n = Decimal(response["results"]["price"]["result"]["value"]["value"]["number"])
-```
-
-Never `Number()` / `parseFloat()` / `float()`. Precision breaks above ~9×10¹⁵.
+Never `Number()` / `parseFloat()` / `float()`. Precision breaks above ~9×10¹⁵. The same string magnitudes appear in HTTP JSON responses; parse them with a decimal library in your language. On Maven, rule magnitudes are already `BigDecimal`.
 
 ## Spec authors
 
 - Money, units, ratios: exact by default; define unit factors as clean literals.
-- `decimals n`: constrains decimal scale when validating Data inputs, defaults, and value copies, not internal ℚ compute or intermediate Rule steps.
-- Keep deliverable top-level Rule results within the 28-digit decimal limit; oversized finals Veto.
+- `decimals n`: constrains decimal scale when validating Data inputs, suggestions, and value copies, not internal ℚ compute or intermediate Rule steps.
+- Keep deliverable top-level Rule results within the 28-digit decimal limit; magnitude overflow at output vetoes.
 
 ## Related
 

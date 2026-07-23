@@ -1,0 +1,20 @@
+[package]
+name = "lemma_jni"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lemma engine JNI crate for the JVM"
+publish = false
+
+[lib]
+name = "lemma_jni"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+lemma-engine = { path = "../../../../" }
+jni = "0.21"
+serde = { workspace = true }
+serde_json.workspace = true

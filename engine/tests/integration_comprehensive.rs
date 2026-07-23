@@ -16,8 +16,8 @@ spec base_contract
 uses lemma units
 data min_salary: 30000
 data max_salary: 200000
-data standard_vacation_days: 20 days
-data probation_period: 90 days
+data standard_vacation_days: 20 day
+data probation_period: 90 day
 data min_age: 18 year
 "#;
 
@@ -28,7 +28,7 @@ uses base: base_contract
 data salary: 75000
 data bonus_percentage: 10%
 data start_date: 2024-01-15
-data vacation_days: 20 days
+data vacation_days: 20 day
 data employee_age: 28 year
 
 rule total_compensation: salary + (salary * bonus_percentage)
@@ -42,10 +42,10 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
 "#;
 
     engine
-        .load(base_contract, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_contract.to_string())])
         .unwrap();
     engine
-        .load(employment_terms, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, employment_terms.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -55,8 +55,8 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
             "employment_terms",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .unwrap();
 
@@ -91,8 +91,8 @@ rule contract_valid: is_salary_valid and vacation_days_ok and is_adult
         .unwrap();
     assert_eq!(contract_valid.boolean, Some(true));
 
-    let _ = engine.remove("employment_terms", Some(&now));
-    let _ = engine.remove("base_contract", Some(&now));
+    let _ = engine.remove(None, "employment_terms", Some(&now));
+    let _ = engine.remove(None, "base_contract", Some(&now));
 }
 
 #[test]
@@ -123,7 +123,9 @@ rule net_income: income - tax_amount
 rule effective_rate: (tax_amount / income) * 100%
 "#;
 
-    engine.load(tax_spec, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, tax_spec.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -132,8 +134,8 @@ rule effective_rate: (tax_amount / income) * 100%
             "tax_calculation",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .unwrap();
 
@@ -193,7 +195,7 @@ rule effective_rate: (tax_amount / income) * 100%
         other => panic!("Expected Ratio for tax_rate, got {:?}", other),
     }
 
-    let _ = engine.remove("tax_calculation", Some(&now));
+    let _ = engine.remove(None, "tax_calculation", Some(&now));
 }
 
 #[test]
@@ -213,7 +215,7 @@ rule status: "LOW"
 "#;
 
     engine
-        .load(config_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, config_spec.to_string())])
         .unwrap();
 
     let mut data = std::collections::HashMap::new();
@@ -222,7 +224,7 @@ rule status: "LOW"
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "dynamic_config", Some(&now), data, true, None)
+        .run(None, "dynamic_config", Some(&now), data, None, true)
         .unwrap();
 
     let calculated = response
@@ -243,7 +245,7 @@ rule status: "LOW"
     data2.insert("threshold".to_string(), "150".to_string());
     data2.insert("multiplier".to_string(), "2".to_string());
     let response2 = engine
-        .run(None, "dynamic_config", Some(&now), data2, true, None)
+        .run(None, "dynamic_config", Some(&now), data2, None, true)
         .unwrap();
 
     let status2 = response2
@@ -253,7 +255,7 @@ rule status: "LOW"
         .unwrap();
     assert_eq!(status2.display.clone().expect("display"), "HIGH");
 
-    let _ = engine.remove("dynamic_config", Some(&now));
+    let _ = engine.remove(None, "dynamic_config", Some(&now));
 }
 
 #[test]
@@ -264,9 +266,9 @@ fn test_date_arithmetic_comprehensive() {
 spec project_timeline
 uses lemma units
 data project_start: 2024-01-15
-data phase1_duration: 30 days
-data phase2_duration: 45 days
-data phase3_duration: 60 days
+data phase1_duration: 30 day
+data phase2_duration: 45 day
+data phase3_duration: 60 day
 data today: 2024-02-15
 
 rule phase1_end: project_start + phase1_duration
@@ -274,8 +276,8 @@ rule phase2_end: phase1_end + phase2_duration
 rule phase3_end: phase2_end + phase3_duration
 
 rule project_duration: phase1_duration + phase2_duration + phase3_duration
-rule elapsed_time: project_start...today as days
-rule days_remaining: today...phase3_end as days
+rule elapsed_time: project_start...today as day
+rule days_remaining: today...phase3_end as day
 
 rule is_phase1_complete: today > phase1_end
 rule is_phase2_complete: today > phase2_end
@@ -283,7 +285,7 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
 "#;
 
     engine
-        .load(timeline_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, timeline_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -293,8 +295,8 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
             "project_timeline",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .unwrap();
 
@@ -312,7 +314,7 @@ rule is_on_schedule: elapsed_time <= phase1_duration + phase2_duration
         .unwrap();
     assert_eq!(phase2_complete.boolean, Some(false));
 
-    let _ = engine.remove("project_timeline", Some(&now));
+    let _ = engine.remove(None, "project_timeline", Some(&now));
 }
 
 // ============================================================================
@@ -337,14 +339,16 @@ data salary: 75000
 rule is_valid: salary >= base_contract.min_salary and salary <= base_contract.max_salary
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(child_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, child_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "child", Some(&now), HashMap::new(), true, None)
+        .run(None, "child", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let is_valid = response
@@ -363,7 +367,7 @@ fn test_spec_ref_field_access_arithmetic() {
 spec base
 uses lemma units
 data project_start: 2024-01-15
-data probation_period: 90 days
+data probation_period: 90 day
 "#;
 
     let child_spec = r#"
@@ -374,14 +378,16 @@ uses base_contract: base
 rule probation_end: base_contract.project_start + base_contract.probation_period
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(child_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, child_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "child", Some(&now), HashMap::new(), true, None)
+        .run(None, "child", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let probation_end = response

@@ -15,8 +15,6 @@ use crate::diagnostics;
 use crate::registry::Registry;
 use crate::semantic_tokens;
 use crate::workspace::WorkspaceModel;
-#[cfg(not(target_arch = "wasm32"))]
-use lemma::Context;
 use lemma::{DataValue, SpecRef};
 
 async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
@@ -328,29 +326,26 @@ impl LanguageServer for LemmaLanguageServer {
                 return Ok(None);
             };
             let engine = workspace.engine_with_workspace();
-            let ctx = engine.specs();
             let text = text.as_str();
             let root = root.as_path();
 
-            let links: Vec<DocumentLink> = parse_result
-                .repositories
-                .values()
-                .flatten()
-                .flat_map(|consumer| {
-                    consumer.data.iter().filter_map(move |data| {
-                        let DataValue::Import(spec_ref) = &data.value else {
-                            return None;
-                        };
-                        build_uses_document_link(
-                            spec_ref,
-                            &consumer.effective_from,
-                            text,
-                            root,
-                            ctx,
-                        )
-                    })
-                })
-                .collect();
+            let mut links: Vec<DocumentLink> = Vec::new();
+            for consumer in parse_result.repositories.values().flatten() {
+                for data in &consumer.data {
+                    let DataValue::Import(spec_ref) = &data.value else {
+                        continue;
+                    };
+                    if let Some(link) = build_uses_document_link(
+                        spec_ref,
+                        consumer.effective_from(),
+                        text,
+                        root,
+                        &engine,
+                    ) {
+                        links.push(link);
+                    }
+                }
+            }
 
             Ok((!links.is_empty()).then_some(links))
         }
@@ -492,10 +487,10 @@ fn full_ref_range(spec_ref: &SpecRef, text: &str) -> Option<Range> {
 #[cfg(not(target_arch = "wasm32"))]
 fn build_uses_document_link(
     spec_ref: &SpecRef,
-    consumer_effective: &lemma::EffectiveDate,
+    consumer_effective_from: Option<&lemma::DateTimeValue>,
     text: &str,
     workspace_root: &Path,
-    ctx: &Context,
+    engine: &lemma::Engine,
 ) -> Option<DocumentLink> {
     let repo_qual = spec_ref.repository.as_ref()?;
     let qualifier_name = repo_qual.name.as_str();
@@ -504,27 +499,32 @@ fn build_uses_document_link(
         return None;
     }
     let full_range = full_ref_range(spec_ref, text)?;
-    let repo_arc = ctx.find_repository(qualifier_name)?;
-    let instant = spec_ref.at(consumer_effective);
-    let spec_set = ctx.spec_set(&repo_arc, spec_ref.name.as_str())?;
-    let resolved = spec_set.spec_at(&instant)?;
+    let instant_dt = spec_ref.resolved_instant(consumer_effective_from)?;
+    let shown = engine
+        .show(
+            Some(qualifier_name),
+            spec_ref.name.as_str(),
+            Some(&instant_dt),
+        )
+        .ok()?;
+
     let dep_path = if is_embedded_stdlib {
         materialize_embedded_stdlib_view(workspace_root)?
     } else {
-        match resolved.source_type.as_ref() {
-            Some(lemma::SourceType::Path(p)) => p.as_ref().clone(),
+        match &shown.source_type {
+            Some(lemma::SourceType::Path(path)) => path.as_ref().clone(),
             _ => lemma::deps::dependency_cache_file(workspace_root, qualifier_name),
         }
     };
     let mut file_url = Url::from_file_path(&dep_path).ok()?;
-    file_url.set_fragment(Some(&format!("L{}", resolved.start_line)));
+    file_url.set_fragment(Some(&format!("L{}", shown.start_line)));
     Some(DocumentLink {
         range: full_range,
         target: Some(file_url),
         tooltip: Some(format!(
             "Open {} (line {})",
             dep_path.display(),
-            resolved.start_line
+            shown.start_line
         )),
         data: None,
     })
@@ -793,15 +793,12 @@ mod tests {
         .expect("parse consumer");
 
         let mut engine = lemma::Engine::new();
-        for (parsed_repo, specs) in &parse_result.repositories {
-            for spec in specs {
-                engine
-                    .specs_mut()
-                    .insert_spec(Arc::clone(parsed_repo), Arc::new(spec.clone()))
-                    .expect("insert workspace spec");
-            }
-        }
-        let ctx = engine.specs();
+        engine
+            .load([(
+                lemma::SourceType::Path(Arc::new(workspace_root.join("consumer.lemma"))),
+                source.to_string(),
+            )])
+            .expect("load consumer");
 
         let consumer_spec = parse_result
             .repositories
@@ -841,26 +838,24 @@ mod tests {
             "repository link must be a file:// URL",
         );
 
-        let repo_arc = ctx
-            .find_repository(EMBEDDED_STDLIB_REPOSITORY)
-            .expect("embedded stdlib must be in context");
-        let consumer_eff = &consumer_spec.effective_from;
-        let instant = spec_ref.at(consumer_eff);
-        let spec_set = ctx
-            .spec_set(&repo_arc, spec_ref.name.as_str())
-            .expect("spec set for units");
-        let resolved = spec_set.spec_at(&instant).expect("resolve spec units");
+        let shown = engine
+            .show(
+                Some(EMBEDDED_STDLIB_REPOSITORY),
+                spec_ref.name.as_str(),
+                None,
+            )
+            .expect("embedded stdlib spec must show");
         assert!(
-            resolved.start_line >= 1,
-            "resolved start_line must reflect UNITS_LEMMA layout, got {}",
-            resolved.start_line,
+            shown.start_line >= 1,
+            "show start_line must reflect UNITS_LEMMA layout, got {}",
+            shown.start_line,
         );
 
         let mut target_link = Url::from_file_path(&materialized).expect("file URL for target span");
-        target_link.set_fragment(Some(&format!("L{}", resolved.start_line)));
+        target_link.set_fragment(Some(&format!("L{}", shown.start_line)));
         assert_eq!(
             target_link.fragment(),
-            Some(format!("L{}", resolved.start_line).as_str()),
+            Some(format!("L{}", shown.start_line).as_str()),
         );
 
         let qualifier_span = spec_ref
@@ -1026,15 +1021,13 @@ mod tests {
             std::fs::read_to_string(&dep_path).expect("read dep"),
         );
 
-        let mut ctx = Context::new();
-        let insert_errors = workspace_model.insert_specs_into_context(&mut ctx);
+        let engine = workspace_model.engine_with_workspace();
         assert!(
-            insert_errors.is_empty(),
-            "workspace must insert both files cleanly, got: {insert_errors:?}",
-        );
-        assert!(
-            ctx.find_repository("@iso/countries").is_some(),
-            "ctx must contain @iso/countries after inserting lemma_deps/@iso/countries.lemma",
+            engine
+                .list()
+                .iter()
+                .any(|r| r.repository.as_deref() == Some("@iso/countries")),
+            "engine must contain @iso/countries after loading lemma_deps/@iso/countries.lemma",
         );
 
         let parse_result = workspace_model
@@ -1050,10 +1043,10 @@ mod tests {
                     };
                     if let Some(link) = build_uses_document_link(
                         spec_ref,
-                        &consumer.effective_from,
+                        consumer.effective_from(),
                         &consumer_source,
                         &root,
-                        &ctx,
+                        &engine,
                     ) {
                         links.push(link);
                     }

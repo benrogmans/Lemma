@@ -19,14 +19,14 @@ npm install @lemmabase/lemma-engine
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
-await engine.load(pricing, 'pricing.lemma');
+await engine.load({ 'pricing.lemma': pricing });
 
-const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null);
+const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null, false);
 // response.results.unit_price → 16 eur
 // response.results.total      → 800 eur
 ```
 
-`Lemma()` initializes the WASM module once and returns an `Engine`. The Response carries every Rule's value (or Veto if no result could be computed), the input snapshot, and the source location of every Rule that fired.
+`Lemma()` initializes the engine once and returns an `Engine`. The response carries each rule's value (or veto), per-rule `missing_data` when inputs are still unbound, and optional explanation trees when the last `run` argument is `true` ([explanation.v1.json](../schemas/explanation.v1.json)). Types and suggestions are on `engine.show(...)`.
 
 ## Browser
 
@@ -38,7 +38,7 @@ const engine = await Lemma();
 
 Serve over http(s), not `file://`. For manual control: `init()` then `new Engine()`.
 
-If your bundler emits IIFE, can't resolve `import.meta.url`, or refuses to ship `lemma_bg.wasm` as a separate asset, use the inlined entry:
+If your bundler emits IIFE, can't resolve `import.meta.url`, or refuses to ship the engine module as a separate asset, use the inlined entry:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine/iife';
@@ -62,7 +62,7 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 ```
 
-For zero-fetch startup with a preloaded module: `initSync({ module })` then `new Engine()`.
+For zero-fetch startup: `initSync({ module })` then `new Engine()`.
 
 ## In-process LSP + Monaco
 
@@ -87,28 +87,31 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 
 | Method | Description |
 |--------|-------------|
-| `load(code, attribute?)` | Parse and validate a `.lemma` Spec set. Resolves on success; rejects with `EngineError[]`. |
-| `load_batch(sources, dependency?)` | Load many sources in one planning pass. |
+| `load(code)` | Load inline Lemma source as a volatile workspace source |
+| `load(sources)` | Load multiple sources in one planning pass (object or `[label, code][]`; `@owner/name` keys tag registry dependencies) |
 | `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. |
 | `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs`. |
-| `format_repository(repo)` | Canonical Lemma source for a loaded repository, formatted from the in-engine AST. |
-| `schema(repo, name, effective?)` | `SpecSchema`; `repo` null for workspace. |
-| `run(repo, name, ruleNames, data, effective?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all Rules; pass a non-empty array to scope. Returns a `Response`. |
+| `show(repo?, spec, effective?)` | `Show`: interface + temporal window (no Lemma text) |
+| `source(repo?, spec?, effective?)` | Formatted Lemma source (omit `spec` for whole repo) |
+| `run(repo?, spec, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [explanation.v1.json](../schemas/explanation.v1.json). |
+| `remove(repo?, name, effective?)` | Remove a temporal spec slice. |
+| `limits()` | Resource limits for this engine. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled (see `lemma.d.ts`).
 
+**API-wire unit maps on literals:** besides `value` (magnitude in the declared unit) and `lemma_type`, API-wire literals may include optional `measure` or `ratio` maps with every declared unit name → magnitude string (same shape as rule results). Interactive prompts use these maps when the user picks a different unit. These maps are not `-> suggest` and not the removed `-> default` commit path.
+
 ## Registry dependencies
 
-Specs that reference `uses … @org/pkg` need that package available. `fetch` only downloads; call `load_batch` to load the dependency, then load your workspace:
+Specs that `uses` a registry id such as `@iso/countries` need that dependency available. `fetch` only downloads; call `load` with the dependency id as the source label, then load your workspace:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
 const { source, id } = await engine.fetch('@iso/countries');
-await engine.load_batch({ '': source }, id);
-await engine.load(sourceThatUsesStd, 'app.lemma');
+await engine.load({ [id]: source, 'app.lemma': sourceThatUsesStd });
 ```
 
 In the browser, the registry must allow your origin (CORS).

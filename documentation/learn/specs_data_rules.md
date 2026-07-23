@@ -37,7 +37,7 @@ data age:        35
 data start_date: 2024-01-15
 data tax_rate:   15%
 data is_manager: true
-data workweek:   40 hours
+data workweek:   40 hour
 data salary:     75_000
 ```
 
@@ -60,15 +60,17 @@ data status: text
 
 data amount: measure
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.91
   -> decimals 2
 ```
 
-Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> default`, `-> help`, and more, depending on the primitive. To see which inputs a Spec requires:
+Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, and more, depending on the primitive. To inspect the static interface (types, constraints, rules) after normalize:
 
 ```bash
-lemma schema loan_application
+lemma show loan_application
 ```
+
+Which inputs a partial `run` still needs is overlay-aware — inspect each rule's `missing_data` on the evaluation response; static types and suggestions are on `show` only. See [CLI reference](../reference/cli.md).
 
 See [Data in the language reference](../reference/readme.md#data).
 
@@ -89,7 +91,7 @@ data rating: number
 
 data amount: measure
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.91
   -> decimals 2
 
 rule max_amount: 100_000 eur
@@ -97,7 +99,7 @@ rule max_amount: 100_000 eur
 
 rule loan_approved:
   rating > 50 and amount < max_amount
-  unless birth_date...now < 18 years then no
+  unless birth_date...now < 18 year then no
 ```
 
 ## Rule references

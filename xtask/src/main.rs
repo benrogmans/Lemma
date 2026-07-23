@@ -35,6 +35,7 @@ fn run_versions_verify() {
 
 const HEX_PACKAGE_DIR: &str = "engine/packages/hex";
 const NPM_WASM_DIR: &str = "engine/packages/npm";
+const MAVEN_PACKAGE_DIR: &str = "engine/packages/maven";
 
 fn require_command(name: &str, install_hint: &str) {
     let ok = Command::new(name)
@@ -101,6 +102,32 @@ fn run_vscode_precommit() {
     }
 }
 
+fn run_maven_precommit() {
+    require_command(
+        "java",
+        "Install a JDK 17+ (https://adoptium.net/) for the Maven package tests.",
+    );
+    eprintln!("xtask: cargo build -p lemma_jni");
+    run(&["build", "-p", "lemma_jni"]);
+    let maven_dir = versions::workspace_root().join(MAVEN_PACKAGE_DIR);
+    let mvnw = maven_dir.join("mvnw");
+    eprintln!("xtask: maven ./mvnw -B test");
+    let status = Command::new(&mvnw)
+        .args(["-B", "test"])
+        .current_dir(&maven_dir)
+        .status()
+        .unwrap_or_else(|e| {
+            panic!(
+                "failed to run {} in {}: {e}",
+                mvnw.display(),
+                maven_dir.display()
+            )
+        });
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
 fn run_deny_precommit() {
     let config = versions::workspace_root().join(".cargo/deny.toml");
     eprintln!("xtask: deny ({})", config.display());
@@ -133,6 +160,8 @@ fn precommit() {
         "-D",
         "warnings",
     ]);
+    eprintln!("xtask: check engine without registry feature");
+    run(&["check", "-p", "lemma-engine", "--no-default-features"]);
     eprintln!("xtask: nextest");
     run(&[
         "nextest",
@@ -144,6 +173,8 @@ fn precommit() {
     ]);
     eprintln!("xtask: npm wasm package");
     run_npm_wasm_precommit();
+    eprintln!("xtask: maven package");
+    run_maven_precommit();
     run_deny_precommit();
     eprintln!("xtask: coverage --check");
     let root = versions::workspace_root();

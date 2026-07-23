@@ -34,7 +34,7 @@ fn eval_with(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec_name, Some(effective), map, false, None)
+        .run(None, spec_name, Some(effective), map, None, false)
         .unwrap()
 }
 
@@ -67,7 +67,10 @@ fn qualified_data_import_pins_to_referenced_version() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
@@ -81,24 +84,23 @@ data money: measure
  -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
             r#"
 spec shop 2025-01-01
 uses f: finance 2025-02-01
 data money: f.money
 data price: money
 rule doubled: price * 2
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Pin resolves finance v1 (eur only), works at any eval datetime.
@@ -134,7 +136,10 @@ fn qualified_data_import_rejects_unit_from_later_version() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
@@ -146,24 +151,23 @@ data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
             r#"
 spec shop 2025-01-01
 uses f: finance 2025-02-01
 data money: f.money
 data price: money
 rule doubled: price * 2
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // eur works: finance v1 has eur
@@ -180,19 +184,14 @@ rule doubled: price * 2
 
     // usd must fail: pin locks to finance v1 which only has eur
     let effective = date(2025, 9, 1);
-    let plan = engine
-        .get_plan(None, "shop", Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
-            Some(&effective),
-            vec![("price".to_string(), "10.00 usd".to_string())]
-                .into_iter()
-                .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-                .collect(),
-            false,
+        .run(
             None,
+            "shop",
+            Some(&effective),
+            HashMap::from([("price".to_string(), "10.00 usd".to_string())]),
+            None,
+            false,
         )
         .expect("usd override must complete with veto, not Error");
     let doubled = response.results.get("doubled").expect("doubled");
@@ -211,7 +210,8 @@ fn unranged_spec_with_type_only_dep_rejects_incompatible_interface() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("units.lemma"))),
             r#"
 spec units
 data weight: measure
@@ -223,23 +223,24 @@ data weight: measure
  -> unit kg 1.00
  -> unit lb 2.205
  -> decimals 1
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("units.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "warehouse.lemma",
+        ))),
         r#"
 spec warehouse
 uses units
 data weight: units.weight
 data item_weight: weight
 rule heavy: item_weight > 100.0 kg
-"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "warehouse.lemma",
-        ))),
-    );
+"#
+        .to_string(),
+    )]);
 
     assert!(
         result.is_err(),
@@ -266,7 +267,10 @@ fn mixed_spec_ref_and_data_import_to_same_dep() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
@@ -280,15 +284,14 @@ data money: measure
  -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
             r#"
 spec shop 2025-01-01
 uses finance
@@ -303,9 +306,9 @@ uses ref: finance
 data money: finance.money
 data price: money
 rule total: ref.base_price + price
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Before boundary: finance v1, base_price=50, only eur
@@ -354,7 +357,10 @@ fn inline_data_import_rejects_incompatible_unpinned_dep() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
@@ -368,22 +374,21 @@ data money: measure
  -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
         r#"
 spec shop 2025-01-01
 uses finance
 data price: finance.money
 rule doubled: price * 2
-"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
-    );
+"#
+        .to_string(),
+    )]);
 
     assert!(
         result.is_err(),
@@ -407,7 +412,10 @@ fn data_import_with_effective_datetime_pins_version() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
@@ -421,26 +429,25 @@ data money: measure
  -> unit usd 0.91
  -> decimals 2
 data base_price: 75.00 eur
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Pin `uses f: finance` to a date before the v2 boundary; even when evaluated
     // after 2025-07-01, only eur should be available.
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
             r#"
 spec shop 2025-01-01
 uses f: finance 2025-03-01
 data money: f.money
 data price: money
 rule doubled: price * 2
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Evaluate after the finance boundary — but `uses f: finance 2025-03-01`
@@ -466,7 +473,10 @@ fn qualified_pin_must_not_leak_later_version_types() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
@@ -478,40 +488,34 @@ data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
             r#"
 spec shop 2025-01-01
 uses f: finance 2025-02-01
 data money: f.money
 data price: money
 rule doubled: price * 2
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("shop.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Evaluate after boundary with usd — must error because pin locks to v1 (no usd).
     let effective = date(2025, 9, 1);
-    let plan = engine
-        .get_plan(None, "shop", Some(&effective))
-        .expect("plan");
-    let result = engine.run_plan(
-        plan,
-        Some(&effective),
-        [("price".to_string(), "10.00 usd".to_string())]
-            .into_iter()
-            .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-            .collect(),
-        false,
+    let result = engine.run(
         None,
+        "shop",
+        Some(&effective),
+        HashMap::from([("price".to_string(), "10.00 usd".to_string())]),
+        None,
+        false,
     );
     match &result {
         Err(e) => {

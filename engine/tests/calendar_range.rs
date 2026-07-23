@@ -24,20 +24,49 @@ fn default_effective() -> DateTimeValue {
     }
 }
 
+fn eval_bool_with_data(
+    code: &str,
+    spec_name: &str,
+    rule_name: &str,
+    data: HashMap<String, String>,
+) -> bool {
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let effective = default_effective();
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&effective),
+            data,
+            Some(&[rule_name.to_string()]),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .boolean
+        .expect("boolean rule result")
+}
+
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
             HashMap::new(),
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -50,18 +79,18 @@ fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
 
 fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
             HashMap::new(),
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -79,7 +108,7 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -128,9 +157,29 @@ rule ok: age in 1 year...2 year"#;
 fn data_default_calendar_range() {
     let code = r#"spec band
 uses lemma units
-data band: units.calendar -> default 18 year...67 year
+data band: units.calendar range -> suggest 18 year...67 year
 rule span: 30 year in band"#;
-    assert!(eval_bool(code, "band", "span"));
+    let mut data = HashMap::new();
+    data.insert("band".to_string(), "18 year...67 year".to_string());
+    assert!(eval_bool_with_data(code, "band", "span", data));
+}
+
+#[test]
+fn reject_range_default_on_calendar_measure() {
+    let code = r#"spec bad
+uses lemma units
+data band: units.calendar -> suggest 18 year...67 year"#;
+    expect_plan_error(code, "suggest");
+}
+
+#[test]
+fn reject_minimum_with_range_default_on_calendar_measure() {
+    let code = r#"spec bad
+uses lemma units
+data band: units.calendar
+  -> minimum 21 year
+  -> suggest 18 year...67 year"#;
+    expect_plan_error(code, "suggest");
 }
 
 #[test]
@@ -167,7 +216,7 @@ rule r: 15 in 12...18"#;
 fn reject_mixed_calendar_and_duration_units() {
     let code = r#"spec bad
 uses lemma units
-rule bad: 12 year...7 days"#;
+rule bad: 12 year...7 day"#;
     expect_plan_error(code, "range");
 }
 

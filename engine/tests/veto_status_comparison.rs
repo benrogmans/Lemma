@@ -17,10 +17,12 @@ rule total: validated_price * quantity
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let total = response
@@ -44,10 +46,12 @@ rule total: validated_price
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let total = response
@@ -71,10 +75,12 @@ rule flag: validated_quantity is veto
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let flag = response
@@ -99,10 +105,12 @@ rule total: price * validated_quantity
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let total = response
@@ -125,10 +133,12 @@ rule flag: validated_price is veto
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let flag = response
@@ -152,10 +162,12 @@ rule right_to_left: veto is validated_price
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let ltr = response
@@ -184,10 +196,12 @@ rule b: not veto is validated_price
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let a = response
@@ -217,10 +231,12 @@ rule total: validated_price * quantity
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let total = response
@@ -233,7 +249,7 @@ rule total: validated_price * quantity
         explanation
             .causes
             .iter()
-            .any(|c| c.condition.contains("is veto") && c.value == "true"),
+            .any(|c| c.condition.contains("is veto") && c.value.as_deref() == Some("true")),
         "expected unless cause with is veto true, got {:?}",
         explanation.causes
     );
@@ -249,7 +265,7 @@ rule r: x is veto "no"
 
     let mut engine = Engine::new();
     let err = engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect_err("veto message in is veto position must fail");
     let msg = format!("{err:?}");
     assert!(

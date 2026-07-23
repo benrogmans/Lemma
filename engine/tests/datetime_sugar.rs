@@ -23,7 +23,7 @@ fn eval_rule_date(
     data: HashMap<String, String>,
 ) -> lemma::LiteralValue {
     let response = engine
-        .run(None, spec_name, Some(effective), data, true, None)
+        .run(None, spec_name, Some(effective), data, None, true)
         .unwrap();
     response
         .results
@@ -51,7 +51,9 @@ spec test
 uses lemma units
 rule current: now
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 14, 30, 0);
     let lit = eval_rule_date(&engine, "test", "current", &effective, HashMap::new());
     if let ValueKind::Date(dt) = &lit.value {
@@ -72,17 +74,19 @@ fn now_in_arithmetic_subtraction() {
 spec test
 uses lemma units
 data birth_date: 2000-01-01
-rule age_duration: birth_date...now as seconds as number
+rule age_duration: birth_date...now as second as number
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     let lit = eval_rule_date(&engine, "test", "age_duration", &effective, HashMap::new());
-    if let ValueKind::Number(seconds) = &lit.value {
-        let days = lemma::ValueKind::Number(seconds.clone())
+    if let ValueKind::Number(second) = &lit.value {
+        let day = lemma::ValueKind::Number(second.clone())
             .as_decimal_magnitude()
             .unwrap()
             / rust_decimal::Decimal::from(86_400);
-        assert_eq!(days, rust_decimal::Decimal::from(9497));
+        assert_eq!(day, rust_decimal::Decimal::from(9497));
     } else {
         panic!("expected Number, got {:?}", lit.value);
     }
@@ -97,7 +101,9 @@ uses lemma units
 data deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -117,7 +123,9 @@ uses lemma units
 data deadline: 2026-04-01
 rule is_before_deadline: now < deadline
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 5, 1, 0, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -137,7 +145,9 @@ uses lemma units
 data threshold: 2026-06-01
 rule is_past_threshold: now > threshold
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let before = make_effective(2026, 3, 1, 0, 0, 0);
     assert!(!eval_rule_bool(
@@ -171,7 +181,9 @@ uses lemma units
 data event_date: 2026-01-15
 rule was_in_past: event_date in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -191,7 +203,9 @@ uses lemma units
 data event_date: 2026-12-25
 rule was_in_past: event_date in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -211,7 +225,9 @@ uses lemma units
 data launch_date: 2026-12-01
 rule is_upcoming: launch_date in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -231,7 +247,9 @@ uses lemma units
 data launch_date: 2025-06-01
 rule is_upcoming: launch_date in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -251,7 +269,9 @@ uses lemma units
 data event_date: 2026-03-07T12:00:00Z
 rule check: event_date in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -271,7 +291,9 @@ uses lemma units
 data event_date: 2026-03-07T12:00:00Z
 rule check: event_date in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -293,9 +315,11 @@ fn in_past_7_days_inside_window() {
 spec test
 uses lemma units
 data delivered: 2026-03-03
-rule recent_delivery: delivered in past 7 days
+rule recent_delivery: delivered in past 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -313,9 +337,11 @@ fn in_past_7_days_outside_window() {
 spec test
 uses lemma units
 data delivered: 2026-02-15
-rule recent_delivery: delivered in past 7 days
+rule recent_delivery: delivered in past 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -333,9 +359,11 @@ fn in_future_30_days_inside_window() {
 spec test
 uses lemma units
 data renewal_date: 2026-03-20
-rule upcoming_renewal: renewal_date in future 30 days
+rule upcoming_renewal: renewal_date in future 30 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -353,9 +381,11 @@ fn in_future_30_days_outside_window() {
 spec test
 uses lemma units
 data renewal_date: 2026-06-15
-rule upcoming_renewal: renewal_date in future 30 days
+rule upcoming_renewal: renewal_date in future 30 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -373,10 +403,12 @@ fn in_past_tolerance_at_exact_boundary() {
 spec test
 uses lemma units
 data event: 2026-02-28T12:00:00Z
-rule check: event in past 7 days
+rule check: event in past 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-    // now - 7 days = 2026-02-28T12:00:00Z, event == window_start → inclusive
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
+    // now - 7 day = 2026-02-28T12:00:00Z, event == window_start → inclusive
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -394,9 +426,11 @@ fn in_past_tolerance_with_hours() {
 spec test
 uses lemma units
 data event: 2026-03-07T10:00:00Z
-rule check: event in past 4 hours
+rule check: event in past 4 hour
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -414,9 +448,11 @@ fn in_past_tolerance_with_hours_outside() {
 spec test
 uses lemma units
 data event: 2026-03-07T06:00:00Z
-rule check: event in past 4 hours
+rule check: event in past 4 hour
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -440,7 +476,9 @@ uses lemma units
 data invoice_date: 2026-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -460,7 +498,9 @@ uses lemma units
 data invoice_date: 2025-06-15
 rule current_year_invoice: invoice_date in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -480,7 +520,9 @@ uses lemma units
 data invoice_date: 2025-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -500,7 +542,9 @@ uses lemma units
 data invoice_date: 2024-06-15
 rule last_year_invoice: invoice_date in past calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -520,7 +564,9 @@ uses lemma units
 data target_date: 2027-06-15
 rule next_year: target_date in future calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -540,7 +586,9 @@ uses lemma units
 data old_date: 2024-01-01
 rule is_not_this_year: old_date not in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -560,7 +608,9 @@ uses lemma units
 data today_date: 2026-03-07
 rule is_not_this_year: today_date not in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -580,7 +630,9 @@ uses lemma units
 data payment_date: 2026-03-15
 rule this_month_payment: payment_date in calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -600,7 +652,9 @@ uses lemma units
 data payment_date: 2026-04-01
 rule this_month_payment: payment_date in calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -620,7 +674,9 @@ uses lemma units
 data payment_date: 2026-02-15
 rule last_month_payment: payment_date in past calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -640,7 +696,9 @@ uses lemma units
 data payment_date: 2025-12-15
 rule last_month_payment: payment_date in past calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 1, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -660,7 +718,9 @@ uses lemma units
 data due_date: 2026-04-15
 rule next_month_due: due_date in future calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -680,7 +740,9 @@ uses lemma units
 data meeting_date: 2026-03-02
 rule this_week_meeting: meeting_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // 2026-03-07 is Saturday, ISO week 10 (Mon Mar 2 - Sun Mar 8)
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -701,7 +763,9 @@ uses lemma units
 data meeting_date: 2026-03-15
 rule this_week_meeting: meeting_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -724,9 +788,11 @@ spec test
 uses lemma units
 data order_date: 2026-03-05
 rule shipping_fee: 15
-  unless order_date in past 3 days then 0
+  unless order_date in past 3 day then 0
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
@@ -749,9 +815,11 @@ spec test
 uses lemma units
 data order_date: 2026-02-01
 rule shipping_fee: 15
-  unless order_date in past 3 days then 0
+  unless order_date in past 3 day then 0
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "shipping_fee", &effective, HashMap::new());
     if let ValueKind::Number(n) = &lit.value {
@@ -776,7 +844,9 @@ data hire_date: 2026-01-15
 rule is_new_hire: false
   unless hire_date in calendar year then true
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -797,7 +867,9 @@ data hire_date: 2024-06-01
 rule needs_recertification: false
   unless hire_date not in calendar year then true
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -820,9 +892,11 @@ spec test
 uses lemma units
 data order_date: 2026-03-05
 data is_premium: true
-rule qualifies: order_date in past 7 days and is_premium
+rule qualifies: order_date in past 7 day and is_premium
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -841,9 +915,11 @@ spec test
 uses lemma units
 data order_date: 2026-03-05
 data is_premium: false
-rule qualifies: order_date in past 7 days and is_premium
+rule qualifies: order_date in past 7 day and is_premium
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -864,9 +940,11 @@ data event_date: 2026-03-05
 rule status: "unknown"
   unless event_date in past then "completed"
   unless event_date in future then "upcoming"
-  unless event_date in past 3 days then "recently_completed"
+  unless event_date in past 3 day then "recently_completed"
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_rule_date(&engine, "test", "status", &effective, HashMap::new());
     if let ValueKind::Text(s) = &lit.value {
@@ -887,9 +965,11 @@ fn in_past_with_data_binding() {
 spec test
 uses lemma units
 data event_date: date
-rule was_recent: event_date in past 7 days
+rule was_recent: event_date in past 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let mut data = HashMap::new();
     data.insert("event_date".to_string(), "2026-03-05".to_string());
@@ -909,9 +989,11 @@ fn in_past_with_data_binding_outside_window() {
 spec test
 uses lemma units
 data event_date: date
-rule was_recent: event_date in past 7 days
+rule was_recent: event_date in past 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     let mut data = HashMap::new();
     data.insert("event_date".to_string(), "2026-01-01".to_string());
@@ -937,7 +1019,9 @@ uses lemma units
 data event_date: 2026-03-07T00:00:00Z
 rule check: event_date in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // effective is 2026-03-07T01:00:00+02:00 = 2026-03-06T23:00:00Z
     // event (UTC midnight Mar 7) is AFTER effective (UTC 23:00 Mar 6)
     let effective = make_effective_tz((2026, 3, 7, 1, 0, 0), (2, 0));
@@ -959,7 +1043,9 @@ uses lemma units
 data event_date: 2026-12-31T23:00:00Z
 rule check: event_date in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // effective timezone is +05:00; year boundary ends at 2026-12-31T23:59:59.999999+05:00
     // = 2026-12-31T18:59:59.999999 UTC
     // event is 2026-12-31T23:00:00 UTC which is past the boundary
@@ -990,7 +1076,9 @@ uses lemma units
 data payment_date: 2024-02-29
 rule this_month: payment_date in calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2024, 2, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1010,7 +1098,9 @@ uses lemma units
 data event_date: 2026-03-31T23:59:59Z
 rule check: event_date in calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 1, 0, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1030,7 +1120,9 @@ uses lemma units
 data event_date: 2026-04-01T00:00:00Z
 rule check: event_date in calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 15, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -1054,7 +1146,9 @@ uses lemma units
 data event_date: 2026-03-02T00:00:00Z
 rule check: event_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // 2026-03-07 is Saturday, week Mon Mar 2 - Sun Mar 8
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
@@ -1075,7 +1169,9 @@ uses lemma units
 data event_date: 2026-03-08T23:59:59Z
 rule check: event_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1095,7 +1191,9 @@ uses lemma units
 data event_date: 2026-03-09T00:00:00Z
 rule check: event_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_rule_bool(
         &engine,
@@ -1119,7 +1217,9 @@ uses lemma units
 data event_date: 2026-01-01T00:00:00Z
 rule check: event_date in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1139,7 +1239,9 @@ uses lemma units
 data event_date: 2025-12-31T23:59:59Z
 rule check: event_date in past calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 1, 1, 0, 0, 0);
     assert!(eval_rule_bool(
         &engine,
@@ -1159,7 +1261,9 @@ uses lemma units
 data event_date: 2025-01-01T00:00:00Z
 rule check: event_date in past calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let effective = make_effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_rule_bool(
         &engine,

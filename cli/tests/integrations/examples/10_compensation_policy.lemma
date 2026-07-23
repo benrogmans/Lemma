@@ -10,9 +10,9 @@ data cost_of_living_adjustment : 0%
 data retirement_match_cap      : 5%
 data retirement_match_rate     : 6%
 data stock_grant_percentage    : 2%
-data base_salary_max           : number -> minimum 0 -> default 250_000
-data base_salary_min           : number -> minimum 0 -> default 45_000
-data health_premium_monthly    : number -> minimum 0 -> default 500
+data base_salary_max           : number -> minimum 0 -> suggest 250_000
+data base_salary_min           : number -> minimum 0 -> suggest 45_000
+data health_premium_monthly    : number -> minimum 0 -> suggest 500
 
 rule annual_health_cost:
   health_premium_monthly * 12
@@ -33,9 +33,9 @@ Inherits base policy with engineering-specific bindings
 """
 
 data department         : "Engineering"
-data level_multiplier   : number -> minimum 0 -> default 1.0
-data performance_rating : number -> minimum 0 -> maximum 5 -> default 0.0
-data years_of_service   : number -> minimum 0 -> default 0
+data level_multiplier   : number -> minimum 0 -> suggest 1.0
+data performance_rating : number -> minimum 0 -> maximum 5 -> suggest 0.0
+data years_of_service   : number -> minimum 0 -> suggest 0
 
 uses policy: base_policy
 with policy.bonus_pool_percentage     : 15%
@@ -165,7 +165,7 @@ data location           : "Berlin"
 data location_cola      : 20%
 data manages_team       : true
 data on_call_rotation   : true
-data team_size          : number -> minimum 0 -> default 15
+data team_size          : number -> minimum 0 -> suggest 15
 
 uses eng_policy: engineering_dept
 with eng_policy.level_multiplier              : 4.5

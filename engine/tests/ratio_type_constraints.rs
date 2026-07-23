@@ -17,12 +17,12 @@ fn decimal_lit(s: &str) -> Decimal {
 
 fn load(engine: &mut Engine, code: &str) {
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "ratio_constraints.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap_or_else(|errs| {
             let joined = errs
                 .errors
@@ -51,8 +51,8 @@ fn ratio_minimum_custom_unit_loads_with_canonical_bounds() {
     load(&mut engine, bps_spec());
 
     let now = DateTimeValue::now();
-    let schema = engine.schema(None, "s", Some(&now)).expect("schema");
-    let entry = schema.data.get("r").expect("data r");
+    let show = engine.show(None, "s", Some(&now)).expect("show");
+    let entry = show.data.get("r").expect("data r");
     match &entry.lemma_type.specifications {
         TypeSpecification::Ratio { units, .. } => {
             assert_eq!(
@@ -82,12 +82,12 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "ratio_constraints.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("bare number minimum on ratio must fail");
     let s = err
         .errors
@@ -106,17 +106,17 @@ rule out: r
 fn ratio_bare_default_rejected_at_load() {
     let code = r#"
 spec s
-data r: ratio -> default 0.015
+data r: ratio -> suggest 0.015
 rule out: r
 "#;
     let mut engine = Engine::new();
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "ratio_constraints.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("bare number default on ratio must fail");
     let s = err
         .errors
@@ -126,8 +126,8 @@ rule out: r
         .join("\n")
         .to_lowercase();
     assert!(
-        s.contains("default") && (s.contains("unit") || s.contains("%")),
-        "expected ratio default unit syntax error, got: {s}"
+        s.contains("suggest") && (s.contains("unit") || s.contains("%")),
+        "expected ratio suggest unit syntax error, got: {s}"
     );
 }
 
@@ -140,12 +140,12 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "ratio_constraints.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("bare number maximum on ratio must fail");
     let s = err
         .errors
@@ -164,16 +164,16 @@ rule out: r
 fn ratio_default_percent_loads() {
     let code = r#"
 spec s
-data r: ratio -> default 1.5%
+data r: ratio -> suggest 1.5%
 rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
 
     let now = DateTimeValue::now();
-    let schema = engine.schema(None, "s", Some(&now)).expect("schema");
-    let entry = schema.data.get("r").expect("data r");
-    let default = entry.default.as_ref().expect("declared default");
+    let show = engine.show(None, "s", Some(&now)).expect("show");
+    let entry = show.data.get("r").expect("data r");
+    let default = entry.suggestion.as_ref().expect("declared default");
     match &default.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
@@ -199,8 +199,8 @@ rule out: r
     load(&mut engine, code);
 
     let now = DateTimeValue::now();
-    let schema = engine.schema(None, "s", Some(&now)).expect("schema");
-    let entry = schema.data.get("r").expect("data r");
+    let show = engine.show(None, "s", Some(&now)).expect("show");
+    let entry = show.data.get("r").expect("data r");
     assert_eq!(
         entry.lemma_type.specifications.minimum_decimal(),
         Some(decimal_lit("0.10"))
@@ -217,7 +217,7 @@ fn ratio_minimum_custom_unit_override_enforced() {
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true, None)
+        .run(None, "s", Some(&now), data, None, true)
         .expect("400 bps < 500 bps minimum must complete with veto");
     let rr = resp.results.get("out").expect("rule out");
     assert!(rr.vetoed, "400 bps < 500 bps minimum must veto");
@@ -246,16 +246,16 @@ fn ratio_default_custom_unit_loads() {
 spec s
 data r: ratio
   -> unit basis_points 10000
-  -> default 500 basis_points
+  -> suggest 500 basis_points
 rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
 
     let now = DateTimeValue::now();
-    let schema = engine.schema(None, "s", Some(&now)).expect("schema");
-    let entry = schema.data.get("r").expect("data r");
-    let default = entry.default.as_ref().expect("declared default");
+    let show = engine.show(None, "s", Some(&now)).expect("show");
+    let entry = show.data.get("r").expect("data r");
+    let default = entry.suggestion.as_ref().expect("declared default");
     match &default.value {
         ValueKind::Ratio(n, u) => {
             assert_eq!(
@@ -280,7 +280,7 @@ fn ratio_minimum_custom_unit_override_accepts_at_bound() {
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true, None)
+        .run(None, "s", Some(&now), data, None, true)
         .expect("500 bps meets minimum");
     let rr = resp.results.get("out").expect("rule out");
     if rr.vetoed {

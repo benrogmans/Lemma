@@ -36,15 +36,15 @@ rule out: s.v
 
     let mut engine = Engine::new();
     engine
-        .load(
-            &src,
+        .load([(
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("big.lemma"))),
-        )
+            &src.to_string(),
+        )])
         .expect("many specs with boundaries inside consumer range");
 
     for month in 1..=12 {
         let d = date(2025, month, 5);
-        let r = engine.run(None, "consumer", Some(&d), HashMap::new(), false, None);
+        let r = engine.run(None, "consumer", Some(&d), HashMap::new(), None, false);
         assert!(r.is_ok(), "month {month}: {:?}", r.err());
         let resp = r.unwrap();
         let rule = resp.results.get("out").expect("out");

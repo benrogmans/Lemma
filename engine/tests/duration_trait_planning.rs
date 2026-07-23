@@ -10,14 +10,16 @@ fn source() -> lemma::SourceType {
 fn load_ok(code: impl AsRef<str>) -> Engine {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     engine
 }
 
 fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -40,13 +42,16 @@ fn eval_rule_measure_unit(
     spec_name: &str,
     rule_name: &str,
     unit: &str,
+    data: HashMap<String, String>,
 ) -> String {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = lemma::DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
+        .run(None, spec_name, Some(&now), data, None, false)
         .expect("Should evaluate");
     response
         .results
@@ -62,7 +67,9 @@ fn eval_rule_measure_unit(
 fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = lemma::DateTimeValue::now();
     let response = engine
         .run(
@@ -70,8 +77,8 @@ fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String 
             spec_name,
             Some(&now),
             std::collections::HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("Should evaluate");
     response
@@ -173,7 +180,7 @@ fn is_numeric_context_character(character: char) -> bool {
 fn planning_local_duration_typedef_accepts_singular_and_plural_literals() {
     let code = r#"spec test
 uses lemma units
-rule value: (2 hours + 30 minute) as minutes"#;
+rule value: (2 hour + 30 minute) as minute"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["150", "minute"]);
 }
@@ -182,7 +189,7 @@ rule value: (2 hours + 30 minute) as minutes"#;
 fn planning_local_duration_typedef_accepts_plural_to_singular_conversion() {
     let code = r#"spec test
 uses lemma units
-rule value: 1 hours as hour"#;
+rule value: 1 hour as hour"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["1"]);
 }
@@ -197,7 +204,7 @@ spec test
 uses base_types
 uses lemma units
 data duration: base_types.duration
-rule value: 90 minutes as hours as number"#;
+rule value: 90 minute as hour as number"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["1.5"]);
 }
@@ -207,11 +214,13 @@ fn planning_duration_name_is_ordinary_user_type_name_after_keyword_removal() {
     let code = r#"spec test
 uses lemma units
 data duration: units.duration
-data elapsed: duration -> default 2 hours
-rule value: elapsed as minutes"#;
+data elapsed: duration -> suggest 2 hour
+rule value: elapsed as minute"#;
     let _engine = load_ok(code);
+    let mut data = HashMap::new();
+    data.insert("elapsed".to_string(), "2 hour".to_string());
     assert_eq!(
-        eval_rule_measure_unit(code, "test", "value", "minutes"),
+        eval_rule_measure_unit(code, "test", "value", "minute", data),
         "120"
     );
 }
@@ -224,7 +233,7 @@ data duration: units.duration
 data travel_duration: duration
   -> unit fortnight 1209600
 data trip: 1 fortnight
-rule value: trip as days as number"#;
+rule value: trip as day as number"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["14"]);
 }
@@ -232,8 +241,8 @@ rule value: trip as days as number"#;
 #[test]
 fn planning_bare_duration_literal_without_visible_typedef_rejected() {
     let code = r#"spec test
-rule value: 2 hours"#;
-    expect_plan_error(code, "hours");
+rule value: 2 hour"#;
+    expect_plan_error(code, "hour");
 }
 
 #[test]

@@ -54,8 +54,8 @@ pub fn datetime_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let seconds = right.duration_canonical_seconds();
-            let duration = match seconds_to_chrono_duration(&seconds) {
+            let second = right.duration_canonical_seconds();
+            let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -76,8 +76,8 @@ pub fn datetime_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let months = right.calendar_canonical_months();
-            let new_dt = match apply_calendar_to_datetime(dt, &months, true) {
+            let month = right.calendar_canonical_months();
+            let new_dt = match apply_calendar_to_datetime(dt, &month, true) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -97,8 +97,8 @@ pub fn datetime_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let seconds = right.duration_canonical_seconds();
-            let duration = match seconds_to_chrono_duration(&seconds) {
+            let second = right.duration_canonical_seconds();
+            let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -121,8 +121,8 @@ pub fn datetime_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let months = right.calendar_canonical_months();
-            let new_dt = match apply_calendar_to_datetime(dt, &months, false) {
+            let month = right.calendar_canonical_months();
+            let new_dt = match apply_calendar_to_datetime(dt, &month, false) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -140,8 +140,8 @@ pub fn datetime_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let seconds = left.duration_canonical_seconds();
-            let duration = match seconds_to_chrono_duration(&seconds) {
+            let second = left.duration_canonical_seconds();
+            let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -162,8 +162,8 @@ pub fn datetime_arithmetic(
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let months = left.calendar_canonical_months();
-            let new_dt = match apply_calendar_to_datetime(dt, &months, true) {
+            let month = left.calendar_canonical_months();
+            let new_dt = match apply_calendar_to_datetime(dt, &month, true) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -223,12 +223,12 @@ pub fn datetime_arithmetic(
             };
 
             let duration = date_dt - time_dt;
-            let seconds = match chrono_duration_to_rational_seconds(duration) {
+            let second = match chrono_duration_to_rational_seconds(duration) {
                 Ok(value) => value,
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
             OperationResult::from_literal(LiteralValue {
-                value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
+                value: ValueKind::Measure(second, vec![("second".to_string(), 1)]),
                 lemma_type: std::sync::Arc::new(
                     crate::planning::semantics::LemmaType::anonymous_for_decomposition(
                         crate::planning::semantics::duration_decomposition(),
@@ -288,15 +288,15 @@ fn chrono_to_semantic_datetime(dt: DateTime<FixedOffset>) -> SemanticDateTime {
     }
 }
 
-fn seconds_to_chrono_duration(seconds: &RationalInteger) -> Result<ChronoDuration, String> {
+fn seconds_to_chrono_duration(second: &RationalInteger) -> Result<ChronoDuration, String> {
     use crate::computation::rational::checked_mul;
     let micros_per_sec = rational_new(MICROSECONDS_PER_SECOND, 1);
-    let microseconds = checked_mul(seconds, &micros_per_sec)
+    let microsecond = checked_mul(second, &micros_per_sec)
         .map_err(|e| format!("Duration conversion overflow: {e}"))?;
-    if microseconds.denom() != &BigInt::one() {
+    if microsecond.denom() != &BigInt::one() {
         return Err("Duration conversion requires microsecond precision".to_string());
     }
-    let us_i64 = microseconds
+    let us_i64 = microsecond
         .numer()
         .to_i128()
         .and_then(|v| i64::try_from(v).ok())
@@ -307,10 +307,10 @@ fn seconds_to_chrono_duration(seconds: &RationalInteger) -> Result<ChronoDuratio
 pub(crate) fn chrono_duration_to_rational_seconds(
     duration: ChronoDuration,
 ) -> Result<RationalInteger, String> {
-    let microseconds = duration
+    let microsecond = duration
         .num_microseconds()
         .ok_or_else(|| "Duration conversion failed".to_string())?;
-    Ok(rational_new(microseconds, MICROSECONDS_PER_SECOND))
+    Ok(rational_new(microsecond, MICROSECONDS_PER_SECOND))
 }
 
 fn apply_calendar_to_datetime(
@@ -322,7 +322,7 @@ fn apply_calendar_to_datetime(
 
     if months_rational.denom() != &BigInt::one() {
         return Err(format!(
-            "Cannot apply fractional calendar offset ({} months) to a date",
+            "Cannot apply fractional calendar offset ({} month) to a date",
             months_rational
         ));
     }
@@ -541,12 +541,12 @@ pub fn time_arithmetic(
         (ValueKind::Time(time), ValueKind::Measure(_, _), ArithmeticComputation::Add)
             if right.lemma_type.is_duration_like_measure() =>
         {
-            let seconds = right.duration_canonical_seconds();
+            let second = right.duration_canonical_seconds();
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let duration = match seconds_to_chrono_duration(&seconds) {
+            let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -565,12 +565,12 @@ pub fn time_arithmetic(
             ValueKind::Measure(_, _),
             ArithmeticComputation::Subtract,
         ) if right.lemma_type.is_duration_like_measure() => {
-            let seconds = right.duration_canonical_seconds();
+            let second = right.duration_canonical_seconds();
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let duration = match seconds_to_chrono_duration(&seconds) {
+            let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -587,12 +587,12 @@ pub fn time_arithmetic(
         (ValueKind::Measure(_, _), ValueKind::Time(time), ArithmeticComputation::Add)
             if left.lemma_type.is_duration_like_measure() =>
         {
-            let seconds = left.duration_canonical_seconds();
+            let second = left.duration_canonical_seconds();
             let time_aware = match semantic_time_to_chrono_datetime(time) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
-            let duration = match seconds_to_chrono_duration(&seconds) {
+            let duration = match seconds_to_chrono_duration(&second) {
                 Ok(d) => d,
                 Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
             };
@@ -655,13 +655,13 @@ pub fn time_arithmetic(
             };
 
             let duration = time_dt - date_dt;
-            let seconds = match chrono_duration_to_rational_seconds(duration) {
+            let second = match chrono_duration_to_rational_seconds(duration) {
                 Ok(value) => value,
                 Err(message) => return OperationResult::Veto(VetoType::computation(message)),
             };
 
             OperationResult::from_literal(LiteralValue {
-                value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
+                value: ValueKind::Measure(second, vec![("second".to_string(), 1)]),
                 lemma_type: std::sync::Arc::new(
                     crate::planning::semantics::LemmaType::anonymous_for_decomposition(
                         crate::planning::semantics::duration_decomposition(),
@@ -1478,7 +1478,7 @@ mod tests {
 
     #[test]
     fn calendar_boundaries_past_week_from_iso_week_53_year() {
-        // 2026 has 53 ISO weeks. 2026-12-28 is Monday of ISO week 53.
+        // 2026 has 53 ISO week. 2026-12-28 is Monday of ISO week 53.
         let now = semantic_datetime_to_chrono(&utc_datetime(2026, 12, 30, 12, 0, 0)).unwrap();
         assert_eq!(now.iso_week().week(), 53);
         let (start, end) = calendar_boundaries(&now, &CalendarPeriodUnit::Week, -1).unwrap();

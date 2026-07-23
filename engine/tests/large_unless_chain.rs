@@ -59,15 +59,15 @@ fn alpha2_analog_199_branches_compiles_and_evaluates() {
     let src = alpha2_analog_source(199, 18);
     let mut engine = Engine::new();
     engine
-        .load(
-            &src,
+        .load([(
             SourceType::Path(Arc::new(PathBuf::from("alpha2_analog.lemma"))),
-        )
+            &src.to_string(),
+        )])
         .expect("alpha2 analog must load");
 
     let effective = date(2025, 1, 1);
     engine
-        .get_plan(None, "lookup", Some(&effective))
+        .show(None, "lookup", Some(&effective))
         .expect("plan at latest slice");
 
     let mut data = std::collections::HashMap::new();
@@ -78,8 +78,8 @@ fn alpha2_analog_199_branches_compiles_and_evaluates() {
             "lookup",
             Some(&effective),
             data,
-            false,
             Some(&["name".to_string()]),
+            false,
         )
         .expect("evaluate base code");
     let result = response.results.get("name").expect("name rule");
@@ -96,8 +96,8 @@ fn alpha2_analog_199_branches_compiles_and_evaluates() {
             "lookup",
             Some(&effective),
             data,
-            false,
             Some(&["name".to_string()]),
+            false,
         )
         .expect("evaluate layer code");
     let result = response.results.get("name").expect("name rule");
@@ -112,10 +112,10 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
     let src = alpha2_analog_source(199, 18);
     let mut engine = Engine::new();
     engine
-        .load(
-            &src,
+        .load([(
             SourceType::Path(Arc::new(PathBuf::from("alpha2_analog.lemma"))),
-        )
+            &src.to_string(),
+        )])
         .expect("alpha2 analog must load");
 
     let effective = date(2025, 1, 1);
@@ -128,8 +128,8 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
             "lookup",
             Some(&effective),
             data,
-            true,
             Some(&["name".to_string()]),
+            true,
         )
         .expect("evaluate layer code with explanation");
     let explanation = response
@@ -149,7 +149,7 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
         explanation
             .causes
             .iter()
-            .any(|c| c.condition == "code is L17" && c.value == "true"),
+            .any(|c| c.condition == "code is L17" && c.value.as_deref() == Some("true")),
         "expected the matched condition stated as a fact, got {:?}",
         explanation.causes
     );
@@ -162,8 +162,8 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
             "lookup",
             Some(&effective),
             data,
-            true,
             Some(&["name".to_string()]),
+            true,
         )
         .expect("evaluate base code with explanation");
     let explanation = response
@@ -182,5 +182,5 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
     // The condition `code is "L17"` was false; the cause states the
     // flipped fact that held.
     assert_eq!(explanation.causes[0].condition, "code is not L17");
-    assert_eq!(explanation.causes[0].value, "true");
+    assert_eq!(explanation.causes[0].value.as_deref(), Some("true"));
 }

@@ -16,7 +16,7 @@ fn run_spec(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Respon
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&now), data_map, false, None)
+        .run(None, spec, Some(&now), data_map, None, false)
         .unwrap()
 }
 
@@ -41,16 +41,15 @@ fn rule_vetoed(response: &lemma::Response, rule_name: &str) -> bool {
 }
 
 // ===========================================================================
-// BUG HUNT 1: `as` operator precedence
-// Docs say: "as binds tighter than *, /, and %"
-// So `balance / rate as month` means `balance / (rate as month)`
+// BUG HUNT 1: compound rate × hours as money
 // ===========================================================================
 
 #[test]
-fn hunt_as_precedence_with_division() {
+fn hunt_compound_rate_times_hours_as_eur() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("as_prec.lemma"),
             r#"
 spec as_prec
 uses lemma units
@@ -61,19 +60,85 @@ data money: measure
 data wage: measure
   -> unit eur_per_hour eur/hour
 
-data hours_worked: 160 hours
-data hourly_rate: wage -> default 50 eur_per_hour
+data hours_worked: 160 hour
+data hourly_rate: wage -> suggest 50 eur_per_hour
 
 rule total_pay: (hourly_rate * hours_worked) as eur
-"#,
-            src("as_prec.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    let resp = run_spec(&engine, "as_prec", &[]);
+    let resp = run_spec(&engine, "as_prec", &[("hourly_rate", "50 eur_per_hour")]);
     let display = rule_display(&resp, "total_pay");
-    // 50 eur/hour * 160 hours = 8000 eur
-    assert_eq!(display, "8000 eur", "50 eur/hour * 160 hours = 8000 eur");
+    // 50 eur/hour * 160 hour = 8000 eur
+    assert_eq!(display, "8000 eur", "50 eur/hour * 160 hour = 8000 eur");
+}
+
+// ===========================================================================
+// BUG HUNT 1b: `as` binds tighter than `/`
+// Docs: `balance / rate as month` means `balance / (rate as month)`.
+// That form is a planning error; suggest `(balance / burn_rate) as month`.
+// ===========================================================================
+
+#[test]
+fn hunt_as_precedence_with_division() {
+    let mut engine = Engine::new();
+    let err = engine
+        .load([(
+            src("as_div_prec.lemma"),
+            r#"
+spec burn
+uses lemma units
+data money: measure
+  -> unit eur 1
+data rate: measure
+  -> unit eur_per_month eur/month
+data balance: 120000 eur
+data burn_rate: 10000 eur_per_month
+rule runway: balance / burn_rate as month
+"#
+            .to_string(),
+        )])
+        .expect_err("unparenthesized / rate as month must fail planning");
+    let joined = err
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        joined.contains("(balance / burn_rate) as month"),
+        "expected parenthesized suggestion in error, got: {joined}"
+    );
+}
+
+#[test]
+fn hunt_as_precedence_division_with_parentheses_evaluates() {
+    let mut engine = Engine::new();
+    engine
+        .load([(
+            src("as_div_ok.lemma"),
+            r#"
+spec burn
+uses lemma units
+data money: measure
+  -> unit eur 1
+data rate: measure
+  -> unit eur_per_month eur/month
+data balance: 120000 eur
+data burn_rate: 10000 eur_per_month
+rule runway: (balance / burn_rate) as month
+"#
+            .to_string(),
+        )])
+        .unwrap();
+
+    let resp = run_spec(&engine, "burn", &[]);
+    let display = rule_display(&resp, "runway");
+    assert_eq!(
+        display, "12 month",
+        "120000 eur / 10000 eur/month = 12 month"
+    );
 }
 
 // ===========================================================================
@@ -85,7 +150,8 @@ rule total_pay: (hourly_rate * hours_worked) as eur
 fn hunt_ratio_comparison() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("ratio_cmp.lemma"),
             r#"
 spec ratio_cmp
 
@@ -94,9 +160,9 @@ data discount: ratio
 rule big_discount: discount > 20%
 rule small_discount: discount < 5%
 rule exact_ten: discount is 10%
-"#,
-            src("ratio_cmp.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "ratio_cmp", &[("discount", "25%")]);
@@ -121,7 +187,8 @@ rule exact_ten: discount is 10%
 fn hunt_veto_in_boolean_expression() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("veto_bool.lemma"),
             r#"
 spec veto_bool
 
@@ -132,9 +199,9 @@ rule validated: value
   unless value < 0 then veto "negative"
 
 rule combined: validated > 10 and flag
-"#,
-            src("veto_bool.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // value=-5 makes validated veto. combined depends on validated > 10.
@@ -155,7 +222,8 @@ rule combined: validated > 10 and flag
 fn hunt_is_veto_on_transitive_veto() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("deep_veto.lemma"),
             r#"
 spec deep_veto
 
@@ -169,9 +237,9 @@ rule step2: step1 * 2
 rule step3: step2 + 1
 
 rule check_step3: step3 is veto
-"#,
-            src("deep_veto.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // input=-1: step1 vetoes, step2 vetoes (depends on step1), step3 vetoes
@@ -205,7 +273,8 @@ rule check_step3: step3 is veto
 fn hunt_measure_comparison() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("quantity_cmp.lemma"),
             r#"
 spec quantity_cmp
 uses lemma units
@@ -215,9 +284,9 @@ data weight: units.mass
 rule over_five: weight > 5 kilogram
 rule under_one: weight < 1 kilogram
 rule exactly_three: weight is 3 kilogram
-"#,
-            src("quantity_cmp.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "quantity_cmp", &[("weight", "3 kilogram")]);
@@ -238,7 +307,8 @@ rule exactly_three: weight is 3 kilogram
 fn hunt_money_precision() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("money.lemma"),
             r#"
 spec money_test
 
@@ -246,18 +316,18 @@ data money: measure
   -> decimals 2
   -> unit eur 1.00
 
-data price: money -> default 19.99 eur
+data price: money -> suggest 19.99 eur
 data tax_rate: 21%
 
 rule tax_amount: price * tax_rate
 rule total: price + tax_amount
 rule ten_items: price * 10
-"#,
-            src("money.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    let resp = run_spec(&engine, "money_test", &[]);
+    let resp = run_spec(&engine, "money_test", &[("price", "19.99 eur")]);
     // 19.99 * 21% = 4.1979 → displayed with 2 decimals? or full precision?
     let tax = rule_display(&resp, "tax_amount");
     // Should be exact: 19.99 * 0.21 = 4.1979
@@ -280,7 +350,8 @@ rule ten_items: price * 10
 fn hunt_unless_condition_with_veto_rule() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("unless_veto.lemma"),
             r#"
 spec unless_veto_cond
 
@@ -292,9 +363,9 @@ rule validated: input
 rule result: 0
   unless validated > 50 then 100
   unless validated is veto then 0
-"#,
-            src("unless_veto.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // input=2000: validated vetoes. The unless condition `validated > 50` references
@@ -322,7 +393,8 @@ rule result: 0
 fn hunt_operator_precedence() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("precedence.lemma"),
             r#"
 spec precedence
 
@@ -333,9 +405,9 @@ data c: number
 rule add_then_mult: a + b * c
 rule explicit_parens: a + (b * c)
 rule mult_first: a * b + c
-"#,
-            src("precedence.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // a=2, b=3, c=4
@@ -363,7 +435,8 @@ rule mult_first: a * b + c
 #[test]
 fn hunt_text_empty_string() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        src("empty.lemma"),
         r#"
 spec empty_text
 
@@ -373,9 +446,9 @@ data label: text
 
 rule is_empty: label is ""
 rule is_hello: label is "hello"
-"#,
-        src("empty.lemma"),
-    );
+"#
+        .to_string(),
+    )]);
 
     // This might fail at parse time if empty strings aren't supported
     match result {
@@ -401,7 +474,8 @@ rule is_hello: label is "hello"
 fn hunt_small_decimal_precision() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("precision.lemma"),
             r#"
 spec precision
 
@@ -410,9 +484,9 @@ data large: number
 
 rule product: tiny * large
 rule sum: tiny + tiny + tiny + tiny + tiny + tiny + tiny + tiny + tiny + tiny
-"#,
-            src("precision.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(
@@ -441,16 +515,17 @@ rule sum: tiny + tiny + tiny + tiny + tiny + tiny + tiny + tiny + tiny + tiny
 #[test]
 fn hunt_name_collision_data_rule() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        src("collision.lemma"),
         r#"
 spec collision
 
 data value: 10
 
 rule value: value * 2
-"#,
-        src("collision.lemma"),
-    );
+"#
+        .to_string(),
+    )]);
 
     // This should either be a parse error (name collision) or have clear semantics
     match result {
@@ -479,7 +554,8 @@ rule value: value * 2
 #[test]
 fn hunt_circular_dependency() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        src("circular.lemma"),
         r#"
 spec circular
 
@@ -487,9 +563,9 @@ data seed: 1
 
 rule a: b + 1
 rule b: a + 1
-"#,
-        src("circular.lemma"),
-    );
+"#
+        .to_string(),
+    )]);
 
     match result {
         Ok(_) => panic!("Circular dependency should be rejected at planning time"),
@@ -513,7 +589,8 @@ rule b: a + 1
 fn hunt_cross_unit_comparison_in_unless() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("cross_unit.lemma"),
             r#"
 spec cross_unit
 uses lemma units
@@ -523,9 +600,9 @@ data weight: units.mass
 rule category: "normal"
   unless weight > 5 kilogram then "heavy"
   unless weight < 100 gram then "tiny"
-"#,
-            src("cross_unit.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // 3 kilogram = 3000 gram, which is > 100g but < 5kg → "normal"

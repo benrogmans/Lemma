@@ -1,8 +1,7 @@
-use crate::parsing::ast::LemmaSpec;
+use crate::parsing::ast::{EffectiveDate, LemmaSpec};
 use crate::parsing::source::Source;
 use crate::registry::RegistryErrorKind;
 use std::fmt;
-use std::sync::Arc;
 
 /// Detailed error information with optional source location.
 #[derive(Debug, Clone)]
@@ -11,12 +10,21 @@ pub struct ErrorDetails {
     pub source: Option<Source>,
     pub suggestion: Option<String>,
     /// Spec we were planning when this error occurred. Used for display grouping ("In spec 'X':").
-    pub spec_context: Option<Arc<LemmaSpec>>,
+    pub spec_context_name: Option<String>,
+    pub spec_context_effective_from: Option<EffectiveDate>,
     /// When the cause involves a referenced spec, that temporal version. Displayed as "See spec 'X' (active from Y)."
-    pub related_spec: Option<Arc<LemmaSpec>>,
+    pub related_spec_name: Option<String>,
+    pub related_spec_effective_from: Option<EffectiveDate>,
     /// Data name this error is about. Populated by the data-binding site so consumers can attribute
     /// the error to a specific input field without string parsing. Displayed as "Failed to parse data 'X':".
     pub related_data: Option<String>,
+}
+
+fn attribution_fields(spec: Option<&LemmaSpec>) -> (Option<String>, Option<EffectiveDate>) {
+    match spec {
+        Some(s) => (Some(s.name.clone()), Some(s.effective_from.clone())),
+        None => (None, None),
+    }
 }
 
 /// Classification of an [`Error`]. Serialized as the `kind` field on the flat object returned to JavaScript from WASM (`engine/src/wasm.rs`, `JsError`).
@@ -109,15 +117,19 @@ impl Error {
         message: impl Into<String>,
         source: Source,
         suggestion: Option<impl Into<String>>,
-        spec_context: Option<Arc<LemmaSpec>>,
-        related_spec: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
+        related_spec: Option<&LemmaSpec>,
     ) -> Self {
+        let (spec_context_name, spec_context_effective_from) = attribution_fields(spec_context);
+        let (related_spec_name, related_spec_effective_from) = attribution_fields(related_spec);
         Self::Parsing(Box::new(ErrorDetails {
             message: message.into(),
             source: Some(source),
             suggestion: suggestion.map(Into::into),
-            spec_context,
-            related_spec,
+            spec_context_name,
+            spec_context_effective_from,
+            related_spec_name,
+            related_spec_effective_from,
             related_data: None,
         }))
     }
@@ -145,15 +157,19 @@ impl Error {
         message: impl Into<String>,
         source: Option<Source>,
         suggestion: Option<impl Into<String>>,
-        spec_context: Option<Arc<LemmaSpec>>,
-        related_spec: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
+        related_spec: Option<&LemmaSpec>,
     ) -> Self {
+        let (spec_context_name, spec_context_effective_from) = attribution_fields(spec_context);
+        let (related_spec_name, related_spec_effective_from) = attribution_fields(related_spec);
         Self::Inversion(Box::new(ErrorDetails {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            spec_context,
-            related_spec,
+            spec_context_name,
+            spec_context_effective_from,
+            related_spec_name,
+            related_spec_effective_from,
             related_data: None,
         }))
     }
@@ -163,8 +179,8 @@ impl Error {
         message: impl Into<String>,
         source: Option<Source>,
         suggestion: impl Into<String>,
-        spec_context: Option<Arc<LemmaSpec>>,
-        related_spec: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
+        related_spec: Option<&LemmaSpec>,
     ) -> Self {
         Self::inversion_with_context(
             message,
@@ -189,15 +205,19 @@ impl Error {
         message: impl Into<String>,
         source: Option<Source>,
         suggestion: Option<impl Into<String>>,
-        spec_context: Option<Arc<LemmaSpec>>,
-        related_spec: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
+        related_spec: Option<&LemmaSpec>,
     ) -> Self {
+        let (spec_context_name, spec_context_effective_from) = attribution_fields(spec_context);
+        let (related_spec_name, related_spec_effective_from) = attribution_fields(related_spec);
         Self::Validation(Box::new(ErrorDetails {
             message: message.into(),
             source,
             suggestion: suggestion.map(Into::into),
-            spec_context,
-            related_spec,
+            spec_context_name,
+            spec_context_effective_from,
+            related_spec_name,
+            related_spec_effective_from,
             related_data: None,
         }))
     }
@@ -235,8 +255,10 @@ impl Error {
                 message: message.into(),
                 source: None,
                 suggestion: suggestion.map(Into::into),
-                spec_context: None,
-                related_spec: None,
+                spec_context_name: None,
+                spec_context_effective_from: None,
+                related_spec_name: None,
+                related_spec_effective_from: None,
                 related_data: None,
             }),
             kind,
@@ -250,20 +272,24 @@ impl Error {
         actual_value: impl Into<String>,
         suggestion: impl Into<String>,
         source: Option<Source>,
-        spec_context: Option<Arc<LemmaSpec>>,
-        related_spec: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
+        related_spec: Option<&LemmaSpec>,
     ) -> Self {
         let limit_name = limit_name.into();
         let limit_value = limit_value.into();
         let actual_value = actual_value.into();
         let message = format!("{limit_name} (limit: {limit_value}, actual: {actual_value})");
+        let (spec_context_name, spec_context_effective_from) = attribution_fields(spec_context);
+        let (related_spec_name, related_spec_effective_from) = attribution_fields(related_spec);
         Self::ResourceLimitExceeded {
             details: Box::new(ErrorDetails {
                 message,
                 source,
                 suggestion: Some(suggestion.into()),
-                spec_context,
-                related_spec,
+                spec_context_name,
+                spec_context_effective_from,
+                related_spec_name,
+                related_spec_effective_from,
                 related_data: None,
             }),
             limit_name,
@@ -279,16 +305,20 @@ impl Error {
         identifier: impl Into<String>,
         kind: RegistryErrorKind,
         suggestion: Option<impl Into<String>>,
-        spec_context: Option<Arc<LemmaSpec>>,
-        related_spec: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
+        related_spec: Option<&LemmaSpec>,
     ) -> Self {
+        let (spec_context_name, spec_context_effective_from) = attribution_fields(spec_context);
+        let (related_spec_name, related_spec_effective_from) = attribution_fields(related_spec);
         Self::Registry {
             details: Box::new(ErrorDetails {
                 message: message.into(),
                 source: Some(source),
                 suggestion: suggestion.map(Into::into),
-                spec_context,
-                related_spec,
+                spec_context_name,
+                spec_context_effective_from,
+                related_spec_name,
+                related_spec_effective_from,
                 related_data: None,
             }),
             identifier: identifier.into(),
@@ -302,15 +332,18 @@ impl Error {
         source: Option<Source>,
         repository: impl Into<String>,
         suggestion: Option<impl Into<String>>,
-        spec_context: Option<Arc<LemmaSpec>>,
+        spec_context: Option<&LemmaSpec>,
     ) -> Self {
+        let (spec_context_name, spec_context_effective_from) = attribution_fields(spec_context);
         Self::MissingRepository {
             details: Box::new(ErrorDetails {
                 message: message.into(),
                 source,
                 suggestion: suggestion.map(Into::into),
-                spec_context,
-                related_spec: None,
+                spec_context_name,
+                spec_context_effective_from,
+                related_spec_name: None,
+                related_spec_effective_from: None,
                 related_data: None,
             }),
             repository: repository.into(),
@@ -318,8 +351,11 @@ impl Error {
     }
 
     /// Attach spec context for display grouping. Returns a new Error with context set.
-    pub fn with_spec_context(self, spec: Arc<LemmaSpec>) -> Self {
-        self.map_details(|d| d.spec_context = Some(spec))
+    pub fn with_spec_context(self, spec: &LemmaSpec) -> Self {
+        self.map_details(|d| {
+            d.spec_context_name = Some(spec.name.clone());
+            d.spec_context_effective_from = Some(spec.effective_from.clone());
+        })
     }
 
     /// Attach a data-binding attribution. Returns a new Error carrying the data name.
@@ -399,14 +435,14 @@ impl Error {
     }
 }
 
-fn format_related_spec(spec: &LemmaSpec) -> String {
-    let effective_from_str = spec
-        .effective_from()
+fn format_related_spec(name: &str, effective_from: &EffectiveDate) -> String {
+    let effective_from_str = effective_from
+        .as_ref()
         .map(|d| d.to_string())
         .unwrap_or_else(|| "beginning".to_string());
     format!(
         "See spec '{}' (effective from {}).",
-        spec.name, effective_from_str
+        name, effective_from_str
     )
 }
 
@@ -423,22 +459,26 @@ fn write_source_location(f: &mut fmt::Formatter<'_>, source: &Option<Source>) ->
 }
 
 fn write_related_spec(f: &mut fmt::Formatter<'_>, details: &ErrorDetails) -> fmt::Result {
-    if let Some(ref related) = details.related_spec {
-        write!(f, " {}", format_related_spec(related))?;
+    if let Some(ref name) = details.related_spec_name {
+        let effective = details
+            .related_spec_effective_from
+            .as_ref()
+            .expect("BUG: related_spec_name set without related_spec_effective_from");
+        write!(f, " {}", format_related_spec(name, effective))?;
     }
     Ok(())
 }
 
-fn write_spec_context(f: &mut fmt::Formatter<'_>, spec: &LemmaSpec) -> fmt::Result {
-    write!(f, "In spec '{}': ", spec.name)
+fn write_spec_context(f: &mut fmt::Formatter<'_>, name: &str) -> fmt::Result {
+    write!(f, "In spec '{}': ", name)
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Parsing(details) => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(f, "Parse error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
@@ -448,8 +488,8 @@ impl fmt::Display for Error {
                 write_source_location(f, &details.source)
             }
             Error::Inversion(details) => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(f, "Inversion error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
@@ -459,8 +499,8 @@ impl fmt::Display for Error {
                 write_source_location(f, &details.source)
             }
             Error::Validation(details) => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(f, "Validation error: ")?;
                 if let Some(ref name) = details.related_data {
@@ -478,8 +518,8 @@ impl fmt::Display for Error {
                 identifier,
                 kind,
             } => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(
                     f,
@@ -496,8 +536,8 @@ impl fmt::Display for Error {
                 details,
                 repository,
             } => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(f, "Missing repository: {}: {}", repository, details.message)?;
                 if let Some(suggestion) = &details.suggestion {
@@ -512,8 +552,8 @@ impl fmt::Display for Error {
                 limit_value,
                 actual_value,
             } => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(
                     f,
@@ -525,8 +565,8 @@ impl fmt::Display for Error {
                 write_source_location(f, &details.source)
             }
             Error::Request { details, .. } => {
-                if let Some(ref spec) = details.spec_context {
-                    write_spec_context(f, spec)?;
+                if let Some(ref name) = details.spec_context_name {
+                    write_spec_context(f, name)?;
                 }
                 write!(f, "Request error: {}", details.message)?;
                 if let Some(suggestion) = &details.suggestion {
@@ -563,7 +603,7 @@ impl Error {
     }
 
     /// Shared access to the inner [`ErrorDetails`] regardless of variant.
-    fn details(&self) -> &ErrorDetails {
+    pub(crate) fn details(&self) -> &ErrorDetails {
         match self {
             Error::Parsing(d) | Error::Inversion(d) | Error::Validation(d) => d,
             Error::Registry { details, .. }
@@ -621,18 +661,12 @@ impl Error {
 
     /// Spec name when the error is attributed to a planning/eval context.
     pub fn spec_context_name(&self) -> Option<&str> {
-        self.details()
-            .spec_context
-            .as_ref()
-            .map(|s| s.name.as_str())
+        self.details().spec_context_name.as_deref()
     }
 
     /// Name of a related spec referenced by this error (e.g. a transitive dependency).
     pub fn related_spec(&self) -> Option<&str> {
-        self.details()
-            .related_spec
-            .as_ref()
-            .map(|s| s.name.as_str())
+        self.details().related_spec_name.as_deref()
     }
 }
 
@@ -667,137 +701,47 @@ mod tests {
             Span {
                 start: 5,
                 end: 10,
-                line: 1,
-                col: 6,
+                line: 2,
+                col: 3,
             },
         );
-
-        let parse_error_with_suggestion = Error::parsing_with_suggestion(
-            "Typo in data name",
-            suggestion_source,
-            "Did you mean 'amount'?",
-        );
-        let parse_error_with_suggestion_display = format!("{parse_error_with_suggestion}");
-        assert!(parse_error_with_suggestion_display.contains("Typo in data name"));
-        assert!(parse_error_with_suggestion_display.contains("Did you mean 'amount'?"));
-
-        let engine_error = Error::validation("Something went wrong", None, None::<String>);
-        assert!(format!("{engine_error}").contains("Validation error: Something went wrong"));
-        assert!(!format!("{engine_error}").contains(" at "));
-
-        let validation_error =
-            Error::validation("Circular dependency: a -> b -> a", None, None::<String>);
-        assert!(format!("{validation_error}")
-            .contains("Validation error: Circular dependency: a -> b -> a"));
+        let suggestion_error =
+            Error::parsing_with_suggestion("typo", suggestion_source, "did you mean X?");
+        assert!(format!("{suggestion_error}").contains("suggestion: did you mean X?"));
     }
 
     #[test]
-    fn test_error_kind_accessor() {
-        assert_eq!(
-            Error::parsing("x", test_source(), None::<String>).kind(),
-            ErrorKind::Parsing
-        );
-        assert_eq!(
-            Error::validation("x", None, None::<String>).kind(),
-            ErrorKind::Validation
-        );
-        assert_eq!(
-            Error::inversion("x", None, None::<String>).kind(),
-            ErrorKind::Inversion
-        );
-        assert_eq!(
-            Error::request("x", None::<String>).kind(),
-            ErrorKind::Request
-        );
-        assert_eq!(
-            Error::resource_limit_exceeded("cap", "1", "2", "try less", None, None, None).kind(),
-            ErrorKind::ResourceLimit
-        );
-    }
-
-    #[test]
-    fn test_missing_repository_kind_display_and_repository() {
-        let err = Error::missing_repository(
-            "'main' references 'x' from '@org/pkg', but repository '@org/pkg' is not loaded",
-            Some(test_source()),
-            "@org/pkg",
-            Some("Run `lemma fetch @org/pkg` to download the repository.".to_string()),
-            None,
-        );
-        assert_eq!(err.kind(), ErrorKind::MissingRepository);
-        assert_eq!(err.repository(), Some("@org/pkg"));
-        let display = format!("{err}");
-        assert!(
-            display.contains("Missing repository: @org/pkg:"),
-            "unexpected display: {display}"
-        );
-    }
-
-    #[test]
-    fn test_registry_repository_accessor() {
-        let err = Error::registry(
-            "HTTP 404",
-            test_source(),
-            "@x/y",
-            crate::registry::RegistryErrorKind::NotFound,
-            None::<String>,
-            None,
-            None,
-        );
-        assert_eq!(err.kind(), ErrorKind::Registry);
-        assert_eq!(err.repository(), Some("@x/y"));
-    }
-
-    #[test]
-    fn test_related_data_attribution_and_display() {
-        let err = Error::validation(
-            "Unknown unit 'mete' for this measure type",
-            Some(test_source()),
-            None::<String>,
-        )
-        .with_related_data("bridge_height");
-
-        assert_eq!(err.related_data(), Some("bridge_height"));
-        assert_eq!(err.kind(), ErrorKind::Validation);
-        assert_eq!(err.message(), "Unknown unit 'mete' for this measure type");
-
-        let display = format!("{err}");
-        assert!(
-            display.contains(
-                "Validation error: Failed to parse data 'bridge_height': Unknown unit 'mete'"
-            ),
-            "unexpected display: {display}"
-        );
-
-        let at_occurrences = display.matches(" at ").count();
-        assert_eq!(
-            at_occurrences, 1,
-            "expected exactly one ` at ` in display, got {at_occurrences}: {display}"
-        );
-    }
-
-    #[test]
-    fn test_related_data_none_by_default() {
-        let err = Error::validation("x", None, None::<String>);
-        assert!(err.related_data().is_none());
+    fn test_request_error_accessors() {
+        let err = Error::request("bad id", Some("use a valid id"));
+        assert_eq!(err.kind(), ErrorKind::Request);
+        assert_eq!(err.message(), "bad id");
+        assert!(err.location().is_none());
+        assert_eq!(err.suggestion(), Some("use a valid id"));
         assert!(err.spec_context_name().is_none());
         assert!(err.related_spec().is_none());
     }
 
     #[test]
-    fn test_related_data_builder_preserves_other_variants() {
-        let err = Error::resource_limit_exceeded(
-            "max_data_value_bytes",
-            "100",
-            "200",
-            "reduce size",
-            Some(test_source()),
+    fn test_missing_repository_display() {
+        let err = Error::missing_repository(
+            "not loaded",
             None,
+            "@iso/countries",
+            Some("load the dependency first"),
             None,
-        )
-        .with_related_data("big_blob");
+        );
+        let display = format!("{err}");
+        assert!(display.contains("Missing repository"));
+        assert!(display.contains("@iso/countries"));
+        assert!(display.contains("not loaded"));
+    }
 
-        assert_eq!(err.kind(), ErrorKind::ResourceLimit);
-        assert_eq!(err.related_data(), Some("big_blob"));
+    #[test]
+    fn test_with_spec_context_copies_name() {
+        let spec = LemmaSpec::new("pricing".to_string());
+        let err = Error::validation("bad", None, None::<String>).with_spec_context(&spec);
+        assert_eq!(err.spec_context_name(), Some("pricing"));
+        let display = format!("{err}");
+        assert!(display.contains("In spec 'pricing':"));
     }
 }

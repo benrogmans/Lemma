@@ -1,125 +1,144 @@
 //! Pure Rust evaluation engine for Lemma
 //!
-//! Executes pre-validated execution plans. Authoritative results come from each
-//! rule's compiled instructions. Structural explanations are built separately in plan order.
+//! Executes pre-validated execution plans by walking each rule's
+//! [`NormalForm`] equation DAG. When `explain` is true the same walk fills
+//! planning-time explanation trees; when false, values only.
 
 pub(crate) mod branch_semantics;
+pub(crate) mod conversion_trace;
+pub mod data_input;
 pub mod explanations;
 pub mod expression;
 pub mod operations;
-pub(crate) mod partial;
 pub mod response;
+pub(crate) mod tree;
 
-use crate::computation::{
-    arithmetic_operation, comparison_operation, convert_unit_operand, UnitResolutionContext,
-};
 use crate::evaluation::operations::VetoType;
 use crate::evaluation::response::EvaluatedRule;
 use crate::planning::execution_plan::{
-    validate_value_against_type, DataOverlay, ExecutionPlan, Instruction, Instructions,
-    INSTRUCTIONS_VERSION,
+    collect_structural_data_paths, order_data_paths_by_plan, validate_value_against_type,
+    ControlDataReleases, ExecutionPlan,
 };
+use crate::planning::normalize::NormalFormId;
 use crate::planning::semantics::{
-    Data, DataDefinition, DataPath, DataValue, LiteralValue, ReferenceTarget, RulePath, ValueKind,
+    DataDefinition, DataPath, LiteralValue, ReferenceTarget, RulePath, ValueKind,
 };
+pub use data_input::{DataOverlay, DataValueInput};
 use indexmap::IndexMap;
 pub use operations::OperationResult;
-pub use response::{DataGroup, Response, RuleResult};
-use std::collections::HashMap;
+pub use response::{Response, RuleResult};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Evaluation context for storing intermediate results during one plan run.
-///
-/// Borrows the [`ExecutionPlan`] for expression-scope units ([`ExecutionPlan::expression_unit_index`])
-/// and signature disambiguation. Rule-result materialization uses each rule's [`ExecutableRule::rule_type`].
-pub(crate) struct EvaluationContext<'plan> {
-    plan: &'plan ExecutionPlan,
-    data_values: HashMap<DataPath, Arc<LiteralValue>>,
+/// Nearest ignored input key for a MissingData typo hint, if within edit distance.
+/// Comparison is case-insensitive; returned spelling is the caller's original key.
+fn closest_ignored_key(needed: &str, ignored: &[String]) -> Option<String> {
+    let max_distance = if needed.len() <= 3 { 1 } else { 2 };
+    let needed_lower = needed.to_ascii_lowercase();
+    let mut best: Option<(usize, &String)> = None;
+    for candidate in ignored {
+        let distance = levenshtein(&needed_lower, &candidate.to_ascii_lowercase());
+        if distance == 0 || distance > max_distance {
+            continue;
+        }
+        if best
+            .map(|(best_distance, _)| distance < best_distance)
+            .unwrap_or(true)
+        {
+            best = Some((distance, candidate));
+        }
+    }
+    best.map(|(_, key)| key.clone())
+}
+
+fn levenshtein(left: &str, right: &str) -> usize {
+    let left_chars: Vec<char> = left.chars().collect();
+    let right_chars: Vec<char> = right.chars().collect();
+    let (left_len, right_len) = (left_chars.len(), right_chars.len());
+    if left_len == 0 {
+        return right_len;
+    }
+    if right_len == 0 {
+        return left_len;
+    }
+    let mut previous: Vec<usize> = (0..=right_len).collect();
+    let mut current = vec![0; right_len + 1];
+    for (i, left_char) in left_chars.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, right_char) in right_chars.iter().enumerate() {
+            let substitution = usize::from(left_char != right_char);
+            current[j + 1] = (previous[j + 1] + 1)
+                .min(current[j] + 1)
+                .min(previous[j] + substitution);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+    previous[right_len]
+}
+
+/// Request-local mutable state for one plan run (overlay values, release tracking, explain caches).
+/// The [`ExecutionPlan`] is passed separately so the tree walk can match Kind in place.
+pub(crate) struct EvaluationContext {
+    pub(crate) data_values: HashMap<DataPath, Arc<LiteralValue>>,
+    /// Results of rules evaluated on demand for Rule embeds (value and explain).
     pub(crate) rule_results: HashMap<RulePath, OperationResult>,
-    /// Recorded executions of each rule's source-shaped instruction stream;
-    /// populated only when explanations are requested. Explanations read all
-    /// runtime facts (register values, branch decisions, winning arm) from
-    /// here — never by re-evaluating expressions.
-    pub(crate) recordings: HashMap<RulePath, RuleRecording>,
+    /// Explain mode only: Rule explanation nodes filled on demand for embeds.
+    pub(crate) rule_explanations: HashMap<RulePath, crate::planning::explanation::ExplanationNode>,
     now: Arc<LiteralValue>,
-    /// Computation vetoes on data paths that cannot be read.
+    /// Computation vetoes on data that cannot be read (bad override or reference constraint).
     vetoes: HashMap<DataPath, VetoType>,
-    /// Register file for compiled instruction execution; sized from plan
-    /// max_register_count. `None` marks a register that has not been written
-    /// yet; reading one is a compiler bug and crashes.
-    register_values: Vec<Option<OperationResult>>,
+    /// Ignored input keys from overlay (typo hints for MissingData).
+    ignored_unknown: Vec<String>,
+    /// Requested local rule whose `missing_data` is being built. Fixed across embeds.
+    pub(crate) release_rule: Option<RulePath>,
+    /// DataPaths released by control outcomes under `release_rule` this evaluation.
+    pub(crate) released: HashSet<DataPath>,
+    /// When false, And/Piecewise outcomes do not apply planned releases (explain narration
+    /// after the value walk already recorded them).
+    pub(crate) record_releases: bool,
+    /// Value memo by NormalFormId for shared-DAG walks within one requested rule.
+    pub(crate) value_memo: HashMap<crate::planning::normalize::NormalFormId, OperationResult>,
 }
 
-/// What one `JumpIfFalse` decided during a recorded execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BranchDecision {
-    /// Condition was true: the arm's result branch was taken.
-    Taken,
-    /// Condition was false: execution jumped past the arm.
-    NotTaken,
-    /// Condition vetoed: the veto propagated as the rule result.
-    Veto,
-}
+impl EvaluationContext {
+    fn new(plan: &ExecutionPlan, overlay: &DataOverlay, now: LiteralValue) -> Self {
+        let mut data_values: HashMap<DataPath, Arc<LiteralValue>> = HashMap::new();
+        let mut vetoes: HashMap<DataPath, VetoType> = HashMap::new();
 
-/// Facts retained from one execution of a rule's instruction stream.
-///
-/// Registers are allocated monotonically and never reused, so the final
-/// register file holds the value of every executed instruction; untaken
-/// branches remain `None`.
-#[derive(Debug, Default, Clone)]
-pub(crate) struct RuleRecording {
-    pub(crate) registers: Vec<Option<OperationResult>>,
-    /// `(pc, decision)` per executed `JumpIfFalse`, in execution order.
-    pub(crate) branch_decisions: Vec<(u32, BranchDecision)>,
-    /// The pc of the `Return` that produced the result, when one executed
-    /// (a vetoing condition propagates without reaching a `Return`).
-    pub(crate) returned_pc: Option<u32>,
-}
-
-impl<'plan> EvaluationContext<'plan> {
-    fn new(plan: &'plan ExecutionPlan, overlay: &DataOverlay, now: LiteralValue) -> Self {
-        let mut data_values: HashMap<DataPath, Arc<LiteralValue>> = plan
-            .data
-            .iter()
-            .filter_map(|(path, definition)| {
-                if overlay.violated.contains_key(path) {
-                    return None;
+        for (path, binding) in &overlay.bindings {
+            match binding {
+                OperationResult::Value(value) => {
+                    data_values.insert(path.clone(), Arc::clone(value));
                 }
-                definition
-                    .value()
-                    .map(|value| (path.clone(), Arc::new(value.clone())))
-            })
-            .collect();
-        for (path, value) in &overlay.values {
-            data_values.insert(path.clone(), Arc::clone(value));
+                OperationResult::Veto(veto) => {
+                    vetoes.insert(path.clone(), veto.clone());
+                }
+            }
         }
 
         for (path, definition) in &plan.data {
-            if data_values.contains_key(path) || overlay.violated.contains_key(path) {
+            if data_values.contains_key(path) || vetoes.contains_key(path) {
                 continue;
             }
-            if let Some(default) = definition.default_suggestion() {
-                data_values.insert(path.clone(), Arc::new(default));
+            if let Some(value) = definition.value() {
+                data_values.insert(path.clone(), Arc::new(value.clone()));
             }
         }
 
-        let mut vetoes: HashMap<DataPath, VetoType> = overlay
-            .violated
-            .iter()
-            .map(|(path, reason)| (path.clone(), VetoType::computation(reason.clone())))
-            .collect();
-
-        for reference_path in &plan.reference_evaluation_order {
-            if data_values.contains_key(reference_path) {
+        for reference_path in &plan.data_reference_order {
+            if data_values.contains_key(reference_path) || vetoes.contains_key(reference_path) {
                 continue;
             }
             match plan.data.get(reference_path) {
                 Some(DataDefinition::Reference {
                     target: ReferenceTarget::Data(target_path),
                     resolved_type,
-                    local_default,
                     ..
                 }) => {
+                    if let Some(veto) = vetoes.get(target_path) {
+                        vetoes.insert(reference_path.clone(), veto.clone());
+                        continue;
+                    }
                     let copied_kind: Option<ValueKind> =
                         data_values.get(target_path).map(|v| v.value.clone());
                     if let Some(value_kind) = copied_kind {
@@ -127,7 +146,11 @@ impl<'plan> EvaluationContext<'plan> {
                             value: value_kind,
                             lemma_type: Arc::clone(resolved_type),
                         };
-                        match validate_value_against_type(resolved_type.as_ref(), &value) {
+                        match validate_value_against_type(
+                            resolved_type.as_ref(),
+                            &value,
+                            &plan.resolved_types.unit_index,
+                        ) {
                             Ok(()) => {
                                 data_values.insert(reference_path.clone(), Arc::new(value));
                             }
@@ -141,12 +164,6 @@ impl<'plan> EvaluationContext<'plan> {
                                 );
                             }
                         }
-                    } else if let Some(dv) = local_default {
-                        let value = LiteralValue {
-                            value: dv.clone(),
-                            lemma_type: Arc::clone(resolved_type),
-                        };
-                        data_values.insert(reference_path.clone(), Arc::new(value));
                     }
                 }
                 Some(DataDefinition::Reference {
@@ -155,20 +172,23 @@ impl<'plan> EvaluationContext<'plan> {
                 }) => {}
                 Some(_) => {}
                 None => unreachable!(
-                    "BUG: reference_evaluation_order references missing data path '{}'",
+                    "BUG: data_reference_order references missing data path '{}'",
                     reference_path
                 ),
             }
         }
 
         Self {
-            plan,
             data_values,
             rule_results: HashMap::new(),
-            recordings: HashMap::new(),
+            rule_explanations: HashMap::new(),
             now: Arc::new(now),
             vetoes,
-            register_values: Vec::with_capacity(plan.max_register_count as usize),
+            ignored_unknown: overlay.ignored_unknown.clone(),
+            release_rule: None,
+            released: HashSet::new(),
+            record_releases: true,
+            value_memo: HashMap::new(),
         }
     }
 
@@ -184,675 +204,194 @@ impl<'plan> EvaluationContext<'plan> {
         self.data_values.get(data_path)
     }
 
-    pub(crate) fn plan(&self) -> &ExecutionPlan {
-        self.plan
+    pub(crate) fn missing_data_suggestion(&self, data_path: &DataPath) -> Option<String> {
+        closest_ignored_key(&data_path.input_key(), &self.ignored_unknown)
     }
 
-    fn read_register(&self, register: u16) -> OperationResult {
-        match self.register_values.get(register as usize) {
-            Some(Some(value)) => value.clone(),
-            Some(None) => panic!("BUG: read of unset register r{register}"),
-            None => panic!("BUG: read of out-of-bounds register r{register}"),
+    /// Begin evaluating one requested local rule: release tracking + per-rule caches.
+    pub(crate) fn begin_requested_rule(&mut self, rule_path: RulePath) {
+        self.release_rule = Some(rule_path);
+        self.released.clear();
+        self.value_memo.clear();
+        self.rule_results.clear();
+        self.rule_explanations.clear();
+    }
+
+    pub(crate) fn end_requested_rule(&mut self) {
+        self.release_rule = None;
+        self.released.clear();
+    }
+
+    /// Union planned release paths for a control outcome under the current release rule.
+    pub(crate) fn apply_releases(
+        &mut self,
+        plan: &ExecutionPlan,
+        control_id: NormalFormId,
+        pick: impl FnOnce(&ControlDataReleases) -> &[DataPath],
+    ) {
+        if !self.record_releases {
+            return;
         }
-    }
-
-    fn take_register(&mut self, register: u16) -> OperationResult {
-        let index = register as usize;
-        match self.register_values.get_mut(index) {
-            Some(Some(_)) => self.register_values[index]
-                .take()
-                .expect("BUG: take of unset register slot"),
-            Some(None) => panic!("BUG: take of unset register r{register}"),
-            None => panic!("BUG: take of out-of-bounds register r{register}"),
-        }
-    }
-
-    fn consume_register(&mut self, register: u16, preserve_for_recording: bool) -> OperationResult {
-        if preserve_for_recording {
-            self.read_register(register)
-        } else {
-            self.take_register(register)
-        }
-    }
-
-    fn write_register(&mut self, register: u16, value: OperationResult) {
-        let index = register as usize;
-        if index >= self.register_values.len() {
-            assert!(
-                index < self.plan.max_register_count as usize,
-                "BUG: register {register} exceeds plan max_register_count"
-            );
-            self.register_values.resize(index + 1, None);
-        }
-        self.register_values[index] = Some(value);
-    }
-}
-
-fn operand_value(result: OperationResult) -> OperationResult {
-    if result.vetoed() {
-        return result;
-    }
-    result
-}
-
-fn borrow_literal<'a>(result: &'a OperationResult, operand: &str) -> &'a LiteralValue {
-    match result {
-        OperationResult::Value(arc) => arc.as_ref(),
-        OperationResult::Veto(_) => panic!("BUG: {operand} passed veto check but has no value"),
-    }
-}
-
-fn unwrap_owned_literal(result: OperationResult, operand: &str) -> LiteralValue {
-    match result {
-        OperationResult::Value(arc) => {
-            Arc::try_unwrap(arc).unwrap_or_else(|shared| shared.as_ref().clone())
-        }
-        OperationResult::Veto(_) => panic!("BUG: {operand} passed veto check but has no value"),
-    }
-}
-
-pub(crate) fn execute_instructions(
-    instructions: &Instructions,
-    context: &mut EvaluationContext<'_>,
-    mut recording: Option<&mut RuleRecording>,
-) -> OperationResult {
-    if instructions.version != INSTRUCTIONS_VERSION {
-        panic!("BUG: instructions version mismatch");
-    }
-    if instructions.register_count > context.plan.max_register_count {
-        panic!("BUG: register_count exceeds plan max_register_count");
-    }
-    context.register_values.clear();
-    context
-        .register_values
-        .resize(instructions.register_count as usize, None);
-
-    let preserve_registers_for_recording = recording.is_some();
-
-    // Compiled instruction streams are loop-free: every jump target is
-    // forward, so a legitimate execution runs each instruction at most once.
-    // The budget is a generous multiple to keep the invariant check far away
-    // from legitimate executions while still catching cyclic jumps.
-    let step_budget = instructions.code.len().saturating_mul(4).saturating_add(16);
-    let mut steps: usize = 0;
-
-    let mut pc: u32 = 0;
-    while (pc as usize) < instructions.code.len() {
-        steps += 1;
-        if steps > step_budget {
+        let rule_path = self.release_rule.as_ref().unwrap_or_else(|| {
+            panic!("BUG: apply_releases without release_rule set for control {control_id:?}")
+        });
+        let rule_releases = plan.data_releases.get(rule_path).unwrap_or_else(|| {
             panic!(
-                "BUG: instruction step budget exceeded at pc={pc}; compiled instructions must be loop-free"
-            );
-        }
-        let insn = &instructions.code[pc as usize];
-        let current_pc = pc;
-        pc += 1;
-        match insn {
-            Instruction::LoadConstant {
-                destination_register,
-                constant_index,
-            } => {
-                let constant = instructions
-                    .constants
-                    .get(*constant_index as usize)
-                    .expect("BUG: invalid constant_index");
-                context.write_register(
-                    *destination_register,
-                    OperationResult::from_literal_arc(Arc::clone(constant)),
-                );
-            }
-            Instruction::LoadData {
-                destination_register,
-                data_index,
-            } => {
-                let data_path = instructions
-                    .data_manifest
-                    .get(*data_index as usize)
-                    .expect("BUG: invalid data_index");
-                let result = expression::resolve_data_path_value(data_path, context);
-                context.write_register(*destination_register, result);
-            }
-            Instruction::LoadNow {
-                destination_register,
-            } => {
-                context.write_register(
-                    *destination_register,
-                    OperationResult::from_literal_arc(Arc::clone(&context.now)),
-                );
-            }
-            Instruction::Arithmetic {
-                destination_register,
-                operation,
-                left_register,
-                right_register,
-            } => {
-                let left = operand_value(
-                    context.consume_register(*left_register, preserve_registers_for_recording),
-                );
-                if left.vetoed() {
-                    context.write_register(*destination_register, left);
-                    continue;
-                }
-                let right = operand_value(
-                    context.consume_register(*right_register, preserve_registers_for_recording),
-                );
-                if right.vetoed() {
-                    context.write_register(*destination_register, right);
-                    continue;
-                }
-                let result = {
-                    let unit_index = &context.plan.resolved_types.unit_index;
-                    let signature_index = &context.plan.signature_index;
-                    arithmetic_operation(
-                        borrow_literal(&left, "left operand"),
-                        operation,
-                        borrow_literal(&right, "right operand"),
-                        unit_index,
-                        signature_index,
-                    )
-                };
-                context.write_register(*destination_register, result);
-            }
-            Instruction::Comparison {
-                destination_register,
-                operation,
-                left_register,
-                right_register,
-            } => {
-                let left = operand_value(
-                    context.consume_register(*left_register, preserve_registers_for_recording),
-                );
-                if left.vetoed() {
-                    context.write_register(*destination_register, left);
-                    continue;
-                }
-                let right = operand_value(
-                    context.consume_register(*right_register, preserve_registers_for_recording),
-                );
-                if right.vetoed() {
-                    context.write_register(*destination_register, right);
-                    continue;
-                }
-                let result = {
-                    let unit_ctx =
-                        UnitResolutionContext::WithIndex(&context.plan.resolved_types.unit_index);
-                    comparison_operation(
-                        borrow_literal(&left, "left operand"),
-                        operation,
-                        borrow_literal(&right, "right operand"),
-                        unit_ctx,
-                    )
-                };
-                context.write_register(*destination_register, result);
-            }
-            Instruction::UnitConversion {
-                destination_register,
-                source_register,
-                target,
-            } => {
-                let source = operand_value(
-                    context.consume_register(*source_register, preserve_registers_for_recording),
-                );
-                if source.vetoed() {
-                    context.write_register(*destination_register, source);
-                    continue;
-                }
-                let result = match source {
-                    OperationResult::Value(arc) => convert_unit_operand(arc, target),
-                    OperationResult::Veto(_) => {
-                        panic!("BUG: operand passed veto check but is vetoed")
-                    }
-                };
-                context.write_register(*destination_register, result);
-            }
-            Instruction::Mathematical {
-                destination_register,
-                operation,
-                source_register,
-            } => {
-                let source = operand_value(
-                    context.consume_register(*source_register, preserve_registers_for_recording),
-                );
-                if source.vetoed() {
-                    context.write_register(*destination_register, source);
-                    continue;
-                }
-                let result = expression::evaluate_mathematical_operator(
-                    operation,
-                    borrow_literal(&source, "operand"),
-                );
-                context.write_register(*destination_register, result);
-            }
-            Instruction::DateRelative {
-                destination_register,
-                kind,
-                source_register,
-            } => {
-                let source = operand_value(
-                    context.consume_register(*source_register, preserve_registers_for_recording),
-                );
-                if source.vetoed() {
-                    context.write_register(*destination_register, source);
-                    continue;
-                }
-                let date_semantic = match &borrow_literal(&source, "date operand").value {
-                    ValueKind::Date(dt) => dt,
-                    other => panic!("BUG: date-relative operand expected date, got {other:?}"),
-                };
-                let now_semantic = match &context.now().value {
-                    ValueKind::Date(dt) => dt,
-                    other => panic!("BUG: context.now() must be a date, got {other:?}"),
-                };
-                let result = crate::computation::datetime::compute_date_relative(
-                    kind,
-                    date_semantic,
-                    now_semantic,
-                );
-                context.write_register(*destination_register, result);
-            }
-            Instruction::DateCalendar {
-                destination_register,
-                kind,
-                unit,
-                source_register,
-            } => {
-                let source = operand_value(
-                    context.consume_register(*source_register, preserve_registers_for_recording),
-                );
-                if source.vetoed() {
-                    context.write_register(*destination_register, source);
-                    continue;
-                }
-                let date_semantic = match &borrow_literal(&source, "date operand").value {
-                    ValueKind::Date(dt) => dt,
-                    other => panic!("BUG: date-calendar operand expected date, got {other:?}"),
-                };
-                let now_semantic = match &context.now().value {
-                    ValueKind::Date(dt) => dt,
-                    other => panic!("BUG: context.now() must be a date, got {other:?}"),
-                };
-                let result = crate::computation::datetime::compute_date_calendar(
-                    kind,
-                    unit,
-                    date_semantic,
-                    now_semantic,
-                );
-                context.write_register(*destination_register, result);
-            }
-            Instruction::RangeLiteral {
-                destination_register,
-                left_register,
-                right_register,
-            } => {
-                let left = operand_value(
-                    context.consume_register(*left_register, preserve_registers_for_recording),
-                );
-                if left.vetoed() {
-                    context.write_register(*destination_register, left);
-                    continue;
-                }
-                let right = operand_value(
-                    context.consume_register(*right_register, preserve_registers_for_recording),
-                );
-                if right.vetoed() {
-                    context.write_register(*destination_register, right);
-                    continue;
-                }
-                let range_value = LiteralValue::range(
-                    unwrap_owned_literal(left, "left endpoint"),
-                    unwrap_owned_literal(right, "right endpoint"),
-                );
-                context.write_register(
-                    *destination_register,
-                    OperationResult::from_literal(range_value),
-                );
-            }
-            Instruction::PastFutureRange {
-                destination_register,
-                kind,
-                source_register,
-            } => {
-                let source = operand_value(
-                    context.consume_register(*source_register, preserve_registers_for_recording),
-                );
-                if source.vetoed() {
-                    context.write_register(*destination_register, source);
-                    continue;
-                }
-                let now_semantic = match &context.now().value {
-                    ValueKind::Date(dt) => dt,
-                    other => panic!("BUG: context.now() must be a date, got {other:?}"),
-                };
-                let result = crate::computation::datetime::evaluate_past_future_range(
-                    kind,
-                    borrow_literal(&source, "offset operand"),
-                    now_semantic,
-                );
-                context.write_register(*destination_register, result);
-            }
-            Instruction::RangeContainment {
-                destination_register,
-                value_register,
-                range_register,
-            } => {
-                let value = operand_value(
-                    context.consume_register(*value_register, preserve_registers_for_recording),
-                );
-                if value.vetoed() {
-                    context.write_register(*destination_register, value);
-                    continue;
-                }
-                let range = operand_value(
-                    context.consume_register(*range_register, preserve_registers_for_recording),
-                );
-                if range.vetoed() {
-                    context.write_register(*destination_register, range);
-                    continue;
-                }
-                let range_literal = borrow_literal(&range, "range operand");
-                let result = match &range_literal.value {
-                    ValueKind::Range(range_left, range_right) => {
-                        crate::computation::range::check_containment(
-                            borrow_literal(&value, "value operand"),
-                            range_left.as_ref(),
-                            range_right.as_ref(),
-                        )
-                    }
-                    other => panic!("BUG: range containment expected range operand, got {other:?}"),
-                };
-                context.write_register(*destination_register, result);
-            }
-            Instruction::ResultIsVeto {
-                destination_register,
-                source_register,
-            } => {
-                let source = context.read_register(*source_register);
-                context.write_register(
-                    *destination_register,
-                    OperationResult::from_literal(LiteralValue::from_bool(source.vetoed())),
-                );
-            }
-            Instruction::MoveRegister {
-                destination_register,
-                source_register,
-            } => {
-                let value =
-                    context.consume_register(*source_register, preserve_registers_for_recording);
-                context.write_register(*destination_register, value);
-            }
-            Instruction::UserVeto {
-                destination_register,
-                message_index,
-            } => {
-                let message = instructions
-                    .veto_messages
-                    .get(*message_index as usize)
-                    .expect("BUG: invalid message_index")
-                    .clone();
-                context.write_register(
-                    *destination_register,
-                    OperationResult::Veto(VetoType::UserDefined {
-                        message: Some(message).filter(|m| !m.is_empty()),
-                    }),
-                );
-            }
-            Instruction::JumpIfFalse {
-                condition_register,
-                target_instruction,
-                veto_semantics,
-            } => {
-                let condition = context.read_register(*condition_register);
-                match branch_semantics::unless_condition_outcome(&condition, *veto_semantics) {
-                    branch_semantics::BranchOutcome::Propagate(result) => {
-                        if let Some(rec) = recording.as_deref_mut() {
-                            rec.branch_decisions
-                                .push((current_pc, BranchDecision::Veto));
-                            rec.registers = std::mem::take(&mut context.register_values);
-                        }
-                        return result;
-                    }
-                    branch_semantics::BranchOutcome::Taken => {
-                        if let Some(rec) = recording.as_deref_mut() {
-                            rec.branch_decisions
-                                .push((current_pc, BranchDecision::Taken));
-                        }
-                    }
-                    branch_semantics::BranchOutcome::NotTaken => {
-                        if let Some(rec) = recording.as_deref_mut() {
-                            rec.branch_decisions
-                                .push((current_pc, BranchDecision::NotTaken));
-                        }
-                        pc = *target_instruction;
-                    }
-                }
-            }
-            Instruction::Jump { target_instruction } => {
-                pc = *target_instruction;
-            }
-            Instruction::Return { source_register } => {
-                if let Some(rec) = recording.as_deref_mut() {
-                    rec.returned_pc = Some(current_pc);
-                    rec.registers = context.register_values.clone();
-                }
-                return context
-                    .consume_register(*source_register, preserve_registers_for_recording);
-            }
+                "BUG: no data_releases for rule '{}' (control {control_id:?})",
+                rule_path.rule
+            )
+        });
+        let control_releases = rule_releases.get(&control_id).unwrap_or_else(|| {
+            panic!(
+                "BUG: no ControlDataReleases for control {control_id:?} under rule '{}'",
+                rule_path.rule
+            )
+        });
+        for path in pick(control_releases) {
+            self.released.insert(path.clone());
         }
     }
-    panic!("BUG: instruction stream ended without Return");
+
+    fn bound_paths(&self) -> HashSet<DataPath> {
+        let mut bound = HashSet::new();
+        bound.extend(self.data_values.keys().cloned());
+        bound.extend(self.vetoes.keys().cloned());
+        bound
+    }
+
+    /// `structural_needed − bound − released`, ordered by plan.data.
+    ///
+    /// Data→data references expand to their ultimate non-reference target (the
+    /// promptable input). Rule-target references are omitted (embeds cover them).
+    pub(crate) fn missing_data_for_rule(
+        &self,
+        plan: &ExecutionPlan,
+        rule_root: NormalFormId,
+    ) -> Vec<String> {
+        let mut structural = HashSet::new();
+        collect_structural_data_paths(plan, rule_root, &mut structural);
+        let structural = expand_data_reference_targets(plan, structural);
+        let bound = self.bound_paths();
+        let still: HashSet<DataPath> = structural
+            .into_iter()
+            .filter(|path| !bound.contains(path) && !self.released.contains(path))
+            .collect();
+        order_data_paths_by_plan(plan, still)
+            .into_iter()
+            .map(|path| path.input_key())
+            .collect()
+    }
 }
 
-#[cfg(test)]
-mod vm_tests {
-    use super::*;
-    use crate::parsing::ast::{DateTimeValue, EffectiveDate};
-    use crate::planning::execution_plan::{Instructions, INSTRUCTIONS_VERSION};
-    use crate::planning::graph::ResolvedSpecTypes;
-    use crate::planning::semantics::primitive_boolean_arc;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    fn empty_plan(max_register_count: u16) -> ExecutionPlan {
-        ExecutionPlan {
-            spec_name: "vm_test".to_string(),
-            commentary: None,
-            data: IndexMap::new(),
-            rules: Vec::new(),
-            max_register_count,
-            reference_evaluation_order: Vec::new(),
-            meta: HashMap::new(),
-            resolved_types: ResolvedSpecTypes::default(),
-            signature_index: HashMap::new(),
-            effective: EffectiveDate::Origin,
-            sources: Vec::new(),
+/// Replace data-reference paths with their ultimate value-bearing targets.
+fn expand_data_reference_targets(
+    plan: &ExecutionPlan,
+    paths: HashSet<DataPath>,
+) -> HashSet<DataPath> {
+    let mut out = HashSet::new();
+    for path in paths {
+        let mut cursor = path;
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(cursor.clone()) {
+                panic!(
+                    "BUG: cyclic data reference while expanding missing_data at '{}'",
+                    cursor
+                );
+            }
+            match plan.data.get(&cursor) {
+                Some(DataDefinition::Reference {
+                    target: ReferenceTarget::Data(next),
+                    ..
+                }) => {
+                    cursor = next.clone();
+                }
+                Some(DataDefinition::Reference {
+                    target: ReferenceTarget::Rule(_),
+                    ..
+                })
+                | Some(DataDefinition::Import { .. }) => {
+                    break;
+                }
+                Some(_) | None => {
+                    out.insert(cursor);
+                    break;
+                }
+            }
         }
     }
+    out
+}
 
-    fn run_instructions(instructions: &Instructions) -> OperationResult {
-        let plan = empty_plan(instructions.register_count);
-        let overlay = DataOverlay::default();
-        let now = LiteralValue {
-            value: ValueKind::Date(crate::planning::semantics::date_time_to_semantic(
-                &DateTimeValue::now(),
-            )),
-            lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
+/// Evaluates Lemma rules within their spec context
+#[derive(Default)]
+pub(crate) struct Evaluator;
+
+impl Evaluator {
+    /// Evaluate an execution plan: one tree walk per requested local rule.
+    ///
+    /// Values come from walking Kind under those roots. Unbound live inputs are
+    /// reported per rule as `missing_data` (structural needed − bound − released).
+    /// When `explain` is true, Rule embeds evaluate dependency rules on demand.
+    pub(crate) fn evaluate(
+        &self,
+        plan: &ExecutionPlan,
+        overlay: &DataOverlay,
+        now: LiteralValue,
+        response_rules: &std::collections::HashSet<String>,
+        explain: bool,
+    ) -> (Response, EvaluationContext) {
+        let effective = match &now.value {
+            ValueKind::Date(date) => date.to_string(),
+            other => panic!("BUG: evaluation now must be a date, got {other:?}"),
         };
-        let mut context = EvaluationContext::new(&plan, &overlay, now);
-        execute_instructions(instructions, &mut context, None)
-    }
+        let mut context = EvaluationContext::new(plan, overlay, now);
 
-    fn bool_instructions(code: Vec<Instruction>, constants: Vec<LiteralValue>) -> Instructions {
-        Instructions {
-            version: INSTRUCTIONS_VERSION,
-            register_count: 2,
-            register_types: vec![
-                Arc::clone(primitive_boolean_arc()),
-                Arc::clone(primitive_boolean_arc()),
-            ],
-            constants: constants.into_iter().map(Arc::new).collect(),
-            data_manifest: Vec::new(),
-            veto_messages: Vec::new(),
-            arm_tags: Vec::new(),
-            conversion_tags: Vec::new(),
-            code,
+        let mut response = Response {
+            spec_name: plan.spec_name.clone(),
+            effective,
+            spec_hash: None,
+            spec_effective_from: None,
+            spec_effective_to: None,
+            results: IndexMap::new(),
+        };
+
+        for exec_rule in plan.rules.values() {
+            if !(exec_rule.path.segments.is_empty() && response_rules.contains(exec_rule.name())) {
+                continue;
+            }
+
+            context.begin_requested_rule(exec_rule.path.clone());
+
+            let (result, explanation) = if explain {
+                let (result, explanation) =
+                    tree::evaluate_rule_explained(exec_rule, plan, &mut context);
+                context
+                    .rule_results
+                    .insert(exec_rule.path.clone(), result.clone());
+                (result, Some(explanation))
+            } else {
+                (tree::evaluate_rule(exec_rule, plan, &mut context), None)
+            };
+
+            let missing_data = context.missing_data_for_rule(plan, exec_rule.normal_form);
+            context.end_requested_rule();
+
+            response.add_result(RuleResult::from_operation_result(
+                EvaluatedRule {
+                    name: exec_rule.name().to_string(),
+                    path: exec_rule.path.clone(),
+                    source_location: exec_rule.source.clone(),
+                    rule_type: (*exec_rule.rule_type).clone(),
+                },
+                &result,
+                exec_rule.rule_type.as_ref(),
+                explanation,
+                missing_data,
+            ));
         }
-    }
 
-    #[test]
-    fn short_circuit_and_first_false_skips_second_conjunct() {
-        let false_lit = LiteralValue::from_bool(false);
-        let true_lit = LiteralValue::from_bool(true);
-        let instructions = bool_instructions(
-            vec![
-                Instruction::LoadConstant {
-                    destination_register: 0,
-                    constant_index: 0,
-                },
-                Instruction::JumpIfFalse {
-                    condition_register: 0,
-                    target_instruction: 4,
-                    veto_semantics: Default::default(),
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 1,
-                },
-                Instruction::Jump {
-                    target_instruction: 5,
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 0,
-                },
-                Instruction::Return { source_register: 1 },
-            ],
-            vec![false_lit, true_lit],
-        );
-        let result = run_instructions(&instructions);
-        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(false));
-    }
-
-    #[test]
-    fn short_circuit_and_both_true_returns_true() {
-        let true_lit = LiteralValue::from_bool(true);
-        let false_lit = LiteralValue::from_bool(false);
-        let instructions = bool_instructions(
-            vec![
-                Instruction::LoadConstant {
-                    destination_register: 0,
-                    constant_index: 0,
-                },
-                Instruction::JumpIfFalse {
-                    condition_register: 0,
-                    target_instruction: 4,
-                    veto_semantics: Default::default(),
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 0,
-                },
-                Instruction::Jump {
-                    target_instruction: 5,
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 1,
-                },
-                Instruction::Return { source_register: 1 },
-            ],
-            vec![true_lit, false_lit],
-        );
-        let result = run_instructions(&instructions);
-        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(true));
-    }
-
-    #[test]
-    fn short_circuit_or_first_true_skips_second_disjunct() {
-        let false_lit = LiteralValue::from_bool(false);
-        let true_lit = LiteralValue::from_bool(true);
-        let instructions = bool_instructions(
-            vec![
-                Instruction::LoadConstant {
-                    destination_register: 0,
-                    constant_index: 0,
-                },
-                Instruction::JumpIfFalse {
-                    condition_register: 0,
-                    target_instruction: 3,
-                    veto_semantics: Default::default(),
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 0,
-                },
-                Instruction::Jump {
-                    target_instruction: 5,
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 1,
-                },
-                Instruction::Return { source_register: 1 },
-            ],
-            vec![true_lit, false_lit],
-        );
-        let result = run_instructions(&instructions);
-        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(true));
-    }
-
-    #[test]
-    fn short_circuit_or_both_false_returns_false() {
-        let false_lit = LiteralValue::from_bool(false);
-        let true_lit = LiteralValue::from_bool(true);
-        let instructions = bool_instructions(
-            vec![
-                Instruction::LoadConstant {
-                    destination_register: 0,
-                    constant_index: 0,
-                },
-                Instruction::JumpIfFalse {
-                    condition_register: 0,
-                    target_instruction: 4,
-                    veto_semantics: Default::default(),
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 1,
-                },
-                Instruction::Jump {
-                    target_instruction: 5,
-                },
-                Instruction::LoadConstant {
-                    destination_register: 1,
-                    constant_index: 0,
-                },
-                Instruction::Return { source_register: 1 },
-            ],
-            vec![false_lit, true_lit],
-        );
-        let result = run_instructions(&instructions);
-        assert_eq!(result.value().unwrap().value, ValueKind::Boolean(false));
-    }
-
-    #[test]
-    #[should_panic(expected = "BUG: instruction step budget exceeded")]
-    fn unpatched_jump_to_zero_hits_step_budget() {
-        let false_lit = LiteralValue::from_bool(false);
-        let instructions = bool_instructions(
-            vec![
-                Instruction::LoadConstant {
-                    destination_register: 0,
-                    constant_index: 0,
-                },
-                Instruction::JumpIfFalse {
-                    condition_register: 0,
-                    target_instruction: 0,
-                    veto_semantics: Default::default(),
-                },
-            ],
-            vec![false_lit],
-        );
-        run_instructions(&instructions);
+        (response, context)
     }
 }
 
@@ -869,7 +408,7 @@ spec inner
 data slot: number -> minimum 0 -> maximum 100
 
 spec source_spec
-data v: number -> default 5
+data v: 5
 
 spec outer
 uses i: inner
@@ -879,17 +418,18 @@ rule r: i.slot
 "#;
         let mut engine = Engine::new();
         engine
-            .load(
-                code,
+            .load([(
                 crate::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                     "ref_invariant.lemma",
                 ))),
-            )
+                code.to_string(),
+            )])
             .expect("must load");
 
-        let now = DateTimeValue::now();
         let plan_basis = engine
-            .get_plan(None, "outer", Some(&now))
+            .plans
+            .get_plans(None, "outer")
+            .and_then(|plans| plans.values().next())
             .expect("must plan");
 
         let reference_path = plan_basis
@@ -908,6 +448,7 @@ rule r: i.slot
 
         let overlay = DataOverlay::default();
 
+        let now = DateTimeValue::now();
         let now_lit = LiteralValue {
             value: crate::planning::semantics::ValueKind::Date(
                 crate::planning::semantics::date_time_to_semantic(&now),
@@ -930,142 +471,5 @@ rule r: i.slot
             stored.as_ref().lemma_type,
             resolved_type,
         );
-    }
-}
-
-/// Evaluates Lemma rules within their spec context
-#[derive(Default)]
-pub(crate) struct Evaluator;
-
-impl Evaluator {
-    /// Evaluate an execution plan: one compiled-instruction pass per rule.
-    ///
-    /// Returns the response and evaluation context. Call [`Self::explain`] to
-    /// attach structural explanation trees.
-    pub(crate) fn evaluate<'a>(
-        &self,
-        plan: &'a ExecutionPlan,
-        overlay: &DataOverlay,
-        now: LiteralValue,
-        explain: bool,
-        response_rules: &std::collections::HashSet<String>,
-    ) -> (Response, EvaluationContext<'a>) {
-        let effective = match &now.value {
-            ValueKind::Date(date) => date.to_string(),
-            other => panic!("BUG: evaluation now must be a date, got {other:?}"),
-        };
-        let mut context = EvaluationContext::new(plan, overlay, now);
-
-        let mut response = Response {
-            spec_name: plan.spec_name.clone(),
-            effective,
-            spec_hash: None,
-            spec_effective_from: None,
-            spec_effective_to: None,
-            data: Vec::new(),
-            results: IndexMap::new(),
-        };
-
-        let vm_rules: std::collections::HashSet<String> = if explain {
-            plan.local_rule_names().into_iter().collect()
-        } else {
-            response_rules.clone()
-        };
-
-        for exec_rule in &plan.rules {
-            let should_vm = if explain {
-                !exec_rule.path.segments.is_empty() || vm_rules.contains(&exec_rule.name)
-            } else {
-                exec_rule.path.segments.is_empty() && vm_rules.contains(&exec_rule.name)
-            };
-            if !should_vm {
-                continue;
-            }
-
-            // Explanations execute the source-shaped stream with recording:
-            // that run's result is the authoritative result, so the response
-            // and the explanation come from the same execution.
-            let result = if explain {
-                let mut recording = RuleRecording::default();
-                let result = execute_instructions(
-                    &exec_rule.source_instructions,
-                    &mut context,
-                    Some(&mut recording),
-                );
-                context.recordings.insert(exec_rule.path.clone(), recording);
-                result
-            } else {
-                execute_instructions(&exec_rule.instructions, &mut context, None)
-            };
-            let in_response =
-                exec_rule.path.segments.is_empty() && response_rules.contains(&exec_rule.name);
-            if in_response {
-                response.add_result(RuleResult::from_operation_result(
-                    EvaluatedRule {
-                        name: exec_rule.name.clone(),
-                        path: exec_rule.path.clone(),
-                        source_location: exec_rule.source.clone(),
-                        rule_type: (*exec_rule.rule_type).clone(),
-                    },
-                    &result,
-                    exec_rule.rule_type.as_ref(),
-                    plan.expression_unit_index(),
-                    None,
-                ));
-                context.rule_results.insert(exec_rule.path.clone(), result);
-            } else {
-                context.rule_results.insert(exec_rule.path.clone(), result);
-            }
-        }
-
-        let response_rule_names: Vec<String> = response_rules.iter().cloned().collect();
-        let needed_data_paths = plan
-            .collect_needed_data_paths(&response_rule_names, overlay)
-            .expect("BUG: response rule names must be pre-validated by the caller");
-
-        let data_list: Vec<Data> = plan
-            .data
-            .keys()
-            .filter(|path| needed_data_paths.contains(*path))
-            .filter_map(|path| {
-                context.get_data_value(path).map(|value| Data {
-                    path: path.clone(),
-                    value: DataValue::from_literal(value.as_ref().clone()),
-                    source: None,
-                })
-            })
-            .collect();
-
-        if !data_list.is_empty() {
-            response.data = vec![DataGroup {
-                data_path: String::new(),
-                referencing_data_name: String::new(),
-                data: data_list,
-            }];
-        }
-
-        (response, context)
-    }
-
-    /// Build structural explanations from source branches and attach them to rule results.
-    pub(crate) fn explain(
-        &self,
-        response: &mut Response,
-        plan: &ExecutionPlan,
-        context: &EvaluationContext<'_>,
-    ) {
-        use crate::evaluation::explanations::{build_explanation, Explanation};
-        use std::collections::HashMap;
-
-        let mut built: HashMap<RulePath, Explanation> = HashMap::new();
-
-        for exec_rule in &plan.rules {
-            let explanation = build_explanation(exec_rule, context, plan, &built);
-            built.insert(exec_rule.path.clone(), explanation);
-
-            if let Some(result) = response.results.get_mut(&exec_rule.name) {
-                result.explanation = built.get(&exec_rule.path).cloned();
-            }
-        }
     }
 }

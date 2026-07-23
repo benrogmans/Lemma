@@ -19,20 +19,20 @@ fn recipe_example_path() -> PathBuf {
 fn load_coffee(engine: &mut Engine) {
     let code = std::fs::read_to_string(coffee_example_path()).expect("read coffee example");
     engine
-        .load(
-            &code,
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from("01_coffee_order.lemma"))),
-        )
+            &code.to_string(),
+        )])
         .expect("load coffee_order");
 }
 
 fn load_recipe(engine: &mut Engine) {
     let code = std::fs::read_to_string(recipe_example_path()).expect("read recipe example");
     engine
-        .load(
-            &code,
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from("03_recipe_scaling.lemma"))),
-        )
+            &code.to_string(),
+        )])
         .expect("load recipe_scaling");
 }
 
@@ -67,7 +67,7 @@ fn invalid_text_option_override_completes_with_veto_not_validation_error() {
     let data = full_coffee_data("tea");
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "coffee_order", Some(&now), data, false, None),
+        engine.run(None, "coffee_order", Some(&now), data, None, false),
         "product=tea (not in options)",
     );
 
@@ -91,7 +91,7 @@ fn below_minimum_number_override_completes_with_veto_not_validation_error() {
     data.insert("age".to_string(), "-5".to_string());
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "coffee_order", Some(&now), data, false, None),
+        engine.run(None, "coffee_order", Some(&now), data, None, false),
         "age=-5 (below minimum 0)",
     );
 
@@ -110,7 +110,7 @@ rule doubled: age * 2
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("plan");
 
     let now = DateTimeValue::now();
@@ -118,7 +118,7 @@ rule doubled: age * 2
     data.insert("age".to_string(), "twenty".to_string());
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "age=twenty (not a number)",
     );
 
@@ -139,7 +139,7 @@ fn below_minimum_typedecl_override_completes_with_veto_not_validation_error() {
     ]);
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "recipe_scaling", Some(&now), data, false, None),
+        engine.run(None, "recipe_scaling", Some(&now), data, None, false),
         "desired_servings=0 (below minimum 1)",
     );
 
@@ -158,7 +158,7 @@ rule flag: active
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("plan");
 
     let now = DateTimeValue::now();
@@ -166,7 +166,7 @@ rule flag: active
     data.insert("active".to_string(), "maybe".to_string());
 
     let response = assert_run_completes_with_veto_not_validation_error(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "active=maybe (not boolean)",
     );
 

@@ -88,13 +88,12 @@ mod imp {
 
     fn resolve_effective(args: &serde_json::Value) -> Result<DateTimeValue, McpError> {
         let raw = args.get("effective").and_then(|v| v.as_str());
-        lemma::Engine::resolve_effective(raw)
-            .map_err(|e| McpError::invalid_params(e.message().to_string()))
+        lemma::resolve_effective(raw).map_err(|e| McpError::invalid_params(e.message().to_string()))
     }
 
     /// Configuration for the MCP server.
     pub struct McpConfig {
-        /// When true, admin tools (`add_spec`, `get_spec_source`) are
+        /// When true, admin tools (`add_spec`, `source`) are
         /// advertised and allowed. When false (default), the server is read-only.
         pub admin: bool,
         /// Wall-clock budget for handling a single request. Requests that
@@ -235,21 +234,16 @@ mod imp {
                     }
                 }),
                 serde_json::json!({
-                    "name": "list_specs",
-                    "description": "List all loaded Lemma specs with their schemas: data names, types, defaults, and rule names with return types.",
+                    "name": "list",
+                    "description": "List loaded specs grouped by repository (metadata only: name, effective_from, effective_to). Use the show tool for data/rule interfaces.",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "effective": {
-                                "type": "string",
-                                "description": "Optional: list specs at a specific effective datetime (e.g. '2026', '2026-03-04')"
-                            }
-                        }
+                        "properties": {}
                     }
                 }),
                 serde_json::json!({
-                    "name": "get_schema",
-                "description": "Get a spec's schema: its data (inputs with types, constraints, and defaults) and rules (outputs with types). Optionally scope to a specific rule to see only the data it needs. Use this before calling evaluate to know which data to provide.",
+                    "name": "show",
+                "description": "Show a spec interface: data (inputs with types, constraints, and suggestions) and rules (outputs with types). Use this before calling evaluate to know which data to provide.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
@@ -257,13 +251,9 @@ mod imp {
                                         "type": "string",
                                         "description": "Spec set id, e.g. pricing"
                                     },
-                                    "rule": {
-                                        "type": "string",
-                                        "description": "Optional: name of a specific rule. Omit to get the full spec schema."
-                                    },
                             "effective": {
                                 "type": "string",
-                                "description": "Optional: get schema at a specific effective datetime"
+                                "description": "Optional: show at a specific effective datetime"
                             }
                         },
                         "required": ["spec"]
@@ -274,7 +264,7 @@ mod imp {
             if self.config.admin {
                 tools.push(serde_json::json!({
                     "name": "add_spec",
-                    "description": "Add Lemma source to the engine. Returns each new spec schema on success.",
+                    "description": "Add Lemma source to the engine. Returns each new spec show on success.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -291,7 +281,7 @@ mod imp {
                     }
                 }));
                 tools.push(serde_json::json!({
-                    "name": "get_spec_source",
+                    "name": "source",
                     "description": "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded units stdlib) for the whole repo, or `spec` for a workspace spec.",
                             "inputSchema": {
                                 "type": "object",
@@ -334,17 +324,15 @@ mod imp {
             debug!("Calling tool: {}", tool_name);
 
             match tool_name {
-                "add_spec" | "get_spec_source" if !self.config.admin => {
-                    Err(McpError::invalid_params(
-                        "Admin tools are disabled. Start the server with --admin to enable them."
-                            .to_string(),
-                    ))
-                }
+                "add_spec" | "source" if !self.config.admin => Err(McpError::invalid_params(
+                    "Admin tools are disabled. Start the server with --admin to enable them."
+                        .to_string(),
+                )),
                 "add_spec" => self.tool_add_spec(arguments),
-                "get_spec_source" => self.tool_get_spec_source(arguments),
+                "source" => self.tool_source(arguments),
                 "evaluate" => self.tool_evaluate(arguments),
-                "list_specs" => self.tool_list_specs(arguments),
-                "get_schema" => self.tool_get_schema(arguments),
+                "list" => self.tool_list(arguments),
+                "show" => self.tool_show(arguments),
                 _ => Err(McpError::invalid_params(format!(
                     "Unknown tool: {}",
                     tool_name
@@ -375,45 +363,59 @@ mod imp {
 
             let names_before: std::collections::HashSet<String> = self
                 .engine
-                .get_workspace()
+                .list()
+                .into_iter()
+                .find(|repository_group| repository_group.repository.is_none())
+                .expect("BUG: workspace repository must exist after Engine::new")
                 .specs
-                .iter()
-                .map(|ss| ss.name.clone())
+                .into_iter()
+                .map(|ls| ls.name)
                 .collect();
 
             let source_type =
                 lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(&source_id)));
-            self.engine.load(code, source_type).map_err(|load_err| {
-                for e in load_err.iter() {
-                    error!(
-                        "{}",
-                        crate::error_formatter::format_error(e, &load_err.sources)
-                    );
-                }
-                McpError::internal_error(format!(
-                    "Failed to load Lemma source ({} error(s))",
-                    load_err.errors.len()
-                ))
-            })?;
+            self.engine
+                .load([(source_type, code.to_string())])
+                .map_err(|load_err| {
+                    for e in load_err.iter() {
+                        error!(
+                            "{}",
+                            crate::error_formatter::format_error(e, &load_err.sources)
+                        );
+                    }
+                    McpError::internal_error(format!(
+                        "Failed to load Lemma source ({} error(s))",
+                        load_err.errors.len()
+                    ))
+                })?;
 
             let new_spec_names: Vec<String> = self
                 .engine
-                .get_workspace()
+                .list()
+                .into_iter()
+                .find(|repository_group| repository_group.repository.is_none())
+                .expect("BUG: workspace repository must exist after Engine::new")
                 .specs
-                .iter()
-                .filter(|ss| !names_before.contains(&ss.name))
-                .map(|ss| ss.name.clone())
+                .into_iter()
+                .filter(|ls| !names_before.contains(&ls.name))
+                .map(|ls| ls.name)
                 .collect();
 
-            let mut output = String::from("Spec added successfully.\n\n");
-
             let now = DateTimeValue::now();
+            let mut shows: Vec<lemma::Show> = Vec::new();
             for spec_name in &new_spec_names {
-                if let Ok(plan) = self.engine.get_plan(None, spec_name, Some(&now)) {
-                    output.push_str(&plan.schema(&lemma::DataOverlay::default()).to_string());
-                    output.push('\n');
+                if let Ok(show) = self.engine.show(None, spec_name, Some(&now)) {
+                    shows.push(show);
                 }
             }
+
+            let payload = serde_json::json!({
+                "message": "Spec added successfully.",
+                "specs": shows,
+            });
+            let output = serde_json::to_string_pretty(&payload).map_err(|e| {
+                McpError::internal_error(format!("Failed to serialize add_spec response: {e}"))
+            })?;
 
             info!(
                 "Spec added from source '{}': {:?}",
@@ -428,19 +430,16 @@ mod imp {
             }))
         }
 
-        fn tool_get_spec_source(
-            &self,
-            args: &serde_json::Value,
-        ) -> Result<serde_json::Value, McpError> {
+        fn tool_source(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
             if let Some(repo) = args
                 .get("repository")
                 .and_then(|v| v.as_str())
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
-                let source = self.engine.format_repository(repo).map_err(|e| {
+                let source = self.engine.source(Some(repo), None, None).map_err(|e| {
                     McpError::invalid_params(format!(
-                        "Repository '{}' not found: {}. Use list_specs to see loaded repositories.",
+                        "Repository '{}' not found: {}. Use list to see loaded repositories.",
                         repo, e
                     ))
                 })?;
@@ -461,14 +460,15 @@ mod imp {
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
-            let spec = self.engine.get_spec(&spec_name, Some(&now)).map_err(|e| {
-                McpError::invalid_params(format!(
-                    "Spec '{}' not found: {}. Use list_specs to see available specs.",
-                    spec_set_id, e
-                ))
-            })?;
-
-            let source = lemma::format_specs(std::slice::from_ref(spec.as_ref()));
+            let source = self
+                .engine
+                .source(None, Some(&spec_name), Some(&now))
+                .map_err(|e| {
+                    McpError::invalid_params(format!(
+                        "Spec '{}' not found: {}. Use list to see available specs.",
+                        spec_set_id, e
+                    ))
+                })?;
 
             debug!("Returned source for spec '{}'", spec_name);
 
@@ -517,25 +517,14 @@ mod imp {
 
             let now = resolve_effective(args)?;
 
-            let plan = self
-                .engine
-                .get_plan(None, &spec_name, Some(&now))
-                .map_err(|e| {
-                    error!("Evaluation failed: {}", e);
-                    McpError::internal_error(format!("Evaluation failed: {e}"))
-                })?;
             let rules = if rule_names.is_empty() {
                 None
             } else {
                 Some(rule_names.as_slice())
             };
-            let data_input: std::collections::HashMap<String, lemma::DataValueInput> = data_values
-                .into_iter()
-                .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-                .collect();
             let response = self
                 .engine
-                .run_plan(plan, Some(&now), data_input, true, rules)
+                .run(None, &spec_name, Some(&now), data_values, rules, true)
                 .map_err(|e| {
                     error!("Evaluation failed: {}", e);
                     McpError::internal_error(format!("Evaluation failed: {e}"))
@@ -587,57 +576,25 @@ mod imp {
             }))
         }
 
-        fn tool_list_specs(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let now = resolve_effective(args)?;
-            let mut sections: Vec<String> = Vec::new();
-            let mut spec_count = 0usize;
-
-            for resolved in self.engine.list() {
-                let label = crate::interactive::repo_label(resolved.repository.as_ref());
-                let repo_q = resolved.repository.name.as_deref();
-                let schemas: Vec<String> = resolved
-                    .specs
-                    .iter()
-                    .flat_map(|ss| ss.iter_specs())
-                    .filter_map(|spec| {
-                        let effective = spec
-                            .effective_from()
-                            .cloned()
-                            .unwrap_or_else(|| now.clone());
-                        self.engine
-                            .schema(repo_q, &spec.name, Some(&effective))
-                            .ok()
-                            .map(|s| s.to_string())
-                    })
-                    .collect();
-                spec_count += schemas.len();
-                if !schemas.is_empty() {
-                    sections.push(format!("Repository: {}\n\n{}", label, schemas.join("\n\n")));
-                }
-            }
+        fn tool_list(&self, _args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+            let list = self.engine.list();
+            let mut output = serde_json::to_string_pretty(&list)
+                .map_err(|e| McpError::internal_error(format!("Failed to serialize list: {e}")))?;
 
             let workspace_empty = self
                 .engine
-                .get_workspace()
+                .list()
+                .into_iter()
+                .find(|repository_group| repository_group.repository.is_none())
+                .expect("BUG: workspace repository must exist after Engine::new")
                 .specs
-                .iter()
-                .all(|ss| ss.iter_specs().next().is_none());
+                .is_empty();
+            if self.config.admin && workspace_empty {
+                output.push_str("\n\nUse the 'add_spec' tool to load workspace Lemma source.");
+            }
 
-            let output = if spec_count == 0 {
-                if self.config.admin {
-                    "No specs loaded.\n\nUse the 'add_spec' tool to load Lemma source.".to_string()
-                } else {
-                    "No specs loaded.".to_string()
-                }
-            } else {
-                let mut out = sections.join("\n\n---\n\n");
-                if self.config.admin && workspace_empty {
-                    out.push_str("\n\nUse the 'add_spec' tool to load workspace Lemma source.");
-                }
-                out
-            };
-
-            debug!("Listed {} specs across repositories", spec_count);
+            let spec_count: usize = list.iter().map(|r| r.specs.len()).sum();
+            debug!("Listed {} spec rows across repositories", spec_count);
 
             Ok(serde_json::json!({
                 "content": [{
@@ -647,7 +604,7 @@ mod imp {
             }))
         }
 
-        fn tool_get_schema(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        fn tool_show(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
             let spec_set_id = args["spec"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
@@ -662,42 +619,24 @@ mod imp {
                 .map_err(|e| McpError::invalid_params(format!("{}", e)))?;
 
             let now = resolve_effective(args)?;
-            let plan = self
+
+            let show = self
                 .engine
-                .get_plan(None, &spec_name, Some(&now))
+                .show(None, &spec_name, Some(&now))
                 .map_err(|e| {
-                    error!("get_plan failed for '{}': {}", spec_set_id.trim(), e);
-                    McpError::internal_error(format!("Failed to get schema: {e}"))
+                    error!("show failed for '{}': {}", spec_set_id.trim(), e);
+                    McpError::internal_error(format!("Failed to show spec: {e}"))
                 })?;
 
-            let rule_names: Vec<String> = match args.get("rule").and_then(|v| v.as_str()) {
-                Some(rule) if !rule.trim().is_empty() => vec![rule.trim().to_string()],
-                _ => Vec::new(),
-            };
+            let scope = format!("{} (all rules)", spec_set_id.trim());
 
-            let schema = if rule_names.is_empty() {
-                plan.schema(&lemma::DataOverlay::default())
-            } else {
-                plan.schema_for_rules(&rule_names, &lemma::DataOverlay::default())
-                    .map_err(|e| {
-                        error!("schema_for_rules failed: {}", e);
-                        McpError::internal_error(format!("Failed to get schema for rules: {e}"))
-                    })?
-            };
-
-            let scope = if rule_names.is_empty() {
-                format!("{} (all rules)", spec_set_id.trim())
-            } else {
-                format!("{}.{}", spec_set_id.trim(), rule_names[0])
-            };
-
-            let output = format!("Schema for {}:\n\n{}", scope, schema);
+            let output = format!("Show for {}:\n\n{}", scope, show);
 
             info!(
-                "Returned schema for '{}' ({} data, {} rules)",
+                "Returned show for '{}' ({} data, {} rules)",
                 scope,
-                schema.data.len(),
-                schema.rules.len()
+                show.data.len(),
+                show.rules.len()
             );
 
             Ok(serde_json::json!({

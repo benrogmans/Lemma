@@ -31,8 +31,8 @@ fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::R
             spec_name,
             Some(effective),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap()
 }
@@ -104,7 +104,7 @@ rule c: parent.p
 
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("scenario_01.lemma"))
+        .load([(path_source("scenario_01.lemma"), code.to_string())])
         .expect("scenario 1: unpinned uses parent across slices must plan");
 
     assert_rule_value(&eval(&engine, "child", &date(2025, 6, 1)), "c", "1");
@@ -128,7 +128,8 @@ rule ok: finance.rate
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, path_source("scenario_02.lemma")));
+    let joined =
+        load_err_joined(engine.load([(path_source("scenario_02.lemma"), code.to_string())]));
     assert_self_ref_not_cycle_only(&joined);
 }
 
@@ -150,7 +151,7 @@ rule c: parent.p
 
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("scenario_04.lemma"))
+        .load([(path_source("scenario_04.lemma"), code.to_string())])
         .expect("scenario 4: qualified pin must plan");
 
     assert_rule_value(&eval(&engine, "child", &date(2025, 3, 1)), "c", "1");
@@ -171,7 +172,8 @@ rule c: parent.p
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, path_source("scenario_13.lemma")));
+    let joined =
+        load_err_joined(engine.load([(path_source("scenario_13.lemma"), code.to_string())]));
     assert_temporal_coverage_rejected(&joined);
 }
 
@@ -190,7 +192,7 @@ rule c: parent.p
 
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("scenario_14.lemma"))
+        .load([(path_source("scenario_14.lemma"), code.to_string())])
         .expect("scenario 14: qualified pin to parent 2027 must plan");
 
     assert_rule_value(&eval(&engine, "child", &date(2025, 3, 1)), "c", "1");
@@ -216,7 +218,7 @@ rule c: parent.p
 
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("scenario_15.lemma"))
+        .load([(path_source("scenario_15.lemma"), code.to_string())])
         .expect("scenario 15: both child rows with pin must plan");
 
     assert_rule_value(&eval(&engine, "child", &date(2025, 3, 1)), "c", "1");
@@ -229,7 +231,7 @@ rule c: parent.p
 fn scenario_27b_read_inner_x_in_rule_accepts() {
     let code = r#"
 spec inner
-data x: number -> default 1
+data x: number -> suggest 1
 
 spec outer
 uses i: inner
@@ -238,13 +240,20 @@ rule r: i.x
 
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("scenario_27b.lemma"))
+        .load([(path_source("scenario_27b.lemma"), code.to_string())])
         .expect("scenario 27b: i.x must plan");
 
     let now = DateTimeValue::now();
     assert_rule_value(
         &engine
-            .run(None, "outer", Some(&now), HashMap::new(), false, None)
+            .run(
+                None,
+                "outer",
+                Some(&now),
+                HashMap::from([("i.x".to_string(), "1".to_string())]),
+                None,
+                false,
+            )
             .expect("scenario 27b: eval outer"),
         "r",
         "1",
@@ -265,6 +274,7 @@ rule x: 5
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(code, path_source("scenario_30.lemma")));
+    let joined =
+        load_err_joined(engine.load([(path_source("scenario_30.lemma"), code.to_string())]));
     assert_temporal_coverage_rejected(&joined);
 }

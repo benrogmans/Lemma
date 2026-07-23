@@ -2,11 +2,11 @@ use lemma::{DateTimeValue, Engine, SourceType};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 
-fn commit_boundary_spec() -> String {
+fn magnitude_overflow_boundary_spec() -> String {
     let max_decimal = Decimal::MAX.normalize().to_string();
     format!(
         r#"
-spec commit_boundary
+spec magnitude_overflow_boundary
 data max_val: {max_decimal}
 data two: 2
 rule huge: max_val * two
@@ -39,7 +39,9 @@ rule over_limit: max_val * two
     );
 
     let mut engine = Engine::new();
-    engine.load(&code, SourceType::Volatile).unwrap();
+    engine
+        .load([(SourceType::Volatile, &code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -48,8 +50,8 @@ rule over_limit: max_val * two
             "decimal_limit",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("evaluation must complete");
 
@@ -66,28 +68,28 @@ rule over_limit: max_val * two
 }
 
 #[test]
-fn uncommittable_intermediate_stored_exactly_explain_result_not_vetoed() {
+fn magnitude_overflow_intermediate_stored_exactly_explain_result_not_vetoed() {
     let mut engine = Engine::new();
     engine
-        .load(commit_boundary_spec(), SourceType::Volatile)
+        .load([(SourceType::Volatile, magnitude_overflow_boundary_spec())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
         .run(
             None,
-            "commit_boundary",
+            "magnitude_overflow_boundary",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("evaluation must complete");
 
     let huge = rule_by_name(&response, "huge");
     assert!(
         huge.vetoed,
-        "response must veto when output materialization cannot commit to decimal"
+        "response must veto when output materialization exceeds decimal magnitude limit"
     );
     assert_eq!(
         huge.veto_reason.as_deref(),
@@ -97,26 +99,26 @@ fn uncommittable_intermediate_stored_exactly_explain_result_not_vetoed() {
     let explanation = huge.explanation.as_ref().expect("huge explanation");
     assert!(
         !explanation.result.vetoed(),
-        "rule_results must store the exact computed value; decimal commit applies only at response materialization"
+        "rule_results must store the exact computed value; materialization applies only at response output"
     );
 }
 
 #[test]
-fn commit_boundary_full_eval_huge_vetoes_safe_succeeds() {
+fn magnitude_overflow_boundary_full_eval_huge_vetoes_safe_succeeds() {
     let mut engine = Engine::new();
     engine
-        .load(commit_boundary_spec(), SourceType::Volatile)
+        .load([(SourceType::Volatile, magnitude_overflow_boundary_spec())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
         .run(
             None,
-            "commit_boundary",
+            "magnitude_overflow_boundary",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("evaluation must complete");
 
@@ -130,27 +132,27 @@ fn commit_boundary_full_eval_huge_vetoes_safe_succeeds() {
     let safe = response.results.get("safe").expect("safe");
     assert!(
         !safe.vetoed,
-        "safe must commit at response materialization even when huge is uncommittable"
+        "safe must materialize at response output even when huge exceeds magnitude limit"
     );
     assert_eq!(safe.number.as_deref(), Some(max_decimal_string().as_str()));
 }
 
 #[test]
-fn commit_boundary_targeted_safe_succeeds() {
+fn magnitude_overflow_boundary_targeted_safe_succeeds() {
     let mut engine = Engine::new();
     engine
-        .load(commit_boundary_spec(), SourceType::Volatile)
+        .load([(SourceType::Volatile, magnitude_overflow_boundary_spec())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
         .run(
             None,
-            "commit_boundary",
+            "magnitude_overflow_boundary",
             Some(&now),
             HashMap::new(),
-            false,
             Some(&["safe".to_string()]),
+            false,
         )
         .expect("evaluation must complete");
 

@@ -2,17 +2,18 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use inquire::validator::Validation;
 use inquire::{DateSelect, MultiSelect, Select, Text};
-use lemma::{DateTimeValue, LemmaRepository, LemmaSpec};
-use lemma::{EffectiveDate, Engine, LemmaType, LiteralValue, TypeSpecification, ValueKind};
+use lemma::{
+    DateTimeValue, Engine, LemmaType, ListedSpec, LiteralValue, Response, TypeSpecification,
+    ValueKind, VetoType,
+};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-pub(crate) fn repo_label(repository: &LemmaRepository) -> String {
-    match &repository.name {
-        Some(name) => name.clone(),
-        None => "(workspace)".to_string(),
-    }
+pub(crate) fn repository_loaded(engine: &Engine, name: &str) -> bool {
+    engine
+        .list()
+        .iter()
+        .any(|r| r.repository.as_deref() == Some(name))
 }
 
 /// Repository qualifier, spec name, selected rules, merged data (CLI + prompts).
@@ -37,14 +38,14 @@ struct NumericConstraints {
     help: String,
 }
 
-fn get_plan_for_interactive<'a>(
-    engine: &'a Engine,
+fn load_static_show(
+    engine: &Engine,
     repo: Option<&str>,
     name: &str,
     now: &DateTimeValue,
-) -> Result<&'a lemma::ExecutionPlan> {
+) -> Result<lemma::Show> {
     engine
-        .get_plan(repo, name, Some(now))
+        .show(repo, name, Some(now))
         .map_err(|e| anyhow::anyhow!("{}", e))
 }
 
@@ -58,8 +59,7 @@ pub fn run_interactive(
 ) -> Result<InteractiveResult> {
     let (repository_qualifier, specification_name) = match spec_name {
         Some(name) => {
-            // Validate the spec exists (will error on ambiguity when repository is None).
-            get_plan_for_interactive(engine, cli_repository_qualifier, &name, now)?;
+            load_static_show(engine, cli_repository_qualifier, &name, now)?;
             (cli_repository_qualifier.map(String::from), name)
         }
         None => select_spec(engine, now, cli_repository_qualifier)?,
@@ -87,57 +87,68 @@ pub fn run_interactive(
     Ok((repository_qualifier, specification_name, rules, data))
 }
 
+fn is_active_at(ls: &ListedSpec, now: &DateTimeValue) -> bool {
+    let after_start = match &ls.effective_from {
+        None => true,
+        Some(from) => now >= from,
+    };
+    let before_end = match &ls.effective_to {
+        None => true,
+        Some(to) => now < to,
+    };
+    after_start && before_end
+}
+
 fn select_spec(
     engine: &Engine,
     now: &DateTimeValue,
     cli_repository_qualifier: Option<&str>,
 ) -> Result<(Option<String>, String)> {
-    let effective_instant = EffectiveDate::DateTimeValue(now.clone());
-    let mut pairs: Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>)> = engine
+    let mut items: Vec<(Option<String>, ListedSpec)> = engine
         .list()
-        .iter()
+        .into_iter()
         .flat_map(|repo| {
-            let repo_arc = Arc::clone(&repo.repository);
-            let instant = effective_instant.clone();
-            repo.specs.iter().filter_map(move |ss| {
-                ss.spec_at(&instant)
-                    .map(|spec| (Arc::clone(&repo_arc), spec))
-            })
+            let repo_name = repo.repository.clone();
+            repo.specs
+                .into_iter()
+                .filter(|ls| is_active_at(ls, now))
+                .map(move |ls| (repo_name.clone(), ls))
         })
         .collect();
+
     if let Some(q) = cli_repository_qualifier {
-        let resolved = engine
-            .get_repository(q)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
-        pairs.retain(|(repo, _)| Arc::ptr_eq(repo, &resolved.repository));
+        if !repository_loaded(engine, q) {
+            anyhow::bail!("Repository '{q}' not loaded");
+        }
+        items.retain(|(repo_name, _)| repo_name.as_deref() == Some(q));
     }
 
-    if pairs.is_empty() {
+    if items.is_empty() {
         anyhow::bail!("No specs found in workspace. Add .lemma files to get started.");
     }
 
     let needs_repo_qualifier = {
-        let mut names: Vec<&str> = pairs.iter().map(|(_, s)| s.name.as_str()).collect();
+        let mut names: Vec<&str> = items.iter().map(|(_, ls)| ls.name.as_str()).collect();
         names.sort();
         names.windows(2).any(|w| w[0] == w[1])
     };
 
-    let display_options: Vec<String> = pairs
+    let display_options: Vec<String> = items
         .iter()
-        .map(|(repo, spec)| {
-            let label = repo_label(repo);
+        .map(|(repo_name, ls)| {
+            let label = repo_name.as_deref().unwrap_or("(workspace)");
             let rq = if needs_repo_qualifier {
-                Some(label.as_str())
+                Some(label)
             } else {
                 cli_repository_qualifier
             };
-            let (data_count, rules_count) = get_plan_for_interactive(engine, rq, &spec.name, now)
+            let (data_count, rules_count) = load_static_show(engine, rq, &ls.name, now)
                 .ok()
-                .map(|p| (p.data.len(), p.rules.len()))
+                .map(|show| (show.data.len(), show.rules.len()))
                 .unwrap_or((0, 0));
             format!(
                 "{} ({}) — {} data, {} rules",
-                spec.name, label, data_count, rules_count
+                ls.name, label, data_count, rules_count
             )
         })
         .collect();
@@ -152,16 +163,17 @@ fn select_spec(
         .position(|d| d == &selected)
         .context("Failed to find selected spec index")?;
 
-    let (r, s) = pairs
+    let (repo_name, ls) = items
         .into_iter()
         .nth(spec_index)
         .context("Failed to match selected spec")?;
+
     let rq = if needs_repo_qualifier {
-        Some(repo_label(&r))
+        repo_name.or_else(|| Some("(workspace)".to_string()))
     } else {
         cli_repository_qualifier.map(String::from)
     };
-    Ok((rq, s.name.clone()))
+    Ok((rq, ls.name))
 }
 
 fn select_rules(
@@ -170,14 +182,9 @@ fn select_rules(
     spec_name: &str,
     now: &DateTimeValue,
 ) -> Result<Option<Vec<String>>> {
-    let plan = get_plan_for_interactive(engine, repo, spec_name, now)
+    let show = load_static_show(engine, repo, spec_name, now)
         .context(format!("Spec '{}' not found", spec_name))?;
-    let rule_names: Vec<String> = plan
-        .schema(&lemma::DataOverlay::default())
-        .rules
-        .keys()
-        .cloned()
-        .collect();
+    let rule_names: Vec<String> = show.rules.keys().cloned().collect();
 
     if rule_names.is_empty() {
         return Ok(None);
@@ -203,67 +210,61 @@ fn prompt_data(
     provided_data: &HashMap<String, String>,
     now: &DateTimeValue,
 ) -> Result<HashMap<String, String>> {
-    let base_plan = get_plan_for_interactive(engine, repo, spec_name, now)
-        .context(format!("Spec '{}' not found", spec_name))?;
-
     let mut collected: HashMap<String, String> = HashMap::new();
     let mut header_printed = false;
+    let rules_for_request = rule_names.as_deref().filter(|rules| !rules.is_empty());
+    let show = load_static_show(engine, repo, spec_name, now)?;
 
     loop {
-        let trial_values: HashMap<String, lemma::DataValueInput> = provided_data
-            .iter()
-            .chain(collected.iter())
-            .map(|(k, v)| (k.clone(), lemma::DataValueInput::convenience(v.clone())))
-            .collect();
+        let mut trial = provided_data.clone();
+        trial.extend(collected.clone());
+        let response = engine
+            .run(repo, spec_name, Some(now), trial, rules_for_request, false)
+            .context(format!("Spec '{}' not found", spec_name))?;
 
-        let overlay = lemma::DataOverlay::resolve(base_plan, trial_values, engine.limits())
-            .map_err(|e| anyhow::anyhow!("{}", e))
-            .context("Failed to apply collected values to plan")?;
+        let next_name = response
+            .results
+            .values()
+            .flat_map(|result| result.missing_data.iter())
+            .find(|name| !provided_data.contains_key(*name) && !collected.contains_key(*name))
+            .cloned();
 
-        let schema = match rule_names {
-            Some(names) if !names.is_empty() => base_plan
-                .schema_for_rules(names, &overlay)
-                .map_err(|e| anyhow::anyhow!("{}", e))
-                .context("Failed to build schema for selected rules")?,
-            _ => base_plan.schema(&overlay),
-        };
-
-        // Skip fields prefilled in the spec or already supplied by the caller.
-        let next = schema
-            .data
-            .iter()
-            .find(|(_, entry)| entry.prefilled.is_none() && entry.supplied.is_none());
-
-        let (name, entry) = match next {
-            Some(pair) => pair,
+        let name = match next_name {
+            Some(name) => name,
             None => break,
         };
-        let name = name.clone();
-        let entry = entry.clone();
+
+        let entry = show
+            .data
+            .get(&name)
+            .unwrap_or_else(|| panic!("BUG: missing_data key {name:?} must exist in show.data"));
+        let lemma_type = entry.lemma_type.clone();
+        let suggestion = entry.suggestion.as_ref();
 
         if !header_printed {
-            println!("\nEnter values for data (press Enter to accept defaults):");
+            println!("\nEnter values for data (press Enter to accept suggestion):");
             header_printed = true;
         }
 
         loop {
-            let input_value =
-                prompt_value_for_type(&name, &entry.lemma_type, entry.default.as_ref())?;
+            let input_value = prompt_value_for_type(&name, &lemma_type, suggestion)?;
 
             let mut validation_trial = provided_data.clone();
             validation_trial.extend(collected.clone());
             validation_trial.insert(name.clone(), input_value.clone());
-            match engine.run_plan(
-                base_plan,
+            match engine.run(
+                repo,
+                spec_name,
                 Some(now),
-                validation_trial
-                    .into_iter()
-                    .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-                    .collect(),
+                validation_trial,
+                rules_for_request,
                 false,
-                rule_names.as_deref(),
             ) {
-                Ok(_) => {
+                Ok(response) => {
+                    if let Some(reason) = computation_veto_reason_for_trial_input(&response) {
+                        eprintln!("  {reason}\n");
+                        continue;
+                    }
                     collected.insert(name.clone(), input_value);
                     break;
                 }
@@ -277,15 +278,30 @@ fn prompt_data(
     Ok(collected)
 }
 
+fn computation_veto_reason_for_trial_input(response: &Response) -> Option<String> {
+    for rule_result in response.results.values() {
+        if !rule_result.vetoed {
+            continue;
+        }
+        if matches!(
+            rule_result.veto_detail.as_ref(),
+            Some(VetoType::Computation { .. })
+        ) {
+            return rule_result.veto_reason.clone();
+        }
+    }
+    None
+}
+
 fn prompt_value_for_type(
     data_name: &str,
     lemma_type: &LemmaType,
-    schema_default: Option<&LiteralValue>,
+    suggestion: Option<&LiteralValue>,
 ) -> Result<String> {
     let type_str = lemma_type.to_string();
 
     match &lemma_type.specifications {
-        TypeSpecification::Boolean { .. } => prompt_boolean_data(data_name, schema_default),
+        TypeSpecification::Boolean { .. } => prompt_boolean_data(data_name, suggestion),
         TypeSpecification::Text {
             options,
             length,
@@ -299,7 +315,7 @@ fn prompt_value_for_type(
                 let prompt_message = format!("{} [{}]", data_name, type_str);
                 let mut prompt =
                     Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
-                if let Some(lit) = schema_default {
+                if let Some(lit) = suggestion {
                     if let ValueKind::Text(s) = &lit.value {
                         if let Some(idx) = options.iter().position(|o| o == s) {
                             prompt = prompt.with_starting_cursor(idx);
@@ -318,7 +334,7 @@ fn prompt_value_for_type(
                     data_name,
                     &type_str,
                     lemma_type,
-                    schema_default,
+                    suggestion,
                     &constraints,
                 )
             }
@@ -348,7 +364,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_measure_data(data_name, &type_str, schema_default, units, &constraints)
+            prompt_measure_data(data_name, &type_str, suggestion, units, &constraints)
         }
         TypeSpecification::Number {
             minimum,
@@ -369,7 +385,7 @@ fn prompt_value_for_type(
                 decimals: *decimals,
                 help: help.clone(),
             };
-            prompt_number_data(data_name, &type_str, schema_default, &constraints)
+            prompt_number_data(data_name, &type_str, suggestion, &constraints)
         }
         TypeSpecification::Ratio {
             minimum,
@@ -389,16 +405,16 @@ fn prompt_value_for_type(
             prompt_ratio_data(
                 data_name,
                 &type_str,
-                schema_default,
+                suggestion,
                 units,
                 ratio_spec.minimum_decimal(),
                 ratio_spec.maximum_decimal(),
                 help.as_str(),
             )
         }
-        TypeSpecification::Date { .. } => prompt_date_data(data_name, schema_default),
+        TypeSpecification::Date { .. } => prompt_date_data(data_name, suggestion),
         TypeSpecification::Time { help, .. } => {
-            let def = schema_default
+            let def = suggestion
                 .filter(|l| matches!(l.value, ValueKind::Time(_)))
                 .map(|l| l.to_string());
             prompt_simple_text(data_name, &type_str, def.as_deref(), help.as_str(), "12:34:56")
@@ -408,7 +424,7 @@ fn prompt_value_for_type(
         | TypeSpecification::TimeRange { help, .. }
         | TypeSpecification::MeasureRange { help, .. }
         | TypeSpecification::RatioRange { help, .. } => {
-            prompt_range_data(data_name, &type_str, lemma_type, schema_default, help.as_str())
+            prompt_range_data(data_name, &type_str, lemma_type, suggestion, help.as_str())
         }
         TypeSpecification::Veto { .. } => {
             anyhow::bail!("Data '{}' has veto type which is not promptable", data_name)
@@ -419,9 +435,9 @@ fn prompt_value_for_type(
     }
 }
 
-fn prompt_date_data(data_name: &str, schema_default: Option<&LiteralValue>) -> Result<String> {
-    let help_message = if schema_default.is_some() {
-        "Use arrow keys to navigate, Enter to select (or accept default)"
+fn prompt_date_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Result<String> {
+    let help_message = if suggestion.is_some() {
+        "Use arrow keys to navigate, Enter to select (or accept suggestion)"
     } else {
         "Use arrow keys to navigate, Enter to select"
     };
@@ -429,7 +445,7 @@ fn prompt_date_data(data_name: &str, schema_default: Option<&LiteralValue>) -> R
     let prompt_title = format!("{} [date]", data_name);
     let mut ds = DateSelect::new(&prompt_title).with_help_message(help_message);
 
-    if let Some(lit) = schema_default {
+    if let Some(lit) = suggestion {
         if let ValueKind::Date(d) = &lit.value {
             if let Some(naive) = NaiveDate::from_ymd_opt(d.year, d.month, d.day) {
                 ds = ds.with_default(naive);
@@ -444,10 +460,10 @@ fn prompt_date_data(data_name: &str, schema_default: Option<&LiteralValue>) -> R
     Ok(format!("{}T00:00:00Z", date.format("%Y-%m-%d")))
 }
 
-fn prompt_boolean_data(data_name: &str, schema_default: Option<&LiteralValue>) -> Result<String> {
+fn prompt_boolean_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Result<String> {
     let options = vec!["true", "false"];
 
-    let default_index = match schema_default.and_then(|lit| match &lit.value {
+    let default_index = match suggestion.and_then(|lit| match &lit.value {
         ValueKind::Boolean(b) => Some(*b),
         _ => None,
     }) {
@@ -456,7 +472,7 @@ fn prompt_boolean_data(data_name: &str, schema_default: Option<&LiteralValue>) -
         None => 0,
     };
 
-    let help_message = if schema_default.is_some() {
+    let help_message = if suggestion.is_some() {
         format!(
             "Default: {} - Use arrow keys to change, Enter to confirm",
             options[default_index]
@@ -478,10 +494,10 @@ fn prompt_text_data_with_constraints(
     data_name: &str,
     type_str: &str,
     lemma_type: &LemmaType,
-    schema_default: Option<&LiteralValue>,
+    suggestion: Option<&LiteralValue>,
     constraints: &TextConstraints,
 ) -> Result<String> {
-    let default_str = schema_default.map(|l| l.to_string());
+    let default_str = suggestion.map(|l| l.to_string());
     let prompt_message = format!("{} [{}]", data_name, type_str);
     let example = lemma_type.example_value();
 
@@ -553,10 +569,10 @@ fn prompt_range_data(
     data_name: &str,
     type_str: &str,
     lemma_type: &LemmaType,
-    schema_default: Option<&LiteralValue>,
+    suggestion: Option<&LiteralValue>,
     help: &str,
 ) -> Result<String> {
-    let (left_default, right_default) = match schema_default {
+    let (left_default, right_default) = match suggestion {
         Some(LiteralValue {
             value: ValueKind::Range(left, right),
             ..
@@ -594,10 +610,10 @@ fn prompt_range_data(
 fn prompt_number_data(
     data_name: &str,
     type_str: &str,
-    schema_default: Option<&LiteralValue>,
+    suggestion: Option<&LiteralValue>,
     constraints: &NumericConstraints,
 ) -> Result<String> {
-    let default_str = schema_default.map(|l| l.to_string());
+    let default_str = suggestion.map(|l| l.to_string());
     let prompt_message = format!("{} [{}]", data_name, type_str);
     prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "10")
 }
@@ -605,11 +621,11 @@ fn prompt_number_data(
 fn prompt_measure_data(
     data_name: &str,
     type_str: &str,
-    schema_default: Option<&LiteralValue>,
+    suggestion: Option<&LiteralValue>,
     units: &lemma::MeasureUnits,
     constraints: &NumericConstraints,
 ) -> Result<String> {
-    let parsed = schema_default.and_then(|lit| match &lit.value {
+    let parsed = suggestion.and_then(|lit| match &lit.value {
         ValueKind::Measure(n, signature) => Some((
             n.clone(),
             signature.first().map(|(n, _)| n.as_str()).unwrap_or(""),
@@ -620,7 +636,7 @@ fn prompt_measure_data(
     let prompt_message = format!("{} [{}]", data_name, type_str);
 
     if units.is_empty() {
-        let default_str = schema_default.and_then(|lit| lit.magnitude_default_for_decimal_prompt());
+        let default_str = suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt());
         return prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "7.65");
     }
 
@@ -640,7 +656,7 @@ fn prompt_measure_data(
             .context(format!("Failed to get unit for {}", data_name))?
     };
 
-    let numeric_default = schema_default.and_then(|lit| lit.magnitude_default_for_decimal_prompt());
+    let numeric_default = suggestion.and_then(|lit| lit.magnitude_in_unit(&unit));
 
     let value_constraints = NumericConstraints {
         help: if constraints.help.is_empty() {
@@ -663,15 +679,13 @@ fn prompt_measure_data(
 fn prompt_ratio_data(
     data_name: &str,
     type_str: &str,
-    schema_default: Option<&LiteralValue>,
+    suggestion: Option<&LiteralValue>,
     units: &lemma::RatioUnits,
     minimum: Option<Decimal>,
     maximum: Option<Decimal>,
     help: &str,
 ) -> Result<String> {
-    // Ratio types typically support percent/permille; offer a unit selector.
     let prompt_message = format!("{} [{}]", data_name, type_str);
-    let default_decimal = schema_default.and_then(|lit| lit.magnitude_default_for_decimal_prompt());
     let selected_unit = if units.len() == 1 {
         units
             .iter()
@@ -687,6 +701,11 @@ fn prompt_ratio_data(
         )
         .prompt()
         .context(format!("Failed to get ratio unit for {}", data_name))?
+    };
+    let default_decimal = if selected_unit == "(none)" {
+        suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt())
+    } else {
+        suggestion.and_then(|lit| lit.magnitude_in_unit(&selected_unit))
     };
 
     let value = prompt_decimal_input(

@@ -14,15 +14,17 @@ fn source() -> lemma::SourceType {
 fn assert_loads(code: &str) {
     let mut engine = Engine::new();
     engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect("spec must load and plan");
 }
 
 fn eval_display(code: &str, repository: Option<&str>, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("spec must load");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("spec must load");
     let response = engine
-        .run(repository, spec_name, None, HashMap::new(), true, None)
+        .run(repository, spec_name, None, HashMap::new(), None, true)
         .expect("spec must evaluate");
     response
         .results

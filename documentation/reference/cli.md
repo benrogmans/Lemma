@@ -24,8 +24,8 @@ lemma run [[repo] spec] [name=value ...] [--prefix PATH] [--rules=RULES] [option
 **Options:**
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
 - `--rules <rules>`: comma-separated rule names (omit to evaluate all)
-- `--json`: output results as JSON (default: human-readable table)
-- `-x, --explain`: show data and reasoning
+- `--json`: output results as JSON (default: human-readable table). Each rule result may include `missing_data` (unbound input keys). Types, prefilled values, and suggestions come from `lemma show`, not from evaluate JSON.
+- `-x, --explain`: include explanation trees (human: reasoning tables; JSON: per-rule `explanation` objects matching [`explanation.v1.json`](../schemas/explanation.v1.json)). Human output prints **Missing data** when any requested rule lists unbound keys.
 - `-i, --interactive`: guided spec/rule/data selection
 - `--effective <datetime>`: evaluate at effective datetime (e.g. `2025`, `2025-03`, `2025-03-04`)
 
@@ -43,12 +43,14 @@ lemma run -i
 lemma run '@iso/countries' alpha2
 ```
 
-### `lemma schema`: spec schema (data types, constraints, and rules)
+### `lemma show`: spec interface (data types, constraints, and rules)
 
-Shows data inputs with types and constraints (minimum, maximum, units, decimals, text options), prefilled values, defaults, supplied caller values (when overlay is applied), and rule result types.
+Shows data inputs with types and constraints (minimum, maximum, units, decimals, text options), prefilled values, suggestions, and rule result types. Lemma source text is available via `Engine::source` (API) only.
+
+`show` lists data that is statically reachable from rules after normalize (all remaining unless arms; no caller overlay). Overlay-aware pruning for a concrete `run` is per-rule `results.*.missing_data`; static types and suggestions are on `show` only.
 
 ```bash
-lemma schema [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]
+lemma show [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]
 ```
 
 **Options:**
@@ -56,16 +58,16 @@ lemma schema [[repo] spec] [--prefix PATH] [--effective <datetime>] [--json]
 - `[spec]`: spec name (omit when workspace has a single spec)
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
 - `--effective <datetime>`: effective datetime for temporal specs
-- `--json`: output schema as JSON (default: human-readable table)
+- `--json`: output as JSON (default: human-readable table)
 
 **Examples:**
 
 ```bash
-lemma schema pricing
-lemma schema --prefix ./policies net_salary
-lemma schema --prefix tax.lemma calculator
-lemma schema '@iso/countries' alpha2
-lemma schema pricing --json
+lemma show pricing
+lemma show --prefix ./policies net_salary
+lemma show --prefix tax.lemma calculator
+lemma show '@iso/countries' alpha2
+lemma show pricing --json
 ```
 
 ### `lemma list`: list loaded specs by repository
@@ -78,7 +80,7 @@ lemma list [--prefix PATH] [--json]
 
 **Options:**
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
-- `--json`: output listing as JSON array of `{ "repository", "specs" }` (default: human-readable text)
+- `--json`: output `Engine::list()` JSON — array of `{ "repository", "specs" }` where each spec is a `ListedSpec` (`name`, optional `effective_from` / `effective_to`). Human text lists unique spec names only.
 
 **Examples:**
 
@@ -115,7 +117,7 @@ lemma format [paths...] [--check] [--stdout]
 ### `lemma server`: start HTTP server
 
 ```bash
-lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanations]
+lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanations] [--eval-timeout SECONDS] [--cors]
 ```
 
 **Options:**
@@ -123,16 +125,18 @@ lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanatio
 - `--host <host>`: bind address (default: `127.0.0.1`)
 - `-p, --port <port>`: port (default: `8012`)
 - `--watch`: live-reload on `.lemma` file changes
-- `--explanations`: enable explanation generation (clients send `x-explanations` header)
+- `--explanations`: enable explanation generation (clients send `x-explanations` header; JSON shape [`explanation.v1.json`](../schemas/explanation.v1.json))
+- `--eval-timeout <second>`: wall-clock timeout for a single evaluation request (default: `10`)
+- `--cors`: allow cross-origin browser requests from any origin (off by default)
 
 **Routes:**
 
 | Method | Route | Description |
 |--------|-------|-------------|
-| GET | `/{spec}?data=value` | Evaluate all rules (data as query params) |
-| POST | `/{spec}` | Evaluate all rules (data as JSON body) |
+| GET | `/` | List all specs |
+| GET | `/{spec}` | Show spec interface (data, rules, versions) |
+| POST | `/{spec}` | Evaluate (data as JSON or form body) |
 | GET/POST | `/{spec}/{rules}` | Evaluate specific rules (comma-separated) |
-| GET | `/` | List all specs with schemas |
 | GET | `/openapi.json` | OpenAPI 3.1 specification |
 | GET | `/docs` | Interactive API documentation (Scalar) |
 | GET | `/health` | Health check |
@@ -162,12 +166,22 @@ lemma lsp
 AI assistant integration via [Model Context Protocol](https://modelcontextprotocol.io) over stdio.
 
 ```bash
-lemma mcp [--prefix PATH] [--admin]
+lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
 ```
 
 **Options:**
-- `--prefix <path>`: workspace directory or `.lemma` file; omit to start without loading from disk
-- `--admin`: enable admin tools: `add_spec`, `get_spec_source` (read-only by default)
+- `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
+- `--admin`: enable admin tools (read-only by default)
+- `--request-timeout <second>`: wall-clock timeout for a single request (default: `10`)
+
+**Tools (default):**
+- `evaluate` — evaluate rules in a spec
+- `list` — list loaded specs by repository
+- `show` — show a spec interface (data and rules)
+
+**Tools (with `--admin`):**
+- `add_spec` — load Lemma source into the engine
+- `source` — return formatted Lemma source for a repository or spec
 
 ## Workspace
 
@@ -188,11 +202,11 @@ Resource limits control parse-time and planning-time budgets. These are security
 |-------|---------|---------|
 | `max_sources` | 4096 | Maximum source files in one engine |
 | `max_loaded_bytes` | 50 MB | Total source text across all files |
-| `max_source_size_bytes` | 10 MB | Single source file size |
-| `max_expression_depth` | 256 | AST nesting depth |
-| `max_expression_count` | 10,000 | Expressions per rule |
-| `max_total_expression_count` | 1,000,000 | Expressions across all rules |
-| `max_normalized_expression_nodes` | 30,000 | Post-normalization node count per rule |
+| `max_source_size_bytes` | 5 MB | Single source file size |
+| `max_expression_depth` | 7 | AST nesting depth |
+| `max_expression_count` | 65,536 | Expression nodes per source (parser) |
+| `max_normalized_expression_nodes` | 30,000 | Unique normal-form cells reachable from one rule root after normalize |
+| `max_normal_form_depth` | 4096 | Nesting depth of a rule's normalized NormalForm DAG |
 | `max_data_value_bytes` | 1 KB | Single data value size |
 | `max_spec_dependency_depth` | 32 | `uses` chain depth |
 | `max_dag_specs` | 4096 | Total specs in dependency DAG |
@@ -203,13 +217,16 @@ Resource limits control parse-time and planning-time budgets. These are security
 
 **Effective datetime**: when no `--effective` flag or `Accept-Datetime` header is provided, the engine uses the current instant to select the temporal version of the root spec.
 
-**Explanations**: disabled by default in CLI (`lemma run`) and HTTP; enabled by default in WASM. Use `--explain` (CLI) or `--explanations` (server) to opt in.
+**Accept-Datetime (HTTP)**: clients send `Accept-Datetime` with the same formats as `--effective`: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO 8601 datetime. Empty or omitted → now. Invalid values are a bad request. Responses include `Vary: Accept-Datetime`. When the resolved spec row has an `effective_from`, the server also sets `Memento-Datetime` to that instant.
+
+**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and WASM. Use `--explain` (CLI), `--explanations` (server) + `x-explanations` (client), or `explain: true` (SDK) to opt in. Evaluate JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`explanation.v1.json`](../schemas/explanation.v1.json) — bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
 
 ## See Also
 
 - [Learn guide](../learn/readme.md)
 - [Installation](../installation.md)
 - [Language reference](readme.md)
+- [Explanation JSON schema](../schemas/explanation.v1.json)
 - [LemmaBase](registry.md)
 - [Engine test coverage](coverage/engine.md)
 - [CLI test coverage](coverage/cli.md)

@@ -12,7 +12,7 @@ data filing_status : text
   -> option "single"
   -> option "married"
   -> option "head_of_household"
-  -> default "single"
+  -> suggest "single"
 data income        : number -> minimum 0
 
 rule taxable_income:

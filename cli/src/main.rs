@@ -9,11 +9,10 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser, Subcommand};
 use formatter::{Formatter, RepositorySpecGroup};
 use lemma::DateTimeValue;
-use lemma::{collect_lemma_sources, Engine};
+use lemma::Engine;
 use lemma_cli::deps::{
     dependency_identifier_from_dependency_path, lemma_deps_dir, relative_dependency_cache_path,
 };
-use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,13 +64,13 @@ enum Commands {
         #[arg(long)]
         effective: Option<String>,
     },
-    /// Spec schema (data types, constraints, and rules)
+    /// Spec interface (data types, constraints, and rules)
     ///
     /// Examples:
-    ///   lemma schema --prefix tax.lemma
-    ///   lemma schema calculator
-    ///   lemma schema '@iso/countries' alpha2
-    Schema {
+    ///   lemma show --prefix tax.lemma
+    ///   lemma show calculator
+    ///   lemma show '@iso/countries' alpha2
+    Show {
         /// Repository qualifier (e.g. `@iso/countries`)
         repo: Option<String>,
         /// Spec name
@@ -82,7 +81,7 @@ enum Commands {
         /// Effective datetime (e.g. 2026, 2026-03-04)
         #[arg(long)]
         effective: Option<String>,
-        /// Output schema as JSON
+        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
@@ -102,7 +101,7 @@ enum Commands {
     /// Start HTTP REST API server with auto-generated typed endpoints (default: localhost:8012)
     ///
     /// Routes:
-    ///   GET  /{spec}              — evaluate all rules (data as query params)
+    ///   GET  /{spec}              — show spec interface (data, rules, versions)
     ///   POST /{spec}              — evaluate all rules (data as JSON or form body)
     ///   GET  /{spec}/{rules}      — evaluate specific rules (comma-separated)
     ///   POST /{spec}/{rules}      — evaluate specific rules (JSON or form body)
@@ -126,7 +125,7 @@ enum Commands {
         /// Enable explanation generation
         #[arg(long)]
         explanations: bool,
-        /// Wall-clock timeout for a single evaluation request, in seconds
+        /// Wall-clock timeout for a single evaluation request, in second
         #[arg(long, default_value = "10", value_name = "SECONDS")]
         eval_timeout: u64,
         /// Allow cross-origin browser requests from any origin (permissive CORS).
@@ -138,13 +137,13 @@ enum Commands {
     Lsp,
     /// Start MCP server for AI assistant integration (stdio)
     Mcp {
-        /// Workspace directory or `.lemma` file
+        /// Workspace directory or `.lemma` file (default: current directory)
         #[arg(long, value_name = "PATH")]
         prefix: Option<PathBuf>,
-        /// Enable admin tools: add_spec, get_spec_source (read-only by default)
+        /// Enable admin tools: add_spec, source (read-only by default)
         #[arg(long)]
         admin: bool,
-        /// Wall-clock timeout for a single request, in seconds
+        /// Wall-clock timeout for a single request, in second
         #[arg(long, default_value = "10", value_name = "SECONDS")]
         request_timeout: u64,
     },
@@ -226,14 +225,24 @@ fn resolve_spec(engine: &Engine, spec: Option<&str>, interactive: bool) -> Resul
     if let Some(name) = spec {
         return Ok(name.to_string());
     }
-    let workspace = engine.get_workspace();
-    let specification_count = workspace.specs.len();
-    match specification_count {
+    let workspace = engine
+        .list()
+        .into_iter()
+        .find(|repository_group| repository_group.repository.is_none())
+        .expect("BUG: workspace repository must exist after Engine::new")
+        .specs;
+    let unique_names: std::collections::BTreeSet<&str> =
+        workspace.iter().map(|ls| ls.name.as_str()).collect();
+    match unique_names.len() {
         0 => anyhow::bail!("No specs found in source"),
-        1 => Ok(workspace.specs[0].name.clone()),
+        1 => Ok(unique_names
+            .into_iter()
+            .next()
+            .expect("BUG: len was 1")
+            .to_string()),
         _ if interactive => Ok(String::new()),
         _ => {
-            let names: Vec<&str> = workspace.specs.iter().map(|ss| ss.name.as_str()).collect();
+            let names: Vec<&str> = unique_names.into_iter().collect();
             anyhow::bail!(
                 "Workspace contains multiple specs: {}\n\nUsage: lemma run [repo] <spec> [--prefix PATH] [name=value ...]",
                 names.join(", ")
@@ -243,7 +252,7 @@ fn resolve_spec(engine: &Engine, spec: Option<&str>, interactive: bool) -> Resul
 }
 
 fn resolve_effective(cli_effective: Option<&String>) -> Result<DateTimeValue> {
-    lemma::Engine::resolve_effective(cli_effective.map(String::as_str))
+    lemma::resolve_effective(cli_effective.map(String::as_str))
         .map_err(|e| anyhow::anyhow!("{}", e.message()))
 }
 
@@ -273,13 +282,13 @@ fn main() {
                 json: *json,
             })
         }
-        Commands::Schema {
+        Commands::Show {
             repo,
             spec,
             prefix,
             effective,
             json,
-        } => schema_command(
+        } => show_command(
             workspace_dir(prefix.as_ref()),
             repo.as_deref(),
             spec.as_deref(),
@@ -309,7 +318,7 @@ fn main() {
             prefix,
             admin,
             request_timeout,
-        } => mcp_command(prefix.as_deref(), *admin, *request_timeout),
+        } => mcp_command(workspace_dir(prefix.as_ref()), *admin, *request_timeout),
         Commands::Fetch {
             dependency,
             prefix,
@@ -366,8 +375,15 @@ fn run_command(options: RunOptions<'_>) -> Result<()> {
     let (repository_qualifier_optional, spec_name_optional) = match options.positionals {
         [] => (None, None),
         [one] => {
-            let is_repo = engine.get_repository(one).is_ok();
-            let is_spec = engine.get_workspace().specs.iter().any(|s| s.name == *one);
+            let is_repo = interactive::repository_loaded(&engine, one);
+            let is_spec = engine
+                .list()
+                .into_iter()
+                .find(|repository_group| repository_group.repository.is_none())
+                .expect("BUG: workspace repository must exist after Engine::new")
+                .specs
+                .iter()
+                .any(|ls| ls.name == *one);
 
             if is_repo && !is_spec {
                 (Some(one.to_string()), None)
@@ -464,24 +480,20 @@ fn run_command(options: RunOptions<'_>) -> Result<()> {
             )
         };
 
-    let plan = engine
-        .get_plan(
-            repository_qualifier_for_run.as_deref(),
-            &spec_set_identifier,
-            Some(&now),
-        )
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let data_values: HashMap<String, lemma::DataValueInput> = evaluation_inputs
-        .into_iter()
-        .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-        .collect();
     let rules = if rule_names.is_empty() {
         None
     } else {
         Some(rule_names.as_slice())
     };
     let response = engine
-        .run_plan(plan, Some(&now), data_values, options.explain, rules)
+        .run(
+            repository_qualifier_for_run.as_deref(),
+            &spec_set_identifier,
+            Some(&now),
+            evaluation_inputs,
+            rules,
+            options.explain,
+        )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let formatter = Formatter;
 
@@ -509,7 +521,7 @@ fn parse_data_strings(data: &[String]) -> HashMap<String, String> {
         .collect()
 }
 
-fn resolve_schema_target(
+fn resolve_show_target(
     engine: &Engine,
     repository_qualifier: Option<&str>,
     specification_name: Option<&str>,
@@ -518,12 +530,15 @@ fn resolve_schema_target(
         (None, Some(spec)) => Ok((None, spec.to_string())),
         (Some(repo), Some(spec)) => Ok((Some(repo.to_string()), spec.to_string())),
         (Some(one), None) => {
-            let is_repository = engine.get_repository(one).is_ok();
+            let is_repository = interactive::repository_loaded(engine, one);
             let is_spec = engine
-                .get_workspace()
+                .list()
+                .into_iter()
+                .find(|repository_group| repository_group.repository.is_none())
+                .expect("BUG: workspace repository must exist after Engine::new")
                 .specs
                 .iter()
-                .any(|spec_set| spec_set.name == *one);
+                .any(|ls| ls.name == *one);
 
             if is_repository && !is_spec {
                 anyhow::bail!(
@@ -539,7 +554,7 @@ fn resolve_schema_target(
     }
 }
 
-fn schema_command(
+fn show_command(
     source_path: &Path,
     repository_qualifier: Option<&str>,
     specification_name: Option<&str>,
@@ -550,57 +565,30 @@ fn schema_command(
     let mut engine = Engine::new();
     let _: usize = load_workspace(&mut engine, source_path)?;
 
-    let (repository_for_schema, chosen_specification) =
-        resolve_schema_target(&engine, repository_qualifier, specification_name)?;
-    let mut schema = engine
-        .get_plan(
-            repository_for_schema.as_deref(),
+    let (repository_for_show, chosen_specification) =
+        resolve_show_target(&engine, repository_qualifier, specification_name)?;
+    let show = engine
+        .show(
+            repository_for_show.as_deref(),
             &chosen_specification,
             Some(&now),
         )
-        .map_err(|e| anyhow::anyhow!("{e}"))?
-        .interface_schema(&lemma::DataOverlay::default());
-
-    let workspace = engine.get_workspace();
-    if let Some(spec_set) = workspace
-        .specs
-        .iter()
-        .find(|spec_set| spec_set.name == chosen_specification)
-    {
-        let all_versions: Vec<DateTimeValue> = spec_set
-            .iter_with_ranges()
-            .filter_map(|(_, effective_from, _)| effective_from)
-            .collect();
-        if all_versions.len() > 1 {
-            schema.versions = all_versions;
-        }
-    }
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if json {
         let json_document =
-            serde_json::to_string_pretty(&schema).expect("BUG: failed to serialize schema JSON");
+            serde_json::to_string_pretty(&show).expect("BUG: failed to serialize show JSON");
         println!("{}", json_document);
     } else {
-        let formatter = Formatter;
-        print!("{}", formatter.format_spec_schema(&schema));
+        print!("{show}");
     }
     Ok(())
 }
 
-#[derive(Serialize)]
-struct RepositorySpecListGroup {
-    repository: Option<String>,
-    specs: Vec<String>,
-}
-
 fn spec_set_names_in_repository(repo: &lemma::ResolvedRepository) -> Vec<String> {
-    let mut names: Vec<String> = repo
-        .specs
-        .iter()
-        .map(|spec_set| spec_set.name.clone())
-        .collect();
-    names.sort();
-    names
+    let unique_names: std::collections::BTreeSet<String> =
+        repo.specs.iter().map(|ls| ls.name.clone()).collect();
+    unique_names.into_iter().collect()
 }
 
 fn repository_spec_groups(engine: &Engine) -> Vec<(Option<String>, Vec<String>)> {
@@ -610,7 +598,7 @@ fn repository_spec_groups(engine: &Engine) -> Vec<(Option<String>, Vec<String>)>
         if names.is_empty() {
             continue;
         }
-        match resolved.repository.name.as_deref() {
+        match resolved.repository.as_deref() {
             None => groups.push((None, names)),
             Some(repository) => groups.push((Some(repository.to_string()), names)),
         }
@@ -622,22 +610,15 @@ fn list_command(source_path: &Path, json: bool) -> Result<()> {
     let mut engine = Engine::new();
     let _: usize = load_workspace(&mut engine, source_path)?;
 
-    let groups = repository_spec_groups(&engine);
-
     if json {
-        let payload: Vec<RepositorySpecListGroup> = groups
-            .iter()
-            .map(|(repository, specs)| RepositorySpecListGroup {
-                repository: repository.clone(),
-                specs: specs.clone(),
-            })
-            .collect();
+        let payload = engine.list();
         let json_document =
             serde_json::to_string_pretty(&payload).expect("BUG: failed to serialize list JSON");
         print!("{}", json_document);
         return Ok(());
     }
 
+    let groups = repository_spec_groups(&engine);
     let formatter = Formatter;
     let view_groups: Vec<RepositorySpecGroup<'_>> = groups
         .iter()
@@ -666,8 +647,18 @@ fn server_command(
         let mut engine = Engine::new();
         let _: usize = load_workspace(&mut engine, source)?;
 
-        let spec_count: usize = engine.get_workspace().specs.len();
-        println!("Starting HTTP server with {} spec(s) loaded...", spec_count);
+        let workspace = engine
+            .list()
+            .into_iter()
+            .find(|repository_group| repository_group.repository.is_none())
+            .expect("BUG: workspace repository must exist after Engine::new")
+            .specs;
+        let unique_specs: std::collections::BTreeSet<&str> =
+            workspace.iter().map(|ls| ls.name.as_str()).collect();
+        println!(
+            "Starting HTTP server with {} spec(s) loaded...",
+            unique_specs.len()
+        );
         server::http::start_server(
             engine,
             host,
@@ -687,20 +678,26 @@ fn lsp_command() -> Result<()> {
     lemma_lsp::stdio::run_stdio().map_err(anyhow::Error::from)
 }
 
-fn mcp_command(workdir: Option<&Path>, admin: bool, request_timeout_secs: u64) -> Result<()> {
+fn mcp_command(workdir: &Path, admin: bool, request_timeout_secs: u64) -> Result<()> {
     let mut engine = Engine::new();
-    if let Some(path) = workdir {
-        let _: usize = load_workspace(&mut engine, path)?;
-    }
+    let _: usize = load_workspace(&mut engine, workdir)?;
 
     let config = mcp::McpConfig {
         admin,
         request_timeout: std::time::Duration::from_secs(request_timeout_secs),
     };
 
+    let workspace_specs = engine
+        .list()
+        .into_iter()
+        .find(|repository_group| repository_group.repository.is_none())
+        .expect("BUG: workspace repository must exist after Engine::new")
+        .specs;
+    let unique_specs: std::collections::BTreeSet<&str> =
+        workspace_specs.iter().map(|ls| ls.name.as_str()).collect();
     eprintln!(
         "Starting MCP server with {} spec(s) loaded",
-        engine.get_workspace().specs.len()
+        unique_specs.len()
     );
     mcp::server::start_server(engine, config)?;
     Ok(())
@@ -735,17 +732,14 @@ async fn fetch_repo(
         .await
         .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", raw_id, e.message))?;
 
-    let source_type_str = bundle.source_type.to_string();
-    let attribute = source_type_str.as_str();
-    let source_text = &bundle.lemma_source;
+    let attribute = raw_id;
+    let source_text = &bundle.source;
     let deps_dir = lemma_deps_dir(workdir);
     let limits = lemma::ResourceLimits::default();
 
     let new_specs = lemma::parse(
         source_text,
-        lemma::SourceType::Registry(std::sync::Arc::new(lemma::LemmaRepository::new(Some(
-            raw_id.to_string(),
-        )))),
+        lemma::SourceType::Dependency(raw_id.to_string()),
         &limits,
     )
     .map_err(|e| anyhow::anyhow!("Registry returned unparseable dependency: {}", e.message()))?
@@ -797,14 +791,11 @@ async fn fetch_repo(
 
     let mut engine = Engine::new();
     load_workspace(&mut engine, workdir)?;
-    let registry_source = lemma::SourceType::Registry(std::sync::Arc::new(
-        lemma::LemmaRepository::new(Some(raw_id.to_string())),
-    ));
     engine
-        .load_batch(
-            HashMap::from([(registry_source, source_text.to_string())]),
-            Some(raw_id),
-        )
+        .load([(
+            lemma::SourceType::Dependency(raw_id.to_string()),
+            source_text.to_string(),
+        )])
         .map_err(|load_err| {
             for e in load_err.iter() {
                 eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
@@ -853,10 +844,9 @@ async fn fetch_workspace_deps(
                 for (parsed_repo, specs) in &result.repositories {
                     let repository_arc = std::sync::Arc::clone(parsed_repo);
                     for spec in specs {
-                        if let Err(e) = ctx.insert_spec(
-                            std::sync::Arc::clone(&repository_arc),
-                            std::sync::Arc::new(spec.clone()),
-                        ) {
+                        if let Err(e) =
+                            ctx.insert_spec(std::sync::Arc::clone(&repository_arc), spec.clone())
+                        {
                             eprintln!("warning: {}", e);
                         }
                     }
@@ -888,7 +878,7 @@ async fn fetch_workspace_deps(
         if local_workspace_sources.contains(source_id) {
             continue;
         }
-        if let Err(load_err) = validate_engine.load(code.clone(), source_id.clone()) {
+        if let Err(load_err) = validate_engine.load([(source_id.clone(), code.clone())]) {
             for e in load_err.iter() {
                 eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
             }
@@ -1061,22 +1051,24 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<usiz
         workspace_paths.len() + deps_paths.len()
     };
 
+    let mut sources = Vec::with_capacity(deps_paths.len().saturating_add(workspace_paths.len()));
+
     for dep_path in &deps_paths {
         let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
-        let dependency_sources = match collect_lemma_sources(std::slice::from_ref(dep_path)) {
-            Ok(sources) => sources,
-            Err(read_errors) => return bail_workspace_load_errors(&read_errors),
-        };
-        if let Err(load_failures) = engine.load_batch(dependency_sources, Some(&dependency_id)) {
+        let content = fs::read_to_string(dep_path)?;
+        sources.push((
+            lemma::SourceType::Dependency(dependency_id.to_string()),
+            content,
+        ));
+    }
+    for path in &workspace_paths {
+        let content = fs::read_to_string(path)?;
+        sources.push((lemma::SourceType::Path(Arc::new(path.clone())), content));
+    }
+    if !sources.is_empty() {
+        if let Err(load_failures) = engine.load(sources) {
             bail_workspace_load_errors(&load_failures)?;
         }
-    }
-    let workspace_sources = match collect_lemma_sources(&workspace_paths) {
-        Ok(sources) => sources,
-        Err(read_errors) => return bail_workspace_load_errors(&read_errors),
-    };
-    if let Err(load_failures) = engine.load_batch(workspace_sources, None) {
-        bail_workspace_load_errors(&load_failures)?;
     }
     Ok(discovered_lemma_source_total)
 }

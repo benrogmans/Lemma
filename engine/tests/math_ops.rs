@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile)?;
+    engine.load([(lemma::SourceType::Volatile, code.to_string())])?;
     let now = DateTimeValue::now();
     let resp = engine
         .run(
@@ -14,8 +14,8 @@ fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
             "test",
             Some(&now),
             HashMap::new(),
-            false,
             Some(&[rule.to_string()]),
+            false,
         )
         .expect("run should succeed after load");
     let v = resp
@@ -39,7 +39,7 @@ fn run_decimal(code: &str, rule: &str) -> Result<Decimal, lemma::Errors> {
 
 fn run_literal(code: &str, rule: &str) -> Result<lemma::LiteralValue, lemma::Errors> {
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile)?;
+    engine.load([(lemma::SourceType::Volatile, code.to_string())])?;
     let now = DateTimeValue::now();
     let resp = engine
         .run(
@@ -47,8 +47,8 @@ fn run_literal(code: &str, rule: &str) -> Result<lemma::LiteralValue, lemma::Err
             "test",
             Some(&now),
             HashMap::new(),
-            false,
             Some(&[rule.to_string()]),
+            false,
         )
         .expect("run should succeed after load");
     let rule_result = resp.get(rule).unwrap_or_else(|_| panic!("rule {rule}"));
@@ -61,7 +61,7 @@ fn run_literal(code: &str, rule: &str) -> Result<lemma::LiteralValue, lemma::Err
 fn run_authoritative_decimal(code: &str, rule: &str) -> Decimal {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
@@ -70,8 +70,8 @@ fn run_authoritative_decimal(code: &str, rule: &str) -> Decimal {
             "test",
             Some(&now),
             HashMap::new(),
-            false,
             Some(&[rule.to_string()]),
+            false,
         )
         .expect("run");
     let rule_result = resp.get(rule).unwrap_or_else(|_| {

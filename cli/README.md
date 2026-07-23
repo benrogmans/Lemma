@@ -32,7 +32,7 @@ lemma run tax_calculation income=75000 filing_status="married"
 lemma run --interactive
 
 # Show spec structure
-lemma schema pricing
+lemma show pricing
 
 # List loaded specs grouped by repository
 lemma list

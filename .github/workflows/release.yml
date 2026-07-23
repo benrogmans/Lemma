@@ -106,6 +106,16 @@ jobs:
             ```elixir
             {:lemma_engine, "~> ${{ needs.detect-version-changes.outputs.version }}"}
             ```
+
+            Or use the JVM package (Maven Central):
+
+            ```xml
+            <dependency>
+              <groupId>com.lemmabase</groupId>
+              <artifactId>lemma-engine</artifactId>
+              <version>${{ needs.detect-version-changes.outputs.version }}</version>
+            </dependency>
+            ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -257,6 +267,92 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-jni-binaries:
+    name: Build JNI (${{ matrix.job.target }})
+    needs: [detect-version-changes, create-release]
+    if: needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ${{ matrix.job.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        job:
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-apple-darwin, os: macos-15-intel }
+          - {
+              target: aarch64-unknown-linux-gnu,
+              os: ubuntu-latest,
+              use-cross: true,
+            }
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-11-vs2026-arm }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.job.target }}
+
+      - name: Install cross
+        if: matrix.job.use-cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build lemma_jni
+        shell: bash
+        run: |
+          if [ "${{ matrix.job.use-cross }}" == "true" ]; then
+            cross build --release -p lemma_jni --target ${{ matrix.job.target }}
+          else
+            cargo build --release -p lemma_jni --target ${{ matrix.job.target }}
+          fi
+
+      - name: Package JNI library
+        shell: bash
+        run: |
+          VERSION="${{ needs.detect-version-changes.outputs.version }}"
+          TARGET="${{ matrix.job.target }}"
+          RELEASE_DIR="target/${TARGET}/release"
+
+          case "${{ runner.os }}" in
+            Windows)
+              SRC="${RELEASE_DIR}/lemma_jni.dll"
+              LIB_NAME="lemma_jni-v${VERSION}-${TARGET}.dll"
+              JAR_NAME="lemma_jni.dll" ;;
+            macOS)
+              SRC="${RELEASE_DIR}/liblemma_jni.dylib"
+              LIB_NAME="liblemma_jni-v${VERSION}-${TARGET}.dylib"
+              JAR_NAME="liblemma_jni.dylib" ;;
+            *)
+              SRC="${RELEASE_DIR}/liblemma_jni.so"
+              LIB_NAME="liblemma_jni-v${VERSION}-${TARGET}.so"
+              JAR_NAME="liblemma_jni.so" ;;
+          esac
+
+          cp "${SRC}" "${LIB_NAME}"
+          tar czf "${LIB_NAME}.tar.gz" "${LIB_NAME}"
+
+          mkdir -p "jni-artifact/native/${TARGET}"
+          cp "${SRC}" "jni-artifact/native/${TARGET}/${JAR_NAME}"
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: lemma-v${{ needs.detect-version-changes.outputs.version }}
+          files: "*lemma_jni-*.tar.gz"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact for Maven package
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-jni-${{ matrix.job.target }}
+          path: jni-artifact/
+          if-no-files-found: error
+
   # Publish jobs run in parallel (no dependencies between them). If one fails
   # (e.g. auth/expired token), update the secret and use "Re-run failed jobs".
   publish-crates:
@@ -352,6 +448,52 @@ jobs:
       - name: Publish to npm
         working-directory: engine/packages/npm/dist
         run: npm publish --provenance --access public
+
+  publish-maven:
+    name: Publish to Maven Central
+    needs: [detect-version-changes, create-release, build-jni-binaries]
+    if: |
+      !cancelled() &&
+      needs.create-release.result == 'success' &&
+      needs.build-jni-binaries.result == 'success' &&
+      needs.detect-version-changes.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JNI natives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: lemma-jni-*
+          path: /tmp/lemma-jni
+          merge-multiple: true
+
+      - name: Install natives into Maven resources
+        run: |
+          set -euo pipefail
+          DEST="engine/packages/maven/src/main/resources"
+          mkdir -p "${DEST}"
+          cp -a /tmp/lemma-jni/native "${DEST}/"
+          find "${DEST}/native" -type f | sort
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          server-id: central
+          server-username: MAVEN_USERNAME
+          server-password: MAVEN_PASSWORD
+          gpg-private-key: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          gpg-passphrase: MAVEN_GPG_PASSPHRASE
+
+      - name: Deploy to Maven Central
+        working-directory: engine/packages/maven
+        run: ./mvnw -B -Pcentral clean deploy -DskipTests
+        env:
+          MAVEN_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
 
   publish-npm-cli:
     name: Publish CLI to npm

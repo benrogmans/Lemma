@@ -31,7 +31,7 @@ Add to `mix.exs`:
 ```elixir
 def deps do
   [
-    {:lemma_engine, "~> 0.8"}
+    {:lemma_engine, "~> 0.9"}
   ]
 end
 ```
@@ -48,30 +48,41 @@ Or from git:
 # Create an engine
 {:ok, engine} = Lemma.new()
 
-# Load a spec
+# Load inline source
 :ok = Lemma.load(engine, """
 spec pricing
 data quantity: number
 data price: 10
-rule total: measure * price
+rule total: quantity * price
 rule discount: 0
   unless quantity >= 10 then 5
   unless quantity >= 50 then 15
 """)
 
-# Run with data
-{:ok, response} = Lemma.run(engine, "pricing", data: %{"measure" => "25"})
+# Or load labeled paths / dependencies in one planning pass
+:ok = Lemma.load(engine, %{"pricing.lemma" => pricing_source})
 
-# Introspect (specs grouped by repository)
+# Run with data
+{:ok, response} =
+  Lemma.run(
+    engine,
+    %{spec: "pricing"},
+    %{data: %{"quantity" => "25"}, explain: false}
+  )
+
+# List loaded specs (grouped by repository)
 {:ok, groups} = Lemma.list(engine)
-# [%{repository: %{name: nil, dependency: nil}, specs: [...]}, ...]
-{:ok, schema} = Lemma.schema(engine, "pricing")
+# [%{repository: nil, specs: [...]}, %{repository: "lemma", specs: [...]}, ...]
+{:ok, show} = Lemma.show(engine, nil, "pricing")
+
+# Canonical Lemma source
+{:ok, source} = Lemma.source(engine, nil, "pricing")
 
 # Format source code (no engine needed)
 {:ok, formatted} = Lemma.format("spec foo\ndata x: 1\nrule y: x + 1")
 
 # Clean up
-:ok = Lemma.remove_spec(engine, "pricing", "2025-01-01")
+:ok = Lemma.remove(engine, nil, "pricing", "2025-01-01")
 ```
 
 ## API
@@ -79,13 +90,12 @@ rule discount: 0
 | Function | Description |
 |----------|-------------|
 | `Lemma.new/1` | Create engine (optional limits map) |
-| `Lemma.load/3` | Load spec from string |
-| `Lemma.load_from_paths/2` | Load specs from file paths |
+| `Lemma.load/2` | Load sources: binary (volatile) or map / list of `{label, code}` (labeled) |
 | `Lemma.list/1` | List loaded specs (includes embedded `lemma` / `spec units`) |
-| `Lemma.format_repository/2` | Formatted Lemma source for a repository (e.g. `"lemma"`) |
-| `Lemma.schema/3` | Get spec schema (data, rules, types) |
-| `Lemma.run/3` | Evaluate a spec with data |
-| `Lemma.remove_spec/3` | Remove a spec from the engine |
+| `Lemma.show/4` | Spec interface and temporal window (`repository`, `spec`, `effective`) |
+| `Lemma.source/4` | Formatted canonical Lemma source |
+| `Lemma.run/3` | Evaluate a spec (`target` + `options` maps; `explain: true` adds per-rule explanation trees) |
+| `Lemma.remove/4` | Remove a spec from the engine |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 
 See `Lemma` module docs for full typespecs and options.
@@ -95,10 +105,12 @@ See `Lemma` module docs for full typespecs and options.
 Data values passed to `Lemma.run/3` must be strings or integers. Elixir floats (IEEE 754 doubles) are rejected to prevent silent precision loss — pass decimal values as strings instead:
 
 ```elixir
-Lemma.run(engine, "pricing", data: %{"rate" => "0.075"})   # correct
-Lemma.run(engine, "pricing", data: %{"quantity" => 42})     # correct (integer)
-Lemma.run(engine, "pricing", data: %{"rate" => 0.075})      # raises — use string
+Lemma.run(engine, %{spec: "pricing"}, %{data: %{"rate" => "0.075"}, explain: false})   # correct
+Lemma.run(engine, %{spec: "pricing"}, %{data: %{"quantity" => 42}, explain: false})     # correct (integer)
+Lemma.run(engine, %{spec: "pricing"}, %{data: %{"rate" => 0.075}, explain: false})      # raises — use string
 ```
+
+With `explain: true`, each rule result may include an `explanation` object matching [`explanation.v1.json`](../../../documentation/schemas/explanation.v1.json).
 
 ## Engine lifecycle
 

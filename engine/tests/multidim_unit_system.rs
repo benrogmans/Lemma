@@ -19,10 +19,12 @@ fn source() -> lemma::SourceType {
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, false)
         .expect("Should evaluate");
     let result = response
         .results
@@ -39,10 +41,12 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> Decimal {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, false)
         .expect("Should evaluate");
     let result = response
         .results
@@ -73,7 +77,7 @@ fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &s
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(
         result.is_err(),
         "Expected planning error containing '{}', but loading succeeded",
@@ -144,7 +148,7 @@ uses lemma units
 data length: measure -> unit meter 1 -> unit kilometer 1000
 data velocity: measure -> unit mps meter/second -> unit kmh kilometer/hour
 data dist: 100 meter
-data secs: 20 seconds
+data secs: 20 second
 rule speed: (dist / secs) as mps"#;
     let val = eval_rule(code, "d2", "speed");
     assert!(val.contains('5'), "Expected 5 mps, got: {val}");
@@ -163,7 +167,7 @@ uses lemma units
 data length: measure -> unit meter 1 -> unit kilometer 1000
 data velocity: measure -> unit mps meter/second -> unit kmh kilometer/hour
 data dist: 100 meter
-data secs: 20 seconds
+data secs: 20 second
 rule speed_kmh: (dist / secs) as kmh"#;
     assert_eq!(
         eval_rule_measure_unit(code, "d2b", "speed_kmh", "kmh"),
@@ -237,7 +241,7 @@ uses spec_b
 data length: spec_b.length
 data velocity: measure -> unit mps meter/second
 data dist: 100 meter
-data secs: 20 seconds
+data secs: 20 second
 rule speed: (dist / secs) as mps"#;
     let val = eval_rule(code, "spec_a", "speed");
     assert!(val.contains('5'), "Expected 5 mps, got: {val}");
@@ -263,12 +267,12 @@ data length: measure -> unit meter 1
 uses spec_b_ref: spec_b
 data velocity: spec_b_ref.velocity
 data dist: 100 meter
-data secs: 20 seconds
+data secs: 20 second
 rule speed: (dist / secs) as mps"#;
     let val = eval_rule(code, "spec_a", "speed");
     assert!(
         val.contains('5'),
-        "Expected speed near 5 mps for 100 meter / 20 seconds, got: {val}"
+        "Expected speed near 5 mps for 100 meter / 20 second, got: {val}"
     );
     assert!(
         val.to_lowercase().contains("mps"),
@@ -287,14 +291,14 @@ fn d8_compound_unit_with_numeric_prefix() {
     // factor = 28.50 * (1/3600) = 28.50/3600 eur/second.
     // We define: unit eur_per_second eur/second (canonical, factor=1)
     //            unit standard 28.50 eur/hour   (factor = 28.50/3600)
-    // 40 hours * standard rate = 40 * 3600 s * (28.50/3600 eur/s) = 40 * 28.50 = 1140 eur.
+    // 40 hour * standard rate = 40 * 3600 s * (28.50/3600 eur/s) = 40 * 28.50 = 1140 eur.
     let code = r#"spec d8
 uses lemma units
 data money: measure -> unit eur 1.00
 data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit standard 28.50 eur/hour
-data hours_worked: 40 hours
+data hours_worked: 40 hour
 data rate: 1 standard
 rule total: (rate * hours_worked)"#;
     let val = eval_rule(code, "d8", "total");
@@ -342,8 +346,8 @@ data money: measure -> unit eur 1.00
 data monthly_rate: measure
   -> unit eur_per_month eur/month
 data sales: 1200 eur
-data months: 1 month
-rule rate: (sales / months)"#;
+data month: 1 month
+rule rate: (sales / month)"#;
     let val = eval_rule(code, "d10b", "rate");
     assert!(
         val.contains("1200") && val.to_lowercase().contains("eur_per_month"),
@@ -376,8 +380,8 @@ data money: measure -> unit eur 1.00
 data per_second_rate: measure
   -> unit eur_per_second eur/second
 data sales: 1200 eur
-data seconds: 1 second
-rule rate: (sales / seconds)"#;
+data second: 1 second
+rule rate: (sales / second)"#;
     let val = eval_rule(code, "d10c", "rate");
     assert!(
         val.contains("1200") && val.to_lowercase().contains("eur_per_second"),
@@ -386,7 +390,7 @@ rule rate: (sales / seconds)"#;
 }
 
 /// Inverse of `d10_calendar_unit_in_derived_measure_definition_allowed`:
-/// balance / monthly burn rate → months of runway (not eur/month).
+/// balance / monthly burn rate → month of runway (not eur/month).
 /// Fails until calendar measure trait + `uses lemma units` exist.
 #[test]
 fn d10_runway_balance_over_monthly_rate_as_month() {
@@ -400,11 +404,11 @@ data burn_rate: 8000 eur_month
 rule runway_months: (balance / burn_rate) as month"#;
     let mut engine = Engine::new();
     engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect("runway spec must load and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "d10_runway", Some(&now), HashMap::new(), false, None)
+        .run(None, "d10_runway", Some(&now), HashMap::new(), None, false)
         .expect("runway spec must evaluate");
     let display = response
         .results
@@ -449,7 +453,7 @@ uses lemma units
 data length: measure -> unit meter 1
 data velocity: measure -> unit mps meter/second
 data dist: 200 meter
-data secs: 40 seconds
+data secs: 40 second
 rule speed: (dist / secs) as mps"#;
     let val = eval_rule(code, "d12", "speed");
     assert!(val.contains('5'), "Expected 5 mps, got: {val}");
@@ -466,7 +470,7 @@ uses lemma units
 data length: measure -> unit meter 1 -> unit kilometer 1000
 data velocity: measure -> unit mps meter/second -> unit kmh kilometer/hour
 data dist: 1000 meter
-data elapsed: 200 seconds
+data elapsed: 200 second
 rule speed_mps: (dist / elapsed) as mps
 rule speed_kmh: (dist / elapsed) as kmh"#;
     let mps = eval_rule(code, "phys", "speed_mps");
@@ -478,7 +482,7 @@ rule speed_kmh: (dist / elapsed) as kmh"#;
 }
 
 // =============================================================================
-// Integration: wage-rate (eur/hour × hours = eur)
+// Integration: wage-rate (eur/hour × hour = eur)
 // =============================================================================
 
 #[test]
@@ -489,11 +493,11 @@ data money: measure -> unit eur 1.00 -> unit cent 0.01
 data wage_rate: measure
   -> unit eur_per_second eur/second
   -> unit eur_per_hour eur/hour
-data hours: 8 hours
+data hour: 8 hour
 data rate: 85 eur_per_hour
-rule total: (rate * hours)"#;
+rule total: (rate * hour)"#;
     let val = eval_rule(code, "wage", "total");
-    // 85 eur/hour × 8 hours = 680 eur
+    // 85 eur/hour × 8 hour = 680 eur
     assert!(val.contains("680"), "Expected 680 eur, got: {val}");
 }
 
@@ -502,26 +506,43 @@ rule total: (rate * hours)"#;
 // =============================================================================
 
 #[test]
-fn integration_anonymous_at_rule_boundary_rejected() {
-    // `dist / time` without `as mps` produces an anonymous intermediate at the rule boundary.
+fn integration_velocity_compound_at_rule_boundary_promotes_to_stdlib() {
+    // `dist / time` matches units.velocity (meter/second).
     let code = r#"spec phys
 uses lemma units
-data length: measure -> unit meter 1
 data dist: 100 meter
-data elapsed: 20 seconds
+data elapsed: 20 second
 rule speed: dist / elapsed"#;
-    expect_plan_error(code, "anonymous intermediate");
+    let val = eval_rule(code, "phys", "speed");
+    assert!(
+        val.contains('5') && val.to_lowercase().contains("meter_per_second"),
+        "expected 5 meter_per_second via units.velocity, got: {val}"
+    );
 }
 
 #[test]
-fn integration_as_number_on_anonymous_rejected() {
-    // Using `as number` to strip an anonymous compound is rejected.
+fn integration_as_number_on_velocity_compound() {
+    // Named velocity strips via unit then number.
     let code = r#"spec phys
 uses lemma units
-data length: measure -> unit meter 1
 data dist: 100 meter
-data elapsed: 20 seconds
-rule speed: (dist / elapsed) as number"#;
+data elapsed: 20 second
+rule speed: (dist / elapsed) as meter_per_second as number"#;
+    let val = eval_rule(code, "phys", "speed");
+    assert!(
+        val.contains('5'),
+        "expected 5 (stripped velocity), got: {val}"
+    );
+}
+
+#[test]
+fn integration_anonymous_acceleration_at_rule_boundary_rejected() {
+    // meter/second^2 has no stdlib type — still anonymous at the rule boundary.
+    let code = r#"spec phys
+uses lemma units
+data dist: 100 meter
+data elapsed: 20 second
+rule accel: dist / elapsed / elapsed"#;
     expect_plan_error(code, "anonymous intermediate");
 }
 
@@ -577,15 +598,14 @@ rule price_ratio: a / b"#;
 
 #[test]
 fn integration_typedef_cast_dimension_mismatch_rejected() {
-    // Cross-dimension cast is rejected: {length:1, duration:-1} cannot be cast to `money`.
+    // Cross-dimension cast is rejected: velocity cannot be cast to `money`.
     let code = r#"spec phys
 uses lemma units
-data length: measure -> unit meter 1
 data money: measure -> unit eur 1.00
 data dist: 100 meter
-data elapsed: 20 seconds
-rule speed_as_eur: (dist / elapsed)"#;
-    expect_plan_error(code, "anonymous intermediate");
+data elapsed: 20 second
+rule speed_as_eur: (dist / elapsed) as eur"#;
+    expect_plan_error(code, "");
 }
 
 // =============================================================================

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://lemma.dev/schemas/explanation.v1.json",
   "title": "Lemma rule explanation",
-  "description": "Structural explanation tree for one evaluated rule. Every runtime fact is read from the recorded execution of the rule's source-shaped instruction stream; the recorded run's result is the response result. Rule references embed their full explanation tree wherever they appear. Present at results.<rule>.explanation only when evaluation was requested with explain: true (Engine::run / Engine::run_plan), CLI --explain, or HTTP x-explanations with server explanations enabled.",
+  "description": "Structural explanation tree for one evaluated rule. Rule references embed their full explanation tree wherever they appear. Present at results.<rule>.explanation only when evaluation was requested with explain: true, CLI --explain, or HTTP x-explanations with server explanations enabled.",
   "$defs": {
     "Cause": {
       "type": "object",
@@ -60,7 +60,10 @@
           "$ref": "#/$defs/ComposeNode"
         },
         {
-          "$ref": "#/$defs/DataInputNode"
+          "$ref": "#/$defs/DataNode"
+        },
+        {
+          "$ref": "#/$defs/DataUnusedNode"
         },
         {
           "$ref": "#/$defs/ConversionNode"
@@ -77,7 +80,7 @@
       "type": "object",
       "required": [
         "type",
-        "rule",
+        "name",
         "result",
         "body"
       ],
@@ -86,12 +89,9 @@
         "type": {
           "const": "rule"
         },
-        "rule": {
-          "type": "string"
-        },
         "result": {
           "type": "string",
-          "description": "Display string for this rule's recorded result."
+          "description": "Display string for this rule's result."
         },
         "body": {
           "type": "string"
@@ -107,6 +107,9 @@
           "items": {
             "$ref": "#/$defs/ExplanationNode"
           }
+        },
+        "name": {
+          "type": "string"
         }
       }
     },
@@ -133,22 +136,39 @@
         }
       }
     },
-    "DataInputNode": {
+    "DataNode": {
       "type": "object",
       "required": [
         "type",
-        "data",
+        "name",
         "display"
       ],
       "additionalProperties": false,
       "properties": {
         "type": {
-          "const": "data_input"
-        },
-        "data": {
-          "type": "string"
+          "const": "data"
         },
         "display": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "DataUnusedNode": {
+      "type": "object",
+      "required": [
+        "type",
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Data path present in a cause condition structure but never looked up (short-circuit or static and-false).",
+      "properties": {
+        "type": {
+          "const": "data_unused"
+        },
+        "name": {
           "type": "string"
         }
       }
@@ -217,74 +237,36 @@
       }
     }
   },
-  "type": "object",
-  "required": [
-    "rule",
-    "result",
-    "body",
-    "children"
-  ],
-  "additionalProperties": false,
-  "properties": {
-    "rule": {
-      "type": "string",
-      "description": "Name of the explained rule."
-    },
-    "result": {
-      "type": "string",
-      "description": "Display string for the rule outcome (value display or veto text)."
-    },
-    "body": {
-      "type": "string",
-      "description": "Winning branch expression from the source rule (or the vetoing condition when an unless condition vetoed)."
-    },
-    "causes": {
-      "type": "array",
-      "description": "Evaluated unless conditions stated as facts, in source order. Omitted when no conditions were evaluated.",
-      "items": {
-        "$ref": "#/$defs/Cause"
-      }
-    },
-    "children": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ExplanationNode"
-      }
-    }
-  },
   "examples": [
     {
-      "rule": "total",
       "result": "4821.09 eur",
       "body": "subtotal + vat",
       "children": [
         {
           "type": "rule",
-          "rule": "subtotal",
           "result": "3984.38 eur",
           "body": "labor + rush_surcharge",
           "children": [
             {
               "type": "rule",
-              "rule": "labor",
               "result": "3187.50 eur",
               "body": "hourly_rate * hours_worked",
               "children": [
                 {
-                  "type": "data_input",
-                  "data": "hourly_rate",
-                  "display": "85.00 eur"
+                  "type": "data",
+                  "display": "85.00 eur",
+                  "name": "hourly_rate"
                 },
                 {
-                  "type": "data_input",
-                  "data": "hours_worked",
-                  "display": "37.5"
+                  "type": "data",
+                  "display": "37.5",
+                  "name": "hours_worked"
                 }
-              ]
+              ],
+              "name": "labor"
             },
             {
               "type": "rule",
-              "rule": "rush_surcharge",
               "result": "796.88 eur",
               "body": "labor * 25%",
               "causes": [
@@ -300,59 +282,58 @@
               "children": [
                 {
                   "type": "rule",
-                  "rule": "labor",
                   "result": "3187.50 eur",
                   "body": "hourly_rate * hours_worked",
                   "children": [
                     {
-                      "type": "data_input",
-                      "data": "hourly_rate",
-                      "display": "85.00 eur"
+                      "type": "data",
+                      "display": "85.00 eur",
+                      "name": "hourly_rate"
                     },
                     {
-                      "type": "data_input",
-                      "data": "hours_worked",
-                      "display": "37.5"
+                      "type": "data",
+                      "display": "37.5",
+                      "name": "hours_worked"
                     }
-                  ]
+                  ],
+                  "name": "labor"
                 }
-              ]
+              ],
+              "name": "rush_surcharge"
             }
-          ]
+          ],
+          "name": "subtotal"
         },
         {
           "type": "rule",
-          "rule": "vat",
           "result": "836.72 eur",
           "body": "subtotal * 21%",
           "children": [
             {
               "type": "rule",
-              "rule": "subtotal",
               "result": "3984.38 eur",
               "body": "labor + rush_surcharge",
               "children": [
                 {
                   "type": "rule",
-                  "rule": "labor",
                   "result": "3187.50 eur",
                   "body": "hourly_rate * hours_worked",
                   "children": [
                     {
-                      "type": "data_input",
-                      "data": "hourly_rate",
-                      "display": "85.00 eur"
+                      "type": "data",
+                      "display": "85.00 eur",
+                      "name": "hourly_rate"
                     },
                     {
-                      "type": "data_input",
-                      "data": "hours_worked",
-                      "display": "37.5"
+                      "type": "data",
+                      "display": "37.5",
+                      "name": "hours_worked"
                     }
-                  ]
+                  ],
+                  "name": "labor"
                 },
                 {
                   "type": "rule",
-                  "rule": "rush_surcharge",
                   "result": "796.88 eur",
                   "body": "labor * 25%",
                   "causes": [
@@ -368,29 +349,35 @@
                   "children": [
                     {
                       "type": "rule",
-                      "rule": "labor",
                       "result": "3187.50 eur",
                       "body": "hourly_rate * hours_worked",
                       "children": [
                         {
-                          "type": "data_input",
-                          "data": "hourly_rate",
-                          "display": "85.00 eur"
+                          "type": "data",
+                          "display": "85.00 eur",
+                          "name": "hourly_rate"
                         },
                         {
-                          "type": "data_input",
-                          "data": "hours_worked",
-                          "display": "37.5"
+                          "type": "data",
+                          "display": "37.5",
+                          "name": "hours_worked"
                         }
-                      ]
+                      ],
+                      "name": "labor"
                     }
-                  ]
+                  ],
+                  "name": "rush_surcharge"
                 }
-              ]
+              ],
+              "name": "subtotal"
             }
-          ]
+          ],
+          "name": "vat"
         }
-      ]
+      ],
+      "type": "rule",
+      "name": "total"
     }
-  ]
+  ],
+  "$ref": "#/$defs/RuleNode"
 }

@@ -7,7 +7,8 @@ use lemma::{Engine, SourceType};
 fn transitive_leaf_interface_change_rejected_for_unqualified_chain() {
     let mut engine = Engine::new();
     let err = engine
-        .load(
+        .load([(
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("chain.lemma"))),
             r#"
 spec leaf 2025-01-01
 data rate: number
@@ -22,9 +23,9 @@ rule m: L.rate
 spec app 2025-01-01
 uses M: middle
 rule out: M.m
-"#,
-            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("chain.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .expect_err("leaf rate type changes across slices");
 
     let msg = err

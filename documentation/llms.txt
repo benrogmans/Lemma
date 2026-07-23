@@ -2,7 +2,7 @@
 
 > Lemma is a declarative business rule language. Translate natural-language policy into readable, deterministic `.lemma` specs. Lemma derives required inputs from rules — declare `data` with type constraints; do not invent runtime values.
 
-When a user describes business logic, your job is to produce Lemma source that humans can read and systems can evaluate. Prefer named pipeline rules over clever one-liners. Split unrelated policies into separate specs. Use `lemma schema` to verify which inputs a spec requires. For syntax not covered here, read the linked documentation.
+When a user describes business logic, your job is to produce Lemma source that humans can read and systems can evaluate. Prefer named pipeline rules over clever one-liners. Split unrelated policies into separate specs. Use `lemma show` to inspect the static interface (types, constraints, rules after normalize). Overlay-aware needs for a concrete evaluation come from each rule's `missing_data` on `run`, not from `show`. Explanations are opt-in (`explain: true` / `lemma run -x`); JSON shape is `documentation/schemas/explanation.v1.json`. For syntax not covered here, read the linked documentation.
 
 **Do not write inline comments.** Lemma has no `#`, `//`, or `--` comment syntax. Anything after `#` on a line is a parse error, not a comment. Do not annotate `data` or `rule` lines with trailing remarks.
 
@@ -63,7 +63,7 @@ spec base_config
 
 data standard_discount: 5%
 data tax_rate:          21%
-data base_price:        number -> minimum 0 -> default 100
+data base_price:        number -> minimum 0 -> suggest 100
 
 rule tax_amount:       base_price * tax_rate
 rule price_with_tax:   base_price + tax_amount
@@ -74,7 +74,7 @@ rule final_price:      discounted_price * (100% + tax_rate)
 
 spec line_item
 
-data qty: number -> minimum 0 -> default 10
+data qty: number -> minimum 0 -> suggest 10
 
 uses pricing: base_config
 
@@ -133,11 +133,11 @@ Reference imported members through the alias: `iso.code`, `iso.name`, etc. See [
 
 **Natural language → Lemma**
 
-User request: *"Library charges €0.25/day for regular books, €0.50 for reference, €1 for new releases. First offense gets 50% off. Grace period 3 days except new releases. Block checkout if fee exceeds €10."*
+User request: *"Library charges €0.25/day for regular books, €0.50 for reference, €1 for new releases. First offense gets 50% off. Grace period 3 day except new releases. Block checkout if fee exceeds €10."*
 
 Mapping:
 - book types → `data book_type` with `-> option` constraints
-- days overdue, first offense → `data` input slots
+- day overdue, first offense → `data` input slots
 - per-day rates → `rule daily_fee` with unless arms per book type
 - grace period → `rule is_in_grace_period`
 - fee calculation → `rule total_fee`, `rule final_fee` pipeline
@@ -185,7 +185,7 @@ rule can_checkout: yes
 
 **Data: constraint definitions, not placeholders**
 
-`data` declares values rules may use. Constraints define validity. Type-only `data` (no literal value) is an input slot — Lemma and `lemma schema` determine what must be supplied at evaluation time. Use real domain values; never `"TODO"` or dummy placeholders.
+`data` declares values rules may use. Constraints define validity. Type-only `data` (no literal value) is an input slot. `lemma show` lists statically reachable data after normalize; what a concrete evaluation still needs is overlay-aware and comes from each rule's `missing_data` on `run`. Use real domain values; never `"TODO"` or dummy placeholders.
 
 **Example D — typed data (coffee order)**
 
@@ -268,11 +268,11 @@ data pay_period: text
   -> help "How often you are paid."
 ```
 
-Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> default`, `-> help`, and more. See the Reference for the full list.
+Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, and more. See the Reference for the full list.
 
 **Standard library — `uses lemma units`**
 
-Lemma embeds SI units in the standard library (`repo lemma`, spec `units`). Import with `uses lemma units`, then reference types as `units.mass`, `units.duration`, `units.length`, and others. Duration units (`hours`, `days`, `weeks`) require `units.duration` or an equivalent type with `-> trait duration`.
+Lemma embeds SI bases, derived compounds (force, pressure, energy, power, frequency, electrical), imperial length/mass/volume, area/volume, and information (`bit`/`byte`) in `repo lemma` / `spec units`. Import with `uses lemma units`, then reference types as `units.mass`, `units.duration`, `units.length`, `units.force`, and others. Unit names are **singular only** (`8 hour`, not `8 hours`); length uses American `meter` (not `metre`). Duration units (`hour`, `day`, `week`) require `units.duration`. No Celsius/Fahrenheit in stdlib (kelvin only).
 
 ```lemma
 spec logistics
@@ -283,22 +283,22 @@ Physical shipment constraints using SI units from the standard library.
 uses lemma units
 
 data package_weight: 12 kilogram
-data shift_length:      8 hours
+data shift_length:      8 hour
 data route_distance:     45 kilometer
 
 rule weight_grams:  package_weight as gram
-rule shift_hours:   shift_length as hours
+rule shift_hours:   shift_length as hour
 rule distance_km:   route_distance as kilometer
 
 rule is_heavy:      package_weight > 20 kilogram
-rule is_long_shift: shift_length >= 8 hours
+rule is_long_shift: shift_length >= 8 hour
 ```
 
-Prefer `units.mass`, `units.duration`, and `units.length` over redefining kilogram, hour, or metre in every spec. Convert within a family with `as <unit>`; strip to a bare number with a chain: `amount as eur as number`. Cross-family relabel keeps magnitude: `5 eur as kg` → `5 kg`.
+Prefer `units.mass`, `units.duration`, and `units.length` over redefining kilogram, hour, or meter in every spec. Convert within a family with `as <unit>`; strip to a bare number with a chain: `amount as eur as number`. Cross-family relabel keeps magnitude: `5 eur as kg` → `5 kg`.
 
 **Ranges — half-open intervals**
 
-Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>` when the result should stay unit-labelled). Bare `as number` on date/measure ranges is rejected. Range typedefs: `number range`, `date range`, `measure range`, `ratio range`. Calendar month/year intervals use `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar` with a range default.
+Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>` when the result should stay unit-labelled). Bare `as number` on date/measure ranges is rejected. Range typedefs: `number range`, `date range`, `measure range`, `ratio range`. Calendar month/year intervals use `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar range`.
 
 ```lemma
 spec eligibility
@@ -311,11 +311,11 @@ data hire_date:          2024-01-15
 data review_date:        2024-06-30
 data discount_rate:      15%
 
-data eligible_band: units.calendar
-  -> default 18 year...67 year
+data eligible_band: units.calendar range
+  -> suggest 18 year...67 year
 
 data score_band: number range
-  -> default 0...100
+  -> suggest 0...100
 
 rule is_working_age: employee_age in eligible_band
 
@@ -327,12 +327,12 @@ rule in_discount_band: discount_rate in 0%...50%
 
 rule in_q2: hire_date in 2024-04-01...2024-07-01
 
-rule review_days: (hire_date...review_date) as days
+rule review_days: (hire_date...review_date) as day
 
-rule span_years: (1990-05-20...2024-06-15) as years
+rule span_years: (1990-05-20...2024-06-15) as year
 ```
 
-At the upper bound, `in` is false: `67 years` is not inside `18 years...67 years`. Declare range slots on `data` when a band is reused; use inline `value in lo...hi` for one-off checks.
+At the upper bound, `in` is false: `67 year` is not inside `18 year...67 year`. Declare range slots on `data` when a band is reused; use inline `value in lo...hi` for one-off checks.
 
 Range over a custom measure type (no SI import needed):
 
@@ -344,7 +344,7 @@ data weight: measure
   -> unit kilogram 1000
 
 data load_band: weight range
-  -> default 30 kilogram...80 kilogram
+  -> suggest 30 kilogram...80 kilogram
 
 rule inside_band: 45 kilogram in load_band
 
@@ -378,16 +378,39 @@ data productivity: measure
 data premium_per_head: measure
   -> unit eur_hour_per_employee eur_per_hour/employee
 
-data hours_worked: 120 hours
-data hourly_rate:  wage_rate -> default 85 eur_per_hour
-data yield_rate:   productivity -> default 3 result_per_employee
+data time_worked: 120 hour
+data wage: wage_rate -> suggest 85 eur_per_hour
+data yield_rate: productivity -> suggest 3 result_per_employee
 
-rule total_payment: (hourly_rate * hours_worked) as eur
+rule total: wage * time_worked
 
 rule is_high_yield: yield_rate >= 2 result_per_employee
 ```
 
 Layer compound units: `eur_per_hour` builds on `eur` and `hour`; `eur_per_hour/employee` builds on `eur_per_hour` and `employee`; `results/eur/hour/employee` combines outcome, money, time, and headcount into one productivity rate. Use derived types as rule inputs — Lemma checks dimensional consistency at plan time.
+
+---
+
+**Date predicates relative to `now`**
+
+`now` is the evaluation/effective instant. Import `uses lemma units` for duration windows.
+
+| Form | Meaning |
+|------|---------|
+| `date in past` / `in future` | Before / after `now` |
+| `date in past N day` / `in future N day` | Within the last / next N duration units |
+| `past N day` / `future N day` | Relative date-range window |
+| `date in calendar year\|month\|week` | Same calendar period as `now` |
+| `date in past\|future calendar year\|month\|week` | Adjacent period |
+| `date not in calendar year\|month\|week` | Not the current period |
+
+```lemma
+spec recency
+uses lemma units
+data event_date: date
+rule recent: event_date in past 7 day
+rule this_year: event_date in calendar year
+```
 
 ---
 
@@ -460,14 +483,14 @@ data destination_country: text
   -> option "BE"
   -> option "DE"
   -> option "FR"
-  -> default "NL"
+  -> suggest "NL"
 
 data customer_tier: text
   -> option "standard"
   -> option "silver"
   -> option "gold"
   -> option "platinum"
-  -> default "gold"
+  -> suggest "gold"
 
 data destination_region: text
 data is_expedited:       boolean
@@ -542,7 +565,7 @@ Veto is like Rust's `Err` — it means the rule has **no value** and propagates 
 |-----------|-----|
 | Invalid or out-of-domain input | `unless ... then veto "reason"` |
 | Unmapped choice / no rule applies | default `veto` + unless arm per known value |
-| Normal business "no" | `false`, `no`, or `reject` |
+| Normal business "no" | `false` or `no` |
 | Test veto without propagating | `x is veto` (returns boolean) |
 
 Place veto unless clauses **last** so they override other branches.
@@ -646,7 +669,7 @@ If `validated_score` vetoes but `use_default` is true, `result = 50` because the
 4. **Factor rules** — intermediate calculations as named rules in a pipeline.
 5. **Unless chains** — default first, general to specific, vetoes last.
 6. **No inline comments** — no `#`, `//`, or trailing annotations. Commentary (`"""..."""`) only as the first block after `spec <name> [<effective>]`, never after `uses` or `data`.
-7. **Validate** — would `lemma schema` list the right inputs? Do overlapping unless cases resolve to the intended bottommost value?
+7. **Validate** — would `lemma show` list the right static interface (types, constraints, reachable data)? Does a sample `run` report the expected overlay-aware needs in each rule's `missing_data`? Do overlapping unless cases resolve to the intended bottommost value?
 8. **Defer advanced features** — registry imports from LemmaBase, temporal pins → read linked docs. Use `uses lemma units`, ranges, and compound units when the domain needs them.
 
 ---
@@ -812,7 +835,7 @@ rule discount: 0%
 - [Reference](https://github.com/lemma/lemma/blob/main/documentation/reference/readme.md): operators, types, units, ranges, `uses`
 - [Veto](https://github.com/lemma/lemma/blob/main/documentation/learn/types_and_units.md#veto): propagation, `is veto`
 - [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/learn/composing_specs.md): `uses`, temporal versions, pins
-- [CLI](https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md): `run`, `schema`, `format`
+- [CLI](https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md): `run`, `show`, `format`
 - [Registry](https://github.com/lemma/lemma/blob/main/documentation/reference/registry.md): LemmaBase `@user/repo` imports
 - [LemmaBase search](https://lemmabase.com/search?q=): find published registry specs
 - [Examples (documentation)](https://github.com/lemma/lemma/tree/main/documentation/examples): curated `.lemma` files

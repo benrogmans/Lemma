@@ -15,9 +15,11 @@ fn source() -> lemma::SourceType {
 
 fn eval_value(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("spec must load");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("spec must load");
     let response = engine
-        .run(None, spec_name, None, HashMap::new(), true, None)
+        .run(None, spec_name, None, HashMap::new(), None, true)
         .expect("spec must evaluate");
     response
         .results
@@ -38,9 +40,11 @@ fn eval_str(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::Decimal {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("spec must load");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("spec must load");
     let response = engine
-        .run(None, spec_name, None, HashMap::new(), true, None)
+        .run(None, spec_name, None, HashMap::new(), None, true)
         .expect("spec must evaluate");
     let rule = response
         .results
@@ -93,7 +97,7 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
 fn load_expect_error(code: &str) -> String {
     let mut engine = Engine::new();
     let errors = engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect_err("expected load to fail");
     errors
         .iter()
@@ -104,14 +108,16 @@ fn load_expect_error(code: &str) -> String {
 
 fn assert_loads(code: &str) {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("expected spec to load");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("expected spec to load");
 }
 
 // ---------------------------------------------------------------------------
 // Plan-time typing: cross-type promotion without as-cast
 // ---------------------------------------------------------------------------
 
-/// rule pay: rate * hours — must plan to `money` without an `as eur` cast.
+/// rule pay: rate * hour — must plan to `money` without an `as eur` cast.
 /// Today planning rejects this with "anonymous intermediate at rule boundary".
 #[test]
 fn cross_type_arithmetic_promotes_without_as_cast() {
@@ -187,7 +193,7 @@ rule total: x + y"#;
     // Same-type add — should not be ambiguous; this tests the non-error path:
     let mut engine = Engine::new();
     engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect("same-type add must load without error");
 
     // Cross-type multiply is the ambiguous case (inch * meter → both types have {length:1}
@@ -579,9 +585,9 @@ data rate_type: measure
   -> unit eur_per_month eur/month
 data balance: 300 eur
 data burn: 100 eur_per_month
-rule months: (balance / burn) as month"#;
+rule month: (balance / burn) as month"#;
     assert_loads(code);
-    let decimal = eval_decimal(code, "runway_inverse", "months");
+    let decimal = eval_decimal(code, "runway_inverse", "month");
     assert_eq!(
         decimal,
         rust_decimal::Decimal::from(3),
@@ -609,7 +615,7 @@ rule annual: (monthly * 1 year)"#;
     assert_eq!(
         decimal,
         rust_decimal::Decimal::from(1200),
-        "expected 1200 eur (100 * 12 months in a year), got {}",
+        "expected 1200 eur (100 * 12 month in a year), got {}",
         decimal
     );
 }
@@ -646,10 +652,10 @@ rule span: 3 month"#;
 }
 
 // ---------------------------------------------------------------------------
-// User scenario: burn-rate runway (money / eur_month rate → months)
+// User scenario: burn-rate runway (money / eur_month rate → month)
 // ---------------------------------------------------------------------------
 
-/// Full user-reported spec. Must load and yield 15 months with pinned inputs.
+/// Full user-reported spec. Must load and yield 15 month with pinned inputs.
 #[test]
 fn burn_baby_burn_deadline_months() {
     let code = r#"spec burn_baby_burn
@@ -681,10 +687,10 @@ rule deadline: veto "Everything is fine: no deadline"
     data.insert("revenue".to_string(), "2000 eur_month".to_string());
     let mut engine = Engine::new();
     engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect("burn_baby_burn must load and plan");
     let response = engine
-        .run(None, "burn_baby_burn", None, data, true, None)
+        .run(None, "burn_baby_burn", None, data, None, true)
         .expect("burn_baby_burn must evaluate");
     let deadline = response.results.get("deadline").expect("deadline rule");
     assert!(
@@ -708,7 +714,7 @@ rule deadline: veto "Everything is fine: no deadline"
     assert_eq!(
         decimal,
         rust_decimal::Decimal::from(15),
-        "120000 eur / 8000 eur_month net burn = 15 months runway"
+        "120000 eur / 8000 eur_month net burn = 15 month runway"
     );
 }
 
@@ -716,10 +722,10 @@ rule deadline: veto "Everything is fine: no deadline"
 // Validation: singular calendar form required
 // ---------------------------------------------------------------------------
 
-/// "3 months" (plural) must be a parse error after the singular-only tightening.
-/// "3 month" must parse fine.
+/// Plural calendar unit `months` is unknown after singular-only stdlib.
+/// Singular `month` must still load.
 #[test]
-fn plural_calendar_unit_accepted_with_import() {
+fn plural_calendar_unit_rejected_with_import() {
     let plural_code = r#"spec pl
 uses lemma units
 data money: measure
@@ -729,10 +735,10 @@ data rate: measure
 data r: 10 eur_per_month
 rule x: r * 3 months"#;
     let mut engine = Engine::new();
-    let result = engine.load(plural_code, source());
+    let result = engine.load([(source(), plural_code.to_string())]);
     assert!(
-        result.is_ok(),
-        "plural '3 months' is valid when calendar spec declares months unit"
+        result.is_err(),
+        "plural '3 months' must be rejected; stdlib calendar is singular-only"
     );
 
     let singular_code = r#"spec sing
@@ -991,8 +997,8 @@ data money: measure
 data rate: measure
   -> unit eur_per_hour eur/hour
 data fee: 10 eur_per_hour
-data minutes: 30 minute
-rule charge: (fee * minutes)"#;
+data minute: 30 minute
+rule charge: (fee * minute)"#;
     let decimal = eval_decimal(code, "rates", "charge");
     assert_eq!(decimal, rust_decimal::Decimal::from(5), "expected 5 eur");
 }
@@ -1032,7 +1038,7 @@ rule runway: balance / burn_rate as month"#;
 
 /// Same pattern for multiplication: `fee * shift as eur` where shift is duration
 /// and eur is money. `shift as eur` is incompatible; `(fee * shift) as eur` is valid
-/// because fee is eur/hour and fee * shift cancels hours leaving eur.
+/// because fee is eur/hour and fee * shift cancels hour leaving eur.
 #[test]
 fn as_binding_multiplication_suggests_parentheses() {
     let code = r#"spec payroll
@@ -1080,17 +1086,15 @@ rule runway: balance / (burn_rate - revenue) as month"#;
     );
 }
 
-/// `speed * time as hours`: time and hours are same-family (duration).
-/// The operand conversion is valid, so this must succeed as `speed * (time as hours)`.
+/// `speed * time as hour`: time and hour are same-family (duration).
+/// The operand conversion is valid, so this must succeed as `speed * (time as hour)`.
 #[test]
 fn as_binding_valid_operand_conversion_succeeds() {
     let code = r#"spec motion
 uses lemma units
-data speed_type: measure
-  -> unit metre_per_second metre/second
-data speed_val: 10 metre_per_second
+data speed_val: 10 meter_per_second
 data duration: 2 hour
-rule distance: speed_val * duration as seconds"#;
+rule distance: speed_val * duration as second"#;
     assert_loads(code);
 }
 
@@ -1118,14 +1122,13 @@ rule weird: m / t as gram"#;
 /// `mass * acceleration as newton`: acceleration (length/time^2) is not same-family
 /// as force (newton), so operand conversion fails. The combined result mass*acceleration
 /// matches force's decomposition, so suggest `(mass * acceleration) as newton`.
+/// Uses stdlib `newton` (no local redeclaration) plus local `mps2`.
 #[test]
 fn as_binding_compound_unit_newton_suggests_parentheses() {
     let code = r#"spec mechanics
 uses lemma units
 data acceleration_type: measure
-  -> unit mps2 metre/second^2
-data force: measure
-  -> unit newton kilogram * mps2
+  -> unit mps2 meter/second^2
 data m: 10 kilogram
 data a: 5 mps2
 rule f: m * a as newton"#;
@@ -1138,14 +1141,13 @@ rule f: m * a as newton"#;
 }
 
 /// `(mass * acceleration) as newton` with explicit parentheses must succeed.
+/// Uses stdlib `newton` (no local redeclaration) plus local `mps2`.
 #[test]
 fn as_binding_compound_unit_newton_explicit_parentheses_succeeds() {
     let code = r#"spec mechanics
 uses lemma units
 data acceleration_type: measure
-  -> unit mps2 metre/second^2
-data force: measure
-  -> unit newton kilogram * mps2
+  -> unit mps2 meter/second^2
 data m: 10 kilogram
 data a: 5 mps2
 rule f: (m * a) as newton"#;
@@ -1158,7 +1160,7 @@ rule f: (m * a) as newton"#;
 }
 
 /// `(balance / burn_rate) as month` with explicit parentheses must succeed and
-/// produce the correct number of months.
+/// produce the correct number of month.
 #[test]
 fn as_binding_explicit_parentheses_succeeds() {
     let code = r#"spec burn
@@ -1174,6 +1176,6 @@ rule runway: (balance / burn_rate) as month"#;
     assert_eq!(
         decimal,
         rust_decimal::Decimal::from(12),
-        "expected 12 months"
+        "expected 12 month"
     );
 }

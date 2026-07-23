@@ -17,7 +17,7 @@ fn run_spec(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Respon
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&now), data_map, false, None)
+        .run(None, spec, Some(&now), data_map, None, false)
         .unwrap()
 }
 
@@ -49,7 +49,8 @@ fn rule_vetoed(response: &lemma::Response, rule_name: &str) -> bool {
 fn edge_large_exponentiation() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("big.lemma"),
             r#"
 spec big_math
 
@@ -57,9 +58,9 @@ data base: number
 data exponent: number
 
 rule result: base ^ exponent
-"#,
-            src("big.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // 2^10 = 1024
@@ -81,7 +82,8 @@ rule result: base ^ exponent
 fn edge_negative_arithmetic() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("neg.lemma"),
             r#"
 spec negatives
 
@@ -92,9 +94,9 @@ rule sum: a + b
 rule diff: a - b
 rule product: a * b
 rule negated: 0 - a
-"#,
-            src("neg.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "negatives", &[("a", "-5"), ("b", "3")]);
@@ -119,7 +121,8 @@ rule negated: 0 - a
 fn edge_three_level_spec_composition() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("nested.lemma"),
             r#"
 spec base
 data factor: 2
@@ -131,9 +134,9 @@ rule doubled: b.factor * 3
 spec top
 uses m: middle
 rule final: m.doubled + 1
-"#,
-            src("nested.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "top", &[]);
@@ -149,7 +152,8 @@ rule final: m.doubled + 1
 fn edge_chained_percentage_reduction() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("chain.lemma"),
             r#"
 spec chain_pct
 
@@ -158,9 +162,9 @@ data amount: 1000
 rule half: amount - 50% * amount
 rule quarter: half - 50% * half
 rule eighth: quarter - 50% * quarter
-"#,
-            src("chain.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "chain_pct", &[]);
@@ -178,7 +182,8 @@ rule eighth: quarter - 50% * quarter
 fn edge_veto_overridden_by_later_clause() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("veto_override.lemma"),
             r#"
 spec veto_override
 
@@ -188,9 +193,9 @@ data override_flag: boolean
 rule result: 0
   unless value > 100 then veto "Too large"
   unless override_flag then 999
-"#,
-            src("veto_override.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // value=200 (triggers veto), override_flag=true (later clause wins)
@@ -226,7 +231,8 @@ rule result: 0
 fn edge_zero_multiplication() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("zero.lemma"),
             r#"
 spec zero_mult
 
@@ -235,9 +241,9 @@ data price: number
 
 rule total: quantity * price
 rule zero_check: 0 * price
-"#,
-            src("zero.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(
@@ -261,7 +267,8 @@ rule zero_check: 0 * price
 fn edge_text_comparison() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("text.lemma"),
             r#"
 spec text_cmp
 
@@ -272,9 +279,9 @@ data status: text
 
 rule is_active: status is "active"
 rule is_not_pending: status is not "pending"
-"#,
-            src("text.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "text_cmp", &[("status", "active")]);
@@ -294,7 +301,8 @@ rule is_not_pending: status is not "pending"
 fn edge_unless_complex_and() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("complex.lemma"),
             r#"
 spec complex_and
 
@@ -305,9 +313,9 @@ data c: boolean
 rule result: "none"
   unless a and b then "a_and_b"
   unless a and b and c then "all_three"
-"#,
-            src("complex.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // All true → last matching is "all_three"
@@ -343,7 +351,8 @@ rule result: "none"
 fn edge_ratio_operations() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("ratio.lemma"),
             r#"
 spec ratio_math
 
@@ -351,9 +360,9 @@ data discount: ratio -> minimum 0% -> maximum 100%
 data base: number
 
 rule raw_mult: base * discount
-"#,
-            src("ratio.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(
@@ -367,15 +376,16 @@ rule raw_mult: base * discount
 #[test]
 fn edge_ratio_add_subtract_rejected() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        src("ratio.lemma"),
         r#"
 spec ratio_math
 data discount: ratio
 data base: number
 rule bad: base - discount
-"#,
-        src("ratio.lemma"),
-    );
+"#
+        .to_string(),
+    )]);
     assert!(result.is_err());
     let msg = result
         .unwrap_err()
@@ -395,7 +405,8 @@ rule bad: base - discount
 fn edge_temporal_before_any_version() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("temporal2.lemma"),
             r#"
 spec rates 2024-01-01
 data rate: 5%
@@ -407,16 +418,16 @@ spec calculator 2024-01-01
 uses r: rates
 data amount: number
 rule result: amount * r.rate
-"#,
-            src("temporal2.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Evaluate at 2024-06-01 → rate = 5%
     let effective = DateTimeValue::from_str("2024-06-01").unwrap();
     let data: HashMap<String, String> = [("amount".to_string(), "1000".to_string())].into();
     let resp = engine
-        .run(None, "calculator", Some(&effective), data, false, None)
+        .run(None, "calculator", Some(&effective), data, None, false)
         .unwrap();
     let display = rule_display(&resp, "result");
     assert_eq!(display, "50", "2024: 1000 * 5% = 50");
@@ -425,7 +436,7 @@ rule result: amount * r.rate
     let effective = DateTimeValue::from_str("2025-06-01").unwrap();
     let data: HashMap<String, String> = [("amount".to_string(), "1000".to_string())].into();
     let resp = engine
-        .run(None, "calculator", Some(&effective), data, false, None)
+        .run(None, "calculator", Some(&effective), data, None, false)
         .unwrap();
     let display = rule_display(&resp, "result");
     assert_eq!(display, "70", "2025: 1000 * 7% = 70");
@@ -439,7 +450,8 @@ rule result: amount * r.rate
 fn edge_sqrt_operations() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("sqrt.lemma"),
             r#"
 spec sqrt_test
 
@@ -448,9 +460,9 @@ data value: number -> minimum 0
 rule root: sqrt(value)
 rule root_of_zero: sqrt(0)
 rule root_of_one: sqrt(1)
-"#,
-            src("sqrt.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "sqrt_test", &[("value", "144")]);
@@ -468,7 +480,8 @@ rule root_of_one: sqrt(1)
 fn edge_non_terminating_division() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("repeating.lemma"),
             r#"
 spec repeating
 
@@ -476,9 +489,9 @@ data a: number
 data b: number
 
 rule third: a / b
-"#,
-            src("repeating.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "repeating", &[("a", "1"), ("b", "3")]);
@@ -496,7 +509,8 @@ rule third: a / b
 fn edge_no_unless_matches() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("fallthrough.lemma"),
             r#"
 spec fallthrough
 
@@ -505,9 +519,9 @@ data x: number
 rule category: "default"
   unless x > 100 then "high"
   unless x < 0 then "negative"
-"#,
-            src("fallthrough.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // x=50: neither >100 nor <0, so default applies
@@ -524,7 +538,8 @@ rule category: "default"
 fn edge_deep_rule_chain() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("chain.lemma"),
             r#"
 spec chain
 
@@ -535,9 +550,9 @@ rule step2: step1 * 2
 rule step3: step2 - 3
 rule step4: step3 / 2
 rule step5: step4 + 10
-"#,
-            src("chain.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // input=5: step1=6, step2=12, step3=9, step4=4.5, step5=14.5
@@ -557,7 +572,8 @@ rule step5: step4 + 10
 fn edge_measure_to_number_conversion() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("strip.lemma"),
             r#"
 spec unit_strip
 uses lemma units
@@ -566,9 +582,9 @@ data weight: 5 kilogram
 
 rule kg_value: weight as kilogram as number
 rule gram_value: weight as gram as number
-"#,
-            src("strip.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "unit_strip", &[]);
@@ -592,7 +608,8 @@ rule gram_value: weight as gram as number
 fn edge_not_operator() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("not.lemma"),
             r#"
 spec not_test
 
@@ -601,9 +618,9 @@ data score: number
 
 rule is_inactive: not active
 rule below_threshold: not score >= 70
-"#,
-            src("not.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "not_test", &[("active", "true"), ("score", "80")]);
@@ -639,7 +656,8 @@ rule below_threshold: not score >= 70
 fn edge_with_binding_override() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("with.lemma"),
             r#"
 spec config
 data tax_rate: 10%
@@ -651,9 +669,9 @@ spec custom
 uses c: config
 with c.tax_rate: 25%
 rule custom_total: c.total
-"#,
-            src("with.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "custom", &[]);

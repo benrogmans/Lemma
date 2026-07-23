@@ -36,9 +36,9 @@ pub const HTTP_BENCH_CASES: &[BenchCase] = &[
         label: "POST `/net_salary`",
     },
     BenchCase {
-        group: "schema",
+        group: "show",
         function: "dutch_salary",
-        label: "GET `/net_salary` (schema only)",
+        label: "GET `/net_salary` (show only)",
     },
 ];
 
@@ -48,11 +48,6 @@ pub const PROFILE_BENCH_CASES: &[BenchCase] = &[
         group: "dutch_salary",
         function: "engine_evaluate",
         label: "Full `Engine::run`",
-    },
-    BenchCase {
-        group: "dutch_salary",
-        function: "data_parsing",
-        label: "`DataOverlay::resolve`",
     },
     BenchCase {
         group: "dutch_salary",
@@ -117,13 +112,13 @@ fn compose_report(
     );
     out.push_str(
         "- Each iteration: blocking `reqwest` POST with `application/x-www-form-urlencoded` body \
-         (coffee order, library fees, Dutch net salary) or GET for schema-only retrieval.\n",
+         (coffee order, library fees, Dutch net salary) or GET for show-only retrieval.\n",
     );
     out.push_str(
         "- Examples loaded from [`../../documentation/examples/`](../../documentation/examples/).\n",
     );
     out.push_str(
-        "- Latency: Criterion (3s warmup, 10s measurement for evaluate group, 5s for schema). Median and standard deviation reported.\n\n",
+        "- Latency: Criterion (3s warmup, 10s measurement for evaluate group, 5s for show). Median and standard deviation reported.\n\n",
     );
 
     out.push_str("### Engine profile (`engine_profile`)\n\n");

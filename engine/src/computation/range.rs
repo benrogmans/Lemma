@@ -6,14 +6,6 @@ use crate::planning::semantics::{
 };
 use std::collections::HashMap;
 
-pub fn compute_measure(
-    left: &LiteralValue,
-    right: &LiteralValue,
-    _other: Option<&LiteralValue>,
-) -> OperationResult {
-    compute_span(left, right)
-}
-
 pub fn compute_span(left: &LiteralValue, right: &LiteralValue) -> OperationResult {
     absolute_span(compute_signed_span(left, right))
 }
@@ -126,16 +118,16 @@ fn compute_elapsed_duration_span(
     right_chrono: chrono::DateTime<chrono::FixedOffset>,
 ) -> OperationResult {
     let duration = right_chrono - left_chrono;
-    let seconds = match super::datetime::chrono_duration_to_rational_seconds(duration) {
+    let second = match super::datetime::chrono_duration_to_rational_seconds(duration) {
         Ok(s) => s,
         Err(msg) => return OperationResult::Veto(VetoType::computation(msg)),
     };
-    let seconds = match rational_abs(&seconds) {
+    let second = match rational_abs(&second) {
         Ok(s) => s,
         Err(failure) => return OperationResult::Veto(VetoType::computation(failure.to_string())),
     };
     OperationResult::from_literal(LiteralValue {
-        value: ValueKind::Measure(seconds, vec![("second".to_string(), 1)]),
+        value: ValueKind::Measure(second, vec![("second".to_string(), 1)]),
         lemma_type: std::sync::Arc::new(
             crate::planning::semantics::LemmaType::anonymous_for_decomposition(
                 crate::planning::semantics::duration_decomposition(),

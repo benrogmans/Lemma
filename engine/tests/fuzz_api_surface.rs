@@ -14,7 +14,7 @@ fn engine_with_files(files: HashMap<String, String>) -> Engine {
         } else {
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(attr.as_str())))
         };
-        let _ = engine.load(&code, src);
+        let _ = engine.load([(src, &code.to_string())]);
     }
     engine
 }
@@ -48,12 +48,12 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "fuzz_binding",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
     // 30 nines exceeds Decimal::MAX (~7.92e28): unrepresentable input must
     // veto with a parse reason, not panic.
@@ -64,7 +64,7 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     );
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "fuzz_test", Some(&now), data, false, None)
+        .run(None, "fuzz_test", Some(&now), data, None, false)
         .expect("run must complete with veto, not Error");
     let doubled = response.results.get("doubled").expect("doubled");
     assert!(
@@ -86,12 +86,12 @@ fn data_binding_with_excess_fractional_digits_truncates_at_input() {
     let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "fuzz_binding",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
     let mut data = HashMap::new();
     data.insert(
@@ -100,7 +100,7 @@ fn data_binding_with_excess_fractional_digits_truncates_at_input() {
     );
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "fuzz_test", Some(&now), data, false, None)
+        .run(None, "fuzz_test", Some(&now), data, None, false)
         .expect("run must complete");
     let doubled = response.results.get("doubled").expect("doubled");
     assert!(

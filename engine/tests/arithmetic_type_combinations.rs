@@ -17,11 +17,11 @@ fn eval_result(
 ) -> lemma::RuleResult {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), data, false, None)
+        .run(None, spec_name, Some(&now), data, None, false)
         .expect("Should evaluate");
     let result = response
         .results
@@ -55,7 +55,7 @@ fn eval_measure_map(code: &str, spec_name: &str, rule_name: &str) -> BTreeMap<St
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -225,14 +225,15 @@ rule result: price ^ 3"#;
 fn measure_power_variable_exponent_rejected() {
     // Variable exponent for Measure ^ Number must be rejected at plan time.
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"spec t
 data money: measure -> unit eur 1.00
 data price: 2 eur
 data n: 3
-rule result: price ^ n"#,
-        lemma::SourceType::Volatile,
-    );
+rule result: price ^ n"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Measure ^ variable_exponent should be rejected at plan time"
@@ -243,13 +244,14 @@ rule result: price ^ n"#,
 fn measure_power_fractional_exponent_rejected() {
     // Fractional literal exponents for Measure ^ Number must also be rejected.
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"spec t
 data money: measure -> unit eur 1.00
 data price: 4 eur
-rule result: price ^ 0.5"#,
-        lemma::SourceType::Volatile,
-    );
+rule result: price ^ 0.5"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Measure ^ fractional_exponent should be rejected at plan time"
@@ -331,8 +333,8 @@ rule result: price / rate"#;
 // ═══════════════════════════════════════════════════════════════════
 // Measure with Duration → anonymous intermediate (canonical magnitudes).
 // Phase 1 dimensional arithmetic: operands are converted to canonical magnitudes before
-// the operation. eur has factor 1 (canonical), hours converts to 3600 seconds.
-// 50 eur * 8 hours → 50 * 28800 seconds = 1 440 000 (anonymous {money:1, duration:1}).
+// the operation. eur has factor 1 (canonical), hour converts to 3600 second.
+// 50 eur * 8 hour → 50 * 28800 second = 1 440 000 (anonymous {money:1, duration:1}).
 // ═══════════════════════════════════════════════════════════════════
 
 #[test]
@@ -340,14 +342,15 @@ fn measure_multiply_duration_rejected_at_rule_boundary() {
     // Duration * Measure and Measure * Duration produce anonymous intermediates with unresolved
     // dimensions. These are forbidden at rule boundaries; give the rule a named measure type with units.
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"spec t
 data money: measure -> unit eur 1.00
 data rate: 50 eur
-data hours: 8 hours
-rule result: rate * hours"#,
-        lemma::SourceType::Volatile,
-    );
+data hour: 8 hour
+rule result: rate * hour"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Measure * Duration at rule boundary should be rejected: anonymous intermediate {{money:1, duration:1}}"
@@ -357,14 +360,15 @@ rule result: rate * hours"#,
 #[test]
 fn duration_multiply_measure_rejected_at_rule_boundary() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"spec t
 data money: measure -> unit eur 1.00
-data hours: 8 hours
+data hour: 8 hour
 data rate: 50 eur
-rule result: hours * rate"#,
-        lemma::SourceType::Volatile,
-    );
+rule result: hour * rate"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Duration * Measure at rule boundary should be rejected: anonymous intermediate {{duration:1, money:1}}"
@@ -374,14 +378,15 @@ rule result: hours * rate"#,
 #[test]
 fn measure_divide_duration_rejected_at_rule_boundary() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"spec t
 data money: measure -> unit eur 1.00
 data total: 400 eur
-data hours: 8 hours
-rule result: total / hours"#,
-        lemma::SourceType::Volatile,
-    );
+data hour: 8 hour
+rule result: total / hour"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Measure / Duration at rule boundary should be rejected: anonymous intermediate {{money:1, duration:-1}}"
@@ -396,7 +401,7 @@ rule result: total / hours"#,
 fn duration_add_number_rejected() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data n: 5
 rule result: d + n"#;
     expect_plan_error(code, "Cannot apply '+'");
@@ -406,7 +411,7 @@ rule result: d + n"#;
 fn duration_subtract_number_rejected() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data n: 3
 rule result: d - n"#;
     expect_plan_error(code, "Cannot apply '-'");
@@ -416,11 +421,11 @@ rule result: d - n"#;
 fn duration_multiply_number() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data n: 3
 rule result: d * n"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "30", "10 hours * 3 = 30 hours");
+    assert_eq!(map["hour"], "30", "10 hour * 3 = 30 hour");
 }
 
 #[test]
@@ -428,32 +433,32 @@ fn number_multiply_duration() {
     let code = r#"spec t
 uses lemma units
 data n: 3
-data d: 10 hours
+data d: 10 hour
 rule result: n * d"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "30", "3 * 10 hours = 30 hours");
+    assert_eq!(map["hour"], "30", "3 * 10 hour = 30 hour");
 }
 
 #[test]
 fn duration_divide_number() {
     let code = r#"spec t
 uses lemma units
-data d: 12 hours
+data d: 12 hour
 data n: 4
 rule result: d / n"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "3", "12 hours / 4 = 3 hours");
+    assert_eq!(map["hour"], "3", "12 hour / 4 = 3 hour");
 }
 
 #[test]
 fn duration_modulo_number() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data n: 3
 rule result: d % n"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "1", "10 hours % 3 = 1 hour");
+    assert_eq!(map["hour"], "1", "10 hour % 3 = 1 hour");
 }
 
 #[test]
@@ -461,23 +466,24 @@ fn duration_power_number() {
     // Exponent must be an integer literal for dimensional types; using a literal 3 directly.
     let code = r#"spec t
 uses lemma units
-data d: 2 hours
+data d: 2 hour
 rule result: d ^ 3"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
-    assert!(val.contains("8"), "Expected 8 hours, got: {}", val);
+    assert!(val.contains("8"), "Expected 8 hour, got: {}", val);
 }
 
 #[test]
 fn duration_power_variable_exponent_rejected() {
     // Variable exponent for Duration ^ Number must be rejected at plan time.
     let mut engine = Engine::new();
-    let result = engine.load(
-        r#"spec t
-data d: 2 hours
-data n: 3
-rule result: d ^ n"#,
+    let result = engine.load([(
         lemma::SourceType::Volatile,
-    );
+        r#"spec t
+data d: 2 hour
+data n: 3
+rule result: d ^ n"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Duration ^ variable_exponent should be rejected at plan time"
@@ -492,7 +498,7 @@ rule result: d ^ n"#,
 fn duration_add_ratio_rejected() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data r: 50%
 rule result: d + r"#;
     expect_plan_error(code, "scale explicitly");
@@ -502,7 +508,7 @@ rule result: d + r"#;
 fn duration_subtract_ratio_rejected() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data r: 25%
 rule result: d - r"#;
     expect_plan_error(code, "scale explicitly");
@@ -513,7 +519,7 @@ fn ratio_add_duration_rejected() {
     let code = r#"spec t
 uses lemma units
 data r: 50%
-data d: 10 hours
+data d: 10 hour
 rule result: r + d"#;
     expect_plan_error(code, "scale explicitly");
 }
@@ -523,7 +529,7 @@ fn ratio_subtract_duration_rejected() {
     let code = r#"spec t
 uses lemma units
 data r: 25%
-data d: 10 hours
+data d: 10 hour
 rule result: r - d"#;
     expect_plan_error(code, "scale explicitly");
 }
@@ -532,11 +538,11 @@ rule result: r - d"#;
 fn duration_multiply_ratio() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data r: 50%
 rule result: d * r"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "5", "10 hours * 50% = 5 hours");
+    assert_eq!(map["hour"], "5", "10 hour * 50% = 5 hour");
 }
 
 #[test]
@@ -544,21 +550,21 @@ fn ratio_multiply_duration() {
     let code = r#"spec t
 uses lemma units
 data r: 50%
-data d: 10 hours
+data d: 10 hour
 rule result: r * d"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "5", "50% * 10 hours = 5 hours");
+    assert_eq!(map["hour"], "5", "50% * 10 hour = 5 hour");
 }
 
 #[test]
 fn duration_divide_ratio() {
     let code = r#"spec t
 uses lemma units
-data d: 10 hours
+data d: 10 hour
 data r: 50%
 rule result: d / r"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "20", "10 hours / 50% = 20 hours");
+    assert_eq!(map["hour"], "20", "10 hour / 50% = 20 hour");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -773,7 +779,7 @@ fn date_subtract_date_result_used_in_comparison_with_duration() {
 uses lemma units
 data start: 2024-01-01
 data end: 2024-01-10
-data limit: 5 days
+data limit: 5 day
 rule elapsed: end - start
 rule over_limit: elapsed > limit"#;
     expect_plan_error(code, "date range");
@@ -797,22 +803,22 @@ rule result: (a - b) as day"#;
 fn duration_add_duration() {
     let code = r#"spec t
 uses lemma units
-data a: 10 hours
-data b: 5 hours
+data a: 10 hour
+data b: 5 hour
 rule result: a + b"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "15", "10 hours + 5 hours = 15 hours");
+    assert_eq!(map["hour"], "15", "10 hour + 5 hour = 15 hour");
 }
 
 #[test]
 fn duration_subtract_duration() {
     let code = r#"spec t
 uses lemma units
-data a: 10 hours
-data b: 3 hours
+data a: 10 hour
+data b: 3 hour
 rule result: a - b"#;
     let map = eval_measure_map(code, "t", "result");
-    assert_eq!(map["hours"], "7", "10 hours - 3 hours = 7 hours");
+    assert_eq!(map["hour"], "7", "10 hour - 3 hour = 7 hour");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -824,7 +830,7 @@ fn date_add_duration() {
     let code = r#"spec t
 uses lemma units
 data d: 2024-01-01
-data dur: 7 days
+data dur: 7 day
 rule result: d + dur"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
     assert!(
@@ -839,7 +845,7 @@ fn date_subtract_duration() {
     let code = r#"spec t
 uses lemma units
 data d: 2024-01-08
-data dur: 7 days
+data dur: 7 day
 rule result: d - dur"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
     assert!(
@@ -853,7 +859,7 @@ rule result: d - dur"#;
 fn duration_add_date() {
     let code = r#"spec t
 uses lemma units
-data dur: 7 days
+data dur: 7 day
 data d: 2024-01-01
 rule result: dur + d"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
@@ -997,14 +1003,15 @@ rule units_per_eur: count / price"#;
 #[test]
 fn measure_multiply_measure_rejected_at_plan_time() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"spec t
 data money: measure -> unit eur 1.00
 data a: 10 eur
 data b: 5 eur
-rule product: a * b"#,
-        lemma::SourceType::Volatile,
-    );
+rule product: a * b"#
+            .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Measure * Measure should be rejected at plan time"

@@ -24,10 +24,10 @@ fn format_details(
 
     let mut output = Vec::new();
 
-    let header = match details.spec_context.as_ref() {
-        Some(spec) => format!(
+    let header = match details.spec_context_name.as_ref() {
+        Some(name) => format!(
             "{}: {} (in spec '{}', file {}:{})",
-            error_type, details.message, spec.name, source_type_str, src.span.line
+            error_type, details.message, name, source_type_str, src.span.line
         ),
         None => format!(
             "{}: {} ({}:{})",

@@ -7,12 +7,12 @@ use std::collections::HashMap;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "nested.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -25,12 +25,12 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "nested.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -67,7 +67,7 @@ rule r: i.x
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false, None)
+        .run(None, "outer", Some(&now), HashMap::new(), None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -90,7 +90,7 @@ rule r: m.l.v
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false, None)
+        .run(None, "outer", Some(&now), HashMap::new(), None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "7");
 }
@@ -101,7 +101,7 @@ rule r: m.l.v
 fn binding_where_first_segment_is_not_spec_ref_is_rejected() {
     let code = r#"
 spec s
-data x: number -> default 1
+data x: number -> suggest 1
 with x.y: 42
 rule r: x
 "#;
@@ -185,7 +185,7 @@ fn binding_rhs_as_spec_reference_is_rejected() {
     // `with i.x: spec …` cannot use `spec` as the start of a reference (structural keyword).
     let code = r#"
 spec other
-data y: number -> default 1
+data y: number -> suggest 1
 
 spec inner
 data x: number
@@ -223,7 +223,7 @@ rule r: i.x
     data.insert("i.x".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false, None)
+        .run(None, "outer", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(
         rule_value(&resp, "r"),
@@ -252,7 +252,7 @@ rule r: m.l.v
     data.insert("m.l.v".to_string(), "123".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false, None)
+        .run(None, "outer", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "123");
 }
@@ -263,7 +263,7 @@ rule r: m.l.v
 fn user_override_key_is_case_insensitive() {
     let code = r#"
 spec s
-data x: number -> default 1
+data x: number -> suggest 1
 rule r: x
 "#;
     let mut engine = Engine::new();
@@ -272,7 +272,7 @@ rule r: x
     data.insert("X".to_string(), "99".to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false, None)
+        .run(None, "s", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }

@@ -68,9 +68,9 @@ fn test_cli_run_nonexistent_spec() {
         .arg(temp_dir.path())
         .arg("nonexistent");
 
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("not found"));
+    cmd.assert().failure().stderr(
+        predicate::str::contains("No execution plan").and(predicate::str::contains("nonexistent")),
+    );
 }
 
 #[test]
@@ -110,7 +110,7 @@ rule discount: 0
 }
 
 #[test]
-fn test_cli_schema_spec() {
+fn test_cli_show_spec() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
@@ -126,7 +126,7 @@ rule doubled: value * 2
     .unwrap();
 
     let mut cmd = cargo_bin_cmd!("lemma");
-    cmd.arg("schema")
+    cmd.arg("show")
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("inspect_test");
@@ -136,11 +136,9 @@ rule doubled: value * 2
         .stdout(predicate::str::contains("inspect_test"))
         .stdout(predicate::str::contains("Data"))
         .stdout(predicate::str::contains("Rules"))
-        .stdout(predicate::str::contains("name"))
-        .stdout(predicate::str::contains("options"))
         .stdout(predicate::str::contains("minimum"))
-        .stdout(predicate::str::contains("text"))
-        .stdout(predicate::str::contains("number"));
+        .stdout(predicate::str::contains("number"))
+        .stdout(predicate::str::contains("doubled"));
 }
 
 #[test]
@@ -309,7 +307,7 @@ also invalid lemma syntax
 }
 
 #[test]
-fn test_cli_explain_renders_data_section() {
+fn test_cli_explain_renders_rule_explanation_not_data_catalog() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(
         temp_dir.path().join("test.lemma"),
@@ -338,13 +336,18 @@ rule doubled: base_value * 2
     );
 
     assert!(
-        stdout.contains("Data"),
-        "explain output should render the Data section, got:\n{}",
+        stdout.contains("Rules"),
+        "explain output should render Rules section, got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Missing data"),
+        "prefilled input must not appear as Missing data, got:\n{}",
         stdout
     );
     assert!(
         stdout.contains("base_value") && stdout.contains("100"),
-        "the Data section should list base_value with its effective value, got:\n{}",
+        "explanation must still narrate base_value, got:\n{}",
         stdout
     );
 }
@@ -426,22 +429,25 @@ rule out: true
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("explain_test")
-        .arg("--explain");
+        .arg("--explain")
+        .arg("--json");
 
     let output = cmd.output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "run --explain should succeed: {}",
+        "run --explain --json should succeed: {}",
         stdout
     );
 
-    // The condition `5 < 3` was false; the explanation states the flipped
-    // fact that held instead of appending "is false".
-    assert!(
-        stdout.contains("5 >= 3"),
-        "explain should state the falsified unless condition as a flipped fact, got:\n{}",
-        stdout
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is valid JSON");
+    assert_eq!(
+        json["results"]["out"]["explanation"]["causes"][0]["condition"],
+        "5 >= 3"
+    );
+    assert_eq!(
+        json["results"]["out"]["explanation"]["causes"][0]["value"],
+        "true"
     );
 }
 
@@ -455,7 +461,7 @@ spec test_cli_conversion_explain
 data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
-    -> default 2 kilogram
+    -> suggest 2 kilogram
 rule result: mass as gram
 "#,
     )
@@ -466,6 +472,7 @@ rule result: mass as gram
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("test_cli_conversion_explain")
+        .arg("mass=2 kilogram")
         .arg("--rules=result")
         .arg("--explain");
 
@@ -497,8 +504,8 @@ fn test_cli_explain_date_range_conversion_format() {
         r#"
 spec test_cli_date_conversion_explain
 uses lemma units
-data age: date range -> default 2024-06-01...2024-06-15
-rule result: age as days
+data age: date range -> suggest 2024-06-01...2024-06-15
+rule result: age as day
 "#,
     )
     .unwrap();
@@ -508,6 +515,7 @@ rule result: age as days
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("test_cli_date_conversion_explain")
+        .arg("age=2024-06-01...2024-06-15")
         .arg("--rules=result")
         .arg("--explain");
 
@@ -531,7 +539,7 @@ rule result: age as days
         stdout.contains("The date range of age is"),
         "stdout:\n{stdout}"
     );
-    assert!(!stdout.contains("age as days is"), "stdout:\n{stdout}");
+    assert!(!stdout.contains("age as day is"), "stdout:\n{stdout}");
 }
 
 #[test]
@@ -544,7 +552,7 @@ spec test_cli_nested_conversion_explain
 data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
-    -> default 2 kilogram
+    -> suggest 2 kilogram
 rule result: (mass * 2) as gram
 "#,
     )
@@ -555,6 +563,7 @@ rule result: (mass * 2) as gram
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("test_cli_nested_conversion_explain")
+        .arg("mass=2 kilogram")
         .arg("--rules=result")
         .arg("--explain");
 
@@ -587,7 +596,7 @@ spec money
 data price: measure
     -> unit eur 1
     -> unit usd 0.91
-    -> default 100 eur
+    -> suggest 100 eur
 rule total: price
 "#,
     )
@@ -598,6 +607,7 @@ rule total: price
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("money")
+        .arg("price=100 eur")
         .arg("--rules=total")
         .arg("--json");
 
@@ -617,8 +627,8 @@ fn test_cli_explain_shows_multiply_trace_for_measure_product() {
 spec product_explanation
 data price: measure
     -> unit eur 1
-    -> default 10 eur
-data quantity: number -> default 3
+    -> suggest 10 eur
+data quantity: number -> suggest 3
 rule product: price * quantity
 "#,
     )
@@ -629,6 +639,8 @@ rule product: price * quantity
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("product_explanation")
+        .arg("price=10 eur")
+        .arg("quantity=3")
         .arg("--rules=product")
         .arg("--explain");
 
@@ -656,8 +668,8 @@ spec product_as_explanation
 data price: measure
     -> unit eur 1
     -> unit usd 0.91
-    -> default 10 eur
-data quantity: number -> default 3
+    -> suggest 10 eur
+data quantity: number -> suggest 3
 rule product: price * quantity
 "#,
     )
@@ -668,6 +680,8 @@ rule product: price * quantity
         .arg("--prefix")
         .arg(temp_dir.path())
         .arg("product_as_explanation")
+        .arg("price=10 eur")
+        .arg("quantity=3")
         .arg("--rules=product")
         .arg("--explain");
 
@@ -733,9 +747,146 @@ rule total: subtotal + vat
     );
 
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is valid JSON");
-    assert_eq!(json["results"]["total"]["explanation"]["rule"], "total");
+    assert_eq!(json["results"]["total"]["explanation"]["type"], "rule");
+    assert_eq!(json["results"]["total"]["explanation"]["name"], "total");
     assert_eq!(
         json["results"]["total"]["explanation"]["result"],
         "4821.09 eur"
+    );
+}
+
+#[test]
+fn run_json_without_explain_exposes_rule_missing_data() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("suggest.lemma"),
+        r#"
+spec suggest_demo
+data n: number -> suggest 42
+rule r: n
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("suggest_demo")
+        .arg("--json");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --json without --explain should succeed: {stdout}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is valid JSON");
+    assert!(
+        json.get("data").is_none(),
+        "evaluate JSON must not include top-level data: {json}"
+    );
+    let results = json["results"]["r"].as_object().expect("rule r in results");
+    assert!(
+        results.get("explanation").is_none(),
+        "explanation must stay stripped without --explain: {results:?}"
+    );
+    let missing = results["missing_data"]
+        .as_array()
+        .expect("results.r.missing_data");
+    assert!(
+        missing.iter().any(|v| v.as_str() == Some("n")),
+        "unbound n must appear in missing_data: {missing:?}"
+    );
+}
+
+#[test]
+fn list_json_emits_listed_spec_temporal_rows() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("pricing.lemma"),
+        r#"
+spec pricing 2025-01-01
+data x: 1
+rule r: x
+
+spec pricing 2026-01-01
+data x: 2
+rule r: x
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("list")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--json");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "list --json should succeed: {stdout}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is valid JSON");
+    let workspace = json
+        .as_array()
+        .expect("list is array")
+        .iter()
+        .find(|g| g["repository"].is_null())
+        .expect("workspace group");
+    let specs = workspace["specs"].as_array().expect("specs array");
+    let pricing: Vec<_> = specs.iter().filter(|s| s["name"] == "pricing").collect();
+    assert_eq!(
+        pricing.len(),
+        2,
+        "dual-version pricing must appear as two ListedSpec rows: {workspace}"
+    );
+    assert!(
+        pricing.iter().any(|s| s.get("effective_from").is_some()),
+        "ListedSpec rows must carry effective_from: {pricing:?}"
+    );
+}
+
+#[test]
+fn run_json_incomplete_rule_exposes_results_missing_data() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("incomplete.lemma"),
+        r#"
+spec incomplete
+data a: number
+data b: number
+rule main: a + b
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("incomplete")
+        .arg("--json");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --json should succeed: {stdout}"
+    );
+
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("stdout is valid JSON");
+    let missing = json["results"]["main"]["missing_data"]
+        .as_array()
+        .expect("results.main.missing_data must be an array");
+    let keys: Vec<&str> = missing.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(
+        keys,
+        ["a", "b"],
+        "smoke: missing_data must list unbound inputs: {json}"
     );
 }

@@ -8,7 +8,7 @@
 
 > **A pure, declarative language for business rules.**
 
-Lemma reads like the documents people already write — pricing, tax, eligibility, contracts, policies, law. Stakeholders read the specs; systems evaluate them deterministically. Same spec, same data, same instant: same result, with an explanation trace you can audit.
+Lemma reads like the documents people already write — pricing, tax, eligibility, contracts, policies, law. Stakeholders read the specs; systems evaluate them deterministically. Same spec, same data, same instant: same result. Opt in to an explanation tree you can audit (`--explain` / `explain: true`).
 
 ```lemma
 spec pricing 2026-01-01
@@ -31,7 +31,7 @@ The last matching `unless` wins, mirroring how business rules, legal documents, 
 ## Why Lemma?
 Laws, policies, and business rules traditionally exist in natural language. While humans must understand these rules, we rely on systems to enforce them. Over time, organizations have built massive IT infrastructures to house these rules; however, as both the regulations and the systems evolve, they become harder to manage and the disconnect between them grows.
 
-Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis — invalid specs are rejected before evaluation ever runs. Furthermore, Lemma provides unrivaled auditability by explaining exactly how rules were applied for every evaluation.
+Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis — invalid specs are rejected before evaluation ever runs. Furthermore, Lemma provides unrivaled auditability: when explanations are requested, each result includes a structured tree of how rules were applied.
 
 This allows you to implement policy changes rapidly without compromising compliance. Lemma requires no database and maintains no state; by design, it is secure, able to run within existing applications and yes, it is blazingly fast.
 
@@ -43,7 +43,7 @@ Lemma aims to combine **deterministic evaluation**, **transparent explanations**
 
 AI models operate on approximations. The complexity of their neural networks makes tracing decisions ("explaining") practically impossible. While they excel at natural language, they are ill-suited for mathematics, strict protocols, or compliance.
 
-Lemma provides certainty and transparency. Every result is exact, verifiable, and delivered in microseconds. Lemma offers seamless interoperability, allowing you to ground your AI systems in deterministic logic.
+Lemma provides certainty and transparency. Every result is exact, verifiable, and delivered in microsecond. Lemma offers seamless interoperability, allowing you to ground your AI systems in deterministic logic.
 
 ## Quick Start
 
@@ -76,7 +76,7 @@ spec shipping
 
 data money: measure
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.91
   -> decimals 2
   -> minimum 0 eur
 
@@ -134,7 +134,7 @@ spec type_examples
 
 data money: measure
   -> unit eur 1.00
-  -> unit usd 1.19
+  -> unit usd 0.91
   -> decimals 2
   -> minimum 0 eur
 
@@ -147,7 +147,7 @@ data discount: ratio
   -> maximum 100%
 ```
 
-**Primitive types:** `boolean`, `number`, `measure` (with units; elapsed time via `trait duration`, calendar periods via `trait calendar`), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `measure range`, `ratio range`, plus named `<type> range`). Import stdlib with `uses lemma units` (`units.duration`, `units.calendar`, …).
+**Primitive types:** `boolean`, `number`, `measure` (with units; elapsed time and calendar periods via `uses lemma units` — `units.duration`, `units.calendar`, …), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `measure range`, `ratio range`, plus named `<type> range`).
 
 ### Spec composition
 
@@ -264,7 +264,7 @@ lemma run pricing --effective 2025-01-01  # temporal query
 lemma run pricing --json                 # JSON output
 lemma run pricing -x                      # show reasoning
 
-lemma schema pricing                      # spec schema
+lemma show pricing                      # spec interface
 lemma list                                # list all specs
 lemma format                               # format .lemma files
 lemma fetch                               # fetch registry dependencies
@@ -318,6 +318,18 @@ const engine = await Lemma();
 
 See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 
+### Maven (Java / Kotlin)
+
+```xml
+<dependency>
+  <groupId>com.lemmabase</groupId>
+  <artifactId>lemma-engine</artifactId>
+  <version>0.9.0</version>
+</dependency>
+```
+
+See [engine/packages/maven/README.md](engine/packages/maven/README.md) and [documentation/tools/maven.md](documentation/tools/maven.md).
+
 ### Docker
 
 ```bash
@@ -352,7 +364,7 @@ Lemma is pre-1.0. The language and APIs are stable for most use cases, but break
 
 Contributions welcome! See [Contributing](documentation/community/contributing.md) for setup and workflow.
 
-From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy, Nextest, WASM npm `build.js` + `test.js`, cargo-deny, and **`cargo coverage all --check`** (verifies published coverage docs are current). Install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), and [`wasm-pack`](https://rustwasm.github.io/wasm-pack/) first. Regenerate coverage with **`cargo coverage all`** when engine/cli sources change ([`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) required). SDK steps always run, not only when their directories change. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
+From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy (`--all-features`), **`cargo check -p lemma-engine --no-default-features`**, Nextest (`--all-features`), WASM npm `build.js` + `test.js`, Maven `./mvnw test` (after `lemma_jni` build), cargo-deny, and **`cargo coverage all --check`** (verifies published coverage docs are current). Install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), [`wasm-pack`](https://rustwasm.github.io/wasm-pack/), and a **JDK 17+** first. Regenerate coverage with **`cargo coverage all`** when engine/cli sources change ([`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) required). SDK steps always run, not only when their directories change. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
 
 ## License
 

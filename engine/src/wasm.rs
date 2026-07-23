@@ -1,6 +1,6 @@
 use crate::error::ErrorKind;
+use crate::evaluation::DataValueInput;
 use crate::parsing::source::Source;
-use crate::planning::DataValueInput;
 use crate::{Engine, Error, SourceType};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -27,82 +27,20 @@ impl WasmEngine {
         }
     }
 
-    /// Load Lemma source. Throws with an array of serialized errors
-    /// (same shape as `EngineError` in `engine/packages/npm/lemma.d.ts`).
+    /// Load Lemma source(s).
+    ///
+    /// - string → one volatile workspace source
+    /// - plain object or `[label, code][]` → labeled sources in one planning pass
+    ///
+    /// Throws with an array of serialized errors on failure. `null` / `undefined` are rejected.
     #[wasm_bindgen(js_name = load)]
-    pub fn load_wasm(&mut self, code: &str, attribute: &str) -> Result<(), JsValue> {
-        let source = if attribute.trim().is_empty() {
-            SourceType::Volatile
-        } else {
-            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(attribute)))
-        };
-        self.engine.load(code, source).map_err(|load_err| {
-            let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
-            errors
-                .serialize(&js_error_serializer())
-                .expect("BUG: serialize JsError array")
-        })
-    }
-
-    /// Load multiple Lemma sources in one planning pass (same as [`Engine::load_batch`]).
-    ///
-    /// `sources` is a plain object mapping path labels to source text. Labels become
-    /// [`SourceType::Path`]; use `""` as a key for [`SourceType::Volatile`].
-    ///
-    /// `dependency`: when non-empty after trim, sources are tagged as that dependency id.
-    ///
-    /// Throws with an array of `JsError` on failure.
-    #[wasm_bindgen(js_name = load_batch)]
-    pub fn load_batch_wasm(
-        &mut self,
-        sources: JsValue,
-        dependency: Option<String>,
-    ) -> Result<(), JsValue> {
-        let map: HashMap<String, String> = if sources.is_undefined() || sources.is_null() {
-            HashMap::new()
-        } else {
-            serde_wasm_bindgen::from_value(sources).map_err(|e| {
-                let err = Error::request(
-                    format!(
-                        "load_batch: sources must be a plain object with string keys and string values: {e}"
-                    ),
-                    None::<String>,
-                );
-                let errors = vec![JsError::from(&err)];
-                errors
-                    .serialize(&js_error_serializer())
-                    .expect("BUG: serialize JsError array")
-            })?
-        };
-        let mut batch: HashMap<SourceType, String> = HashMap::with_capacity(map.len());
-        for (key, code) in map {
-            let source = if key.trim().is_empty() {
-                SourceType::Volatile
-            } else {
-                SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(key)))
-            };
-            batch.insert(source, code);
-        }
-        let owned_dep = dependency.and_then(|s| {
-            let t = s.trim();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t.to_string())
-            }
-        });
-        self.engine
-            .load_batch(batch, owned_dep.as_deref())
-            .map_err(|load_err| {
-                let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
-                errors
-                    .serialize(&js_error_serializer())
-                    .expect("BUG: serialize JsError array")
-            })
+    pub fn load_wasm(&mut self, sources: JsValue) -> Result<(), JsValue> {
+        let batch = parse_load_sources(sources)?;
+        self.engine.load(batch).map_err(serialize_load_errors)
     }
 
     /// Download Lemma source for a registry identifier via [`crate::registry::LemmaBase`]. Returns `{ source, id }`.
-    /// Does not load this [`WasmEngine`]; call [`Self::load_batch`], etc., yourself.
+    /// Does not load this [`WasmEngine`]; call [`Self::load`] with `{ [id]: source }`.
     #[wasm_bindgen(js_name = fetch)]
     pub fn fetch_wasm(&self, name: &str) -> js_sys::Promise {
         match crate::spec_set_id::parse_spec_set_id(name) {
@@ -142,89 +80,122 @@ impl WasmEngine {
     }
 
     /// Evaluate spec. Returns [`crate::evaluation::Response`] as a JS object. Throws on planning/runtime error.
-    ///
-    /// `repository`: repository qualifier (`@org/pkg`), or `null`/empty for workspace (same as
-    /// [`Engine::run`] `repo: None`).
     #[wasm_bindgen(js_name = run)]
     pub fn run(
         &self,
         repository: Option<String>,
         spec: &str,
-        rule_names: JsValue,
-        data_values: JsValue,
         effective: Option<String>,
+        data_values: JsValue,
+        rule_names: JsValue,
         explain: Option<bool>,
     ) -> Result<JsValue, JsValue> {
         let effective_dt =
-            Engine::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
+            crate::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
 
-        let data = parse_data_values(&data_values).map_err(js_err)?;
+        let data = parse_data_values_to_strings(&data_values).map_err(js_err)?;
 
         let repo = repository
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let plan = self
-            .engine
-            .get_plan(repo, spec, Some(&effective_dt))
-            .map_err(|e| error_to_js(&e))?;
-
         let response_rules = resolve_wasm_response_rules(&rule_names).map_err(js_err)?;
 
         let response = self
             .engine
-            .run_plan(
-                plan,
+            .run(
+                repo,
+                spec,
                 Some(&effective_dt),
                 data,
-                explain.unwrap_or(true),
                 response_rules.as_deref(),
+                explain.unwrap_or(false),
             )
             .map_err(|e| error_to_js(&e))?;
 
         serialize_engine_json(&response)
     }
 
-    /// Same data as [`Engine::list`]: grouped [`ResolvedRepository`] JSON without planning.
+    /// Catalog of loaded repositories and specs (metadata only, no source).
     #[wasm_bindgen(js_name = list)]
     pub fn list_wasm(&self) -> Result<JsValue, JsValue> {
-        serialize_engine_json(&self.engine.list())
+        let repos = self.engine.list();
+        serialize_engine_json(&repos)
     }
 
-    /// Canonical Lemma source for `repository`, formatted from the in-engine AST (e.g. `"lemma"`).
-    #[wasm_bindgen(js_name = format_repository)]
-    pub fn format_repository_wasm(&self, repository: &str) -> Result<String, JsValue> {
-        self.engine
-            .format_repository(repository)
-            .map_err(|e| error_to_js(&e))
-    }
-
-    /// Planning schema for the spec ([`crate::planning::execution_plan::SpecSchema`]). Throws on error.
-    ///
-    /// `repository`: qualifier string or `null`/empty for workspace ([`Engine::schema`]).
-    #[wasm_bindgen(js_name = schema)]
-    pub fn schema(
+    /// Spec interface and temporal window at `effective`. Lemma text is [`Self::source`].
+    #[wasm_bindgen(js_name = show)]
+    pub fn show_wasm(
         &self,
         repository: Option<String>,
         spec: &str,
         effective: Option<String>,
     ) -> Result<JsValue, JsValue> {
         let effective_dt =
-            Engine::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
-
+            crate::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
         let repo = repository
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
-
-        let plan = self
+        let view = self
             .engine
-            .get_plan(repo, spec, Some(&effective_dt))
+            .show(repo, spec, Some(&effective_dt))
             .map_err(|e| error_to_js(&e))?;
-        let schema = plan.schema(&crate::planning::DataOverlay::default());
+        serialize_engine_json(&view)
+    }
 
-        serialize_engine_json(&schema)
+    /// Formatted canonical Lemma source. Omit `spec` for whole-repository text.
+    #[wasm_bindgen(js_name = source)]
+    pub fn source_wasm(
+        &self,
+        repository: Option<String>,
+        spec: Option<String>,
+        effective: Option<String>,
+    ) -> Result<String, JsValue> {
+        let repo = repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let spec_name = spec.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let effective_dt = match (spec_name, effective) {
+            (Some(_), eff) => {
+                Some(crate::resolve_effective(eff.as_deref()).map_err(|e| error_to_js(&e))?)
+            }
+            _ => None,
+        };
+        self.engine
+            .source(repo, spec_name, effective_dt.as_ref())
+            .map_err(|e| error_to_js(&e))
+    }
+
+    /// Remove a temporal spec slice. `effective`: ISO datetime string or omit for now.
+    #[wasm_bindgen(js_name = remove)]
+    pub fn remove_wasm(
+        &mut self,
+        repository: Option<String>,
+        spec: &str,
+        effective: Option<String>,
+    ) -> Result<(), JsValue> {
+        let effective_dt = match effective {
+            None => None,
+            Some(s) => {
+                Some(crate::resolve_effective(Some(s.as_str())).map_err(|e| error_to_js(&e))?)
+            }
+        };
+        let repo = repository
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        self.engine
+            .remove(repo, spec, effective_dt.as_ref())
+            .map_err(|e| error_to_js(&e))
+    }
+
+    /// Resource limits configured for this engine.
+    #[wasm_bindgen(js_name = limits)]
+    pub fn limits_wasm(&self) -> Result<JsValue, JsValue> {
+        serialize_engine_json(self.engine.limits())
     }
 
     /// Returns formatted source string on success; throws with error message on failure.
@@ -304,14 +275,14 @@ fn wasm_registry_fetch_only_promise(name: String) -> js_sys::Promise {
         };
 
         let payload = RegistryFetchPayload {
-            source: bundle.lemma_source,
+            source: bundle.source,
             id: name,
         };
         serialize_engine_json(&payload)
     })
 }
 
-/// Same JSON as CLI/HTTP. `serde_wasm_bindgen::to_value(serde_json::Value)` drops
+/// Same JSON as CLI/HTTP.
 /// `IndexMap` entries (e.g. `Response.results` → `{}`); `JSON.parse` matches browser semantics.
 fn serialize_engine_json<T: Serialize>(v: &T) -> Result<JsValue, JsValue> {
     let s = serde_json::to_string(v)
@@ -468,7 +439,73 @@ fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput
     }
 }
 
-fn parse_data_values(v: &JsValue) -> Result<HashMap<String, DataValueInput>, String> {
+fn serialize_load_errors(load_err: crate::Errors) -> JsValue {
+    let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
+    errors
+        .serialize(&js_error_serializer())
+        .expect("BUG: serialize JsError array")
+}
+
+fn request_error_js(message: impl Into<String>) -> JsValue {
+    let err = Error::request(message, None::<String>);
+    let errors = vec![JsError::from(&err)];
+    errors
+        .serialize(&js_error_serializer())
+        .expect("BUG: serialize JsError array")
+}
+
+fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsValue> {
+    if sources.is_undefined() || sources.is_null() {
+        return Err(request_error_js(
+            "load: sources must be a string, plain object, or array of [label, code] pairs"
+                .to_string(),
+        ));
+    }
+    if let Some(code) = sources.as_string() {
+        return Ok(vec![(SourceType::Volatile, code)]);
+    }
+    if sources.is_array() {
+        let arr = js_sys::Array::from(&sources);
+        let mut batch = Vec::with_capacity(arr.length() as usize);
+        for (i, item) in arr.iter().enumerate() {
+            if !item.is_array() {
+                return Err(request_error_js(format!(
+                    "load: entry {i} must be a [label, code] pair"
+                )));
+            }
+            let pair = js_sys::Array::from(&item);
+            if pair.length() != 2 {
+                return Err(request_error_js(format!(
+                    "load: entry {i} must be a [label, code] pair"
+                )));
+            }
+            let label = pair.get(0).as_string().ok_or_else(|| {
+                request_error_js(format!("load: entry {i} label must be a string"))
+            })?;
+            let code = pair.get(1).as_string().ok_or_else(|| {
+                request_error_js(format!("load: entry {i} code must be a string"))
+            })?;
+            let source_type = SourceType::from_binding_label(&label)
+                .map_err(|e| request_error_js(format!("load: entry {i}: {e}")))?;
+            batch.push((source_type, code));
+        }
+        return Ok(batch);
+    }
+    let map: HashMap<String, String> = serde_wasm_bindgen::from_value(sources).map_err(|e| {
+        request_error_js(format!(
+            "load: sources must be a string, plain object, or array of [label, code] pairs: {e}"
+        ))
+    })?;
+    map.into_iter()
+        .map(|(label, code)| {
+            SourceType::from_binding_label(&label)
+                .map(|source_type| (source_type, code))
+                .map_err(|e| request_error_js(format!("load: label '{label}': {e}")))
+        })
+        .collect()
+}
+
+fn parse_data_values_to_strings(v: &JsValue) -> Result<HashMap<String, String>, String> {
     if v.is_undefined() || v.is_null() {
         return Ok(HashMap::new());
     }
@@ -476,6 +513,32 @@ fn parse_data_values(v: &JsValue) -> Result<HashMap<String, DataValueInput>, Str
         .map_err(|e| format!("data_values must be a plain object: {}", e))?;
     map.into_iter()
         .filter(|(_, v)| !v.is_null())
-        .map(|(k, v)| data_input_from_json_value(v).map(|input| (k, input)))
+        .map(|(k, v)| {
+            let input = data_input_from_json_value(v)?;
+            match input {
+                DataValueInput::Convenience(s) => Ok((k, s)),
+                DataValueInput::Boolean(b) => Ok((k, b.to_string())),
+                DataValueInput::MeasureMap(m) => {
+                    if m.len() == 1 {
+                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
+                        Ok((k, format!("{mag} {unit}")))
+                    } else {
+                        Err(format!(
+                            "data value '{k}' must be a convenience string for WASM run"
+                        ))
+                    }
+                }
+                DataValueInput::RatioMap(m) => {
+                    if m.len() == 1 {
+                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
+                        Ok((k, format!("{mag} {unit}")))
+                    } else {
+                        Err(format!(
+                            "data value '{k}' must be a convenience string for WASM run"
+                        ))
+                    }
+                }
+            }
+        })
         .collect()
 }

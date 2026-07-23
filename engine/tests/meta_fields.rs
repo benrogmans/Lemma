@@ -14,12 +14,12 @@ data x: 1
 "#;
 
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "meta_test.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect("Failed to parse meta_test");
 
     let effective = DateTimeValue {
@@ -34,20 +34,20 @@ data x: 1
 
         granularity: DateGranularity::Full,
     };
-    let plan = engine
-        .get_plan(None, "meta_test", Some(&effective))
+    let show = engine
+        .show(None, "meta_test", Some(&effective))
         .expect("Plan not found");
 
     assert_eq!(
-        plan.meta.get("title").map(|v| v.to_string()),
+        show.meta.get("title").map(|v| v.to_string()),
         Some("Test Spec".to_string())
     );
     assert_eq!(
-        plan.meta.get("version").map(|v| v.to_string()),
+        show.meta.get("version").map(|v| v.to_string()),
         Some("v1.2.3".to_string())
     );
     assert_eq!(
-        plan.meta.get("author").map(|v| v.to_string()),
+        show.meta.get("author").map(|v| v.to_string()),
         Some("Alice".to_string())
     );
 }
@@ -62,12 +62,12 @@ meta title: 123
 "#;
 
     let errs = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "meta_error.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("meta title must reject non-text");
     let err_msg = errs
         .iter()
@@ -88,12 +88,12 @@ meta title: "Second"
 "#;
 
     let errs = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "meta_dup.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("duplicate meta key must fail");
     let err_msg = errs
         .iter()

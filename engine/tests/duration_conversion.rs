@@ -9,19 +9,19 @@ fn test_duration_conversion_properties() {
     let code = r#"
 spec test
 uses lemma units
-data duration: 60 minutes
-rule to_hours: duration as hours
+data duration: 60 minute
+rule to_hours: duration as hour
 "#;
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), true, None)
+        .run(None, "test", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let rule_result = response
         .results
@@ -42,10 +42,10 @@ rule to_hours: duration as hours
             rule_result
                 .measure
                 .as_ref()
-                .and_then(|m| m.get("hours"))
+                .and_then(|m| m.get("hour"))
                 .map(String::as_str),
             Some("1"),
-            "60 minutes as hours"
+            "60 minute as hour"
         );
     } else {
         panic!(

@@ -35,8 +35,8 @@ Multiple aliases for readability:
 
 | Value | Aliases |
 |-------|---------|
-| **True** | `true`, `yes`, `accept` |
-| **False** | `false`, `no`, `reject` |
+| **True** | `true`, `yes` |
+| **False** | `false`, `no` |
 
 All aliases in each row are interchangeable.
 

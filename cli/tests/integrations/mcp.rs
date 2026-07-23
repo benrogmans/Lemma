@@ -13,17 +13,29 @@ fn test_mcp_help_shows_admin_flag() {
 }
 
 /// Send JSON-RPC messages to the MCP server and collect responses.
-/// `workdir: None` runs `lemma mcp` with no path (in-memory only; no disk read at startup).
+/// `prefix: None` runs `lemma mcp` without `--prefix` (defaults to process cwd).
 fn mcp_session(
-    workdir: Option<&std::path::Path>,
+    prefix: Option<&std::path::Path>,
+    admin: bool,
+    messages: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    mcp_session_in_dir(prefix, None, admin, messages)
+}
+
+fn mcp_session_in_dir(
+    prefix: Option<&std::path::Path>,
+    current_dir: Option<&std::path::Path>,
     admin: bool,
     messages: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
     cmd.arg("mcp");
-    if let Some(p) = workdir {
+    if let Some(p) = prefix {
         cmd.arg("--prefix").arg(p);
+    }
+    if let Some(dir) = current_dir {
+        cmd.current_dir(dir);
     }
     if admin {
         cmd.arg("--admin");
@@ -78,7 +90,7 @@ fn write_spec(dir: &std::path::Path, filename: &str, content: &str) {
 }
 
 #[test]
-fn test_mcp_list_specs_includes_schema() {
+fn test_mcp_list_returns_list() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
@@ -92,7 +104,7 @@ fn test_mcp_list_specs_includes_schema() {
                 3,
                 "tools/call",
                 json!({
-                    "name": "list_specs",
+                    "name": "list",
                     "arguments": {}
                 }),
             ),
@@ -102,23 +114,22 @@ fn test_mcp_list_specs_includes_schema() {
     assert!(responses.len() >= 3, "Expected at least 3 responses");
 
     let list_result = &responses[2]["result"]["content"][0]["text"];
-    let text = list_result.as_str().expect("list_specs should return text");
+    let text = list_result.as_str().expect("list should return text");
+    let list: serde_json::Value = serde_json::from_str(text).expect("list should return list JSON");
 
+    let workspace = list
+        .as_array()
+        .and_then(|groups| {
+            groups
+                .iter()
+                .find(|g| g["repository"].is_null())
+                .map(|g| g["specs"].as_array())
+        })
+        .flatten()
+        .expect("workspace group with specs");
     assert!(
-        text.contains("Spec: pricing"),
-        "Should contain spec name, got: {text}"
-    );
-    assert!(
-        text.contains("quantity"),
-        "Should list data names, got: {text}"
-    );
-    assert!(
-        text.contains("base_price"),
-        "Should list data names, got: {text}"
-    );
-    assert!(
-        text.contains("total"),
-        "Should list rule names, got: {text}"
+        workspace.iter().any(|row| row["name"] == "pricing"),
+        "list should include pricing, got: {text}"
     );
 }
 
@@ -213,8 +224,8 @@ fn test_mcp_read_only_by_default() {
         tool_names
     );
     assert!(
-        !tool_names.contains(&"get_spec_source"),
-        "get_spec_source should not be listed in read-only mode, got: {:?}",
+        !tool_names.contains(&"source"),
+        "source should not be listed in read-only mode, got: {:?}",
         tool_names
     );
 
@@ -274,30 +285,35 @@ fn test_mcp_admin_enables_add_spec() {
         tool_names
     );
     assert!(
-        tool_names.contains(&"get_spec_source"),
-        "get_spec_source should be listed with --admin, got: {:?}",
+        tool_names.contains(&"source"),
+        "source should be listed with --admin, got: {:?}",
         tool_names
     );
 
-    // add_spec should succeed and return schema
+    // add_spec should succeed and return structured show JSON
     let add_result = &responses[2]["result"]["content"][0]["text"];
     let text = add_result.as_str().expect("add_spec should return text");
+    let payload: serde_json::Value =
+        serde_json::from_str(text).expect("add_spec should return JSON");
+    assert_eq!(
+        payload["message"].as_str(),
+        Some("Spec added successfully.")
+    );
+    let specs = payload["specs"]
+        .as_array()
+        .expect("add_spec payload should include specs array");
     assert!(
-        text.contains("Spec added successfully"),
-        "Should confirm success, got: {text}"
+        specs.iter().any(|s| s["spec"] == "test_spec"),
+        "Should include show for test_spec, got: {text}"
     );
     assert!(
-        text.contains("Spec: test_spec"),
-        "Should include spec name in schema, got: {text}"
-    );
-    assert!(
-        text.contains("y"),
-        "Should include rule name in schema, got: {text}"
+        specs[0]["rules"]["y"].is_object(),
+        "Should include rule types in show JSON, got: {text}"
     );
 }
 
 #[test]
-fn test_mcp_get_spec_source() {
+fn test_mcp_source() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
@@ -310,7 +326,7 @@ fn test_mcp_get_spec_source() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_spec_source",
+                    "name": "source",
                     "arguments": {
                         "spec": "pricing"
                     }
@@ -322,9 +338,7 @@ fn test_mcp_get_spec_source() {
     assert!(responses.len() >= 2, "Expected at least 2 responses");
 
     let source_result = &responses[1]["result"]["content"][0]["text"];
-    let text = source_result
-        .as_str()
-        .expect("get_spec_source should return text");
+    let text = source_result.as_str().expect("source should return text");
 
     assert!(
         text.contains("spec pricing"),
@@ -341,7 +355,7 @@ fn test_mcp_get_spec_source() {
 }
 
 #[test]
-fn test_mcp_get_spec_source_embedded_lemma_repository() {
+fn test_mcp_source_embedded_lemma_repository() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -353,7 +367,7 @@ fn test_mcp_get_spec_source_embedded_lemma_repository() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_spec_source",
+                    "name": "source",
                     "arguments": {
                         "repository": "lemma"
                     }
@@ -365,7 +379,7 @@ fn test_mcp_get_spec_source_embedded_lemma_repository() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("get_spec_source should return text");
+        .expect("source should return text");
     assert!(
         text.contains("repo lemma")
             && text.contains("spec units")
@@ -375,7 +389,7 @@ fn test_mcp_get_spec_source_embedded_lemma_repository() {
 }
 
 #[test]
-fn test_mcp_get_spec_source_blocked_without_admin() {
+fn test_mcp_source_blocked_without_admin() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
         temp_dir.path(),
@@ -392,7 +406,7 @@ fn test_mcp_get_spec_source_blocked_without_admin() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_spec_source",
+                    "name": "source",
                     "arguments": {
                         "spec": "pricing"
                     }
@@ -406,7 +420,7 @@ fn test_mcp_get_spec_source_blocked_without_admin() {
     let error = &responses[1]["error"];
     assert!(
         error.is_object(),
-        "get_spec_source should return an error without --admin"
+        "source should return an error without --admin"
     );
     assert!(
         error["message"]
@@ -444,10 +458,10 @@ fn test_mcp_initialize_response() {
     );
 }
 
-// ── get_schema ──────────────────────────────────────────────────────────
+// ── show ──────────────────────────────────────────────────────────
 
 #[test]
-fn test_mcp_get_schema_full_spec() {
+fn test_mcp_show_full_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
 
@@ -460,7 +474,7 @@ fn test_mcp_get_schema_full_spec() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_schema",
+                    "name": "show",
                     "arguments": { "spec": "pricing" }
                 }),
             ),
@@ -470,7 +484,7 @@ fn test_mcp_get_schema_full_spec() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("get_schema should return text");
+        .expect("show should return text");
 
     assert!(
         text.contains("pricing"),
@@ -482,7 +496,7 @@ fn test_mcp_get_schema_full_spec() {
 }
 
 #[test]
-fn test_mcp_get_schema_for_specific_rule() {
+fn test_mcp_show_full_spec_rules() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
         temp_dir.path(),
@@ -499,8 +513,8 @@ fn test_mcp_get_schema_for_specific_rule() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_schema",
-                    "arguments": { "spec": "multi", "rule": "sum" }
+                    "name": "show",
+                    "arguments": { "spec": "multi" }
                 }),
             ),
         ],
@@ -509,16 +523,16 @@ fn test_mcp_get_schema_for_specific_rule() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("get_schema should return text");
+        .expect("show should return text");
 
     assert!(
-        text.contains("sum"),
-        "Should include the requested rule, got: {text}"
+        text.contains("sum") && text.contains("product"),
+        "Should list all rules, got: {text}"
     );
 }
 
 #[test]
-fn test_mcp_get_schema_missing_spec() {
+fn test_mcp_show_missing_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -530,7 +544,7 @@ fn test_mcp_get_schema_missing_spec() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_schema",
+                    "name": "show",
                     "arguments": { "spec": "nonexistent" }
                 }),
             ),
@@ -548,7 +562,7 @@ fn test_mcp_get_schema_missing_spec() {
 }
 
 #[test]
-fn test_mcp_get_schema_empty_spec_name() {
+fn test_mcp_show_empty_spec_name() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -560,7 +574,7 @@ fn test_mcp_get_schema_empty_spec_name() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_schema",
+                    "name": "show",
                     "arguments": { "spec": "" }
                 }),
             ),
@@ -760,10 +774,10 @@ fn test_mcp_evaluate_with_effective_datetime() {
     );
 }
 
-// ── list_specs edge cases ───────────────────────────────────────────────
+// ── list edge cases ─────────────────────────────────────────────────────
 
 #[test]
-fn test_mcp_list_specs_empty_workspace() {
+fn test_mcp_list_empty_workspace() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -775,7 +789,7 @@ fn test_mcp_list_specs_empty_workspace() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "list_specs",
+                    "name": "list",
                     "arguments": {}
                 }),
             ),
@@ -785,16 +799,24 @@ fn test_mcp_list_specs_empty_workspace() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("list_specs should return text");
-
+        .expect("list should return text");
+    let list: serde_json::Value = serde_json::from_str(text).expect("list should return JSON");
+    let embedded = list
+        .as_array()
+        .and_then(|groups| groups.iter().find(|g| g["repository"] == "lemma"))
+        .expect("embedded lemma repository group");
     assert!(
-        text.contains("Repository: lemma") && text.contains("Spec: units"),
-        "embedded stdlib must appear in list_specs, got: {text}"
+        embedded["specs"]
+            .as_array()
+            .and_then(|specs| specs.first())
+            .and_then(|row| row["name"].as_str())
+            == Some("units"),
+        "embedded stdlib must appear in list, got: {text}"
     );
 }
 
 #[test]
-fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
+fn test_mcp_list_empty_workspace_admin_suggests_add() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -806,7 +828,7 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "list_specs",
+                    "name": "list",
                     "arguments": {}
                 }),
             ),
@@ -816,10 +838,9 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("list_specs should return text");
-
+        .expect("list should return text");
     assert!(
-        text.contains("Repository: lemma") && text.contains("Spec: units"),
+        text.contains("\"repository\": \"lemma\"") && text.contains("\"name\": \"units\""),
         "embedded stdlib must appear, got: {text}"
     );
     assert!(
@@ -829,17 +850,21 @@ fn test_mcp_list_specs_empty_workspace_admin_suggests_add() {
 }
 
 #[test]
-fn test_mcp_omit_path_no_disk_at_startup() {
-    let responses = mcp_session(
+fn test_mcp_defaults_prefix_to_cwd() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
+
+    let responses = mcp_session_in_dir(
         None,
-        true,
+        Some(temp_dir.path()),
+        false,
         &[
             make_request(1, "initialize", json!({})),
             make_request(
                 2,
                 "tools/call",
                 json!({
-                    "name": "list_specs",
+                    "name": "list",
                     "arguments": {}
                 }),
             ),
@@ -849,12 +874,22 @@ fn test_mcp_omit_path_no_disk_at_startup() {
     assert!(responses.len() >= 2);
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
-        .expect("list_specs should return text");
+        .expect("list should return text");
+    let list: serde_json::Value = serde_json::from_str(text).expect("list should return JSON");
+    let workspace = list
+        .as_array()
+        .and_then(|groups| {
+            groups
+                .iter()
+                .find(|g| g["repository"].is_null())
+                .map(|g| g["specs"].as_array())
+        })
+        .flatten()
+        .expect("workspace group");
     assert!(
-        text.contains("Repository: lemma") && text.contains("Spec: units"),
-        "embedded stdlib must appear when no workspace path, got: {text}"
+        workspace.iter().any(|row| row["name"] == "pricing"),
+        "workspace specs must load when --prefix is omitted, got: {text}"
     );
-    assert!(text.contains("add_spec"));
 }
 
 // ── error handling ──────────────────────────────────────────────────────
@@ -912,9 +947,10 @@ fn test_mcp_unknown_method() {
 
 #[test]
 fn test_mcp_malformed_json() {
+    let temp_dir = tempfile::tempdir().unwrap();
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
-    cmd.arg("mcp");
+    cmd.arg("mcp").current_dir(temp_dir.path());
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -1032,9 +1068,10 @@ fn test_mcp_tools_call_unknown_tool() {
 /// error, and the server must stay in sync to serve subsequent requests.
 #[test]
 fn test_mcp_oversized_line_rejected_then_recovers() {
+    let temp_dir = tempfile::tempdir().unwrap();
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
-    cmd.arg("mcp");
+    cmd.arg("mcp").current_dir(temp_dir.path());
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -1243,14 +1280,8 @@ fn test_mcp_tools_list_read_only_tools() {
         tool_names.contains(&"evaluate"),
         "Should list evaluate tool"
     );
-    assert!(
-        tool_names.contains(&"list_specs"),
-        "Should list list_specs tool"
-    );
-    assert!(
-        tool_names.contains(&"get_schema"),
-        "Should list get_schema tool"
-    );
+    assert!(tool_names.contains(&"list"), "Should list list tool");
+    assert!(tool_names.contains(&"show"), "Should list show tool");
     assert_eq!(
         tool_names.len(),
         3,
@@ -1282,21 +1313,15 @@ fn test_mcp_tools_list_admin_tools() {
         tool_names.contains(&"evaluate"),
         "Should list evaluate tool"
     );
-    assert!(
-        tool_names.contains(&"list_specs"),
-        "Should list list_specs tool"
-    );
-    assert!(
-        tool_names.contains(&"get_schema"),
-        "Should list get_schema tool"
-    );
+    assert!(tool_names.contains(&"list"), "Should list list tool");
+    assert!(tool_names.contains(&"show"), "Should list show tool");
     assert!(
         tool_names.contains(&"add_spec"),
         "Should list add_spec tool in admin mode"
     );
     assert!(
-        tool_names.contains(&"get_spec_source"),
-        "Should list get_spec_source tool in admin mode"
+        tool_names.contains(&"source"),
+        "Should list source tool in admin mode"
     );
     assert_eq!(
         tool_names.len(),
@@ -1423,9 +1448,11 @@ fn test_mcp_add_spec_then_evaluate() {
     let add_text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("add_spec should return text");
-    assert!(
-        add_text.contains("Spec added successfully"),
-        "got: {add_text}"
+    let payload: serde_json::Value =
+        serde_json::from_str(add_text).expect("add_spec should return JSON");
+    assert_eq!(
+        payload["message"].as_str(),
+        Some("Spec added successfully.")
     );
 
     let eval_text = responses[2]["result"]["content"][0]["text"]
@@ -1441,10 +1468,10 @@ fn test_mcp_add_spec_then_evaluate() {
     );
 }
 
-// ── get_spec_source for missing spec ────────────────────────────────────
+// ── source for missing spec ─────────────────────────────────────────────
 
 #[test]
-fn test_mcp_get_spec_source_missing_spec() {
+fn test_mcp_source_missing_spec() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
@@ -1456,7 +1483,7 @@ fn test_mcp_get_spec_source_missing_spec() {
                 2,
                 "tools/call",
                 json!({
-                    "name": "get_spec_source",
+                    "name": "source",
                     "arguments": { "spec": "nonexistent" }
                 }),
             ),
@@ -1595,7 +1622,7 @@ fn test_mcp_response_ids_match_request_ids() {
                 30,
                 "tools/call",
                 json!({
-                    "name": "list_specs",
+                    "name": "list",
                     "arguments": {}
                 }),
             ),

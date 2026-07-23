@@ -32,9 +32,11 @@ fn eval_literal(
 ) -> lemma::LiteralValue {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let response = engine
-        .run(None, spec_name, Some(effective), HashMap::new(), true, None)
+        .run(None, spec_name, Some(effective), HashMap::new(), None, true)
         .expect("Should evaluate");
     response
         .results
@@ -90,7 +92,7 @@ fn assert_contains_all(actual: &str, expected_parts: &[&str]) {
 fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -181,7 +183,7 @@ fn is_numeric_context_character(character: char) -> bool {
 fn precision_duration_microsecond_addition_exact() {
     let code = r#"spec test
 uses lemma units
-rule value: ((1 microsecond + 999 microseconds) as milliseconds)"#;
+rule value: ((1 microsecond + 999 microsecond) as millisecond)"#;
     let value = eval_rule(
         code,
         "test",
@@ -195,7 +197,7 @@ rule value: ((1 microsecond + 999 microseconds) as milliseconds)"#;
 fn precision_duration_microsecond_to_millisecond_fraction() {
     let code = r#"spec test
 uses lemma units
-rule value: 1500 microseconds as milliseconds"#;
+rule value: 1500 microsecond as millisecond"#;
     let value = eval_rule(
         code,
         "test",
@@ -209,7 +211,7 @@ rule value: 1500 microseconds as milliseconds"#;
 fn precision_second_to_millisecond_exact() {
     let code = r#"spec test
 uses lemma units
-rule value: 0.001 second as milliseconds"#;
+rule value: 0.001 second as millisecond"#;
     let value = eval_rule(
         code,
         "test",
@@ -223,7 +225,7 @@ rule value: 0.001 second as milliseconds"#;
 fn precision_datetime_range_to_microseconds() {
     let code = r#"spec test
 uses lemma units
-rule value: (2024-01-01T00:00:00.000001Z...2024-01-01T00:00:00.000003Z) as microseconds"#;
+rule value: (2024-01-01T00:00:00.000001Z...2024-01-01T00:00:00.000003Z) as microsecond"#;
     let value = eval_rule(
         code,
         "test",
@@ -237,7 +239,7 @@ rule value: (2024-01-01T00:00:00.000001Z...2024-01-01T00:00:00.000003Z) as micro
 fn precision_reversed_datetime_range_span_is_absolute_microseconds() {
     let code = r#"spec test
 uses lemma units
-rule value: (2024-01-01T00:00:00.000003Z...2024-01-01T00:00:00.000001Z) as microseconds"#;
+rule value: (2024-01-01T00:00:00.000003Z...2024-01-01T00:00:00.000001Z) as microsecond"#;
     let value = eval_rule(
         code,
         "test",
@@ -251,7 +253,7 @@ rule value: (2024-01-01T00:00:00.000003Z...2024-01-01T00:00:00.000001Z) as micro
 fn precision_time_minus_time_rejected_with_datetime_range_suggestion() {
     let code = r#"spec test
 uses lemma units
-rule value: (00:00:00.000001 - 00:00:00.000000) as microseconds"#;
+rule value: (00:00:00.000001 - 00:00:00.000000) as microsecond"#;
     expect_plan_error(code, "datetime range");
 }
 
@@ -273,7 +275,7 @@ rule value: 2024-01-01T00:00:00.000001Z + 1 microsecond"#;
 fn precision_datetime_crosses_second_boundary_exactly() {
     let code = r#"spec test
 uses lemma units
-rule value: 2024-01-01T00:00:00.999999Z + 2 microseconds"#;
+rule value: 2024-01-01T00:00:00.999999Z + 2 microsecond"#;
     let value = eval_rule(
         code,
         "test",

@@ -27,11 +27,11 @@ rule total: subtotal + vat
 fn run_calc(data: HashMap<String, String>) -> lemma::Explanation {
     let mut engine = Engine::new();
     engine
-        .load(CALC_SPEC, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, CALC_SPEC.to_string())])
         .expect("calc spec loads");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "calc", Some(&now), data, true, None)
+        .run(None, "calc", Some(&now), data, None, true)
         .expect("calc eval succeeds");
     response
         .results

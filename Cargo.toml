@@ -6,13 +6,14 @@ members = [
     "engine",
     "engine/lsp",
     "engine/packages/hex/native/lemma_hex",
+    "engine/packages/maven/native/lemma_jni",
     "openapi",
 ]
 default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.8.22"
+version = "0.9.0"
 edition = "2021"
 authors = ["Ben Rogmans <ben@lemmabase.com>"]
 description = "A pure, declarative language for business rules."
@@ -24,7 +25,7 @@ dead_code = "deny"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive", "rc"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.39.2", features = ["full"] }
 rust_decimal = { version = "1.33", features = ["serde", "maths"] }

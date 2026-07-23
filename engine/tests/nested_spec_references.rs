@@ -23,25 +23,25 @@ rule line_total: pricing.final_price * quantity
 "#;
 
     engine
-        .load(
-            base_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "pricing.lemma",
             ))),
-        )
+            base_spec.to_string(),
+        )])
         .unwrap();
     engine
-        .load(
-            line_item_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "line_item.lemma",
             ))),
-        )
+            line_item_spec.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "line_item", Some(&now), HashMap::new(), true, None)
+        .run(None, "line_item", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let line_total = response
         .results
@@ -94,15 +94,19 @@ uses middle_ref: middle
 rule top_calc: middle_ref.middle_calc
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(middle_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
         .unwrap();
-    engine.load(top_spec, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, middle_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, top_spec.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), true, None)
+        .run(None, "top", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let top_calc = response
@@ -140,7 +144,9 @@ spec a
 data x: spec other
 "#;
 
-    let errs = engine.load(specs, lemma::SourceType::Volatile).unwrap_err();
+    let errs = engine
+        .load([(lemma::SourceType::Volatile, specs.to_string())])
+        .unwrap_err();
     let msg = errs
         .iter()
         .map(|e| e.to_string())
@@ -175,15 +181,19 @@ uses settings: middle
 rule final_value: settings.config.value * 2
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(middle_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
         .unwrap();
-    engine.load(top_spec, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, middle_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, top_spec.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), true, None)
+        .run(None, "top", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let final_value = response
         .results
@@ -241,18 +251,18 @@ rule order_total: line.line_total
 "#;
 
     engine
-        .load(pricing_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, pricing_spec.to_string())])
         .unwrap();
     engine
-        .load(line_item_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, line_item_spec.to_string())])
         .unwrap();
     engine
-        .load(order_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, order_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), true, None)
+        .run(None, "order", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let order_total = response
@@ -310,17 +320,19 @@ rule total2: path2.base.total
 rule difference: total2 - total1
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(wrapper_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
         .unwrap();
     engine
-        .load(comparison_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, wrapper_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, comparison_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "comparison", Some(&now), HashMap::new(), true, None)
+        .run(None, "comparison", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let total1 = response
@@ -422,18 +434,18 @@ rule product: c1.value * c2.value
 "#;
 
     engine
-        .load(config1_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, config1_spec.to_string())])
         .unwrap();
     engine
-        .load(config2_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, config2_spec.to_string())])
         .unwrap();
     engine
-        .load(combined_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, combined_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "combined", Some(&now), HashMap::new(), true, None)
+        .run(None, "combined", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let sum = response
@@ -511,29 +523,29 @@ rule final_result: middle_config.x_squared_plus_ten * 2
 "#;
 
     engine
-        .load(
-            base_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("base.lemma"))),
-        )
+            base_spec.to_string(),
+        )])
         .unwrap();
     engine
-        .load(
-            middle_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "middle.lemma",
             ))),
-        )
+            middle_spec.to_string(),
+        )])
         .unwrap();
     engine
-        .load(
-            top_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("top.lemma"))),
-        )
+            top_spec.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "top", Some(&now), HashMap::new(), true, None)
+        .run(None, "top", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let final_result = response
@@ -591,15 +603,15 @@ rule price_difference: retail_final - wholesale_final
 "#;
 
     engine
-        .load(pricing_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, pricing_spec.to_string())])
         .unwrap();
     engine
-        .load(scenario_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, scenario_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "scenarios", Some(&now), HashMap::new(), true, None)
+        .run(None, "scenarios", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let retail_final = response
@@ -693,7 +705,9 @@ data cc.aa: spec a
 rule yy: cc.y
 "#;
 
-    let errs = engine.load(specs, lemma::SourceType::Volatile).unwrap_err();
+    let errs = engine
+        .load([(lemma::SourceType::Volatile, specs.to_string())])
+        .unwrap_err();
     let msg = errs
         .iter()
         .map(|e| e.to_string())

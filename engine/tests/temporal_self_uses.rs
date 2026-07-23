@@ -26,8 +26,8 @@ fn eval(engine: &Engine, spec_name: &str, effective: &DateTimeValue) -> lemma::R
             spec_name,
             Some(effective),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap()
 }
@@ -81,38 +81,40 @@ fn load_finance_origin_and_consumer(
     engine: &mut Engine,
     consumer_body: &str,
 ) -> Result<(), lemma::Errors> {
-    engine.load(
+    engine.load([(
+        SourceType::Path(Arc::new(std::path::PathBuf::from("finance_origin.lemma"))),
         r#"
 spec finance
-data rate: number -> default 0
-"#,
-        SourceType::Path(Arc::new(std::path::PathBuf::from("finance_origin.lemma"))),
-    )?;
-    engine.load(
-        consumer_body,
+data rate: number -> suggest 0
+"#
+        .to_string(),
+    )])?;
+    engine.load([(
         SourceType::Path(Arc::new(std::path::PathBuf::from("finance_consumer.lemma"))),
-    )
+        consumer_body.to_string(),
+    )])
 }
 
 fn load_finance_specs(engine: &mut Engine, consumer_body: &str) {
     engine
-        .load(
+        .load([(
+            SourceType::Path(Arc::new(std::path::PathBuf::from("finance_base.lemma"))),
             r#"
 spec finance 2026-01-01
 data rate: 1
 
 spec finance 2024-01-01
 data rate: 2
-"#,
-            SourceType::Path(Arc::new(std::path::PathBuf::from("finance_base.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .expect("base finance temporal rows");
 
     engine
-        .load(
-            consumer_body,
+        .load([(
             SourceType::Path(Arc::new(std::path::PathBuf::from("finance_consumer.lemma"))),
-        )
+            consumer_body.to_string(),
+        )])
         .expect("consumer spec");
 }
 
@@ -150,16 +152,17 @@ rule ok: fin.rate
 fn true_self_uses_on_origin_spec_is_rejected() {
     let mut engine = Engine::new();
     let err = engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec finance
 data rate: 1
 
 uses finance
 rule ok: finance.rate
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap_err();
 
     let joined = err
@@ -178,10 +181,10 @@ rule ok: finance.rate
 fn true_self_uses_implicit_alias_on_origin_is_rejected() {
     let mut engine = Engine::new();
     let err = engine
-        .load(
-            "spec finance\nuses finance\nrule ok: 1",
+        .load([(
             SourceType::Volatile,
-        )
+            "spec finance\nuses finance\nrule ok: 1".to_string(),
+        )])
         .unwrap_err();
 
     let joined = err
@@ -199,16 +202,19 @@ fn true_self_uses_implicit_alias_on_origin_is_rejected() {
 #[test]
 fn true_self_rejects_cannot_reference_itself() {
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        r#"
+    let joined = load_err_joined(
+        engine.load([(
+            SourceType::Volatile,
+            r#"
 spec finance
 data rate: 1
 
 uses finance
 rule ok: finance.rate
-"#,
-        SourceType::Volatile,
-    ));
+"#
+            .to_string(),
+        )]),
+    );
     assert!(
         joined.contains("cannot reference itself") && joined.contains("finance"),
         "expected cannot reference itself, got: {joined}"
@@ -244,10 +250,12 @@ uses finance 2027
 #[test]
 fn forward_pin_with_rules_not_cycle_only() {
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        r#"
+    let joined = load_err_joined(
+        engine.load([(
+            SourceType::Volatile,
+            r#"
 spec finance
-data rate: number -> default 0
+data rate: number -> suggest 0
 
 spec finance 2026-05-20
 uses fin: finance 2027
@@ -256,9 +264,10 @@ rule x: 1
 spec finance 2024-01-01
 uses prev: finance 2026-05-20
 rule y: prev.x
-"#,
-        SourceType::Volatile,
-    ));
+"#
+            .to_string(),
+        )]),
+    );
     assert!(
         joined.contains("2026") || joined.contains("2027") || joined.contains("not active at"),
         "consumer or pin context expected, got: {joined}"
@@ -281,24 +290,28 @@ rule y: prev.x
 fn forward_pin_missing_year_body() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec finance 2026-01-01
 data rate: 1
 
 spec finance 2024-01-01
 data rate: 2
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .expect("base rows");
-    let joined = load_err_joined(engine.load(
-        r#"
+    let joined = load_err_joined(
+        engine.load([(
+            SourceType::Volatile,
+            r#"
 spec finance 2026-05-20
 uses fin: finance 2028
-"#,
-        SourceType::Volatile,
-    ));
+"#
+            .to_string(),
+        )]),
+    );
     assert_forward_pin_rejected(&joined);
 }
 
@@ -306,7 +319,8 @@ uses fin: finance 2028
 fn temporal_self_uses_three_slice_chain() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec finance 2024-01-01
 data rate: 2
@@ -317,20 +331,21 @@ data rate: 1
 spec finance 2027-01-01
 uses f26: finance 2026-01-01
 rule from_2026: f26.rate
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .expect("2027 slice");
 
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec finance 2026-05-20
 uses fin: finance 2024-01-01
 rule from_2024: fin.rate
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .expect("2026 consumer");
 
     assert_rule_value(
@@ -349,16 +364,17 @@ rule from_2024: fin.rate
 fn same_instant_pin_is_rejected() {
     let mut engine = Engine::new();
     let err = engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec finance 2026-01-01
 data rate: 1
 
 uses finance 2026-01-01
 rule ok: finance.rate
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap_err();
 
     let joined = err
@@ -377,7 +393,8 @@ rule ok: finance.rate
 fn temporal_self_uses_cycle_is_rejected() {
     let mut engine = Engine::new();
     let err = engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec finance 2026-01-01
 uses f27: finance 2027-01-01
@@ -386,9 +403,9 @@ rule a: 1
 spec finance 2027-01-01
 uses f26: finance 2026-01-01
 rule b: 1
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap_err();
 
     let joined = err

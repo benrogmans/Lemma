@@ -1,12 +1,22 @@
 //! Exact rational arithmetic bridge between `rust_decimal::Decimal` and fallible `BigInt`.
+//!
+//! Input literals parse through [`crate::literals::NumberLiteral`] (`Decimal::from_str`).
+//! Output materialization uses [`RationalInteger::try_to_decimal`], enforcing the same
+//! [`Decimal::MAX_SCALE`] digit limit.
 
 use rust_decimal::Decimal;
 use rust_decimal::MathematicalOps;
 use std::fmt;
+use std::str::FromStr;
 
 use crate::computation::bigint::AllocError;
 
 pub use crate::computation::bigint::BigInt;
+
+/// Digit limit for ℚ → [`Decimal`] output materialization.
+///
+/// Matches [`Decimal::MAX_SCALE`] and [`crate::literals::NumberLiteral`] input parsing.
+const DECIMAL_OUTPUT_DIGIT_LIMIT: usize = Decimal::MAX_SCALE as usize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RationalInteger {
@@ -80,14 +90,113 @@ impl RationalInteger {
         Ok(self)
     }
 
-    #[cfg(test)]
-    pub fn reduced(self) -> Self {
-        self.try_reduce().expect("BUG: test rational reduce")
-    }
     pub fn try_cmp(&self, other: &Self) -> Result<std::cmp::Ordering, NumericFailure> {
         let left = self.numer().try_mul(other.denom())?;
         let right = other.numer().try_mul(self.denom())?;
         Ok(left.cmp(&right))
+    }
+
+    /// Round to [`Decimal::MAX_SCALE`] precision.
+    ///
+    /// Returns [`NumericFailure::Overflow`] only when `|self| > Decimal::MAX`.
+    pub fn try_to_decimal(&self) -> Result<Decimal, NumericFailure> {
+        let reduced = Self::try_reduce_ref(self)?;
+        if reduced.numer().is_zero() {
+            return Ok(Decimal::ZERO);
+        }
+
+        let max_rational = decimal_to_rational(Decimal::MAX.normalize())?;
+        let min_rational = decimal_to_rational(Decimal::MIN.normalize())?;
+        if reduced.try_cmp(&max_rational)? == std::cmp::Ordering::Greater {
+            return Err(NumericFailure::Overflow);
+        }
+        if reduced.try_cmp(&min_rational)? == std::cmp::Ordering::Less {
+            return Err(NumericFailure::Overflow);
+        }
+
+        let negative = reduced.numer().is_negative();
+        let abs_numer = reduced.numer().try_abs()?;
+        let abs_denom = reduced.denom().try_abs()?;
+
+        let (int_quotient, mut remainder) = abs_numer.try_div_rem(&abs_denom)?;
+
+        let mut digit_string = if int_quotient.is_zero() {
+            String::from("0")
+        } else {
+            int_quotient.to_string()
+        };
+
+        if !remainder.is_zero() {
+            digit_string.push('.');
+            let integer_significant_digits = if int_quotient.is_zero() {
+                0
+            } else {
+                digit_string.len()
+            };
+
+            if int_quotient.is_zero() {
+                let mut significant_digits = 0usize;
+                while !remainder.is_zero() && significant_digits < DECIMAL_OUTPUT_DIGIT_LIMIT + 1 {
+                    remainder = remainder.try_mul(&BigInt::from_i64(10))?;
+                    let (digit_quotient, new_remainder) = remainder.try_div_rem(&abs_denom)?;
+                    let digit = u8::try_from(
+                        digit_quotient
+                            .to_i32()
+                            .expect("BUG: fractional digit quotient must fit i32"),
+                    )
+                    .expect("BUG: fractional digit must be 0-9");
+                    digit_string.push(char::from(b'0' + digit));
+                    remainder = new_remainder;
+                    if digit != 0 || significant_digits > 0 {
+                        significant_digits += 1;
+                    }
+                }
+            } else {
+                let max_fractional_digits = DECIMAL_OUTPUT_DIGIT_LIMIT
+                    .saturating_sub(integer_significant_digits)
+                    .saturating_add(1);
+                let mut fractional_count = 0usize;
+                while !remainder.is_zero() && fractional_count < max_fractional_digits {
+                    remainder = remainder.try_mul(&BigInt::from_i64(10))?;
+                    let (digit_quotient, new_remainder) = remainder.try_div_rem(&abs_denom)?;
+                    let digit = u8::try_from(
+                        digit_quotient
+                            .to_i32()
+                            .expect("BUG: fractional digit quotient must fit i32"),
+                    )
+                    .expect("BUG: fractional digit must be 0-9");
+                    digit_string.push(char::from(b'0' + digit));
+                    remainder = new_remainder;
+                    fractional_count += 1;
+                }
+            }
+        }
+
+        if negative {
+            digit_string.insert(0, '-');
+        }
+
+        Decimal::from_str(&digit_string).map_err(|_| NumericFailure::Overflow)
+    }
+
+    pub fn try_to_decimal_string(&self) -> Result<String, NumericFailure> {
+        self.try_to_decimal()
+            .map(|decimal| decimal_to_display_str(&decimal))
+    }
+
+    /// Human-readable decimal when materializable; fraction string on magnitude overflow.
+    pub fn display_str(&self) -> String {
+        match self.try_to_decimal() {
+            Ok(decimal) => decimal_to_display_str(&decimal),
+            Err(NumericFailure::Overflow) => rational_fraction_str(self),
+            Err(NumericFailure::OutOfMemory) => rational_fraction_str(self),
+            Err(NumericFailure::DivisionByZero) => {
+                unreachable!("BUG: display_str on reduced rational with zero denominator")
+            }
+            Err(NumericFailure::Irrational) => {
+                unreachable!("BUG: display_str does not perform irrational operations")
+            }
+        }
     }
 }
 
@@ -193,34 +302,6 @@ pub fn decimal_to_rational(decimal: Decimal) -> Result<RationalInteger, NumericF
     try_rational_new(BigInt::from_i128(mantissa), denominator)
 }
 
-pub fn commit_rational_to_decimal(rational: &RationalInteger) -> Result<Decimal, NumericFailure> {
-    let reduced = RationalInteger::try_reduce_ref(rational)?;
-    let numerator = reduced.numer();
-    let denominator = reduced.denom();
-    if denominator.is_zero() {
-        unreachable!("BUG: rational with zero denominator");
-    }
-    if numerator.is_zero() {
-        return Ok(Decimal::ZERO);
-    }
-    let numerator_decimal = decimal_from_bigint(numerator)?;
-    let denominator_decimal = decimal_from_bigint(denominator)?;
-    numerator_decimal
-        .checked_div(denominator_decimal)
-        .ok_or(NumericFailure::Overflow)
-}
-
-pub fn rational_to_display_str(rational: &RationalInteger) -> String {
-    match commit_rational_to_decimal(rational) {
-        Ok(decimal) => decimal_to_display_str(&decimal),
-        Err(_) => rational_fraction_str(rational),
-    }
-}
-
-pub fn rational_to_decimal_string(rational: &RationalInteger) -> Result<String, NumericFailure> {
-    commit_rational_to_decimal(rational).map(|decimal| decimal_to_display_str(&decimal))
-}
-
 fn decimal_to_display_str(decimal: &Decimal) -> String {
     let normalized = decimal.normalize();
     if normalized.fract().is_zero() {
@@ -242,16 +323,6 @@ fn rational_fraction_str(rational: &RationalInteger) -> String {
     } else {
         format!("{numer}/{denom}")
     }
-}
-
-fn decimal_from_bigint(value: &BigInt) -> Result<Decimal, NumericFailure> {
-    let max_mantissa = Decimal::MAX.mantissa();
-    let min_mantissa = Decimal::MIN.mantissa();
-    let i128_val = value.to_i128().ok_or(NumericFailure::Overflow)?;
-    if i128_val > max_mantissa || i128_val < min_mantissa {
-        return Err(NumericFailure::Overflow);
-    }
-    Ok(Decimal::from(i128_val))
 }
 
 pub fn rational_operation(
@@ -282,14 +353,6 @@ pub fn rational_operation(
     }
 }
 
-pub(crate) fn planning_rational_operation(
-    left: &RationalInteger,
-    operation: NumericOperation,
-    right: &RationalInteger,
-) -> Result<RationalInteger, NumericFailure> {
-    rational_operation(left, operation, right)
-}
-
 pub fn rational_operation_with_fallback(
     left: &RationalInteger,
     operation: NumericOperation,
@@ -309,8 +372,8 @@ fn approximate_rational_operation(
     operation: NumericOperation,
     right: &RationalInteger,
 ) -> Result<RationalInteger, NumericFailure> {
-    let left_decimal = commit_rational_to_decimal(left)?;
-    let right_decimal = commit_rational_to_decimal(right)?;
+    let left_decimal = left.try_to_decimal()?;
+    let right_decimal = right.try_to_decimal()?;
     let result_decimal = decimal_arithmetic(left_decimal, operation, right_decimal)?;
     decimal_to_rational(result_decimal)
 }
@@ -518,7 +581,7 @@ pub use {
 
 impl fmt::Display for RationalInteger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", rational_to_display_str(self))
+        write!(f, "{}", self.display_str())
     }
 }
 
@@ -541,11 +604,58 @@ mod tests {
     }
 
     #[test]
-    fn commit_one_third_to_decimal() {
+    fn try_to_decimal_one_third() {
         let rational = rational_new(1, 3);
-        let decimal = commit_rational_to_decimal(&rational).unwrap();
+        let decimal = rational.try_to_decimal().unwrap();
         let expected = Decimal::from_str("0.3333333333333333333333333333").unwrap();
         assert_eq!(decimal, expected);
+    }
+
+    #[test]
+    fn try_to_decimal_tiny_rounds_to_zero() {
+        let rational = try_rational_new(
+            BigInt::one(),
+            BigInt::try_from_str_radix("1000000000000000000000000000000", 10).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(rational.try_to_decimal().unwrap(), Decimal::ZERO);
+    }
+
+    #[test]
+    fn try_to_decimal_magnitude_beyond_max_returns_overflow() {
+        let max = Decimal::MAX.normalize();
+        let max_rational = decimal_to_rational(max).unwrap();
+        let twice = try_mul(&max_rational, &rational_new(2, 1)).unwrap();
+        assert_eq!(
+            twice.try_to_decimal().unwrap_err(),
+            NumericFailure::Overflow,
+        );
+    }
+
+    #[test]
+    fn try_to_decimal_string_integer() {
+        let rational = rational_new(37, 1);
+        assert_eq!(rational.try_to_decimal_string().unwrap(), "37");
+    }
+
+    #[test]
+    fn display_str_shows_decimal_for_materializable() {
+        let rational = rational_new(355, 113);
+        let display = rational.display_str();
+        assert!(
+            !display.contains('/'),
+            "materializable rational must display as decimal, got {display}"
+        );
+    }
+
+    #[test]
+    fn try_to_decimal_huge_cancelling_rationals() {
+        let numer = BigInt::try_from_str_radix("1", 10)
+            .unwrap()
+            .try_pow_u32(100)
+            .unwrap();
+        let rational = try_rational_new(numer.clone(), numer).unwrap();
+        assert_eq!(rational.try_to_decimal().unwrap(), Decimal::ONE);
     }
 
     #[test]
@@ -611,12 +721,10 @@ mod tests {
             &rational_new(1, 2),
         )
         .unwrap();
+        let expected = rational_new(2, 1).try_to_decimal().unwrap().sqrt().unwrap();
         assert_eq!(
-            commit_rational_to_decimal(&result).unwrap(),
-            commit_rational_to_decimal(&rational_new(2, 1))
-                .unwrap()
-                .sqrt()
-                .unwrap(),
+            result.try_to_decimal().unwrap().round_dp(27),
+            expected.round_dp(27),
         );
     }
 
@@ -627,40 +735,20 @@ mod tests {
     }
 
     #[test]
-    fn rational_to_decimal_string_rejects_uncommittable() {
+    fn try_to_decimal_string_rejects_magnitude_overflow() {
         let too_large = try_rational_new(
             BigInt::try_from_str_radix("10000000000000000000000000000000", 10).unwrap(),
             BigInt::one(),
         )
         .unwrap();
-        assert!(commit_rational_to_decimal(&too_large).is_err());
-        assert!(rational_to_decimal_string(&too_large).is_err());
-    }
-
-    #[test]
-    fn rational_to_decimal_string_matches_commit_for_committable() {
-        let rational = rational_new(37, 1);
-        assert_eq!(rational_to_decimal_string(&rational).unwrap(), "37");
-    }
-
-    #[test]
-    fn rational_to_display_str_falls_back_to_fraction_when_commit_fails() {
-        let rational = rational_new(355, 113);
-        let display = rational_to_display_str(&rational);
-        assert!(
-            display.contains('/') || commit_rational_to_decimal(&rational).is_ok(),
-            "display must be either committable decimal or fraction, got {display}"
+        assert_eq!(
+            too_large.try_to_decimal().unwrap_err(),
+            NumericFailure::Overflow
         );
-    }
-
-    #[test]
-    fn commit_huge_cancelling_rationals() {
-        let numer = BigInt::try_from_str_radix("1", 10)
-            .unwrap()
-            .try_pow_u32(100)
-            .unwrap();
-        let rational = try_rational_new(numer.clone(), numer).unwrap();
-        assert_eq!(commit_rational_to_decimal(&rational).unwrap(), Decimal::ONE);
+        assert_eq!(
+            too_large.try_to_decimal_string().unwrap_err(),
+            NumericFailure::Overflow,
+        );
     }
 
     #[test]

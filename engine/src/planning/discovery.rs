@@ -4,13 +4,24 @@ use crate::parsing::ast::{
     RepositoryQualifier, SpecRef,
 };
 use crate::parsing::source::Source;
+use crate::planning::semantics::{DataDefinition, LemmaType};
 use crate::Error;
-use indexmap::IndexMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-/// A spec together with its owning repository, as produced by DAG discovery.
-pub(crate) type DagSpec = (Arc<LemmaRepository>, Arc<LemmaSpec>);
+/// A spec together with its owning repository, as produced by dependency discovery.
+/// Spec is borrowed from Context storage for the duration of `plan`.
+#[derive(Debug)]
+pub(crate) struct DependencySpec<'a> {
+    pub repository: Arc<LemmaRepository>,
+    pub spec: &'a LemmaSpec,
+}
+
+/// Same Context-owned row (planning identity within one `plan` pass).
+#[inline]
+pub(crate) fn same_loaded_spec(a: &LemmaSpec, b: &LemmaSpec) -> bool {
+    std::ptr::eq(a, b)
+}
 
 // ---------------------------------------------------------------------------
 // Two-stage spec reference resolution
@@ -41,7 +52,7 @@ pub(crate) fn resolve_spec_ref_after_expanding_uses_aliases(
     spec_ref: &SpecRef,
     ref_source: Option<&Source>,
     consumer_name: &str,
-    spec_context: Option<Arc<LemmaSpec>>,
+    spec_context: Option<&LemmaSpec>,
 ) -> Result<(ResolvedSpecRef, SpecRef), Error> {
     let effective_ref = if spec_ref.repository.is_some() {
         spec_ref.clone()
@@ -69,7 +80,7 @@ pub(crate) fn resolve_spec_ref_after_expanding_uses_aliases(
                     ),
                     ref_source.cloned(),
                     None::<String>,
-                    spec_context.clone(),
+                    spec_context,
                     None,
                 ));
             }
@@ -111,7 +122,7 @@ fn unknown_repository_qualifier_error(
     spec_ref: &SpecRef,
     ref_source: Option<&Source>,
     consumer_name: &str,
-    spec_context: Option<Arc<LemmaSpec>>,
+    spec_context: Option<&LemmaSpec>,
 ) -> Error {
     let message = if qualifier.is_registry() {
         format!(
@@ -152,25 +163,25 @@ fn consumer_identity(spec: &LemmaSpec) -> String {
     }
 }
 
-/// Resolve a `SpecRef` to the owning repository and loaded `Arc<LemmaSpec>` at the
+/// Resolve a `SpecRef` to the owning repository and loaded `&LemmaSpec` at the
 /// planning `effective`. Returns a [`crate::Error::MissingRepository`] when the
 /// repository qualifier is not loaded, or another planning error when the reference
 /// cannot be resolved.
-pub(crate) fn resolve_spec_ref(
-    context: &Context,
+pub(crate) fn resolve_spec_ref<'a>(
+    context: &'a Context,
     spec_ref: &SpecRef,
     consumer_repository: &Arc<LemmaRepository>,
-    consumer_spec: &Arc<LemmaSpec>,
+    consumer_spec: &LemmaSpec,
     effective: &EffectiveDate,
     ref_source: Option<Source>,
-) -> Result<(Arc<LemmaRepository>, Arc<LemmaSpec>), Error> {
+) -> Result<(Arc<LemmaRepository>, &'a LemmaSpec), Error> {
     let consumer_name = consumer_spec.name.as_str();
     let (resolved, effective_ref) = resolve_spec_ref_after_expanding_uses_aliases(
         context,
         spec_ref,
         ref_source.as_ref(),
         consumer_name,
-        Some(Arc::clone(consumer_spec)),
+        Some(consumer_spec),
     )?;
     let repository_arc = match &resolved.repository {
         Some(explicit) => Arc::clone(explicit),
@@ -191,14 +202,14 @@ pub(crate) fn resolve_spec_ref(
             message,
             ref_source,
             Some(suggestion),
-            Some(Arc::clone(consumer_spec)),
+            Some(consumer_spec),
             None,
         ));
     };
 
     let spec = if let Some(pin) = effective_ref.effective.as_ref() {
         if let Some(exact) = spec_set.get_exact(Some(pin)) {
-            Some(Arc::clone(exact))
+            Some(exact)
         } else {
             spec_set.spec_at(&EffectiveDate::DateTimeValue(pin.clone()))
         }
@@ -220,12 +231,12 @@ pub(crate) fn resolve_spec_ref(
             message,
             ref_source.clone(),
             Some(suggestion),
-            Some(Arc::clone(consumer_spec)),
+            Some(consumer_spec),
             None,
         )
     })?;
 
-    if Arc::ptr_eq(consumer_spec, &spec) {
+    if same_loaded_spec(consumer_spec, spec) {
         return Err(Error::validation_with_context(
             format!(
                 "spec '{}' cannot reference itself via '{}'",
@@ -234,7 +245,7 @@ pub(crate) fn resolve_spec_ref(
             ),
             ref_source,
             None::<String>,
-            Some(Arc::clone(consumer_spec)),
+            Some(consumer_spec),
             None,
         ));
     }
@@ -343,7 +354,7 @@ impl DependencyEdge {
 }
 
 pub(crate) fn dependency_edges(
-    spec: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
     consumer_repository: &Arc<LemmaRepository>,
     context: &Context,
 ) -> Result<Vec<DependencyEdge>, Vec<Error>> {
@@ -356,7 +367,7 @@ pub(crate) fn dependency_edges(
             spec_ref,
             Some(source),
             spec.name.as_str(),
-            Some(Arc::clone(spec)),
+            Some(spec),
         ) {
             Ok((resolved, effective_ref)) => {
                 let dep_repository = match &resolved.repository {
@@ -407,29 +418,28 @@ pub(crate) fn dependency_edges(
 /// (schema) is type-compatible across all dep specs active within the
 /// consumer's effective range. Qualified deps are pinned and skip this check.
 ///
-/// Returns `(consumer_repository, consumer_spec_name, error)` triples so the
-/// caller can do a two-level lookup into `plan()` 's nested `IndexMap`.
-pub fn validate_dependency_interfaces(
-    context: &Context,
-    results: &IndexMap<Arc<LemmaRepository>, IndexMap<String, super::SpecSetPlanningResult>>,
-) -> Vec<(Arc<LemmaRepository>, String, Error)> {
-    let mut errors: Vec<(Arc<LemmaRepository>, String, Error)> = Vec::new();
+/// Returns `(consumer_repository, consumer_spec_name, consumer_spec, error)` tuples.
+pub fn validate_dependency_interfaces<'a>(
+    context: &'a Context,
+    plan_sets: &super::PlanStore,
+    missing_repository_source_specs: &HashSet<(Arc<LemmaRepository>, String, EffectiveDate)>,
+    failed_source_specs: &HashSet<(Arc<LemmaRepository>, String, EffectiveDate)>,
+) -> Vec<(Arc<LemmaRepository>, String, &'a LemmaSpec, Error)> {
+    let mut errors: Vec<(Arc<LemmaRepository>, String, &'a LemmaSpec, Error)> = Vec::new();
 
-    for (_repo, by_name) in results.iter() {
-        for set_result in by_name.values() {
-            for spec_result in &set_result.slice_results {
-                if spec_result
-                    .errors
-                    .iter()
-                    .any(|e| e.kind() == crate::ErrorKind::MissingRepository)
-                {
+    for (consumer_repository, by_name) in context.repositories().iter() {
+        for (consumer_spec_name, consumer_spec_set) in by_name.iter() {
+            for spec in consumer_spec_set.iter_specs() {
+                if missing_repository_source_specs.contains(&(
+                    Arc::clone(consumer_repository),
+                    consumer_spec_name.clone(),
+                    spec.effective_from.clone(),
+                )) {
                     continue;
                 }
 
-                let spec = &spec_result.spec;
-                let consumer_ss = &set_result.lemma_spec_set;
-                let consumer_repository = Arc::clone(&consumer_ss.repository);
-                let (eff_from, eff_to) = consumer_ss.effective_range(spec);
+                let consumer_repository = Arc::clone(consumer_repository);
+                let (eff_from, eff_to) = consumer_spec_set.effective_range(spec);
 
                 let edges = match dependency_edges(spec, &consumer_repository, context) {
                     Ok(edges) => edges,
@@ -437,7 +447,8 @@ pub fn validate_dependency_interfaces(
                         for e in errs {
                             errors.push((
                                 Arc::clone(&consumer_repository),
-                                set_result.name.clone(),
+                                consumer_spec_name.clone(),
+                                spec,
                                 e,
                             ));
                         }
@@ -456,7 +467,8 @@ pub fn validate_dependency_interfaces(
                     else {
                         errors.push((
                             Arc::clone(&consumer_repository),
-                            set_result.name.clone(),
+                            consumer_spec_name.clone(),
+                            spec,
                             Error::validation_with_context(
                                 format!(
                                     "'{}' depends on '{}', but '{}' does not exist",
@@ -464,21 +476,101 @@ pub fn validate_dependency_interfaces(
                                 ),
                                 Some(edge.source.clone()),
                                 None::<String>,
-                                Some(Arc::clone(spec)),
+                                Some(spec),
                                 None,
                             ),
                         ));
                         continue;
                     };
-                    let dep_set_result = results
-                        .get(&edge.dep_repository)
-                        .and_then(|by_name| by_name.get(&edge.dep_name))
-                        .expect("BUG: dependency is in context but has no planning result — plan() must insert every context spec into results");
+                    let Some(dep_plans) =
+                        plan_sets.get_plans(edge.dep_repository.name.as_deref(), &edge.dep_name)
+                    else {
+                        let dep_repo = Arc::clone(&edge.dep_repository);
+                        let dep_name = edge.dep_name.clone();
+                        let all_dep_rows_failed = context
+                            .spec_set(&dep_repo, &dep_name)
+                            .expect("BUG: dependency spec set missing after existence check")
+                            .iter_specs()
+                            .all(|dep_spec| {
+                                failed_source_specs.contains(&(
+                                    Arc::clone(&dep_repo),
+                                    dep_name.clone(),
+                                    dep_spec.effective_from.clone(),
+                                ))
+                            });
+                        if all_dep_rows_failed {
+                            continue;
+                        }
+                        panic!(
+                            "BUG: dependency '{}' in context but has no planning result",
+                            dep_qualified
+                        );
+                    };
 
-                    if dep_set_result.schema_over(&eff_from, &eff_to).is_none() {
+                    let mut data_types: HashMap<String, &LemmaType> = HashMap::new();
+                    let mut rule_types: HashMap<String, &LemmaType> = HashMap::new();
+                    let mut interface_drift = false;
+                    let mut saw_overlapping_plan = false;
+
+                    let mut dep_iter = dep_plans.iter().peekable();
+                    'dep_plans: while let Some((_effective, plan)) = dep_iter.next() {
+                        let window_from = plan.effective.as_ref().cloned();
+                        let window_to = dep_iter
+                            .peek()
+                            .and_then(|(_, next)| next.effective.as_ref().cloned());
+
+                        if !super::ranges_overlap(&eff_from, &eff_to, &window_from, &window_to) {
+                            continue;
+                        }
+                        saw_overlapping_plan = true;
+
+                        for (path, data) in &plan.data {
+                            let Some(lemma_type) = data.schema_type() else {
+                                continue;
+                            };
+                            if matches!(data, DataDefinition::Reference { .. }) {
+                                continue;
+                            }
+                            let input_key = path.input_key();
+                            match data_types.get(&input_key) {
+                                Some(existing) if **existing != *lemma_type => {
+                                    interface_drift = true;
+                                    break 'dep_plans;
+                                }
+                                None => {
+                                    data_types.insert(input_key, lemma_type);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        if interface_drift {
+                            break;
+                        }
+
+                        for rule in plan.rules.values() {
+                            if !rule.path.segments.is_empty() {
+                                continue;
+                            }
+                            match rule_types.get(rule.name()) {
+                                Some(existing) if **existing != *rule.rule_type => {
+                                    interface_drift = true;
+                                    break 'dep_plans;
+                                }
+                                None => {
+                                    rule_types
+                                        .insert(rule.name().to_string(), rule.rule_type.as_ref());
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    if interface_drift || !saw_overlapping_plan {
                         errors.push((
                             Arc::clone(&consumer_repository),
-                            set_result.name.clone(),
+                            consumer_spec_name.clone(),
+                            spec,
                             Error::validation_with_context(
                                 format!(
                                     "'{}' depends on '{}' without pinning an effective date, but '{}' changed its interface between temporal slices",
@@ -489,7 +581,7 @@ pub fn validate_dependency_interfaces(
                                     "Pin '{}' to a specific effective date, or make '{}' interface-compatible across specs.",
                                     dep_qualified, dep_qualified
                                 )),
-                                Some(Arc::clone(spec)),
+                                Some(spec),
                                 None,
                             ),
                         ));
@@ -506,46 +598,39 @@ pub fn validate_dependency_interfaces(
 // Spec DAG: DFS discovery + Kahn's topological sort
 // ---------------------------------------------------------------------------
 
-/// Errors from DAG construction, distinguishing cycles (global) from other errors (per-spec).
+/// Errors from dependency discovery, distinguishing cycles (global) from other
+/// errors (per-spec).
 #[derive(Debug)]
-pub(crate) enum DagError {
+pub(crate) enum DependencyDiscoveryError {
     /// Dependency cycle detected -- global structural error.
     Cycle(Vec<Error>),
     /// Missing deps, resolution failures, etc. -- per-spec errors.
     Other(Vec<Error>),
 }
 
-/// Single-root DFS dependency discovery. Returns topo-sorted DAG containing
-/// `root` and its transitive deps, or a typed error on cycles / missing deps.
 /// Single-root DFS dependency discovery. Returns a topo-sorted list of
-/// `(owning_repository, spec)` pairs containing `root` and its transitive deps,
-/// or a typed error on cycles / missing deps.
+/// [`DependencySpec`]s containing `root` and its transitive deps, or a typed
+/// error on cycles / missing deps.
 ///
-/// Each pair is insertion-ordered (leaves first, root last) and deduplicated
-/// by `Arc::ptr_eq` on the spec.
-pub(crate) fn build_dag_for_spec(
-    context: &Context,
-    root: &Arc<LemmaSpec>,
+/// Entries are dependency-first (leaves first after Kahn sort, root last)
+/// and deduplicated by Context-owned row identity (`same_loaded_spec`).
+pub(crate) fn discover_dependency_order<'a>(
+    context: &'a Context,
+    root: &'a LemmaSpec,
     effective: &EffectiveDate,
     limits: &crate::limits::ResourceLimits,
-) -> Result<Vec<DagSpec>, DagError> {
-    // nodes: insertion-ordered, no duplicates (membership via Arc::ptr_eq).
-    let mut nodes: Vec<DagSpec> = Vec::new();
-    // edges: (from_index, to_index) into nodes — "from depends on to".
+) -> Result<Vec<DependencySpec<'a>>, DependencyDiscoveryError> {
+    let mut nodes: Vec<DependencySpec<'a>> = Vec::new();
     let mut edges: Vec<(usize, usize)> = Vec::new();
     let mut errors: Vec<Error> = Vec::new();
-    // visited: (spec pointer, effective instant) pairs already walked. Keyed
-    // on the instant as well as the spec: the same spec slice reached at two
-    // different instants (for example once through an explicit pin and once
-    // unpinned) can resolve different dependency slices, which must all be
-    // discovered.
-    let mut visited: Vec<(*const LemmaSpec, EffectiveDate)> = Vec::new();
+    // Visited: (repo name key, loaded name, loaded effective_from, resolution instant).
+    let mut visited: Vec<(Option<String>, String, EffectiveDate, EffectiveDate)> = Vec::new();
 
     let root_repository =
         lookup_owning_repository(context, root).unwrap_or_else(|| context.workspace());
     dfs_discover(
         context,
-        Arc::clone(root),
+        root,
         &root_repository,
         effective,
         &mut nodes,
@@ -557,9 +642,9 @@ pub(crate) fn build_dag_for_spec(
     );
 
     if errors.is_empty() {
-        kahns_topo_sort(&nodes, &edges).map_err(|err| DagError::Cycle(vec![err]))
+        kahns_topo_sort(&nodes, &edges).map_err(|err| DependencyDiscoveryError::Cycle(vec![err]))
     } else {
-        Err(DagError::Other(errors))
+        Err(DependencyDiscoveryError::Other(errors))
     }
 }
 
@@ -568,14 +653,14 @@ pub(crate) fn build_dag_for_spec(
 /// pass it explicitly.
 pub(crate) fn lookup_owning_repository(
     context: &Context,
-    spec: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
 ) -> Option<Arc<LemmaRepository>> {
     for (repository, inner) in context.repositories().iter() {
         for (name, set) in inner.iter() {
             if name != &spec.name {
                 continue;
             }
-            if set.iter_specs().any(|p| Arc::ptr_eq(&p, spec)) {
+            if set.iter_specs().any(|p| same_loaded_spec(p, spec)) {
                 return Some(Arc::clone(repository));
             }
         }
@@ -583,16 +668,29 @@ pub(crate) fn lookup_owning_repository(
     None
 }
 
+fn visit_key(
+    repository: &LemmaRepository,
+    spec: &LemmaSpec,
+    effective: &EffectiveDate,
+) -> (Option<String>, String, EffectiveDate, EffectiveDate) {
+    (
+        repository.name.clone(),
+        spec.name.clone(),
+        spec.effective_from.clone(),
+        effective.clone(),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
-fn dfs_discover(
-    context: &Context,
-    spec: Arc<LemmaSpec>,
+fn dfs_discover<'a>(
+    context: &'a Context,
+    spec: &'a LemmaSpec,
     consumer_repository: &Arc<LemmaRepository>,
     effective: &EffectiveDate,
-    nodes: &mut Vec<DagSpec>,
+    nodes: &mut Vec<DependencySpec<'a>>,
     edges: &mut Vec<(usize, usize)>,
     errors: &mut Vec<Error>,
-    visited: &mut Vec<(*const LemmaSpec, EffectiveDate)>,
+    visited: &mut Vec<(Option<String>, String, EffectiveDate, EffectiveDate)>,
     depth: usize,
     limits: &crate::limits::ResourceLimits,
 ) {
@@ -606,26 +704,22 @@ fn dfs_discover(
                 spec.name
             ),
             None,
-            Some(Arc::clone(&spec)),
+            Some(spec),
             None,
         ));
         return;
     }
 
-    // Walk membership is keyed on (spec pointer, effective instant): the
-    // same spec reached at a different instant can resolve different
-    // dependency slices and must be walked again. Node membership stays
-    // keyed on the spec pointer alone — each slice is one DAG node.
-    let spec_pointer: *const LemmaSpec = Arc::as_ptr(&spec);
-    if visited
-        .iter()
-        .any(|(pointer, instant)| *pointer == spec_pointer && instant == effective)
-    {
+    let key = visit_key(consumer_repository, spec, effective);
+    if visited.iter().any(|v| v == &key) {
         return;
     }
-    visited.push((spec_pointer, effective.clone()));
+    visited.push(key);
 
-    let spec_index = match nodes.iter().position(|(_, s)| Arc::ptr_eq(s, &spec)) {
+    let spec_index = match nodes
+        .iter()
+        .position(|node| same_loaded_spec(node.spec, spec))
+    {
         Some(existing_index) => existing_index,
         None => {
             if nodes.len() >= limits.max_dag_specs {
@@ -639,18 +733,21 @@ fn dfs_discover(
                         limits.max_dag_specs, spec.name
                     ),
                     None,
-                    Some(Arc::clone(&spec)),
+                    Some(spec),
                     None,
                 ));
                 return;
             }
             let new_index = nodes.len();
-            nodes.push((Arc::clone(consumer_repository), Arc::clone(&spec)));
+            nodes.push(DependencySpec {
+                repository: Arc::clone(consumer_repository),
+                spec,
+            });
             new_index
         }
     };
 
-    let edges_for_spec = match dependency_edges(&spec, consumer_repository, context) {
+    let edges_for_spec = match dependency_edges(spec, consumer_repository, context) {
         Ok(edges) => edges,
         Err(errs) => {
             errors.extend(errs);
@@ -668,7 +765,7 @@ fn dfs_discover(
             context,
             &edge.as_spec_ref(),
             consumer_repository,
-            &spec,
+            spec,
             effective,
             Some(edge.source.clone()),
         ) {
@@ -681,7 +778,7 @@ fn dfs_discover(
 
         dfs_discover(
             context,
-            Arc::clone(&dependency),
+            dependency,
             &edge.dep_repository,
             &dep_effective,
             nodes,
@@ -691,9 +788,10 @@ fn dfs_discover(
             depth + 1,
             limits,
         );
-        // A limit rejection above returns without inserting the dependency;
-        // the recorded error fails planning, so skip the edge.
-        let Some(dep_index) = nodes.iter().position(|(_, s)| Arc::ptr_eq(s, &dependency)) else {
+        let Some(dep_index) = nodes
+            .iter()
+            .position(|node| same_loaded_spec(node.spec, dependency))
+        else {
             assert!(
                 !errors.is_empty(),
                 "BUG: dependency absent from nodes without a recorded error"
@@ -707,8 +805,11 @@ fn dfs_discover(
 /// Kahn's topological sort over an index-based edge list.
 ///
 /// `nodes` is insertion-ordered; `edges` are `(from, to)` index pairs.
-/// Returns `(repo, spec)` pairs in dependency-first order (leaves first, root last).
-fn kahns_topo_sort(nodes: &[DagSpec], edges: &[(usize, usize)]) -> Result<Vec<DagSpec>, Error> {
+/// Returns dependency specs in dependency-first order (leaves first, root last).
+fn kahns_topo_sort<'a>(
+    nodes: &[DependencySpec<'a>],
+    edges: &[(usize, usize)],
+) -> Result<Vec<DependencySpec<'a>>, Error> {
     let n = nodes.len();
     let mut in_degree = vec![0usize; n];
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
@@ -719,10 +820,13 @@ fn kahns_topo_sort(nodes: &[DagSpec], edges: &[(usize, usize)]) -> Result<Vec<Da
     }
 
     let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_degree[i] == 0).collect();
-    let mut result: Vec<DagSpec> = Vec::with_capacity(n);
+    let mut result: Vec<DependencySpec<'a>> = Vec::with_capacity(n);
 
     while let Some(idx) = queue.pop_front() {
-        result.push((Arc::clone(&nodes[idx].0), Arc::clone(&nodes[idx].1)));
+        result.push(DependencySpec {
+            repository: Arc::clone(&nodes[idx].repository),
+            spec: nodes[idx].spec,
+        });
         for &neighbor in &adjacency[idx] {
             in_degree[neighbor] -= 1;
             if in_degree[neighbor] == 0 {
@@ -736,7 +840,7 @@ fn kahns_topo_sort(nodes: &[DagSpec], edges: &[(usize, usize)]) -> Result<Vec<Da
             .iter()
             .enumerate()
             .filter(|(_, &deg)| deg > 0)
-            .map(|(i, _)| nodes[i].1.name.clone())
+            .map(|(i, _)| nodes[i].spec.name.clone())
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -768,9 +872,9 @@ mod tests {
     };
     use crate::parsing::source::Source;
 
-    fn dag_errors(e: DagError) -> Vec<Error> {
+    fn discovery_errors(e: DependencyDiscoveryError) -> Vec<Error> {
         match e {
-            DagError::Cycle(e) | DagError::Other(e) => e,
+            DependencyDiscoveryError::Cycle(e) | DependencyDiscoveryError::Other(e) => e,
         }
     }
 
@@ -811,10 +915,10 @@ mod tests {
         })
     }
 
-    fn alpha2_slice_2024() -> Arc<LemmaSpec> {
+    fn alpha2_slice_2024() -> LemmaSpec {
         let mut s = LemmaSpec::new("alpha2".to_string());
         s.effective_from = EffectiveDate::from_option(Some(date(2024, 1, 1)));
-        Arc::new(s)
+        s
     }
 
     fn consumer_alias_from_alpha2() -> LemmaSpec {
@@ -870,23 +974,49 @@ mod tests {
         s
     }
 
+    /// `plan` inserts every successfully planned spec into the plan sets
+    /// before interface validation runs. A dependency that exists in the
+    /// context, did not fail planning, and is still absent from the plan sets
+    /// means the planning pipeline skipped a spec — a bug. Skipping the
+    /// interface check silently would let a consumer keep plans validated
+    /// against nothing. Must crash.
+    #[test]
+    #[should_panic(expected = "BUG")]
+    fn validate_panics_when_healthy_dep_in_context_but_unplanned() {
+        let mut ctx = Context::new();
+        let repository = ctx.workspace();
+
+        let dep = LemmaSpec::new("dep".to_string());
+        ctx.insert_spec(Arc::clone(&repository), dep)
+            .expect("insert dep");
+
+        let consumer = spec_with_dep("consumer", None, "dep", None, None);
+        ctx.insert_spec(Arc::clone(&repository), consumer)
+            .expect("insert consumer");
+
+        // Dep is in the context, healthy, but was never planned into plans.
+        let plan_sets = crate::planning::PlanStore::new();
+        let missing_repository_source_specs = HashSet::new();
+
+        let _ = validate_dependency_interfaces(
+            &ctx,
+            &plan_sets,
+            &missing_repository_source_specs,
+            &HashSet::new(),
+        );
+    }
+
     #[test]
     fn dag_error_unqualified_missing_dep_includes_parent_and_resolve_instant() {
         let mut ctx = Context::new();
         let repository = ctx.workspace();
-        let consumer = Arc::new(spec_with_dep(
-            "consumer",
-            Some(date(2025, 1, 1)),
-            "dep",
-            None,
-            None,
-        ));
-        ctx.insert_spec(Arc::clone(&repository), Arc::clone(&consumer))
+        let consumer = spec_with_dep("consumer", Some(date(2025, 1, 1)), "dep", None, None);
+        ctx.insert_spec(Arc::clone(&repository), consumer.clone())
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(
-            build_dag_for_spec(
+        let errs = discovery_errors(
+            discover_dependency_order(
                 &ctx,
                 &consumer,
                 &effective,
@@ -915,19 +1045,19 @@ mod tests {
     fn dag_error_qualified_missing_dep_mentions_qualifier_instant() {
         let mut ctx = Context::new();
         let repository = ctx.workspace();
-        let consumer = Arc::new(spec_with_dep(
+        let consumer = spec_with_dep(
             "consumer",
             Some(date(2025, 1, 1)),
             "dep",
             Some(date(2025, 8, 1)),
             None,
-        ));
-        ctx.insert_spec(Arc::clone(&repository), Arc::clone(&consumer))
+        );
+        ctx.insert_spec(Arc::clone(&repository), consumer.clone())
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(
-            build_dag_for_spec(
+        let errs = discovery_errors(
+            discover_dependency_order(
                 &ctx,
                 &consumer,
                 &effective,
@@ -969,25 +1099,28 @@ mod tests {
         // Insert a registry-bound spec so the repository qualifier resolves but
         // the *requested* spec is missing — exercising the "registry dep
         // missing" branch of the suggestion text.
-        let registry_spec = Arc::new(LemmaSpec::new("other_spec".to_string()));
+        let registry_spec = LemmaSpec::new("other_spec".to_string());
         ctx.insert_spec(Arc::clone(&registry_repository), registry_spec)
             .unwrap();
 
-        let consumer = Arc::new(spec_with_dep(
+        let consumer = spec_with_dep(
             "consumer",
             Some(date(2025, 1, 1)),
             "missing",
             None,
             Some(RepositoryQualifier::new("@org/pkg")),
-        ));
-        ctx.insert_spec(Arc::clone(&repository), Arc::clone(&consumer))
-            .unwrap();
+        );
+        ctx.insert_spec(Arc::clone(&repository), consumer).unwrap();
 
+        let consumer = ctx
+            .spec_set(&repository, "consumer")
+            .and_then(|ss| ss.get_exact(Some(&date(2025, 1, 1))))
+            .expect("consumer inserted");
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(
-            build_dag_for_spec(
+        let errs = discovery_errors(
+            discover_dependency_order(
                 &ctx,
-                &consumer,
+                consumer,
                 &effective,
                 &crate::ResourceLimits::default(),
             )
@@ -1006,19 +1139,13 @@ mod tests {
     fn dag_error_has_source_location() {
         let mut ctx = Context::new();
         let repository = ctx.workspace();
-        let consumer = Arc::new(spec_with_dep(
-            "consumer",
-            Some(date(2025, 1, 1)),
-            "dep",
-            None,
-            None,
-        ));
-        ctx.insert_spec(Arc::clone(&repository), Arc::clone(&consumer))
+        let consumer = spec_with_dep("consumer", Some(date(2025, 1, 1)), "dep", None, None);
+        ctx.insert_spec(Arc::clone(&repository), consumer.clone())
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2025, 1, 1));
-        let errs = dag_errors(
-            build_dag_for_spec(
+        let errs = discovery_errors(
+            discover_dependency_order(
                 &ctx,
                 &consumer,
                 &effective,
@@ -1041,8 +1168,8 @@ mod tests {
         let workspace = ctx.workspace();
         ctx.insert_spec(Arc::clone(&iso_repo), alpha2_slice_2024())
             .unwrap();
-        let consumer = Arc::new(consumer_alias_from_alpha2());
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
+        let consumer = consumer_alias_from_alpha2();
+        ctx.insert_spec(Arc::clone(&workspace), consumer.clone())
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2024, 6, 1));
@@ -1086,18 +1213,17 @@ mod tests {
         let workspace = ctx.workspace();
         let mut finance_2026 = LemmaSpec::new("finance".to_string());
         finance_2026.effective_from = EffectiveDate::from_option(Some(date(2026, 1, 1)));
-        ctx.insert_spec(Arc::clone(&workspace), Arc::new(finance_2026))
+        ctx.insert_spec(Arc::clone(&workspace), finance_2026)
             .unwrap();
-        let consumer_arc = Arc::new(consumer);
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer_arc))
+        ctx.insert_spec(Arc::clone(&workspace), consumer.clone())
             .unwrap();
 
         let (resolved, effective_ref) = resolve_spec_ref_after_expanding_uses_aliases(
             &ctx,
             &inner,
-            Some(&consumer_arc.data[0].source_location),
+            Some(&consumer.data[0].source_location),
             "finance",
-            Some(Arc::clone(&consumer_arc)),
+            Some(&consumer),
         )
         .expect("uses finance 2026-01-01 must resolve when alias equals target name");
 
@@ -1126,8 +1252,7 @@ mod tests {
             },
             dummy_source(),
         ));
-        ctx.insert_spec(Arc::clone(&workspace), Arc::new(origin))
-            .unwrap();
+        ctx.insert_spec(Arc::clone(&workspace), origin).unwrap();
         let mut consumer = LemmaSpec::new("finance".to_string());
         consumer.effective_from = EffectiveDate::from_option(Some(date(2026, 5, 20)));
         consumer.data.push(LemmaData::new(
@@ -1141,9 +1266,12 @@ mod tests {
             }),
             dummy_source(),
         ));
-        let consumer = Arc::new(consumer);
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
-            .unwrap();
+        let consumer_effective = consumer.effective_from.clone();
+        ctx.insert_spec(Arc::clone(&workspace), consumer).unwrap();
+        let consumer = ctx
+            .spec_set(&workspace, "finance")
+            .and_then(|ss| ss.get_exact(Some(&date(2026, 5, 20))))
+            .expect("inserted 2026 finance slice");
 
         let err = resolve_spec_ref(
             &ctx,
@@ -1155,8 +1283,8 @@ mod tests {
                 target_span: None,
             },
             &workspace,
-            &consumer,
-            &consumer.effective_from,
+            consumer,
+            &consumer_effective,
             None,
         )
         .expect_err("finance 2027 row does not exist");
@@ -1170,13 +1298,13 @@ mod tests {
 
     #[test]
     fn resolve_spec_ref_rejects_effective_on_bare_from_uses_alias() {
-        let consumer = Arc::new(consumer_alias_from_alpha2());
+        let consumer = consumer_alias_from_alpha2();
         let mut ctx = Context::new();
         let iso_repo = registry_iso_repository();
         let workspace = ctx.workspace();
         ctx.insert_spec(Arc::clone(&iso_repo), alpha2_slice_2024())
             .unwrap();
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
+        ctx.insert_spec(Arc::clone(&workspace), consumer.clone())
             .unwrap();
 
         let effective = EffectiveDate::DateTimeValue(date(2024, 6, 1));
@@ -1207,8 +1335,8 @@ mod tests {
         let workspace = ctx.workspace();
         ctx.insert_spec(Arc::clone(&iso_repo), alpha2_slice_2024())
             .unwrap();
-        let consumer = Arc::new(consumer_alias_from_alpha2());
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&consumer))
+        let consumer = consumer_alias_from_alpha2();
+        ctx.insert_spec(Arc::clone(&workspace), consumer.clone())
             .unwrap();
 
         let edges = dependency_edges(&consumer, &workspace, &ctx).expect("dependency_edges");
@@ -1229,7 +1357,7 @@ mod tests {
     fn dependency_edges_qualified_parent_resolves_uses_alias() {
         let mut ctx = Context::new();
         let workspace = ctx.workspace();
-        let child = Arc::new(LemmaSpec::new("child".to_string()));
+        let child = LemmaSpec::new("child".to_string());
         let mut dep = LemmaSpec::new("dep".to_string());
         dep.data.push(LemmaData::new(
             Reference::local("c".to_string()),
@@ -1253,10 +1381,10 @@ mod tests {
             },
             dummy_source(),
         ));
-        let dep = Arc::new(dep);
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&child))
+        let dep = dep;
+        ctx.insert_spec(Arc::clone(&workspace), child.clone())
             .unwrap();
-        ctx.insert_spec(Arc::clone(&workspace), Arc::clone(&dep))
+        ctx.insert_spec(Arc::clone(&workspace), dep.clone())
             .unwrap();
 
         let edges = dependency_edges(&dep, &workspace, &ctx).expect("edges");
@@ -1308,21 +1436,23 @@ data money: measure
         let mut ctx = Context::new();
         let workspace = ctx.workspace();
         for spec in specs {
-            ctx.insert_spec(Arc::clone(&workspace), Arc::new(spec))
-                .unwrap();
+            ctx.insert_spec(Arc::clone(&workspace), spec).unwrap();
         }
         let consumer = ctx
             .spec_set(&workspace, "consumer")
             .and_then(|ss| ss.spec_at(&EffectiveDate::from_option(Some(date(2025, 3, 1)))))
             .expect("consumer");
-        let dag = build_dag_for_spec(
+        let ordered_dependencies = discover_dependency_order(
             &ctx,
-            &consumer,
+            consumer,
             &EffectiveDate::from_option(Some(date(2025, 3, 1))),
             &crate::ResourceLimits::default(),
         )
-        .expect("DAG must not reference unresolved alias `c`");
-        let names: Vec<_> = dag.iter().map(|(_, s)| s.name.as_str()).collect();
+        .expect("dependency order must not reference unresolved alias `c`");
+        let names: Vec<_> = ordered_dependencies
+            .iter()
+            .map(|n| n.spec.name.as_str())
+            .collect();
         assert!(names.contains(&"child"));
         assert!(names.contains(&"dep"));
         assert!(!names.contains(&"c"));

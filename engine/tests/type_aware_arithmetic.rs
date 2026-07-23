@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -62,10 +62,10 @@ rule test_passes: result is expected
 "#;
 
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
     let now = lemma::DateTimeValue::now();
     let response = engine
@@ -74,8 +74,8 @@ rule test_passes: result is expected
             "test_number_times_percentage",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 
@@ -104,10 +104,10 @@ rule test_passes: final_price is expected
 "#;
 
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
     let now = lemma::DateTimeValue::now();
     let response = engine
@@ -116,8 +116,8 @@ rule test_passes: final_price is expected
             "test_with_rule_reference",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 

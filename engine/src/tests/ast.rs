@@ -1,4 +1,5 @@
 use crate::computation::rational::rational_new;
+use crate::literals::DateGranularity;
 use crate::parsing::ast::*;
 use crate::planning::semantics::{
     date_time_to_semantic, primitive_time, time_to_semantic, BaseMeasureVector, LemmaType,
@@ -59,7 +60,7 @@ fn test_literal_value_to_primitive_type() {
                 decomposition: BaseMeasureVector::new(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: None,
+                suggestion_magnitude: None,
             }]),
             traits: vec![MeasureTrait::Duration],
             decomposition: None,
@@ -106,7 +107,7 @@ fn test_comparison_operator_display() {
 fn test_conversion_target_display() {
     assert_eq!(
         format!("{}", ConversionTarget::Type(PrimitiveKind::Number)),
-        "Number"
+        "number"
     );
 }
 
@@ -250,14 +251,14 @@ fn test_literal_value_display_value() {
             maximum: None,
             decimals: None,
             units: MeasureUnits::from(vec![MeasureUnit {
-                name: "hours".to_string(),
+                name: "hour".to_string(),
                 factor: crate::computation::rational::decimal_to_rational(Decimal::from(3600))
                     .expect("3600 must be exact decimal ratio"),
                 derived_measure_factors: Vec::new(),
                 decomposition: BaseMeasureVector::new(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: None,
+                suggestion_magnitude: None,
             }]),
             traits: vec![MeasureTrait::Duration],
             decomposition: None,
@@ -268,11 +269,11 @@ fn test_literal_value_display_value() {
     assert_eq!(
         LiteralValue::measure_with_type(
             ten_hours_canonical,
-            "hours".to_string(),
+            "hour".to_string(),
             std::sync::Arc::new(dur_type),
         )
         .display_value(),
-        "10 hours"
+        "10 hour"
     );
 }
 

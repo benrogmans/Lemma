@@ -6,7 +6,8 @@ use std::collections::HashMap;
 fn test_equal_operator_numbers() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_equal_numbers
 
@@ -16,9 +17,9 @@ data c: 100
 
 rule equal_true: a is b
 rule equal_false: a is c
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -28,8 +29,8 @@ rule equal_false: a is c
             "test_equal_numbers",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 
@@ -44,7 +45,8 @@ rule equal_false: a is c
 fn test_equal_operator_text() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_equal_text
 
@@ -53,9 +55,9 @@ data other: "world"
 
 rule same_greeting: greeting is "hello"
 rule different_greeting: greeting is other
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -65,8 +67,8 @@ rule different_greeting: greeting is other
             "test_equal_text",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 
@@ -81,7 +83,8 @@ rule different_greeting: greeting is other
 fn test_equal_operator_booleans() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_equal_booleans
 
@@ -91,9 +94,9 @@ data flag_c: false
 
 rule both_true: flag_a is flag_b
 rule mixed: flag_a is flag_c
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -103,8 +106,8 @@ rule mixed: flag_a is flag_c
             "test_equal_booleans",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 
@@ -119,7 +122,8 @@ rule mixed: flag_a is flag_c
 fn test_equal_operator_in_conditions() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_equal_conditions
 
@@ -129,9 +133,9 @@ data count: 10
 rule message: "inactive"
   unless status is "active" then "active"
   unless count is 10 then "count is 10"
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -141,8 +145,8 @@ rule message: "inactive"
             "test_equal_conditions",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 

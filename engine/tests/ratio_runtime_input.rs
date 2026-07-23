@@ -22,12 +22,12 @@ fn decimal_lit(d: &str) -> Decimal {
 
 fn load(engine: &mut Engine, code: &str) {
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "ratio_in.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -43,7 +43,7 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, true, None)
+        .run(None, spec, Some(&now), data, None, true)
         .unwrap_or_else(|e| panic!("run failed for input '{raw}': {e}"));
     let rr = resp
         .results
@@ -77,7 +77,7 @@ fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, true, None)
+        .run(None, spec, Some(&now), data, None, true)
         .unwrap_or_else(|e| panic!("run must complete with veto, not Error for '{raw}': {e}"));
     let rr = resp
         .results

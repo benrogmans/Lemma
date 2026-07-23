@@ -8,22 +8,19 @@ use std::collections::HashMap;
 fuzz_target!(|data: &[u8]| {
     if let Ok(s) = std::str::from_utf8(data) {
         let mut engine = Engine::new();
-        let loaded = engine.load(
-            s,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_input"))),
-        );
+        let loaded = engine.load([(lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_input"))), s.to_string())]);
 
         // Property: load Ok => every loaded spec must evaluate without panic.
         if loaded.is_ok() {
             let now = DateTimeValue::now();
             let spec_names: Vec<String> = engine
-                .get_workspace()
-                .specs
+                .list()
                 .iter()
-                .map(|ss| ss.name.clone())
-                .collect();
+                .find(|r| r.repository.name.is_none())
+                .map(|r| r.specs.iter().map(|ls| ls.name.clone()).collect())
+                .unwrap_or_default();
             for name in spec_names {
-                let _ = engine.run(None, &name, Some(&now), HashMap::new(), false, None);
+                let _ = engine.run(None, &name, Some(&now), HashMap::new(), None, false);
             }
         }
     }

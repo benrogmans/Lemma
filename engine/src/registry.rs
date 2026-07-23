@@ -10,11 +10,12 @@
 //! Input to all methods is the full repository name as it appears in source
 //! (e.g. `"@org/project"` including the `@` prefix).
 
-use crate::parsing::ast::DateTimeValue;
 #[cfg(feature = "registry")]
+use crate::parsing::ast::DateTimeValue;
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 use crate::parsing::ast::LemmaRepository;
 use std::fmt;
-#[cfg(feature = "registry")]
+#[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 use std::sync::Arc;
 
 #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
@@ -37,13 +38,11 @@ use {
 /// A bundle of Lemma source text returned by the Registry.
 ///
 /// Contains one or more `spec ...` blocks as raw Lemma source code.
+#[cfg(feature = "registry")]
 #[derive(Debug, Clone)]
 pub struct RegistryBundle {
-    /// Lemma source containing one or more `spec ...` blocks.
-    pub lemma_source: String,
-
-    /// Source identifier used for diagnostics and explanations
-    pub source_type: crate::parsing::source::SourceType,
+    pub repository: String,
+    pub source: String,
 }
 
 /// The kind of failure that occurred during a Registry operation.
@@ -78,18 +77,21 @@ impl fmt::Display for RegistryErrorKind {
 }
 
 /// An error returned by a Registry implementation.
+#[cfg(feature = "registry")]
 #[derive(Debug, Clone)]
 pub struct RegistryError {
     pub message: String,
     pub kind: RegistryErrorKind,
 }
 
+#[cfg(feature = "registry")]
 impl fmt::Display for RegistryError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.message)
     }
 }
 
+#[cfg(feature = "registry")]
 impl std::error::Error for RegistryError {}
 
 /// Trait for resolving external repository references.
@@ -103,13 +105,14 @@ impl std::error::Error for RegistryError {}
 /// references and `uses`-backed type parents from specs share this resolution path.
 ///
 /// `name` is the full repository name as it appears in source (e.g. `"@org/project"`).
+#[cfg(feature = "registry")]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 pub trait Registry: Send + Sync {
     /// Fetch all temporal versions for a repository identifier.
     ///
     /// `name` is the full repository name (e.g. `"@org/project"`).
-    /// Returns a bundle whose `lemma_source` contains all temporal versions.
+    /// Returns a bundle whose `source` contains all temporal versions.
     async fn get(&self, name: &str) -> Result<RegistryBundle, RegistryError>;
 
     /// Map a repository identifier to a human-facing address for navigation.
@@ -390,7 +393,7 @@ impl LemmaBase {
         let url = self.source_url(name, None);
         let display = Self::display_id(name, None);
 
-        let lemma_source = self.fetcher.get(&url).await.map_err(|error| {
+        let source = self.fetcher.get(&url).await.map_err(|error| {
             if let Some(code) = error.status_code {
                 let kind = match code {
                     404 => RegistryErrorKind::NotFound,
@@ -414,10 +417,8 @@ impl LemmaBase {
         })?;
 
         Ok(RegistryBundle {
-            lemma_source,
-            source_type: crate::parsing::source::SourceType::Registry(Arc::new(
-                LemmaRepository::new(Some(name.to_string())),
-            )),
+            repository: name.to_string(),
+            source,
         })
     }
 }
@@ -486,8 +487,8 @@ pub async fn resolve_registry_references(
 
             let bundle_result = registry.get(&reference.repository.name).await;
 
-            let bundle = match bundle_result {
-                Ok(b) => b,
+            let dependency = match bundle_result {
+                Ok(d) => d,
                 Err(registry_error) => {
                     let suggestion = match &registry_error.kind {
                         RegistryErrorKind::NotFound => Some(
@@ -520,33 +521,33 @@ pub async fn resolve_registry_references(
                 }
             };
 
-            sources.insert(bundle.source_type.clone(), bundle.lemma_source.clone());
+            let source_type =
+                crate::parsing::source::SourceType::Dependency(dependency.repository.clone());
+            sources.insert(source_type.clone(), dependency.source.clone());
 
-            let parsed = match crate::parsing::parse(
-                &bundle.lemma_source,
-                bundle.source_type.clone(),
-                limits,
-            ) {
-                Ok(result) => result,
-                Err(e) => {
-                    round_errors.push(e);
-                    return Err(round_errors);
-                }
-            };
+            let parsed =
+                match crate::parsing::parse(&dependency.source, source_type.clone(), limits) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        round_errors.push(e);
+                        return Err(round_errors);
+                    }
+                };
 
             for (parsed_repo, specs) in parsed.repositories {
                 let repo_name = parsed_repo
                     .name
                     .clone()
                     .unwrap_or_else(|| reference.repository.name.clone());
+                let dep_id = reference.repository.name.clone();
                 let header = LemmaRepository::new(Some(repo_name))
-                    .with_dependency(reference.repository.name.clone())
+                    .with_dependency(dep_id.clone())
                     .with_start_line(parsed_repo.start_line)
-                    .with_source_type(bundle.source_type.clone());
+                    .with_source_type(source_type.clone());
                 let repository_arc = Arc::new(header);
 
                 for spec in specs {
-                    if let Err(e) = ctx.insert_spec(Arc::clone(&repository_arc), Arc::new(spec)) {
+                    if let Err(e) = ctx.insert_spec(Arc::clone(&repository_arc), spec) {
                         round_errors.push(e);
                     }
                 }
@@ -609,8 +610,6 @@ fn find_missing_repositories(
     let mut seen_in_this_round: HashSet<String> = HashSet::new();
 
     for spec in ctx.iter() {
-        let spec = spec.as_ref();
-
         for data in &spec.data {
             // `uses <repository> <spec>`
             if let DataValue::Import(spec_ref) = &data.value {
@@ -636,7 +635,7 @@ fn find_missing_repositories(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::{Context, Engine};
+    use crate::engine::Context;
     use crate::literals::DateGranularity;
 
     /// A test Registry that returns predefined bundles keyed by name.
@@ -652,14 +651,12 @@ mod tests {
         }
 
         /// Add a bundle containing all zones for this identifier (e.g. `"@org/repo"`).
-        fn add_spec_bundle(&mut self, identifier: &str, lemma_source: &str) {
+        fn add_spec_bundle(&mut self, identifier: &str, source: &str) {
             self.bundles.insert(
                 identifier.to_string(),
                 RegistryBundle {
-                    lemma_source: lemma_source.to_string(),
-                    source_type: crate::parsing::source::SourceType::Registry(Arc::new(
-                        LemmaRepository::new(Some(identifier.to_string())),
-                    )),
+                    repository: identifier.to_string(),
+                    source: source.to_string(),
                 },
             );
         }
@@ -690,7 +687,36 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    fn context_with_embedded_stdlib() -> Context {
+        use crate::engine::EMBEDDED_STDLIB_REPOSITORY;
+        use crate::parsing::ast::LemmaRepository;
+        use crate::parsing::source::SourceType;
+        use crate::stdlib::UNITS_LEMMA;
+
+        let mut ctx = Context::new();
+        let source_type = SourceType::Dependency(EMBEDDED_STDLIB_REPOSITORY.to_string());
+        let parsed = crate::parse(UNITS_LEMMA, source_type, &ResourceLimits::default())
+            .expect("BUG: embedded stdlib must parse");
+        for (parsed_repo, specs) in &parsed.repositories {
+            let repository_arc = Arc::new(
+                LemmaRepository::new(
+                    parsed_repo
+                        .name
+                        .clone()
+                        .or_else(|| Some(EMBEDDED_STDLIB_REPOSITORY.to_string())),
+                )
+                .with_dependency(EMBEDDED_STDLIB_REPOSITORY)
+                .with_start_line(parsed_repo.start_line),
+            );
+            for spec in specs {
+                ctx.insert_spec(Arc::clone(&repository_arc), spec.clone())
+                    .expect("BUG: embedded stdlib must load");
+            }
+        }
+        ctx
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_with_no_registry_references_returns_local_specs_unchanged() {
         let source = r#"spec example
 data price: 100"#;
@@ -701,12 +727,11 @@ data price: 100"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in &local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec.clone()))
+                .insert_spec(Arc::clone(&local_repository), spec.clone())
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -716,18 +741,27 @@ data price: 100"#;
         );
 
         let registry = TestRegistry::new();
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(store.len(), 2, "embedded spec units plus workspace example");
+        assert_eq!(
+            store.iter().count(),
+            2,
+            "embedded spec units plus workspace example"
+        );
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "example"));
         assert!(names.iter().any(|n| n == "units"));
     }
 
     /// Mirrors `lemma fetch --all`: bare `Context::new()` without embedded stdlib.
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_does_not_fetch_non_at_qualified_repositories() {
         let local_source = r#"spec burn_baby_burn
 uses lemma units
@@ -743,7 +777,7 @@ rule x: 1 hour"#;
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -768,7 +802,7 @@ rule x: 1 hour"#;
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_fetches_single_spec_from_registry() {
         let local_source = r#"spec main_spec
 uses external: @org/project helper
@@ -780,12 +814,11 @@ rule value: external.quantity"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -802,18 +835,23 @@ spec helper
 data quantity: 42"#,
         );
 
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(store.len(), 3);
+        assert_eq!(store.iter().count(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "helper"));
         assert!(names.iter().any(|n| n == "units"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_registry_bundle_without_repo_decl_uses_reference_repository_name() {
         let local_source = r#"spec main_spec
 uses external: @org/project helper
@@ -825,12 +863,11 @@ rule value: external.quantity"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -846,9 +883,14 @@ rule value: external.quantity"#;
 data quantity: 42"#,
         );
 
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
         let ext_repo = store
             .find_repository("@org/project")
@@ -867,7 +909,7 @@ data quantity: 42"#,
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn get_returns_all_zones_and_url_for_id_supports_effective() {
         let effective = DateTimeValue {
             year: 2026,
@@ -888,8 +930,8 @@ data quantity: 42"#,
         );
 
         let bundle = registry.get("@org/spec").await.unwrap();
-        assert!(bundle.lemma_source.contains("data x: 1"));
-        assert!(bundle.lemma_source.contains("data x: 2"));
+        assert!(bundle.source.contains("data x: 1"));
+        assert!(bundle.source.contains("data x: 2"));
 
         assert_eq!(
             registry.url_for_id("@org/spec", None),
@@ -901,7 +943,7 @@ data quantity: 42"#,
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_fetches_transitive_dependencies() {
         let local_source = r#"spec main_spec
 uses a: @org/project spec_a"#;
@@ -912,12 +954,11 @@ uses a: @org/project spec_a"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -940,11 +981,16 @@ spec spec_b
 data value: 99"#,
         );
 
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(store.len(), 4);
+        assert_eq!(store.iter().count(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "spec_a"));
@@ -952,7 +998,7 @@ data value: 99"#,
         assert!(names.iter().any(|n| n == "units"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_handles_bundle_with_multiple_specs() {
         let local_source = r#"spec main_spec
 uses a: @org/project spec_a"#;
@@ -963,12 +1009,11 @@ uses a: @org/project spec_a"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -988,11 +1033,16 @@ spec spec_b
 data value: 99"#,
         );
 
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(store.len(), 4);
+        assert_eq!(store.iter().count(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "spec_a"));
@@ -1000,7 +1050,7 @@ data value: 99"#,
         assert!(names.iter().any(|n| n == "units"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_returns_registry_error_when_registry_fails() {
         let local_source = r#"spec main_spec
 uses external: @org/project missing"#;
@@ -1011,12 +1061,11 @@ uses external: @org/project missing"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -1027,9 +1076,13 @@ uses external: @org/project missing"#;
 
         let registry = TestRegistry::new(); // empty — no bundles
 
-        let result =
-            resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-                .await;
+        let result = resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
         let errs = result.unwrap_err();
@@ -1065,7 +1118,7 @@ uses external: @org/project missing"#;
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_returns_all_registry_errors_when_multiple_repositorys_fail() {
         let local_source = r#"spec main_spec
 uses @org/example helper
@@ -1078,12 +1131,11 @@ data country: alpha2.code"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -1094,9 +1146,13 @@ data country: alpha2.code"#;
 
         let registry = TestRegistry::new(); // empty — no bundles
 
-        let result =
-            resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-                .await;
+        let result = resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await;
 
         assert!(result.is_err(), "Should fail when Registry cannot resolve");
         let errors = result.unwrap_err();
@@ -1122,7 +1178,7 @@ data country: alpha2.code"#;
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_does_not_request_same_repository_twice() {
         let local_source = r#"spec spec_one
 uses a: @org/shared shared
@@ -1136,12 +1192,11 @@ uses b: @org/shared shared"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -1158,17 +1213,22 @@ spec shared
 data value: 1"#,
         );
 
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(store.len(), 4);
+        assert_eq!(store.iter().count(), 4);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "shared"));
         assert!(names.iter().any(|n| n == "units"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn resolve_handles_data_import_from_registry() {
         let local_source = r#"spec main_spec
 uses @iso/countries alpha2
@@ -1181,12 +1241,11 @@ data home: country"#;
         )
         .unwrap()
         .into_flattened_specs();
-        let mut engine = Engine::new();
-        let store = engine.specs_mut();
+        let mut store = context_with_embedded_stdlib();
         let local_repository = store.workspace();
         for spec in local_specs {
             store
-                .insert_spec(Arc::clone(&local_repository), Arc::new(spec))
+                .insert_spec(Arc::clone(&local_repository), spec)
                 .unwrap();
         }
         let mut sources: HashMap<crate::parsing::source::SourceType, String> = HashMap::new();
@@ -1204,11 +1263,16 @@ data code: text
  -> option "NL""#,
         );
 
-        resolve_registry_references(store, &mut sources, &registry, &ResourceLimits::default())
-            .await
-            .unwrap();
+        resolve_registry_references(
+            &mut store,
+            &mut sources,
+            &registry,
+            &ResourceLimits::default(),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(store.len(), 3);
+        assert_eq!(store.iter().count(), 3);
         let names: Vec<String> = store.iter().map(|a| a.name.clone()).collect();
         assert!(names.iter().any(|n| n == "main_spec"));
         assert!(names.iter().any(|n| n == "alpha2"));
@@ -1417,14 +1481,14 @@ data code: text
         // fetch_source tests (mock-based, no real HTTP calls)
         // -------------------------------------------------------------------
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn test_mode_serves_bundled_fixtures() {
             let registry = LemmaBase::test();
             let iso = registry.get("@iso/countries").await.unwrap();
-            assert!(iso.lemma_source.contains("spec alpha2"));
+            assert!(iso.source.contains("spec alpha2"));
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_returns_bundle_on_success() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec org/my_spec\ndata x: 1",
@@ -1432,11 +1496,11 @@ data code: text
 
             let bundle = registry.fetch_source("@org/my_spec").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "spec org/my_spec\ndata x: 1");
-            assert_eq!(bundle.source_type.to_string(), "@org/my_spec");
+            assert_eq!(bundle.source, "spec org/my_spec\ndata x: 1");
+            assert_eq!(bundle.repository, "@org/my_spec");
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_passes_correct_url_to_fetcher() {
             let captured_url = Arc::new(Mutex::new(String::new()));
             let captured = captured_url.clone();
@@ -1454,7 +1518,7 @@ data code: text
             );
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_404_to_not_found() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
@@ -1474,7 +1538,7 @@ data code: text
             );
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_500_to_server_error() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(500)));
@@ -1489,7 +1553,7 @@ data code: text
             );
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_401_to_unauthorized() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(401)));
@@ -1500,7 +1564,7 @@ data code: text
             assert!(err.message.contains("HTTP 401"));
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_403_to_unauthorized() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(403)));
@@ -1515,7 +1579,7 @@ data code: text
             );
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_unexpected_status_to_other() {
             let registry =
                 LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(418)));
@@ -1526,7 +1590,7 @@ data code: text
             assert!(err.message.contains("HTTP 418"));
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_network_error_to_network_error_kind() {
             let registry = LemmaBase::with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error("connection refused"),
@@ -1547,7 +1611,7 @@ data code: text
             );
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_dns_error_to_network_error_kind() {
             let registry = LemmaBase::with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error(
@@ -1574,7 +1638,7 @@ data code: text
         // Registry trait delegation tests (mock-based)
         // -------------------------------------------------------------------
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn get_delegates_to_fetch_source() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec org/resolved\ndata a: 1",
@@ -1582,18 +1646,18 @@ data code: text
 
             let bundle = registry.get("@org/resolved").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "spec org/resolved\ndata a: 1");
-            assert_eq!(bundle.source_type.to_string(), "@org/resolved");
+            assert_eq!(bundle.source, "spec org/resolved\ndata a: 1");
+            assert_eq!(bundle.repository, "@org/resolved");
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_returns_empty_body_as_valid_bundle() {
             let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning("")));
 
             let bundle = registry.fetch_source("@org/empty").await.unwrap();
 
-            assert_eq!(bundle.lemma_source, "");
-            assert_eq!(bundle.source_type.to_string(), "@org/empty");
+            assert_eq!(bundle.source, "");
+            assert_eq!(bundle.repository, "@org/empty");
         }
     }
 }

@@ -2,10 +2,9 @@ use crate::error::Error;
 use crate::limits::ResourceLimits;
 use crate::parsing::ast::{try_parse_type_constraint_command, *};
 use crate::parsing::lexer::{
-    can_be_label, can_be_reference_segment, can_be_repository_qualifier_segment,
-    is_boolean_keyword, is_keyword, is_math_function, is_spec_body_keyword,
-    token_is_calendar_period_marker, token_kind_to_boolean_value, token_kind_to_primitive, Lexer,
-    LexerCheckpoint, Token, TokenKind,
+    can_be_label, can_be_repository_qualifier_segment, is_boolean_keyword, is_keyword,
+    is_math_function, is_spec_body_keyword, token_is_calendar_period_marker,
+    token_kind_to_boolean_value, token_kind_to_primitive, Lexer, LexerCheckpoint, Token, TokenKind,
 };
 use crate::parsing::source::Source;
 use indexmap::IndexMap;
@@ -817,7 +816,7 @@ impl Parser {
             ));
         }
 
-        if !can_be_reference_segment(&first.kind) {
+        if !can_be_label(&first.kind) {
             return Err(self.error_at_token(
                 &first,
                 format!("Expected an identifier, found {}", first.kind),
@@ -830,7 +829,7 @@ impl Parser {
         while self.at(&TokenKind::Dot)? {
             self.next()?; // consume .
             let seg = self.next()?;
-            if !can_be_reference_segment(&seg.kind) {
+            if !can_be_label(&seg.kind) {
                 return Err(self.error_at_token(
                     &seg,
                     format!("Expected an identifier after '.', found {}", seg.kind),
@@ -875,7 +874,7 @@ impl Parser {
     /// Parse a single `uses` item: `[alias ':']` then [`Self::parse_spec_ref_target`] (optional
     /// repository qualifier, spec name, optional effective date pin).
     fn parse_uses_item(&mut self, start_span: &Span) -> Result<LemmaData, Error> {
-        let explicit_alias = if can_be_reference_segment(&self.peek()?.kind)
+        let explicit_alias = if can_be_label(&self.peek()?.kind)
             && self.lexer.peek_second()?.kind == TokenKind::Colon
         {
             let alias_tok = self.next()?;
@@ -1135,7 +1134,7 @@ impl Parser {
             self.error_at_token(
                 &name_tok,
                 format!(
-                    "Unknown constraint command '{}'. Valid commands: help, default, unit, trait, minimum, maximum, decimals, option, options, length",
+                    "Unknown constraint command '{}'. Valid commands: help, suggest, unit, trait, minimum, maximum, decimals, option, options, length",
                     name_tok.text
                 ),
             )
@@ -1667,14 +1666,14 @@ impl Parser {
                     let min_tok = self.next()?;
                     dt_str.push_str(&min_tok.text);
 
-                    // Consume :SS and optional fractional seconds
+                    // Consume :SS and optional fractional second
                     if self.at(&TokenKind::Colon)? {
                         self.next()?;
                         dt_str.push(':');
                         let sec_tok = self.next()?;
                         dt_str.push_str(&sec_tok.text);
 
-                        // Check for fractional seconds .NNNNNN
+                        // Check for fractional second .NNNNNN
                         if self.at(&TokenKind::Dot)? {
                             self.next()?;
                             dt_str.push('.');
@@ -1760,7 +1759,7 @@ impl Parser {
             let sec_tok = self.expect(&TokenKind::NumberLit)?;
             time_str.push_str(&sec_tok.text);
 
-            // Optional fractional seconds .NNNNNN
+            // Optional fractional second .NNNNNN
             if self.at(&TokenKind::Dot)? {
                 self.next()?;
                 time_str.push('.');
@@ -2241,7 +2240,7 @@ impl Parser {
                 }
             } else if let Some(primitive) = token_kind_to_primitive(&target_tok.kind) {
                 ConversionTarget::Type(primitive)
-            } else if can_be_reference_segment(&target_tok.kind) {
+            } else if can_be_label(&target_tok.kind) {
                 ConversionTarget::Unit {
                     unit_name: target_tok.text.clone(),
                 }
@@ -2307,7 +2306,7 @@ impl Parser {
 
     /// Atom or range-typed value: `...` binds before `^`, `*`, `/`, `%` on the same operand.
     /// Both endpoints use [`Self::parse_range_ellipsis_bound`] (`+`/`-` only) so
-    /// `now - 7 days...now` and `start...start + length` are valid, and
+    /// `now - 7 day...now` and `start...start + length` are valid, and
     /// `rate * period_start...period_end` keeps `*` outside the range.
     fn parse_range_operand(&mut self) -> Result<Expression, Error> {
         let start_span = self.peek()?.span.clone();
@@ -2656,7 +2655,7 @@ impl Parser {
             TokenKind::NumberLit => self.parse_number_expression(),
 
             // Reference (identifier, type keyword)
-            k if can_be_reference_segment(k) => {
+            k if can_be_label(k) => {
                 let reference = self.parse_expression_reference()?;
                 let span = self.span_covering(&start_span, &self.last_span);
                 self.new_expression(ExpressionKind::Reference(reference), self.make_source(span))
@@ -2785,7 +2784,7 @@ impl Parser {
         while self.at(&TokenKind::Dot)? {
             self.next()?; // consume .
             let seg = self.next()?;
-            if !can_be_reference_segment(&seg.kind) {
+            if !can_be_label(&seg.kind) {
                 return Err(self.error_at_token(
                     &seg,
                     format!("Expected an identifier after '.', found {}", seg.kind),

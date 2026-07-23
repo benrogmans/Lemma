@@ -1,6 +1,6 @@
-//! Shared evaluation helpers used by the instruction VM.
+//! Shared evaluation helpers used by the tree evaluator.
 //!
-//! All runtime errors (division by zero, etc.) result in Veto instead of errors.
+//! Domain failures (division by zero, etc.) surface as Veto, not Error.
 
 use super::operations::{OperationResult, VetoType};
 use crate::computation::measure_math::{
@@ -24,13 +24,16 @@ pub(crate) fn evaluate_mathematical_operator(
 
     match &value.value {
         ValueKind::Number(stored_rational) => {
-            use crate::computation::rational::{commit_rational_to_decimal, decimal_to_rational};
-            let stored_decimal = match commit_rational_to_decimal(stored_rational) {
+            use crate::computation::rational::decimal_to_rational;
+            let stored_decimal = match stored_rational.try_to_decimal() {
                 Ok(decimal) => decimal,
-                Err(_) => {
+                Err(crate::computation::rational::NumericFailure::Overflow) => {
                     return OperationResult::Veto(VetoType::computation(
-                        "Mathematical operation requires a decimal-representable input",
+                        "Calculated result exceeds decimal value limit",
                     ));
+                }
+                Err(failure) => {
+                    return OperationResult::Veto(VetoType::computation(failure.to_string()));
                 }
             };
             let decimal_result: Option<rust_decimal::Decimal> = match op {
@@ -49,8 +52,8 @@ pub(crate) fn evaluate_mathematical_operator(
                 MathematicalComputation::Atan => decimal_atan(stored_decimal),
             };
 
-            let committed_decimal = match decimal_result {
-                Some(committed) => committed,
+            let rounded_decimal = match decimal_result {
+                Some(rounded) => rounded,
                 None => {
                     return OperationResult::Veto(VetoType::computation(
                         "Mathematical operation result is undefined for this input",
@@ -58,7 +61,7 @@ pub(crate) fn evaluate_mathematical_operator(
                 }
             };
 
-            let result_rational = decimal_to_rational(committed_decimal)
+            let result_rational = decimal_to_rational(rounded_decimal)
                 .expect("BUG: transcendental result must lift back to stored rational");
             let result_value =
                 LiteralValue::number_with_type(result_rational, value.lemma_type.clone());
@@ -70,9 +73,10 @@ pub(crate) fn evaluate_mathematical_operator(
     }
 }
 
-pub(crate) fn resolve_data_path_value<'plan>(
+pub(crate) fn resolve_data_path_value(
     data_path: &crate::planning::semantics::DataPath,
-    context: &crate::evaluation::EvaluationContext<'plan>,
+    plan: &crate::planning::execution_plan::ExecutionPlan,
+    context: &crate::evaluation::EvaluationContext,
 ) -> OperationResult {
     if let Some(veto) = context.get_veto(data_path) {
         return OperationResult::Veto(veto.clone());
@@ -80,22 +84,16 @@ pub(crate) fn resolve_data_path_value<'plan>(
     if let Some(value) = context.get_data_value(data_path) {
         return OperationResult::from_literal_arc(Arc::clone(value));
     }
-    if let Some(rule_path) = crate::planning::normalize::follow_data_reference_to_rule_target(
-        &context.plan().data,
-        data_path,
-    ) {
-        return context
-            .rule_results
-            .get(&rule_path)
-            .cloned()
-            .unwrap_or_else(|| {
-                unreachable!(
-                    "BUG: rule-target reference '{}' read before target rule '{}' evaluated",
-                    data_path, rule_path.rule
-                )
-            });
+    if let Some(rule_path) =
+        crate::planning::normalize::follow_data_reference_to_rule_target(&plan.data, data_path)
+    {
+        panic!(
+            "BUG: rule-target data path '{}' (→ rule '{}') reached evaluation; planning must inline these",
+            data_path, rule_path.rule
+        );
     }
-    OperationResult::Veto(VetoType::MissingData {
-        data: data_path.clone(),
-    })
+    OperationResult::Veto(VetoType::missing_data(
+        data_path.clone(),
+        context.missing_data_suggestion(data_path),
+    ))
 }

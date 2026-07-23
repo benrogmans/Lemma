@@ -1,12 +1,24 @@
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-
-pub const CRITERION_RELATIVE: &str = "target/criterion";
 
 pub const CRITERION_WARMUP_SECS: &str = "3";
 pub const CRITERION_MEASUREMENT_SECS: &str = "5";
+pub const ENGINE_CRITERION_MEASUREMENT_SECS: &str = "30";
+
+fn workspace_target_dir(root: &Path) -> PathBuf {
+    root.join("target")
+}
+
+fn criterion_estimates_path(root: &Path, group: &str, function: &str) -> PathBuf {
+    workspace_target_dir(root)
+        .join("criterion")
+        .join(group)
+        .join(function)
+        .join("new")
+        .join("estimates.json")
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct LatencyRow {
@@ -58,12 +70,7 @@ pub fn read_latency_estimate(
     group: &str,
     function: &str,
 ) -> Result<LatencyRow, String> {
-    let path = root
-        .join(CRITERION_RELATIVE)
-        .join(group)
-        .join(function)
-        .join("new")
-        .join("estimates.json");
+    let path = criterion_estimates_path(root, group, function);
     let raw = fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     let parsed: Value = serde_json::from_str(&raw)
         .map_err(|error| format!("{}: invalid JSON: {error}", path.display()))?;
@@ -84,8 +91,23 @@ pub fn read_latency_estimate(
 }
 
 pub fn run_criterion_bench(root: &Path, package: &str, bench: &str) -> Result<(), String> {
+    run_criterion_bench_with_measurement(root, package, bench, CRITERION_MEASUREMENT_SECS)
+}
+
+pub fn run_engine_criterion_bench(root: &Path, package: &str, bench: &str) -> Result<(), String> {
+    run_criterion_bench_with_measurement(root, package, bench, ENGINE_CRITERION_MEASUREMENT_SECS)
+}
+
+fn run_criterion_bench_with_measurement(
+    root: &Path,
+    package: &str,
+    bench: &str,
+    measurement_secs: &str,
+) -> Result<(), String> {
+    let target_dir = workspace_target_dir(root);
     let status = Command::new("cargo")
         .current_dir(root)
+        .env("CARGO_TARGET_DIR", &target_dir)
         .args([
             "bench",
             "-p",
@@ -96,7 +118,7 @@ pub fn run_criterion_bench(root: &Path, package: &str, bench: &str) -> Result<()
             "--warm-up-time",
             CRITERION_WARMUP_SECS,
             "--measurement-time",
-            CRITERION_MEASUREMENT_SECS,
+            measurement_secs,
         ])
         .status()
         .map_err(|error| format!("failed to spawn cargo bench {bench}: {error}"))?;
@@ -167,11 +189,6 @@ pub fn write_report(root: &Path, relative: &str, report: &str) -> Result<(), Str
     Ok(())
 }
 
-pub fn read_relative(root: &Path, relative: &str) -> Result<String, String> {
-    let path = root.join(relative);
-    fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,7 +197,7 @@ mod tests {
     #[test]
     fn read_latency_estimate_reads_criterion_layout() {
         let base = std::env::temp_dir().join(format!("lemma_bench_test_{}", std::process::id()));
-        let estimates = base.join("target/criterion/bench_shipping/run_plan/new");
+        let estimates = base.join("target/criterion/bench_shipping/evaluate/new");
         fs::create_dir_all(&estimates).expect("mkdir");
         let mut file = fs::File::create(estimates.join("estimates.json")).expect("create");
         writeln!(
@@ -189,7 +206,7 @@ mod tests {
         )
         .expect("write");
 
-        let row = read_latency_estimate(&base, "bench_shipping", "run_plan").expect("read");
+        let row = read_latency_estimate(&base, "bench_shipping", "evaluate").expect("read");
         assert_eq!(row.median_ns, 20853.0);
         assert_eq!(row.std_dev_ns, 3834.0);
         let _ = fs::remove_dir_all(&base);

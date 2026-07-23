@@ -11,12 +11,14 @@ fn path_source(file: &str) -> lemma::SourceType {
 
 fn load_ok(code: &str, source_file: &str, message: &str) {
     let mut engine = Engine::new();
-    engine.load(code, path_source(source_file)).expect(message);
+    engine
+        .load([(path_source(source_file), code.to_string())])
+        .expect(message);
 }
 
 fn expect_plan_error(code: &str, source_file: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, path_source(source_file));
+    let result = engine.load([(path_source(source_file), code.to_string())]);
     assert!(
         result.is_err(),
         "expected planning to fail containing '{expected_fragment}'"
@@ -88,7 +90,8 @@ rule smoke: true
     );
 }
 
-/// Force = mass * acceleration; `newton` references compound unit `mps2`.
+/// Force = mass * acceleration; local force unit references compound unit `mps2`.
+/// Names avoid stdlib `newton` / `units.force`.
 #[test]
 fn compound_newton_force_unit_plans() {
     let code = r#"spec mechanics
@@ -106,18 +109,18 @@ data acceleration: measure
   -> unit mps2 meter/second^2
 
 data force: measure
-  -> unit newton kg * mps2
+  -> unit local_newton kg * mps2
 
 rule smoke: true
 "#;
     load_ok(
         code,
         "mechanics_newton.lemma",
-        "newton = kg * mps2 must plan with compound-of-compound normalization",
+        "local_newton = kg * mps2 must plan with compound-of-compound normalization",
     );
 }
 
-/// Pressure = force / area; `pascal` references `newton` and `sqm` (depth-3 compound chain).
+/// Pressure = force / area; depth-3 compound chain (avoids stdlib `pascal` / `newton`).
 #[test]
 fn compound_pascal_pressure_unit_plans() {
     let code = r#"spec mechanics_pressure
@@ -133,20 +136,20 @@ data acceleration: measure
   -> unit mps2 meter/second^2
 
 data force: measure
-  -> unit newton kg * mps2
+  -> unit local_newton kg * mps2
 
 data area: measure
   -> unit sqm meter^2
 
 data pressure: measure
-  -> unit pascal newton/sqm
+  -> unit local_pascal local_newton/sqm
 
 rule smoke: true
 "#;
     load_ok(
         code,
         "mechanics_pascal.lemma",
-        "pascal = newton/sqm must plan across three derived measure layers",
+        "local_pascal = local_newton/sqm must plan across three derived measure layers",
     );
 }
 
@@ -255,6 +258,7 @@ rule smoke: true
 }
 
 /// Explicit prefix on a compound unit alongside another compound unit (normalization).
+/// Local names avoid stdlib `newton` / `kilonewton`.
 #[test]
 fn compound_kilonewton_with_prefix_plans() {
     let code = r#"spec force_prefix
@@ -273,23 +277,23 @@ data acceleration: measure
   -> unit kmh2 km/hour^2
 
 data force: measure
-  -> unit newton kg * mps2
-  -> unit kilonewton 1000 kg * meter/second^2
+  -> unit local_newton kg * mps2
+  -> unit local_kilonewton 1000 kg * meter/second^2
 
 rule smoke: true
 "#;
     load_ok(
         code,
         "force_prefix.lemma",
-        "newton and kilonewton compound units must plan with normalization",
+        "local_newton and local_kilonewton compound units must plan with normalization",
     );
 }
 
-/// Convert 1 kilonewton to gram * km/hour^2 via a third compound unit in the same type.
-/// 1 newton = 1 kg * m/s^2.
+/// Convert 1 local_kilonewton to gram * km/hour^2 via a third compound unit in the same type.
+/// 1 local_newton = 1 kg * m/s^2.
 /// 1 gram_kmh2 = 0.001 kg * 1000 m / (3600 s)^2 = 1 kg*m/s^2 * (0.001 * 1000 / 3600^2)
-///             = 1/12960000 newton.
-/// 1 kilonewton = 1000 newton = 1000 * 12960000 gram_kmh2 = 12960000000 gram_kmh2.
+///             = 1/12960000 local_newton.
+/// 1 local_kilonewton = 1000 local_newton = 1000 * 12960000 gram_kmh2 = 12960000000 gram_kmh2.
 #[test]
 fn compound_kilonewton_to_gram_kmh2_conversion() {
     let code = r#"spec force_conv
@@ -308,17 +312,17 @@ data acceleration: measure
   -> unit kmh2 km/hour^2
 
 data force: measure
-  -> unit newton kg * mps2
-  -> unit kilonewton 1000 kg * meter/second^2
+  -> unit local_newton kg * mps2
+  -> unit local_kilonewton 1000 kg * meter/second^2
   -> unit gram_kmh2 gram * kmh2
 
-data f: 1 kilonewton
+data f: 1 local_kilonewton
 rule converted: f as gram_kmh2
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("force_conv.lemma"))
-        .expect("newton/kilonewton/gram_kmh2 must plan");
+        .load([(path_source("force_conv.lemma"), code.to_string())])
+        .expect("local_newton/local_kilonewton/gram_kmh2 must plan");
     let now = lemma::DateTimeValue::now();
     let response = engine
         .run(
@@ -326,8 +330,8 @@ rule converted: f as gram_kmh2
             "force_conv",
             Some(&now),
             std::collections::HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("should evaluate");
     let result = response
@@ -344,7 +348,7 @@ rule converted: f as gram_kmh2
     );
 }
 
-/// Two compound volume units: `cubic_meter` natural canonical, `liter` explicit prefix on same expression.
+/// Two compound volume units with local names (avoids stdlib `liter` / `cubic_meter`).
 #[test]
 fn compound_volume_liter_and_cubic_meter_plans() {
     let code = r#"spec volume
@@ -355,14 +359,14 @@ data length: measure
   -> unit km 1000
 
 data volume: measure
-  -> unit cubic_meter meter^3
-  -> unit liter 0.001 meter^3
+  -> unit local_cubic_meter meter^3
+  -> unit local_liter 0.001 meter^3
 
 rule smoke: true
 "#;
     load_ok(
         code,
         "volume.lemma",
-        "liter and cubic_meter must coexist with cubic_meter as natural canonical",
+        "local_liter and local_cubic_meter must coexist with local_cubic_meter as natural canonical",
     );
 }

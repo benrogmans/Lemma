@@ -30,7 +30,7 @@ pub fn relative_dependency_cache_path(registry_attribute_display: &str) -> PathB
     }
 }
 
-/// Derive registry dependency id from a `lemma_deps/` `.lemma` file path (same string CLI `load_batch` passes as `dependency_id`).
+/// Derive registry dependency id from a `lemma_deps/` `.lemma` file path (same string CLI passes as `dependency_id`).
 #[must_use]
 pub fn dependency_identifier_from_dependency_path(
     workdir: &Path,

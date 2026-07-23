@@ -138,8 +138,6 @@ fn type_in_body(kind: &TokenKind) -> Option<u32> {
         | TokenKind::False
         | TokenKind::Yes
         | TokenKind::No
-        | TokenKind::Accept
-        | TokenKind::Reject
         | TokenKind::Permille => Some(IDX_VALUE),
 
         // Punctuation (Colon, Dot, Comma, LParen, RParen, …) — transparent

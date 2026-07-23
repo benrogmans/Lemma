@@ -8,10 +8,10 @@ use std::sync::Arc;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(Arc::new(std::path::PathBuf::from("case_insensitive.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap_or_else(|errs| {
             panic!(
                 "expected load to succeed, got: {}",
@@ -25,10 +25,10 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(Arc::new(std::path::PathBuf::from("case_insensitive.lemma"))),
-        )
+            code.to_string(),
+        )])
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -55,14 +55,16 @@ fn rule_value(result: &lemma::Response, name: &str) -> String {
 fn parse_lowercases_data_and_reference_names() {
     let code = r#"
 spec s
-data Price: number -> default 10
+data Price: number -> suggest 10
 rule r: price
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("price".to_string(), "10".to_string());
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false, None)
+        .run(None, "s", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -78,7 +80,7 @@ rule r: 500 Gram
     load_ok(&mut engine, code);
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, false)
         .expect("evaluates");
     assert!(rule_value(&resp, "r").contains("500"));
     assert!(rule_value(&resp, "r").contains("gram"));
@@ -88,15 +90,16 @@ rule r: 500 Gram
 fn get_spec_accepts_mixed_case_api_name() {
     let code = r#"
 spec myspec
-data x: number -> default 7
+data x: number -> suggest 7
 rule r: x
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    let spec = engine
-        .get_spec("MySpec", None)
+    let now = DateTimeValue::now();
+    let show = engine
+        .show(None, "MySpec", Some(&now))
         .expect("spec found with mixed-case API name");
-    assert_eq!(spec.name, "myspec");
+    assert_eq!(show.spec, "myspec");
 }
 
 #[test]
@@ -117,7 +120,7 @@ data Age: number
 #[test]
 fn format_source_lowercases_identifiers() {
     let source = r#"spec Test
-data Price: number -> default 1
+data Price: number -> suggest 1
 rule Total: price
 "#;
     let formatted = format_source(source, lemma::SourceType::Volatile).expect("format succeeds");

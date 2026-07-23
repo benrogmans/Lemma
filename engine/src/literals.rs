@@ -24,7 +24,9 @@ pub type BaseMeasureVector = BTreeMap<String, i32>;
 // -----------------------------------------------------------------------------
 
 pub fn rational_to_serialized_str(rational: &RationalInteger) -> Result<String, String> {
-    rational::rational_to_decimal_string(rational).map_err(|failure| failure.to_string())
+    rational
+        .try_to_decimal_string()
+        .map_err(|failure| failure.to_string())
 }
 
 pub fn rational_from_parsed_decimal(decimal: Decimal) -> Result<RationalInteger, String> {
@@ -90,7 +92,7 @@ pub struct MeasureUnit {
     /// Maximum magnitude in this unit (schema/UI).
     pub maximum: Option<RationalInteger>,
     /// Default suggestion magnitude in this unit (schema/UI).
-    pub default_magnitude: Option<RationalInteger>,
+    pub suggestion_magnitude: Option<RationalInteger>,
 }
 
 impl Serialize for MeasureUnit {
@@ -116,11 +118,12 @@ impl Serialize for MeasureUnit {
                     .expect("BUG: planned measure unit maximum must serialize to decimal string"),
             )?;
         }
-        if let Some(default_magnitude) = &self.default_magnitude {
+        if let Some(suggestion_magnitude) = &self.suggestion_magnitude {
             state.serialize_field(
-                "default",
-                &rational_to_serialized_str(default_magnitude)
-                    .expect("BUG: planned measure unit default must serialize to decimal string"),
+                "suggestion",
+                &rational_to_serialized_str(suggestion_magnitude).expect(
+                    "BUG: planned measure unit suggestion must serialize to decimal string",
+                ),
             )?;
         }
         state.end()
@@ -142,8 +145,8 @@ impl<'de> Deserialize<'de> for MeasureUnit {
             minimum: Option<Decimal>,
             #[serde(default)]
             maximum: Option<Decimal>,
-            #[serde(default, rename = "default")]
-            default_magnitude: Option<Decimal>,
+            #[serde(default, rename = "suggestion")]
+            suggestion_magnitude: Option<Decimal>,
         }
         let data = MeasureUnitData::deserialize(deserializer)?;
         Ok(Self {
@@ -161,8 +164,8 @@ impl<'de> Deserialize<'de> for MeasureUnit {
                 .map(rational_from_parsed_decimal)
                 .transpose()
                 .map_err(serde::de::Error::custom)?,
-            default_magnitude: data
-                .default_magnitude
+            suggestion_magnitude: data
+                .suggestion_magnitude
                 .map(rational_from_parsed_decimal)
                 .transpose()
                 .map_err(serde::de::Error::custom)?,
@@ -185,14 +188,14 @@ impl MeasureUnit {
             decomposition: BaseMeasureVector::new(),
             minimum: None,
             maximum: None,
-            default_magnitude: None,
+            suggestion_magnitude: None,
         })
     }
 
     pub fn clear_constraint_magnitudes(&mut self) {
         self.minimum = None;
         self.maximum = None;
-        self.default_magnitude = None;
+        self.suggestion_magnitude = None;
     }
 
     pub fn is_canonical_factor(&self) -> bool {
@@ -207,31 +210,34 @@ impl MeasureUnit {
 
     /// Conversion factor as decimal (schema unit factors always commit).
     pub fn factor_decimal(&self) -> Decimal {
-        rational::commit_rational_to_decimal(&self.factor)
-            .expect("BUG: measure unit factor must commit to decimal")
+        rational::RationalInteger::try_to_decimal(&self.factor)
+            .expect("BUG: measure unit factor must materialize to decimal")
     }
 
     #[must_use]
     pub fn minimum_decimal(&self) -> Option<Decimal> {
         self.minimum.as_ref().map(|bound| {
-            rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned measure unit minimum must commit to decimal")
+            bound
+                .try_to_decimal()
+                .expect("BUG: planned measure unit minimum must materialize to decimal")
         })
     }
 
     #[must_use]
     pub fn maximum_decimal(&self) -> Option<Decimal> {
         self.maximum.as_ref().map(|bound| {
-            rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned measure unit maximum must commit to decimal")
+            bound
+                .try_to_decimal()
+                .expect("BUG: planned measure unit maximum must materialize to decimal")
         })
     }
 
     #[must_use]
-    pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
-        self.default_magnitude.as_ref().map(|bound| {
-            rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned measure unit default must commit to decimal")
+    pub fn suggestion_magnitude_decimal(&self) -> Option<Decimal> {
+        self.suggestion_magnitude.as_ref().map(|bound| {
+            bound
+                .try_to_decimal()
+                .expect("BUG: planned measure unit default must materialize to decimal")
         })
     }
 
@@ -241,8 +247,9 @@ impl MeasureUnit {
         self.maximum.as_ref().map(|maximum| {
             let canonical = rational::checked_mul(maximum, &self.factor)
                 .expect("BUG: planned measure unit maximum canonical multiply must succeed");
-            rational::commit_rational_to_decimal(&canonical)
-                .expect("BUG: planned measure unit maximum canonical must commit to decimal")
+            canonical
+                .try_to_decimal()
+                .expect("BUG: planned measure unit maximum canonical must materialize to decimal")
         })
     }
 }
@@ -372,7 +379,7 @@ pub struct RatioUnit {
     pub value: RationalInteger,
     pub minimum: Option<RationalInteger>,
     pub maximum: Option<RationalInteger>,
-    pub default_magnitude: Option<RationalInteger>,
+    pub suggestion_magnitude: Option<RationalInteger>,
 }
 
 impl Serialize for RatioUnit {
@@ -396,11 +403,11 @@ impl Serialize for RatioUnit {
                     .expect("BUG: planned ratio unit maximum must serialize to decimal string"),
             )?;
         }
-        if let Some(default_magnitude) = &self.default_magnitude {
+        if let Some(suggestion_magnitude) = &self.suggestion_magnitude {
             state.serialize_field(
-                "default",
-                &rational_to_serialized_str(default_magnitude)
-                    .expect("BUG: planned ratio unit default must serialize to decimal string"),
+                "suggestion",
+                &rational_to_serialized_str(suggestion_magnitude)
+                    .expect("BUG: planned ratio unit suggestion must serialize to decimal string"),
             )?;
         }
         state.end()
@@ -418,8 +425,8 @@ impl<'de> Deserialize<'de> for RatioUnit {
             minimum: Option<Decimal>,
             #[serde(default)]
             maximum: Option<Decimal>,
-            #[serde(default, rename = "default")]
-            default_magnitude: Option<Decimal>,
+            #[serde(default, rename = "suggestion")]
+            suggestion_magnitude: Option<Decimal>,
         }
         let data = RatioUnitData::deserialize(deserializer)?;
         Ok(Self {
@@ -435,8 +442,8 @@ impl<'de> Deserialize<'de> for RatioUnit {
                 .map(rational_from_parsed_decimal)
                 .transpose()
                 .map_err(serde::de::Error::custom)?,
-            default_magnitude: data
-                .default_magnitude
+            suggestion_magnitude: data
+                .suggestion_magnitude
                 .map(rational_from_parsed_decimal)
                 .transpose()
                 .map_err(serde::de::Error::custom)?,
@@ -448,36 +455,40 @@ impl RatioUnit {
     pub fn clear_constraint_magnitudes(&mut self) {
         self.minimum = None;
         self.maximum = None;
-        self.default_magnitude = None;
+        self.suggestion_magnitude = None;
     }
 
     /// Unit scale as decimal (schema ratio unit values always commit).
     pub fn value_decimal(&self) -> Decimal {
-        rational::commit_rational_to_decimal(&self.value)
-            .expect("BUG: ratio unit value must commit to decimal")
+        self.value
+            .try_to_decimal()
+            .expect("BUG: ratio unit value must materialize to decimal")
     }
 
     #[must_use]
     pub fn minimum_decimal(&self) -> Option<Decimal> {
         self.minimum.as_ref().map(|bound| {
-            rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned ratio unit minimum must commit to decimal")
+            bound
+                .try_to_decimal()
+                .expect("BUG: planned ratio unit minimum must materialize to decimal")
         })
     }
 
     #[must_use]
     pub fn maximum_decimal(&self) -> Option<Decimal> {
         self.maximum.as_ref().map(|bound| {
-            rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned ratio unit maximum must commit to decimal")
+            bound
+                .try_to_decimal()
+                .expect("BUG: planned ratio unit maximum must materialize to decimal")
         })
     }
 
     #[must_use]
-    pub fn default_magnitude_decimal(&self) -> Option<Decimal> {
-        self.default_magnitude.as_ref().map(|bound| {
-            rational::commit_rational_to_decimal(bound)
-                .expect("BUG: planned ratio unit default must commit to decimal")
+    pub fn suggestion_magnitude_decimal(&self) -> Option<Decimal> {
+        self.suggestion_magnitude.as_ref().map(|bound| {
+            bound
+                .try_to_decimal()
+                .expect("BUG: planned ratio unit default must materialize to decimal")
         })
     }
 
@@ -487,8 +498,9 @@ impl RatioUnit {
         self.maximum.as_ref().map(|maximum| {
             let canonical = rational::checked_mul(maximum, &self.value)
                 .expect("BUG: planned ratio unit maximum canonical multiply must succeed");
-            rational::commit_rational_to_decimal(&canonical)
-                .expect("BUG: planned ratio unit maximum canonical must commit to decimal")
+            canonical
+                .try_to_decimal()
+                .expect("BUG: planned ratio unit maximum canonical must materialize to decimal")
         })
     }
 }
@@ -557,16 +569,11 @@ pub enum BooleanValue {
     False,
     Yes,
     No,
-    Accept,
-    Reject,
 }
 
 impl From<BooleanValue> for bool {
     fn from(value: BooleanValue) -> bool {
-        matches!(
-            value,
-            BooleanValue::True | BooleanValue::Yes | BooleanValue::Accept
-        )
+        matches!(value, BooleanValue::True | BooleanValue::Yes)
     }
 }
 
@@ -619,8 +626,6 @@ impl std::str::FromStr for BooleanValue {
             "false" => Ok(BooleanValue::False),
             "yes" => Ok(BooleanValue::Yes),
             "no" => Ok(BooleanValue::No),
-            "accept" => Ok(BooleanValue::Accept),
-            "reject" => Ok(BooleanValue::Reject),
             _ => Err(format!("Invalid boolean: '{}'", s)),
         }
     }
@@ -634,8 +639,6 @@ impl BooleanValue {
             BooleanValue::False => "false",
             BooleanValue::Yes => "yes",
             BooleanValue::No => "no",
-            BooleanValue::Accept => "accept",
-            BooleanValue::Reject => "reject",
         }
     }
 }
@@ -658,8 +661,8 @@ impl fmt::Display for TimezoneValue {
             write!(f, "Z")
         } else {
             let sign = if self.offset_hours >= 0 { "+" } else { "-" };
-            let hours = self.offset_hours.abs();
-            write!(f, "{}{:02}:{:02}", sign, hours, self.offset_minutes)
+            let hour = self.offset_hours.abs();
+            write!(f, "{}{:02}:{:02}", sign, hour, self.offset_minutes)
         }
     }
 }
@@ -1071,8 +1074,8 @@ impl std::str::FromStr for TimeValue {
 
 /// Number literal with Lemma rules (strip _ and , separators).
 ///
-/// `Decimal::from_str` rounds excess fractional digits to the 28 significant
-/// digits a `Decimal` holds (truncate at input); an integer magnitude that
+/// `Decimal::from_str` rounds excess fractional digits to [`Decimal::MAX_SCALE`]
+/// significant digits (truncate at input); an integer magnitude that
 /// cannot be represented is an error.
 pub(crate) struct NumberLiteral(pub Decimal);
 
@@ -1268,6 +1271,22 @@ impl std::str::FromStr for RatioLiteral {
                     unit: unit.to_string(),
                 })
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BooleanValue;
+    use std::str::FromStr;
+
+    #[test]
+    fn boolean_value_rejects_accept_and_reject_strings() {
+        for invalid in ["accept", "reject"] {
+            assert!(
+                BooleanValue::from_str(invalid).is_err(),
+                "'{invalid}' must not parse as boolean"
+            );
         }
     }
 }

@@ -24,8 +24,8 @@ fn get_rule_value(
             spec_name,
             Some(&now),
             data,
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .unwrap();
     response
@@ -58,10 +58,10 @@ fn load_specs_folder_examples() -> Engine {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
         engine
-            .load(
-                &content,
+            .load([(
                 lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(path))),
-            )
+                &content.to_string(),
+            )])
             .unwrap_or_else(|errs| {
                 panic!(
                     "Failed to parse {}: {}",
@@ -162,7 +162,7 @@ fn test_03_recipe_scaling() {
             );
             assert_eq!(
                 signature.first().map(|(name, _)| name.as_str()),
-                Some("minutes")
+                Some("minute")
             );
         }
         other => panic!("expected Measure baking_time, got {other:?}"),
@@ -201,7 +201,14 @@ fn test_04_membership_benefits() {
     );
 
     // Test membership_benefits spec (references premium_membership)
-    let discount = get_rule_value(&engine, "membership_benefits", "discount", HashMap::new());
+    let mut benefits_data = HashMap::new();
+    benefits_data.insert("monthly_spend".to_string(), "150".to_string());
+    let discount = get_rule_value(
+        &engine,
+        "membership_benefits",
+        "discount",
+        benefits_data.clone(),
+    );
     assert_eq!(
         discount.value,
         LiteralValue::number_from_decimal(decimal_lit("15")).value
@@ -211,7 +218,7 @@ fn test_04_membership_benefits() {
         &engine,
         "membership_benefits",
         "shipping_cost",
-        HashMap::new(),
+        benefits_data.clone(),
     );
     assert_eq!(
         shipping_cost.value,
@@ -222,7 +229,7 @@ fn test_04_membership_benefits() {
         &engine,
         "membership_benefits",
         "total_points",
-        HashMap::new(),
+        benefits_data,
     );
     assert_eq!(
         total_points.value,
@@ -270,8 +277,11 @@ fn test_nl_tax_net_salary() {
     let mut data = HashMap::new();
     data.insert("gross_salary".to_string(), "5000 eur".to_string());
     data.insert("pay_period".to_string(), "month".to_string());
+    data.insert("income_source".to_string(), "employment".to_string());
+    data.insert("pension_contribution".to_string(), "0 eur".to_string());
+    data.insert("payroll_tax_credit".to_string(), "true".to_string());
     let response = engine
-        .run(None, "net_salary", Some(&effective), data, true, None)
+        .run(None, "net_salary", Some(&effective), data, None, true)
         .expect("net_salary run");
 
     let net = response

@@ -13,10 +13,10 @@ Lemma has a rich type system built from primitives, quantities with units, ratio
 |------|---------|-------|
 | Number | `42`, `3.14`, `1.23e10` | Exact rational arithmetic |
 | Text | `"hello"` | String literals |
-| Boolean | `true`, `false`, `yes`, `no`, `accept`, `reject` | Aliases |
+| Boolean | `true`, `false`, `yes`, `no` | Aliases |
 | Date | `2024-01-15`, `2024-01-15T14:30:00Z` | ISO 8601 |
 | Time | `14:30:00` | Time of day |
-| Measure | `100 eur`, `40 hours`, `12 kilogram` | Unit must be declared by a measure type in scope |
+| Measure | `100 eur`, `40 hour`, `12 kilogram` | Unit must be declared by a measure type in scope |
 | Ratio | `15 percent`, `15%`, `5 permille`, `5%%` | Proportional values |
 | Range | `0...100`, `2024-01-01...2024-06-15`, `18 year...67 year` | Half-open intervals |
 
@@ -32,11 +32,11 @@ data tax:      21
 data quantity:      3
 data principal: 1_000
 data rate:      0.05
-data years:     10
+data year:     10
 
 rule total: (price + tax) * quantity
 
-rule compound: principal * (1 + rate) ^ years
+rule compound: principal * (1 + rate) ^ year
 ```
 
 Operators: `+`, `-`, `*`, `/`, `%`, `^`
@@ -94,7 +94,9 @@ Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `ex
 
 ## Standard library: `uses lemma units`
 
-Lemma embeds SI units in the standard library (Repo `lemma`, Spec `units`). Import with `uses lemma units`, then use units directly in literals or reference types as `units.mass`, `units.duration`, `units.length`, `units.calendar`, and others:
+Lemma embeds SI bases, derived compounds, imperial, and information units in the standard library (Repo `lemma`, Spec `units`). Import with `uses lemma units`, then use units directly in literals or reference types as `units.mass`, `units.duration`, `units.length`, `units.calendar`, `units.force`, and others.
+
+Names are singular only (`8 hour`, not `8 hours`). Length uses American `meter` (not `metre`).
 
 ```lemma
 spec logistics
@@ -102,15 +104,15 @@ spec logistics
 uses lemma units
 
 data package_weight: 12 kilogram
-data shift_length:   8 hours
+data shift_length:   8 hour
 data route_distance: 45 kilometer
 
 rule weight_grams:  package_weight as gram
 rule is_heavy:      package_weight > 20 kilogram
-rule is_long_shift: shift_length >= 8 hours
+rule is_long_shift: shift_length >= 8 hour
 ```
 
-Duration units (`hours`, `days`, `weeks`, ...) come from `units.duration`; calendar periods (`year`, `month`) from `units.calendar`. Prefer the stdlib types over redefining kilogram or hour in every Spec.
+Duration units (`hour`, `day`, `week`, ...) come from `units.duration`; calendar periods (`year`, `month`) from `units.calendar`. Prefer the stdlib types over redefining kilogram or hour in every Spec.
 
 ## Unit conversions
 
@@ -137,16 +139,16 @@ spec schedule
 
 uses lemma units
 
-data workweek: 40 hours
+data workweek: 40 hour
 
-rule workweek_days: workweek as days
+rule workweek_days: workweek as day
 ```
 
 Strip to a bare number with a chained cast: `amount as eur as number`. See [Type cast in the language reference](../reference/readme.md#type-cast-as).
 
 ## Ranges
 
-Intervals use `lo...hi` (lower inclusive, upper exclusive). Test membership with `in`; project width with `(lo...hi) as <unit>`. Range slots use `number range`, `date range`, `time range`, `measure range`, `ratio range`, or a named `<type> range`:
+Intervals use `lo...hi` (lower inclusive, upper exclusive). Test membership with `in`; project width with `(lo...hi) as <unit>`. Range slots use `number range`, `date range`, `time range`, `measure range`, `ratio range`, or a named `<type> range`. Constrain endpoints with `-> lower` / `-> upper` and span width with `-> minimum` / `-> maximum`:
 
 ```lemma
 spec eligibility
@@ -156,14 +158,20 @@ uses lemma units
 data age:   25 year
 data score: 50
 
+data window: date range
+  -> lower 2020-01-01
+  -> upper 2030-12-31
+  -> minimum 1 day
+  -> maximum 90 day
+
 rule in_working_age: age in 18 year...67 year
 
 rule in_band: score in 0...100
 
-rule days_in_q2: (2024-04-01...2024-07-01) as days
+rule days_in_q2: (2024-04-01...2024-07-01) as day
 ```
 
-See [Ranges in the language reference](../reference/readme.md#ranges).
+See [Ranges in the language reference](../reference/readme.md#ranges) and [Data commands](../reference/readme.md#data-commands).
 
 ## Date and time
 
@@ -177,18 +185,37 @@ uses lemma units
 data today:    2024-09-30
 data deadline: 2024-12-31
 
-rule days_until_deadline: (today...deadline) as days
+rule days_until_deadline: (today...deadline) as day
 
 rule is_overdue: today > deadline
 
-rule follow_up_date: deadline + 14 days
+rule follow_up_date: deadline + 14 day
 ```
 
 ### Calendar vs duration arithmetic
 
-Calendar units (`year`, `month`) use calendar-aware arithmetic; duration units (`days`, `hours`, `seconds`, ...) use fixed-length arithmetic. Adding one month to March 1 gives April 1 regardless of month length, while adding 30 days always adds exactly 30 × 86400 seconds.
+Calendar units (`year`, `month`) use calendar-aware arithmetic; duration units (`day`, `hour`, `second`, ...) use fixed-length arithmetic. Adding one month to March 1 gives April 1 regardless of month length, while adding 30 day always adds exactly 30 × 86400 second.
 
-**Month-end clamping**: adding months or years clamps to the last valid day of the target month. January 31 + 1 month → February 28 (or 29 in a leap year). March 31 − 1 month → February 28/29.
+**Month-end clamping**: adding month or year clamps to the last valid day of the target month. January 31 + 1 month → February 28 (or 29 in a leap year). March 31 − 1 month → February 28/29.
+
+### Relative to `now`
+
+`now` is the evaluation instant. Compare dates to it, or to a sliding window / calendar period (duration units from `uses lemma units`):
+
+```lemma
+spec recency
+
+uses lemma units
+
+data event_date: date
+
+rule was_before_now: (event_date in past)
+rule recent:         event_date in past 7 day
+rule this_year:      event_date in calendar year
+rule last_month:     event_date in past calendar month
+```
+
+Also: `in future`, `future N day`, `in past|future calendar year|month|week`, `not in calendar …`, and bare windows `past 7 day`. Full table: [Date predicates in the language reference](../reference/readme.md#date-predicates-and-windows).
 
 ## Veto
 
@@ -262,7 +289,7 @@ If `validated_weight` is vetoed but `use_estimated` is true, then `shipping_weig
 
 ### Missing Data propagates as Veto
 
-When a Data field has no value (not provided and no default), Rules that depend on it Veto with a "Missing data" reason:
+When a Data field has no value (not provided), Rules that depend on it Veto with a "Missing data" reason:
 
 ```lemma
 spec coffee_prices
@@ -307,7 +334,7 @@ When the operand is a Rule reference (`validated_price is veto`), the test reads
 
 You can Veto again based on a test: `unless x is veto then veto "outer"`. The Rule's result message is then `"outer"`; explanations may still show the inner Veto beneath the `is veto` operand.
 
-`veto "message"` is only valid as a Rule or Unless result, not in `is veto` comparisons. Here `veto` is a keyword meaning "no value", different from `veto "message"`, which produces a Veto. See [Special expressions in the language reference](../reference/readme.md#special-expressions).
+`veto` and `veto "message"` are only valid as a Rule or Unless result. See [Special expressions in the language reference](../reference/readme.md#special-expressions).
 
 Test for a Veto without propagating it:
 
@@ -329,10 +356,11 @@ Lemma distinguishes three outcomes:
 | Outcome | When | Example |
 |---------|------|---------|
 | Planning Error | Invalid Spec (wrong types, unsupported operations) | `5 and "text"` (logical AND requires boolean operands); `1 / 0` (literal division by zero) |
+| Request Error | Malformed run request (before evaluation) | Duplicate overlay keys that canonicalize to the same name (`Age` and `age`) |
 | Veto | Domain "no value" at runtime | Division by zero from Data, missing Data, invalid Data override, user `veto "..."`, date overflow |
 | Panic | Bug (invariant violated; should never happen after planning) | Internal consistency failure |
 
-After planning succeeds, evaluation is guaranteed to complete: it produces Rule results (values or Vetoes) and never returns an error. Data overrides that violate type constraints, minimum/maximum bounds, or allowed options produce a Veto on the affected Rules, not a planning error.
+After planning succeeds, a well-formed run completes with Rule results (values or Vetoes). Data overrides that violate type constraints, minimum/maximum bounds, or allowed options bind as a Veto on that Data (dependent Rules veto); they are not a planning error. Unknown overlay keys and import aliases are ignored; a `MissingData` veto may suggest a near match from ignored keys. Duplicate canonical keys in the same request are a request Error and abort before evaluation.
 
 Veto is only for domain-level "no value", not for type errors or invalid operations in the Spec itself. Those are caught at planning time.
 

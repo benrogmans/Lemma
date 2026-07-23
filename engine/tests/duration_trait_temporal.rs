@@ -37,9 +37,11 @@ fn eval_literal(
 ) -> lemma::LiteralValue {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let response = engine
-        .run(None, spec_name, Some(effective), HashMap::new(), true, None)
+        .run(None, spec_name, Some(effective), HashMap::new(), None, true)
         .expect("Should evaluate");
     response
         .results
@@ -72,9 +74,11 @@ fn eval_rule_measure_unit(
 ) -> String {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let response = engine
-        .run(None, spec_name, Some(effective), HashMap::new(), true, None)
+        .run(None, spec_name, Some(effective), HashMap::new(), None, true)
         .expect("Should evaluate");
     response
         .results
@@ -102,7 +106,7 @@ fn eval_bool(
 fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -210,7 +214,7 @@ fn is_numeric_context_character(character: char) -> bool {
 fn temporal_date_plus_duration() {
     let code = r#"spec test
 uses lemma units
-rule value: 2024-01-01T00:00:00Z + 2 hours"#;
+rule value: 2024-01-01T00:00:00Z + 2 hour"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["2024-01-01", "02:00:00"]);
 }
@@ -219,7 +223,7 @@ rule value: 2024-01-01T00:00:00Z + 2 hours"#;
 fn temporal_date_minus_duration() {
     let code = r#"spec test
 uses lemma units
-rule value: 2024-01-01T01:00:00Z - 2 hours"#;
+rule value: 2024-01-01T01:00:00Z - 2 hour"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["2023-12-31", "23:00:00"]);
 }
@@ -228,7 +232,7 @@ rule value: 2024-01-01T01:00:00Z - 2 hours"#;
 fn temporal_duration_plus_date() {
     let code = r#"spec test
 uses lemma units
-rule value: 2 hours + 2024-01-01T01:00:00Z"#;
+rule value: 2 hour + 2024-01-01T01:00:00Z"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["2024-01-01", "03:00:00"]);
 }
@@ -237,7 +241,7 @@ rule value: 2 hours + 2024-01-01T01:00:00Z"#;
 fn temporal_time_plus_duration() {
     let code = r#"spec test
 uses lemma units
-rule value: 14:30:00 + 90 minutes"#;
+rule value: 14:30:00 + 90 minute"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["16:00:00"]);
 }
@@ -246,7 +250,7 @@ rule value: 14:30:00 + 90 minutes"#;
 fn temporal_time_minus_duration() {
     let code = r#"spec test
 uses lemma units
-rule value: 14:30:00 - 90 minutes"#;
+rule value: 14:30:00 - 90 minute"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["13:00:00"]);
 }
@@ -255,7 +259,7 @@ rule value: 14:30:00 - 90 minutes"#;
 fn temporal_past_keyword_still_builds_range() {
     let code = r#"spec test
 uses lemma units
-rule value: (past 7 days) as days as number"#;
+rule value: (past 7 day) as day as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["7"]);
 }
@@ -264,13 +268,13 @@ rule value: (past 7 days) as days as number"#;
 fn temporal_future_keyword_still_builds_range() {
     let code = r#"spec test
 uses lemma units
-rule value: (future 2 hours) as minutes"#;
+rule value: (future 2 hour) as minute"#;
     assert_eq!(
         eval_rule_measure_unit(
             code,
             "test",
             "value",
-            "minutes",
+            "minute",
             &effective(2026, 3, 8, 12, 0, 0)
         ),
         "120"
@@ -282,7 +286,7 @@ fn temporal_event_in_past_range() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-03-05T12:00:00Z
-rule ok: event in past 7 days"#;
+rule ok: event in past 7 day"#;
     assert!(eval_bool(
         code,
         "test",
@@ -296,7 +300,7 @@ fn temporal_event_in_future_range() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-03-08T13:30:00Z
-rule ok: event in future 2 hours"#;
+rule ok: event in future 2 hour"#;
     assert!(eval_bool(
         code,
         "test",
@@ -309,7 +313,7 @@ rule ok: event in future 2 hours"#;
 fn temporal_explicit_now_minus_duration_range_span() {
     let code = r#"spec test
 uses lemma units
-rule value: (now - 7 days...now) as days as number"#;
+rule value: (now - 7 day...now) as day as number"#;
     let value = eval_rule(code, "test", "value", &effective(2026, 3, 8, 12, 0, 0));
     assert_contains_all(&value, &["7"]);
 }
@@ -319,7 +323,7 @@ fn temporal_explicit_now_minus_duration_range_contains_start_boundary() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-03-01T12:00:00Z
-rule ok: event in now - 7 days...now"#;
+rule ok: event in now - 7 day...now"#;
     assert!(eval_bool(
         code,
         "test",
@@ -333,7 +337,7 @@ fn temporal_explicit_now_minus_duration_range_excludes_end_boundary() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-03-08T12:00:00Z
-rule ok: event in now - 7 days...now"#;
+rule ok: event in now - 7 day...now"#;
     assert!(!eval_bool(
         code,
         "test",
@@ -347,7 +351,7 @@ fn temporal_explicit_now_minus_duration_range_rejects_just_outside_left() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-03-01T11:59:59Z
-rule ok: event in now - 7 days...now"#;
+rule ok: event in now - 7 day...now"#;
     assert!(!eval_bool(
         code,
         "test",
@@ -361,8 +365,8 @@ fn temporal_explicit_range_matches_past_keyword_for_inside_case() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-03-05T12:00:00Z
-rule past_check: event in past 7 days
-rule range_check: event in now - 7 days...now"#;
+rule past_check: event in past 7 day
+rule range_check: event in now - 7 day...now"#;
     let effective = effective(2026, 3, 8, 12, 0, 0);
     let past_check = eval_bool(code, "test", "past_check", &effective);
     let range_check = eval_bool(code, "test", "range_check", &effective);
@@ -375,8 +379,8 @@ fn temporal_explicit_range_matches_past_keyword_for_outside_case() {
     let code = r#"spec test
 uses lemma units
 data event: 2026-02-28T11:59:59Z
-rule past_check: event in past 7 days
-rule range_check: event in now - 7 days...now"#;
+rule past_check: event in past 7 day
+rule range_check: event in now - 7 day...now"#;
     let effective = effective(2026, 3, 8, 12, 0, 0);
     let past_check = eval_bool(code, "test", "past_check", &effective);
     let range_check = eval_bool(code, "test", "range_check", &effective);
@@ -425,13 +429,13 @@ rule value: 14:30:00 + 2 eur"#,
 #[test]
 fn temporal_past_without_visible_duration_typedef_rejected() {
     let code = r#"spec test
-rule value: past 7 days"#;
+rule value: past 7 day"#;
     expect_plan_error(code, "not in scope");
 }
 
 #[test]
 fn temporal_explicit_now_minus_duration_range_without_visible_typedef_rejected() {
     let code = r#"spec test
-rule value: now - 7 days...now"#;
+rule value: now - 7 day...now"#;
     expect_plan_error(code, "not in scope");
 }

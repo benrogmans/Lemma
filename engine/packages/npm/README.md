@@ -1,6 +1,6 @@
 # @lemmabase/lemma-engine
 
-> [Lemma](https://github.com/lemma/lemma) is a declarative language for business rules. **This package is the engine, compiled to WebAssembly** - runs in the browser, on Node, Bun, Deno, Cloudflare Workers, Vercel Edge, etc.
+> [Lemma](https://github.com/lemma/lemma) is a declarative language for business rules. **This package is the Lemma engine for JavaScript and TypeScript** — browser, Node, Bun, Deno, Cloudflare Workers, Vercel Edge, etc.
 
 Pricing tiers, tax brackets, leave entitlement, eligibility checks, discount stacks: the rules that change, that auditors ask about, that legal writes in PDFs and engineers re-implement in operational code... Lemma is a language built specifically for your business rules. It is readable by stakeholders, executable anywhere, and impossible to drift out of sync.
 
@@ -28,22 +28,22 @@ rule total:
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
-await engine.load(pricing, 'pricing.lemma');
+await engine.load({ 'pricing.lemma': pricing });
 
-const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null);
+const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null, false);
 // response.results.unit_price → 16 eur
 // response.results.total      → 800 eur
 ```
 
-The `Response` carries every rule's value (or `veto` if no result could be computed), the input snapshot, and the source location of every rule that fired, allowing you to render an audit trail in your UI.
+The `Response` carries every rule's value (or `veto` if no result could be computed). When inputs are still unbound, that rule includes `missing_data` (`string[]` input keys). Types, prefilled literals, and suggestions are on `engine.show(...)` (`Show.data`) only — not on the evaluate response.
 
 ## Why use it from JavaScript?
 
 - **Deterministic.** `(spec, data, effective_date) → result`. No DB, no clock, no ambient state. Same inputs → same outputs, every time.
-- **Explainable.** The `Response` tells you which rules contributed and why; pair it with the [CLI](https://github.com/lemma/lemma) for a full reasoning trace.
+- **Explainable.** Pass `explain: true` (6th `run` argument) to get a per-rule explanation tree; see [explanation.v1.json](https://github.com/lemma/lemma/blob/main/documentation/schemas/explanation.v1.json). Pair with the [CLI](https://github.com/lemma/lemma) for human reasoning tables.
 - **Time-aware.** Multiple versions of the same spec coexist. Pass an `effective` date and the engine resolves the version in force on that day.
 - **Statically checked.** Type errors, missing data, cycles, measure-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
-- **Runs anywhere V8 does.** ~2 MB WASM, no native binary, no postinstall script.
+- **Runs anywhere JavaScript does.** ~2 MB package, no native binary, no postinstall script.
 - **Editor in a tab.** Includes an in-process language server and a Monaco adapter, so you can build a real Lemma editor experience client-side - diagnostics, completion, formatting... even without setting up a server.
 
 ## Install
@@ -60,9 +60,9 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 ```
 
-`Lemma()` initializes the WASM module once and returns an `Engine`. Serve over **http(s)**, not `file://`. For manual control: `init()` then `new Engine()`.
+`Lemma()` initializes the engine once and returns an `Engine`. Serve over **http(s)**, not `file://`. For manual control: `init()` then `new Engine()`.
 
-If your bundler emits IIFE, can't resolve `import.meta.url`, or refuses to ship `lemma_bg.wasm` as a separate asset, use the inlined entry - it embeds the wasm bytes in the JS bundle:
+If your bundler emits IIFE, can't resolve `import.meta.url`, or refuses to ship the engine module as a separate asset, use the inlined entry — everything ships in one JS bundle:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine/iife';
@@ -86,7 +86,7 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 ```
 
-For zero-fetch startup with a preloaded module: `initSync({ module })` then `new Engine()`.
+For zero-fetch startup: `initSync({ module })` then `new Engine()`.
 
 ## In-process LSP + Monaco
 
@@ -111,39 +111,40 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 
 | Method | Description |
 |--------|-------------|
-| `load(code, attribute?)` | Parse and validate a `.lemma` spec set. Resolves on success; rejects with `EngineError[]`. |
-| `load_batch(sources, dependency?)` | Load many sources in one planning pass (see `lemma.d.ts`). |
+| `load(code)` | Load inline Lemma source as a volatile workspace source |
+| `load(sources)` | Load multiple sources in one planning pass (`Record<label, text>` or `[label, code][]`; `@org/pkg` keys tag dependencies) |
 | `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. Rejects with `EngineError[]`. |
-| `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs` (spec sets). Always includes embedded `lemma` / `spec units`. |
-| `format_repository(repo)` | Canonical Lemma source for a loaded repository, formatted from the in-engine AST. Use `"lemma"` for the embedded units stdlib. |
-| `schema(repo, name, effective?)` | `SpecSchema`; `repo` null for workspace. |
-| `run(repo, name, ruleNames, data, effective?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. |
+| `list()` | Slim catalog: `ResolvedRepository[]` with `repository` and temporal `specs` rows. Always includes embedded `lemma` / `spec units`. |
+| `show(repo, name, effective?)` | Spec interface + temporal window; `repo` null for workspace. |
+| `source(repo, spec?, effective?)` | Canonical Lemma source text. Omit `spec` for whole repository. |
+| `run(repo, name, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. `explain: true` adds per-rule explanation trees. |
+| `remove(repo, name, effective?)` | Remove a temporal spec slice. |
+| `limits()` | Resource limits for this engine. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled - see `lemma.d.ts`.
 
 ### Registry dependencies
 
-Specs that reference `uses … @org/pkg` need that package available. `fetch` only downloads; call `load_batch` to load the dependency, then load your workspace:
+Specs that reference `uses … @org/pkg` need that package available. `fetch` only downloads; call `load` with the dependency id as the source label, then load your workspace:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine';
 
 const engine = await Lemma();
 const { source, id } = await engine.fetch('@iso/countries');
-await engine.load_batch({ '': source }, id);
-await engine.load(sourceThatUsesStd, 'app.lemma');
+await engine.load({ [id]: source, 'app.lemma': sourceThatUsesStd });
 ```
 
 In the browser, the registry must allow your origin (CORS). Use `https` or `http://localhost` when using `fetch`.
 
 ## Status
 
-Lemma is pre-1.0. The WASM API is stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
+Lemma is pre-1.0. The JavaScript API is stable for most use cases, but breaking changes may occur between minor versions. Pin your dependency version and review the [changelog](https://github.com/lemma/lemma/blob/main/CHANGELOG.md) before upgrading.
 
-### WASM panic behavior
+### Runtime traps (internal bugs)
 
-Rust panics cannot unwind on the `wasm32` target, so an internal invariant violation (a bug) traps the WASM instance. The call throws a `RuntimeError` which you can catch with `try/catch` to fail gracefully, but the module's linear memory is poisoned — constructing a new `Engine()` from the same initialized module is not safe. To recover, re-initialize the WASM module (`init()` again) or, for robust containment, run the engine in a Web Worker and respawn the worker on trap. The panic message (prefixed `BUG: ...`) is logged to the console before the trap. All domain-level failures (invalid specs, bad data, impossible rules) are reported as `EngineError[]` or vetoes and never cause traps.
+An internal invariant violation (a bug in the engine) traps the runtime. The call throws a `RuntimeError` which you can catch with `try/catch`, but the loaded module is poisoned — constructing a new `Engine()` from the same initialization is not safe. To recover, call `init()` again or run the engine in a Web Worker and respawn the worker on trap. Domain failures (invalid specs, bad data, impossible rules) are reported as `EngineError[]` or vetoes and never cause traps.
 
 ## Related
 

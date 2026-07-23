@@ -60,10 +60,9 @@ pub fn comparison_operation(
         }
 
         (ValueKind::Range(range_left, range_right), _) => {
-            let measure = super::range::compute_measure(
+            let measure = super::range::compute_span(
                 range_left.as_ref(),
                 range_right.as_ref(),
-                Some(right),
             );
             compare_with_operation_result(measure, op, right)
         }

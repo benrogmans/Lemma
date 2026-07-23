@@ -46,7 +46,7 @@
           "name": "storage.type.lemma"
         },
         {
-          "match": "\\b(option|minimum|maximum|minimal|decimals|unit|units|options|length|default|help)\\b",
+          "match": "\\b(option|minimum|maximum|lower|upper|minimal|decimals|unit|units|options|length|suggest|help)\\b",
           "name": "keyword.operator.constraint.lemma"
         }
       ]
@@ -54,7 +54,7 @@
     "literals": {
       "patterns": [
         {
-          "match": "\\b(true|false|yes|no|accept|reject)\\b",
+          "match": "\\b(true|false|yes|no)\\b",
           "name": "constant.language.lemma"
         },
         {

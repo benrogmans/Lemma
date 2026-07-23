@@ -9,7 +9,7 @@ fn decimal_lit(d: &str) -> Decimal {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -55,7 +55,8 @@ fn test_unit_add_percentage_rejected() {
 fn test_unit_multiply_percentage() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    engine.load(
+    engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("ops.lemma"))),
         r#"
         spec unit_percentage_ops
 
@@ -63,9 +64,9 @@ fn test_unit_multiply_percentage() -> Result<(), lemma::Errors> {
         data increase: 20%
 
         rule scaled: price * increase
-        "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("ops.lemma"))),
-    )?;
+        "#
+        .to_string(),
+    )])?;
 
     let now = lemma::DateTimeValue::now();
     let response = engine
@@ -74,8 +75,8 @@ fn test_unit_multiply_percentage() -> Result<(), lemma::Errors> {
             "unit_percentage_ops",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("run should succeed after load");
 
@@ -124,7 +125,10 @@ fn test_complex_discount_scenario_rejected() {
 fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
     let mut engine = Engine::new();
 
-    engine.load(
+    engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "percentage.lemma",
+        ))),
         r#"
         spec percentage_ops
 
@@ -137,11 +141,9 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
         rule net_rate: tax_rate - discount_a
         rule compound: compound_rate * compound_rate
         rule price_ratio: compound_rate / discount_a
-        "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "percentage.lemma",
-        ))),
-    )?;
+        "#
+        .to_string(),
+    )])?;
 
     let now = lemma::DateTimeValue::now();
     let response = engine
@@ -150,8 +152,8 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
             "percentage_ops",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("run should succeed after load");
 

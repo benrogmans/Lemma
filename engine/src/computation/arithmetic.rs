@@ -343,16 +343,10 @@ pub fn arithmetic_operation(
             ArithmeticComputation::Add | ArithmeticComputation::Subtract
         ) =>
         {
-            let left_measure = super::range::compute_measure(
-                left_range_left.as_ref(),
-                left_range_right.as_ref(),
-                None,
-            );
-            let right_measure = super::range::compute_measure(
-                right_range_left.as_ref(),
-                right_range_right.as_ref(),
-                None,
-            );
+            let left_measure =
+                super::range::compute_span(left_range_left.as_ref(), left_range_right.as_ref());
+            let right_measure =
+                super::range::compute_span(right_range_left.as_ref(), right_range_right.as_ref());
             operate_on_operation_results(
                 left_measure,
                 op,
@@ -368,11 +362,7 @@ pub fn arithmetic_operation(
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract
             ) =>
         {
-            let measure = super::range::compute_measure(
-                range_left.as_ref(),
-                range_right.as_ref(),
-                Some(right),
-            );
+            let measure = super::range::compute_span(range_left.as_ref(), range_right.as_ref());
             operate_with_left_result(measure, op, right, unit_index, signature_index)
         }
 
@@ -382,11 +372,7 @@ pub fn arithmetic_operation(
                 ArithmeticComputation::Add | ArithmeticComputation::Subtract
             ) =>
         {
-            let measure = super::range::compute_measure(
-                range_left.as_ref(),
-                range_right.as_ref(),
-                Some(left),
-            );
+            let measure = super::range::compute_span(range_left.as_ref(), range_right.as_ref());
             operate_with_right_result(left, op, measure, unit_index, signature_index)
         }
 
@@ -1170,7 +1156,7 @@ mod tests {
         let left = rational_new(10, 1);
         let right = rational_new(3, 1);
         let quotient = number_arithmetic(&left, &ArithmeticComputation::Divide, &right).unwrap();
-        let decimal = crate::computation::rational::commit_rational_to_decimal(&quotient).unwrap();
+        let decimal = quotient.try_to_decimal().unwrap();
         assert!(decimal > Decimal::from(3));
         assert!(decimal < Decimal::from(4));
     }
@@ -1241,13 +1227,13 @@ mod tests {
         use std::sync::Arc;
         let mut engine = Engine::new();
         engine
-            .load(
-                code,
+            .load([(
                 crate::parsing::source::SourceType::Path(Arc::new(PathBuf::from("t.lemma"))),
-            )
+                code.to_string(),
+            )])
             .expect("spec must load");
         let response = engine
-            .run(None, spec, None, HashMap::new(), false, None)
+            .run(None, spec, None, HashMap::new(), None, false)
             .expect("spec must evaluate");
         let rule_result = response
             .results
@@ -1270,7 +1256,7 @@ data money: measure
   -> unit eur 1
 data rate: measure
   -> unit eur_per_hour eur/hour
-data hours: measure
+data hour: measure
   -> unit hour 1
 data r: 30 eur_per_hour
 data h: 2 hour
@@ -1300,7 +1286,7 @@ data money: measure
   -> unit eur 1
 data rate: measure
   -> unit eur_per_minute eur/minute
-data hours: measure
+data hour: measure
   -> unit hour 1
 data r: 40 eur_per_minute
 data h: 2 hour
@@ -1314,10 +1300,10 @@ rule weird: r * h
         use std::path::PathBuf;
         use std::sync::Arc;
         let mut engine = Engine::new();
-        let result = engine.load(
-            code,
+        let result = engine.load([(
             crate::parsing::source::SourceType::Path(Arc::new(PathBuf::from("t.lemma"))),
-        );
+            code.to_string(),
+        )]);
         assert!(
             result.is_err(),
             "rule producing anonymous Q*Q with no signature_index match must be rejected"
@@ -1337,7 +1323,7 @@ rule total: a + b
         let value = build_engine_and_get_value(code, "t", "total");
         match &value.value {
             ValueKind::Measure(n, _) => {
-                let decimal = crate::computation::rational::commit_rational_to_decimal(n).unwrap();
+                let decimal = n.try_to_decimal().unwrap();
                 assert_eq!(decimal, Decimal::from(150));
             }
             other => panic!("expected Measure, got {:?}", other),
@@ -1363,7 +1349,7 @@ rule total_rate: (a + b) as eur_per_second
         let value = build_engine_and_get_value(code, "t", "total_rate");
         match &value.value {
             ValueKind::Measure(n, _) => {
-                let decimal = crate::computation::rational::commit_rational_to_decimal(n).unwrap();
+                let decimal = n.try_to_decimal().unwrap();
                 // 10 + 1/3 ≈ 10.333...
                 let expected_low = Decimal::new(10_333, 3);
                 let expected_high = Decimal::new(10_334, 3);

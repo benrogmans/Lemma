@@ -1,5 +1,6 @@
 use lemma::DateTimeValue;
-use lemma::{Engine, ExecutionPlan, ValueKind};
+use lemma::__test_support::{checked_div, checked_mul, decimal_to_rational, rational_new};
+use lemma::{Engine, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -16,7 +17,7 @@ fn run_override_veto_message(
 ) -> String {
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, true, None)
+        .run(None, spec, Some(&now), data, None, true)
         .unwrap_or_else(|err| panic!("run must complete with veto, not Error: {err}"));
     let rr = resp
         .results
@@ -42,12 +43,14 @@ data money: measure
 
 data price: money
 
-rule check: accept
+rule check: true
     unless price > 100 usd then veto "This price is too high."
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -56,8 +59,8 @@ rule check: accept
             "pricing",
             Some(&now),
             HashMap::from([("price".to_string(), "150 eur".to_string())]),
-            true,
             None,
+            true,
         )
         .unwrap();
 
@@ -88,7 +91,9 @@ rule check: price
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let msg = run_override_veto_message(
         &engine,
@@ -113,11 +118,13 @@ rule price_eur: amount as eur
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), true, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let rule_result = response
         .results
@@ -173,11 +180,13 @@ rule taxable: gross - pension
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true, None)
+        .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let rule_result = response
@@ -204,7 +213,9 @@ rule price_gbp: 100 as gbp
 "#;
 
     let mut engine = Engine::new();
-    let load_err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
+    let load_err = engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap_err();
     let msg = load_err
         .errors
         .iter()
@@ -234,11 +245,13 @@ rule base_shipping: 5.99
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "shipping", Some(&now), HashMap::new(), true, None)
+        .run(None, "shipping", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let rule_result = response
@@ -285,11 +298,13 @@ rule total: base_fee + surcharge
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "shipping", Some(&now), HashMap::new(), true, None)
+        .run(None, "shipping", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let rule_result = response
@@ -331,17 +346,21 @@ spec physics
 data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
-    -> default 2 kilogram
+    -> suggest 2 kilogram
 
 rule result: mass as gram as number
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("mass".to_string(), "2 kilogram".to_string());
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true, None)
+        .run(None, "physics", Some(&now), data, None, true)
         .unwrap();
     let rule = response
         .results
@@ -378,17 +397,21 @@ spec physics
 data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
-    -> default 500 gram
+    -> suggest 500 gram
 
 rule result: mass as kilogram as number
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("mass".to_string(), "500 gram".to_string());
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true, None)
+        .run(None, "physics", Some(&now), data, None, true)
         .unwrap();
     let rule = response
         .results
@@ -426,17 +449,21 @@ data mass: measure
     -> unit kilogram 1.0
     -> unit gram 0.001
     -> unit pound 0.453592
-    -> default 1 pound
+    -> suggest 1 pound
 
 rule result: mass as gram as number
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("mass".to_string(), "1 pound".to_string());
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true, None)
+        .run(None, "physics", Some(&now), data, None, true)
         .unwrap();
     let rule = response
         .results
@@ -481,11 +508,13 @@ rule total: a + b
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true, None)
+        .run(None, "physics", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let rule = response
         .results
@@ -512,11 +541,13 @@ rule heavy: package > 1 kilogram
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "physics", Some(&now), HashMap::new(), true, None)
+        .run(None, "physics", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let rule = response
         .results
@@ -549,7 +580,9 @@ rule result: weight
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     // 1500 gram = 1.5 kg, which is under the 2 kg maximum
@@ -558,8 +591,8 @@ rule result: weight
         "physics",
         Some(&now),
         HashMap::from([("weight".to_string(), "1500 gram".to_string())]),
-        true,
         None,
+        true,
     );
 
     assert!(
@@ -584,7 +617,9 @@ rule result: weight
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     // 1500 gram = 1.5 kg, which is above the 1 kg minimum
@@ -593,8 +628,8 @@ rule result: weight
         "physics",
         Some(&now),
         HashMap::from([("weight".to_string(), "1500 gram".to_string())]),
-        true,
         None,
+        true,
     );
 
     assert!(
@@ -619,7 +654,9 @@ rule result: weight
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     // 3000 gram = 3 kg, which exceeds the 2 kg maximum
     let message = run_override_veto_message(
@@ -651,7 +688,9 @@ rule out: cost_per_unit
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let message = run_override_veto_message(
         &engine,
@@ -692,7 +731,9 @@ rule out: cost_per_unit
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let message = run_override_veto_message(
         &engine,
@@ -736,7 +777,10 @@ rule out: cost_per_unit
 fn compound_measure_below_maximum_in_other_unit_passes() {
     let mut engine = Engine::new();
     engine
-        .load(COMPOUND_COST_VALIDATION_SPEC, lemma::SourceType::Volatile)
+        .load([(
+            lemma::SourceType::Volatile,
+            COMPOUND_COST_VALIDATION_SPEC.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -748,8 +792,8 @@ fn compound_measure_below_maximum_in_other_unit_passes() {
             "cost_per_unit".to_string(),
             "2.01 usd_per_tonne".to_string(),
         )]),
-        true,
         None,
+        true,
     );
 
     assert!(
@@ -763,7 +807,10 @@ fn compound_measure_below_maximum_in_other_unit_passes() {
 fn compound_measure_above_maximum_shows_converted_bound_in_user_unit() {
     let mut engine = Engine::new();
     engine
-        .load(COMPOUND_COST_VALIDATION_SPEC, lemma::SourceType::Volatile)
+        .load([(
+            lemma::SourceType::Volatile,
+            COMPOUND_COST_VALIDATION_SPEC.to_string(),
+        )])
         .unwrap();
 
     let message = run_override_veto_message(
@@ -813,10 +860,10 @@ rule out: storage_cost
 fn tri_compound_measure_below_maximum_in_other_unit_passes() {
     let mut engine = Engine::new();
     engine
-        .load(
-            TRI_COMPOUND_COST_VALIDATION_SPEC,
+        .load([(
             lemma::SourceType::Volatile,
-        )
+            TRI_COMPOUND_COST_VALIDATION_SPEC.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -828,8 +875,8 @@ fn tri_compound_measure_below_maximum_in_other_unit_passes() {
             "storage_cost".to_string(),
             "2.01 usd_per_ton_hour".to_string(),
         )]),
-        true,
         None,
+        true,
     );
 
     assert!(
@@ -843,10 +890,10 @@ fn tri_compound_measure_below_maximum_in_other_unit_passes() {
 fn tri_compound_measure_above_maximum_shows_converted_bound_in_user_unit() {
     let mut engine = Engine::new();
     engine
-        .load(
-            TRI_COMPOUND_COST_VALIDATION_SPEC,
+        .load([(
             lemma::SourceType::Volatile,
-        )
+            TRI_COMPOUND_COST_VALIDATION_SPEC.to_string(),
+        )])
         .unwrap();
 
     let message = run_override_veto_message(
@@ -887,7 +934,9 @@ rule result: weight
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let message = run_override_veto_message(
         &engine,
@@ -912,11 +961,14 @@ fn reference_named_unit_conversion(
     from_factor: Decimal,
     to_factor: Decimal,
 ) -> Decimal {
-    stored
-        .checked_mul(from_factor)
-        .expect("reference conversion multiply failed")
-        .checked_div(to_factor)
-        .expect("reference conversion divide failed")
+    let magnitude = decimal_to_rational(stored).expect("reference stored magnitude must lift");
+    let from = decimal_to_rational(from_factor).expect("reference from factor must lift");
+    let to = decimal_to_rational(to_factor).expect("reference to factor must lift");
+    let canonical = checked_mul(&magnitude, &from).expect("reference multiply");
+    let in_unit = checked_div(&canonical, &to).expect("reference divide");
+    in_unit
+        .try_to_decimal()
+        .expect("reference conversion must materialize to decimal")
 }
 
 fn eval_rule_measure_magnitude(
@@ -926,7 +978,7 @@ fn eval_rule_measure_magnitude(
 ) -> (Decimal, String) {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, true)
         .expect("precision stress evaluation must complete");
     let rule = response
         .results
@@ -1004,7 +1056,9 @@ rule step1: step0 as p2
 rule step2: step1 as base
 "#;
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let (amount, unit) = eval_rule_measure_magnitude(&engine, "prime_precision", "step2");
     assert_eq!(unit, "base");
     assert_eq!(amount, Decimal::from(37));
@@ -1037,7 +1091,9 @@ fn precision_short_prime_chain_matches_stepwise_reference() {
     code.push_str(&format!("rule {final_rule}: {last} as base\n"));
 
     let mut engine = Engine::new();
-    engine.load(&code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, &code.to_string())])
+        .unwrap();
 
     let (lemma_amount, unit) = eval_rule_measure_magnitude(&engine, "prime_precision", &final_rule);
     assert_eq!(unit, "base");
@@ -1075,7 +1131,9 @@ fn precision_prime_ladder_forward_reverse_matches_reference() {
     code.push_str(&format!("rule {final_rule}: {last} as base\n"));
 
     let mut engine = Engine::new();
-    engine.load(&code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, &code.to_string())])
+        .unwrap();
 
     let (lemma_amount, unit) = eval_rule_measure_magnitude(&engine, "prime_precision", &final_rule);
     assert_eq!(unit, "base");
@@ -1086,8 +1144,7 @@ fn precision_prime_ladder_forward_reverse_matches_reference() {
     );
 }
 
-#[test]
-fn precision_many_prime_cycles_deterministic() {
+fn prime_cycles_lemma(cycle_count: usize) -> String {
     let cycle: &[u32] = &[2, 3, 5, 7, 11];
     let mut code = String::from(
         "spec prime_cycles\n\
@@ -1099,7 +1156,7 @@ fn precision_many_prime_cycles_deterministic() {
     code.push_str("data anchor: 37 base\nrule step0: anchor\n");
     let mut previous = String::from("step0");
     let mut step_number = 0;
-    for _cycle_index in 0..20 {
+    for _cycle_index in 0..cycle_count {
         for prime in cycle {
             step_number += 1;
             let rule = format!("step{step_number}");
@@ -1108,14 +1165,71 @@ fn precision_many_prime_cycles_deterministic() {
         }
     }
     code.push_str(&format!("rule final_step: {previous} as base\n"));
+    code
+}
+
+#[test]
+fn precision_many_prime_cycles_deterministic() {
+    let code = prime_cycles_lemma(20);
 
     let mut engine = Engine::new();
-    engine.load(&code, lemma::SourceType::Volatile).unwrap();
+    engine.load([(lemma::SourceType::Volatile, &code)]).unwrap();
 
     let (first, _) = eval_rule_measure_magnitude(&engine, "prime_cycles", "final_step");
     let (second, _) = eval_rule_measure_magnitude(&engine, "prime_cycles", "final_step");
     assert_eq!(first, second, "repeated evaluation must be deterministic");
     assert!(first > Decimal::ZERO);
+}
+
+/// Cold on-demand explain of the tip only — must not recurse O(hops) on the Rust stack.
+#[test]
+fn precision_many_prime_cycles_explain_tip_only() {
+    let code = prime_cycles_lemma(20);
+
+    let mut engine = Engine::new();
+    engine.load([(lemma::SourceType::Volatile, &code)]).unwrap();
+
+    let now = DateTimeValue::now();
+    let rules = ["final_step".to_string()];
+    let response = engine
+        .run(
+            None,
+            "prime_cycles",
+            Some(&now),
+            HashMap::new(),
+            Some(&rules),
+            true,
+        )
+        .expect("tip-only explain of 100-hop chain must complete");
+
+    assert_eq!(response.results.len(), 1);
+    let final_step = response.results.get("final_step").expect("final_step");
+    assert!(!final_step.vetoed, "final_step must not veto");
+    assert!(
+        final_step.explanation.is_some(),
+        "tip-only run with explain must attach explanation"
+    );
+    let again = engine
+        .run(
+            None,
+            "prime_cycles",
+            Some(&now),
+            HashMap::new(),
+            Some(&rules),
+            true,
+        )
+        .expect("second tip-only explain must complete");
+    let first_display = final_step.display.clone();
+    let second_display = again
+        .results
+        .get("final_step")
+        .expect("final_step")
+        .display
+        .clone();
+    assert_eq!(
+        first_display, second_display,
+        "repeated tip-only explain must be deterministic"
+    );
 }
 
 #[test]
@@ -1135,7 +1249,9 @@ fn precision_ping_pong_p7_p11_forty_hops() {
     code.push_str(&format!("rule final_step: {previous} as base\n"));
 
     let mut engine = Engine::new();
-    engine.load(&code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, &code.to_string())])
+        .unwrap();
     let (amount, unit) = eval_rule_measure_magnitude(&engine, "ping_pong", "final_step");
     assert_eq!(unit, "base");
     assert!(amount > Decimal::ZERO);
@@ -1160,18 +1276,18 @@ rule step4: step3 / two
 rule step5: step4 as base
 "#;
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
-    let mut reference =
-        reference_named_unit_conversion(Decimal::from(37), Decimal::ONE, Decimal::from(3));
-    reference = reference
-        .checked_mul(Decimal::from(5))
-        .expect("reference multiply by five");
-    reference = reference_named_unit_conversion(reference, Decimal::from(3), Decimal::from(7));
-    reference = reference
-        .checked_div(Decimal::from(2))
-        .expect("reference divide by two");
-    reference = reference_named_unit_conversion(reference, Decimal::from(7), Decimal::ONE);
+    let reference = {
+        let mut canonical = decimal_to_rational(Decimal::from(37)).expect("lift anchor");
+        canonical = checked_mul(&canonical, &rational_new(5, 1)).expect("multiply by five");
+        canonical = checked_div(&canonical, &rational_new(2, 1)).expect("divide by two");
+        canonical
+            .try_to_decimal()
+            .expect("reference must materialize to decimal")
+    };
 
     let (lemma_amount, unit) = eval_rule_measure_magnitude(&engine, "mixed_arith", "step5");
     assert_eq!(unit, "base");
@@ -1194,7 +1310,9 @@ fn precision_api_display_ping_pong_twenty_unit_toggles() {
     }
 
     let mut engine = Engine::new();
-    engine.load(&code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, &code.to_string())])
+        .unwrap();
 
     let (in_spec_amount, in_spec_unit) =
         eval_rule_measure_magnitude(&engine, "api_ping_pong", &previous);
@@ -1203,6 +1321,11 @@ fn precision_api_display_ping_pong_twenty_unit_toggles() {
         "p11" => Decimal::from(11),
         other => panic!("unexpected in-spec unit {other}"),
     };
+    assert_eq!(
+        in_spec_amount,
+        reference_named_unit_conversion(in_spec_amount, in_spec_factor, in_spec_factor),
+        "step20 in-spec display must match canonical materialization in its own unit"
+    );
 
     for index in 0..20 {
         let rule = format!("step{}", index + 1);
@@ -1215,7 +1338,7 @@ fn precision_api_display_ping_pong_twenty_unit_toggles() {
         let (amount, unit) = eval_rule_measure_magnitude(&engine, "api_ping_pong", &rule);
         assert_eq!(unit, target_unit);
         let expected =
-            reference_named_unit_conversion(in_spec_amount, in_spec_factor, target_factor);
+            reference_named_unit_conversion(Decimal::from(37), Decimal::ONE, target_factor);
         assert_eq!(
             amount, expected,
             "in-spec conversion at hop {index} must match reference"
@@ -1232,10 +1355,12 @@ data zero: 0
 rule quotient: ten / zero
 "#;
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "div0_control", Some(&now), HashMap::new(), true, None)
+        .run(None, "div0_control", Some(&now), HashMap::new(), None, true)
         .expect("evaluation must complete");
     let rule = response
         .results
@@ -1247,97 +1372,6 @@ rule quotient: ten / zero
     assert!(
         reason.contains("Division by zero") || reason.contains("division"),
         "expected division veto, got: {reason}"
-    );
-}
-
-/// Regression: stripping expression-scope unit_index from a serialized plan must
-/// not invalidate unit conversions that carry their owning type at plan time.
-#[test]
-fn eval_stripped_plan_unit_index_still_plans_and_runs() {
-    let code = r#"
-spec t
-uses lemma units
-data duration: units.duration
-data x: number -> default 5
-rule r: x as minutes
-"#;
-
-    let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-    let now = DateTimeValue::now();
-
-    let plan = engine.get_plan(None, "t", Some(&now)).unwrap();
-
-    let mut json: serde_json::Value =
-        serde_json::to_value(lemma::ExecutionPlanSerialized::from(plan)).unwrap();
-    let unit_index = json["unit_index"]
-        .as_object_mut()
-        .expect("unit_index object");
-    assert!(
-        unit_index.contains_key("minutes"),
-        "x as minutes must register minutes in unit_index before tampering; keys: {:?}",
-        unit_index.keys().collect::<Vec<_>>()
-    );
-    unit_index.remove("minutes");
-
-    let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
-    let reconstructed = ExecutionPlan::try_from(serialized)
-        .expect("carried owning_type must not need plan unit_index");
-    let response = engine
-        .run_plan(&reconstructed, Some(&now), HashMap::new(), false, None)
-        .expect("evaluation must succeed with carried conversion types");
-    let display = response
-        .results
-        .get("r")
-        .expect("rule r must be present")
-        .display
-        .clone()
-        .expect("rule r must have display");
-    assert_eq!(display, "5 minutes");
-}
-
-/// Regression: tampered unit conversion target rejected at TryFrom, not at eval.
-#[test]
-fn eval_tampered_unit_conversion_target_rejected_at_try_from() {
-    let code = r#"
-spec t
-uses lemma units
-data duration: units.duration
-data x: number -> default 5
-rule r: x as minutes
-"#;
-
-    let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-    let now = DateTimeValue::now();
-
-    let plan = engine.get_plan(None, "t", Some(&now)).unwrap();
-
-    let mut json: serde_json::Value =
-        serde_json::to_value(lemma::ExecutionPlanSerialized::from(plan)).unwrap();
-    let code_array = json["rules"][0]["instructions"]["code"]
-        .as_array_mut()
-        .expect("instruction code array");
-    let conversion = code_array
-        .iter_mut()
-        .find(|insn| insn.get("unit_conversion").is_some())
-        .expect("plan must contain a unit_conversion instruction");
-    let target = conversion
-        .get_mut("unit_conversion")
-        .expect("unit_conversion object")
-        .get_mut("target")
-        .expect("conversion target");
-    let unit = target
-        .get_mut("unit")
-        .expect("unit conversion target must be unit variant");
-    unit["unit_name"] = serde_json::Value::String("tampered_unit".to_string());
-
-    let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
-    let result = ExecutionPlan::try_from(serialized);
-    let err = result.expect_err("tampered conversion target must fail TryFrom");
-    assert_eq!(
-        err.message(),
-        "Serialized execution plan for spec 't' is invalid: Unit conversion target 'tampered_unit' is not declared on owning type 'duration'"
     );
 }
 
@@ -1353,7 +1387,7 @@ rule r: 5 as minutes
 
     let mut engine = Engine::new();
     let err = engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect_err("shadowed duration must reject minutes alias at load");
     let msg = format!("{err:?}");
     assert!(
@@ -1363,21 +1397,25 @@ rule r: 5 as minutes
 }
 
 #[test]
-fn stdlib_duration_minutes_loads_and_runs() {
+fn stdlib_duration_minute_loads_and_runs() {
     let code = r#"
 spec t
 uses lemma units
 data duration: units.duration
-data x: number -> default 5
-rule r: x as minutes
+data x: number -> suggest 5
+rule r: x as minute
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("x".to_string(), "5".to_string());
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true, None)
-        .expect("stdlib duration with minutes must run");
+        .run(None, "t", Some(&now), data, None, true)
+        .expect("stdlib duration with minute must run");
     let display = response
         .results
         .get("r")
@@ -1385,7 +1423,7 @@ rule r: x as minutes
         .display
         .as_deref()
         .expect("display");
-    assert_eq!(display, "5 minutes");
+    assert_eq!(display, "5 minute");
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1403,10 +1441,12 @@ data mass: measure -> unit kg 1
 rule out: 5 eur as kg
 "#;
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true, None)
+        .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let lit = response
         .results
@@ -1451,10 +1491,12 @@ data amount: 100 usd
 rule out: amount as eur as kg
 "#;
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true, None)
+        .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let lit = response
         .results
@@ -1495,10 +1537,12 @@ data amount: 100 usd
 rule out: amount as eur as number as kg
 "#;
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "t", Some(&now), HashMap::new(), true, None)
+        .run(None, "t", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let lit = response
         .results
@@ -1542,7 +1586,9 @@ data amount: money
 rule out: amount as number
 "#;
     let mut engine = Engine::new();
-    let err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
+    let err = engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap_err();
     let msg = err
         .errors
         .iter()
@@ -1570,7 +1616,9 @@ data amount: money
 rule out: amount as kg
 "#;
     let mut engine = Engine::new();
-    let err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
+    let err = engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap_err();
     let msg = err
         .errors
         .iter()

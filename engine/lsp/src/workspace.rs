@@ -1,11 +1,11 @@
-use lemma::{parse, Context, Error, LemmaRepository, ParseResult, ResourceLimits};
+use lemma::{parse, Error, ParseResult, ResourceLimits, SourceType};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 
 /// Web virtual dependency docs use `file:///lemma/repo/<hex-utf8>.lemma` (`hex` lowercase per client).
-/// Attributed like [`lemma::Engine::load_batch`]'s `(sources, dependency)`.
+/// Attributed like [`lemma::SourceType::Dependency`] when loading dependency bundles.
 const VIRTUAL_LEMMA_REPO_PREFIX: &str = "/lemma/repo/";
 
 /// Result of parsing a single file's content.
@@ -97,47 +97,21 @@ impl WorkspaceModel {
         Self::dependency_id_from_hex_segment(seg)
     }
 
-    /// Parity with `Engine::load_batch` when the second argument is `Some(dependency_id)`:
-    /// keep parsed repository names; for anonymous repositories use the virtual bundle id as
-    /// [`LemmaRepository::name`] and set [`LemmaRepository::dependency`].
-    ///
-    /// Files under `<workspace_root>/lemma_deps/` are attributed like dependency bundles (same as CLI).
-    fn repository_arc_for_workspace_file(
-        url: &Url,
-        parsed_repo: &Arc<LemmaRepository>,
-        workspace_root: Option<&Path>,
-    ) -> Arc<LemmaRepository> {
-        #[cfg(target_arch = "wasm32")]
-        let _ = workspace_root;
-
+    /// Provenance for [`lemma::Engine::load`]: workspace paths use [`SourceType::Path`];
+    /// `lemma_deps/` and virtual bundle URIs use [`SourceType::Dependency`].
+    fn source_type_for_url(&self, url: &Url) -> SourceType {
         if let Some(bundle_id) = Self::virtual_bundle_dependency_id(url) {
-            let repo = parsed_repo.as_ref();
-            let name = repo.name.clone().or_else(|| Some(bundle_id.clone()));
-            let mut out = LemmaRepository::new(name)
-                .with_start_line(repo.start_line)
-                .with_dependency(bundle_id.clone());
-            if let Some(st) = repo.source_type.clone() {
-                out = out.with_source_type(st);
-            }
-            return Arc::new(out);
+            return SourceType::Dependency(bundle_id);
         }
-
         #[cfg(not(target_arch = "wasm32"))]
-        if let (Some(root), Ok(path)) = (workspace_root, url.to_file_path()) {
+        if let (Some(root), Ok(path)) = (self.workspace_root.as_deref(), url.to_file_path()) {
             let deps_dir = lemma::deps::lemma_deps_dir(root);
             if path.starts_with(&deps_dir) {
                 let dep_id = lemma::deps::dependency_identifier_from_dependency_path(root, &path);
-                let repo = parsed_repo.as_ref();
-                let repo_name = repo.name.clone().or_else(|| Some(dep_id.clone()));
-                return Arc::new(
-                    LemmaRepository::new(repo_name)
-                        .with_start_line(repo.start_line)
-                        .with_dependency(dep_id),
-                );
+                return SourceType::Dependency(dep_id);
             }
         }
-
-        Arc::clone(parsed_repo)
+        SourceType::Path(Arc::new(PathBuf::from(Self::attribute_for_url(url))))
     }
 
     /// Derive a stable source attribute from a URL (path or URL string).
@@ -155,7 +129,7 @@ impl WorkspaceModel {
         let attribute = Self::attribute_for_url(&url);
         let parse_outcome = match parse(
             &text,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(&attribute))),
+            SourceType::Path(Arc::new(PathBuf::from(&attribute))),
             &self.limits,
         ) {
             Ok(result) => ParseOutcome::Success(result),
@@ -188,86 +162,41 @@ impl WorkspaceModel {
             })
     }
 
-    /// Insert all successfully parsed workspace files into `ctx` (same attribution as validation).
-    pub fn insert_specs_into_context(&self, ctx: &mut Context) -> Vec<(String, Error)> {
-        let mut insert_errors = Vec::new();
-        for tracked in self.files.values() {
-            if let ParseOutcome::Success(parse_result) = &tracked.parse_outcome {
-                for (parsed_repo, specs) in &parse_result.repositories {
-                    let repository_arc = Self::repository_arc_for_workspace_file(
-                        &tracked.url,
-                        parsed_repo,
-                        self.workspace_root.as_deref(),
-                    );
-                    for spec in specs {
-                        let attr = spec
-                            .source_type
-                            .as_ref()
-                            .expect("BUG: spec missing source_type after parsing")
-                            .to_string();
-                        match ctx.insert_spec(Arc::clone(&repository_arc), Arc::new(spec.clone())) {
-                            Ok(()) => {}
-                            Err(e) => insert_errors.push((attr, e)),
-                        }
-                    }
+    fn load_tracked_files_into(&self, engine: &mut lemma::Engine) -> HashMap<String, Vec<Error>> {
+        let sources: Vec<_> = self
+            .files
+            .values()
+            .filter(|t| matches!(t.parse_outcome, ParseOutcome::Success(_)))
+            .map(|t| (self.source_type_for_url(&t.url), t.text.clone()))
+            .collect();
+
+        match engine.load(sources) {
+            Ok(()) => HashMap::new(),
+            Err(e) => {
+                let mut by_attr: HashMap<String, Vec<Error>> = HashMap::new();
+                for err in e.errors {
+                    let attr = err
+                        .location()
+                        .map(|s| s.source_type.to_string())
+                        .unwrap_or_default();
+                    by_attr.entry(attr).or_default().push(err);
                 }
+                by_attr
             }
         }
-        insert_errors
     }
 
     /// Embedded stdlib plus all workspace specs (same composition as [`Engine::new`] after load).
     pub fn engine_with_workspace(&self) -> lemma::Engine {
         let mut engine = lemma::Engine::new();
-        let _ = self.insert_specs_into_context(engine.specs_mut());
+        let _ = self.load_tracked_files_into(&mut engine);
         engine
     }
 
     /// Run a full workspace validation: parse errors + planning errors for all files.
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
         let mut engine = lemma::Engine::new();
-        let insert_errors = self.insert_specs_into_context(engine.specs_mut());
-        let mut results = self.validate_workspace_with_resolved_specs(engine.specs());
-        for (attr, e) in insert_errors {
-            if let Some(r) = results.iter_mut().find(|d| d.attribute == attr) {
-                r.errors.push(e);
-            } else if let Some(r) = results.first_mut() {
-                r.errors.push(e);
-            }
-        }
-        results
-    }
-
-    /// Run planning with the given context. Returns one FileDiagnostics per workspace file.
-    pub fn validate_workspace_with_resolved_specs(&self, ctx: &Context) -> Vec<FileDiagnostics> {
-        let mut planning_errors_by_attribute: HashMap<String, Vec<Error>> = HashMap::new();
-
-        let planning_result = lemma::plan(ctx, &self.limits);
-        let all_planning_errors: Vec<Error> = planning_result
-            .results
-            .into_iter()
-            .flat_map(|set| {
-                set.slice_results
-                    .into_iter()
-                    .flat_map(|sr| {
-                        let ctx_spec = Arc::clone(&sr.spec);
-                        sr.errors
-                            .into_iter()
-                            .map(move |e| e.with_spec_context(Arc::clone(&ctx_spec)))
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        for error in all_planning_errors {
-            let err_attr = error
-                .location()
-                .map(|s| s.source_type.to_string())
-                .unwrap_or_default();
-            planning_errors_by_attribute
-                .entry(err_attr)
-                .or_default()
-                .push(error);
-        }
+        let load_errors_by_attribute = self.load_tracked_files_into(&mut engine);
 
         let mut results = Vec::new();
         for (attribute, tracked) in &self.files {
@@ -275,8 +204,8 @@ impl WorkspaceModel {
             if let ParseOutcome::Failed(parse_errors) = &tracked.parse_outcome {
                 file_errors.extend(parse_errors.iter().cloned());
             }
-            if let Some(plan_errors) = planning_errors_by_attribute.remove(attribute) {
-                file_errors.extend(plan_errors);
+            if let Some(load_errors) = load_errors_by_attribute.get(attribute) {
+                file_errors.extend(load_errors.iter().cloned());
             }
             results.push(FileDiagnostics {
                 url: tracked.url.clone(),
@@ -458,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn deps_lemma_files_use_registry_identity_like_cli_load_batch() {
+    fn deps_lemma_files_use_registry_identity_like_dependency_load() {
         let root = std::env::temp_dir().join("lemma_lsp_deps_workspace_test");
         let _ = std::fs::remove_dir_all(&root);
         let dep_path = lemma::deps::dependency_cache_file(&root, "@iso/countries");
@@ -503,10 +432,10 @@ mod tests {
     }
 
     #[test]
-    fn inline_registry_repo_spec_keeps_host_file_as_source_type() {
+    fn inline_registry_repo_spec_loads_with_dependency_provenance() {
         let root = std::env::temp_dir().join("lemma_lsp_inline_registry_repo_test");
         let _ = std::fs::remove_dir_all(&root);
-        let dep_path = lemma::deps::dependency_cache_file(&root, "@iso/countries");
+        let dep_path = lemma::deps::dependency_cache_file(&root, "@user/somedep");
         std::fs::create_dir_all(dep_path.parent().expect("dep parent")).expect("create dep dir");
         let src = "spec consumer\nuses @user/somedep some_spec\ndata x: 1\n\nrepo @user/somedep\nspec some_spec\ndata y: 2\n";
         std::fs::write(&dep_path, src).expect("write dep");
@@ -516,29 +445,14 @@ mod tests {
         let url_dep = Url::from_file_path(&dep_path).expect("dep url");
         workspace.update_file(url_dep, src.to_string());
 
-        let mut ctx = Context::new();
-        let insert_errs = workspace.insert_specs_into_context(&mut ctx);
-        assert!(insert_errs.is_empty(), "insert errors: {:?}", insert_errs);
-
-        let repo = ctx
-            .find_repository("@user/somedep")
-            .expect("@user/somedep repo");
-        let spec_set = ctx.spec_set(&repo, "some_spec").expect("some_spec set");
-        let resolved = spec_set
-            .spec_at(&lemma::EffectiveDate::Origin)
-            .expect("some_spec at origin");
-
-        let path_from_spec = match resolved.source_type.as_ref() {
-            Some(lemma::SourceType::Path(p)) => p.as_ref().clone(),
-            o => panic!("expected Path source_type, got {:?}", o),
-        };
-        assert_eq!(path_from_spec, dep_path);
-
-        let cache_path = lemma::deps::dependency_cache_file(&root, "@user/somedep");
-        assert!(
-            !cache_path.exists(),
-            "test assumes no fetched bundle at {:?}",
-            cache_path
+        let engine = workspace.engine_with_workspace();
+        let shown = engine
+            .show(Some("@user/somedep"), "some_spec", None)
+            .expect("some_spec must show");
+        assert_eq!(
+            shown.source_type.as_ref().map(|st| st.to_string()),
+            Some("@user/somedep".to_string()),
+            "expected Dependency source_type"
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -549,7 +463,7 @@ mod tests {
     }
 
     #[test]
-    fn virtual_bundle_hex_path_scopes_unnamed_repo_like_load_batch() {
+    fn virtual_bundle_hex_path_scopes_unnamed_repo_like_dependency_load() {
         let dep_id = "@scope/pkg";
         let hex = hex_utf8_path_segment(dep_id);
         let dep_url = Url::parse(&format!("file:///lemma/repo/{hex}.lemma")).unwrap();
@@ -610,7 +524,7 @@ rule smoke: true
         workspace.update_file(
             url.clone(),
             r#"spec finance
-data rate: number -> default 0
+data rate: number -> suggest 0
 
 spec finance 2026-05-20
 uses fin: finance 2027

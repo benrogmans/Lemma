@@ -29,8 +29,6 @@ pub enum TokenKind {
     False,
     Yes,
     No,
-    Accept,
-    Reject,
 
     // Type keywords
     MeasureKw,
@@ -122,8 +120,6 @@ impl std::fmt::Display for TokenKind {
             TokenKind::False => write!(f, "'false'"),
             TokenKind::Yes => write!(f, "'yes'"),
             TokenKind::No => write!(f, "'no'"),
-            TokenKind::Accept => write!(f, "'accept'"),
-            TokenKind::Reject => write!(f, "'reject'"),
             TokenKind::MeasureKw => write!(f, "'measure'"),
             TokenKind::NumberKw => write!(f, "'number'"),
             TokenKind::TextKw => write!(f, "'text'"),
@@ -236,14 +232,6 @@ impl Lexer {
         }
     }
 
-    pub fn source_text(&self) -> Arc<str> {
-        self.source_text.clone()
-    }
-
-    pub fn source_type(&self) -> crate::parsing::source::SourceType {
-        self.source_type.clone()
-    }
-
     pub fn peek(&mut self) -> Result<&Token, Error> {
         if self.peeked.is_none() {
             let token = self.lex_token()?;
@@ -259,16 +247,6 @@ impl Lexer {
             self.peeked2 = Some(token);
         }
         Ok(self.peeked2.as_ref().expect("just assigned"))
-    }
-
-    /// Current raw position as a Span. Does not trigger tokenization.
-    pub fn current_span(&self) -> Span {
-        Span {
-            start: self.byte_offset,
-            end: self.byte_offset,
-            line: self.line,
-            col: self.col,
-        }
     }
 
     pub fn next_token(&mut self) -> Result<Token, Error> {
@@ -690,8 +668,6 @@ fn keyword_from_identifier(text: &str) -> TokenKind {
         "false" => TokenKind::False,
         "yes" => TokenKind::Yes,
         "no" => TokenKind::No,
-        "accept" => TokenKind::Accept,
-        "reject" => TokenKind::Reject,
         "measure" => TokenKind::MeasureKw,
         "number" => TokenKind::NumberKw,
         "text" => TokenKind::TextKw,
@@ -756,8 +732,6 @@ pub fn is_keyword(kind: &TokenKind) -> bool {
             | TokenKind::False
             | TokenKind::Yes
             | TokenKind::No
-            | TokenKind::Accept
-            | TokenKind::Reject
             | TokenKind::MeasureKw
             | TokenKind::NumberKw
             | TokenKind::TextKw
@@ -787,12 +761,7 @@ pub fn token_kind_to_primitive(kind: &TokenKind) -> Option<PrimitiveKind> {
 pub fn is_boolean_keyword(kind: &TokenKind) -> bool {
     matches!(
         kind,
-        TokenKind::True
-            | TokenKind::False
-            | TokenKind::Yes
-            | TokenKind::No
-            | TokenKind::Accept
-            | TokenKind::Reject
+        TokenKind::True | TokenKind::False | TokenKind::Yes | TokenKind::No
     )
 }
 
@@ -804,8 +773,6 @@ pub fn token_kind_to_boolean_value(kind: &TokenKind) -> BooleanValue {
         TokenKind::False => BooleanValue::False,
         TokenKind::Yes => BooleanValue::Yes,
         TokenKind::No => BooleanValue::No,
-        TokenKind::Accept => BooleanValue::Accept,
-        TokenKind::Reject => BooleanValue::Reject,
         _ => unreachable!(
             "BUG: token_kind_to_boolean_value called with non-boolean token {:?}",
             kind
@@ -842,8 +809,9 @@ pub fn is_spec_body_keyword(kind: &TokenKind) -> bool {
     )
 }
 
-/// Returns true if the token can be used as a label/identifier
-/// (i.e. it is a non-reserved keyword or an identifier).
+/// Returns true if the token kind can be used as a label or reference segment
+/// (identifier, or non-reserved contextual keyword such as `past` / `future` /
+/// `permille` / `is`).
 pub fn can_be_label(kind: &TokenKind) -> bool {
     matches!(
         kind,
@@ -859,12 +827,6 @@ pub fn can_be_label(kind: &TokenKind) -> bool {
 #[must_use]
 pub fn token_is_calendar_period_marker(tok: &Token) -> bool {
     tok.kind == TokenKind::Identifier && tok.text == "calendar"
-}
-
-/// Returns true if the token kind can be used as a reference segment
-/// (identifier, type keyword, or non-reserved contextual keyword).
-pub fn can_be_reference_segment(kind: &TokenKind) -> bool {
-    can_be_label(kind)
 }
 
 /// Slash-/dot-separated registry path segments (`@org/repo/...`). Keywords that are
@@ -1056,23 +1018,21 @@ mod tests {
 
     #[test]
     fn lex_boolean_keywords() {
-        let kinds = lex_kinds("true false yes no accept reject").unwrap();
+        let kinds = lex_kinds("true false yes no").unwrap();
         assert_eq!(
-            &kinds[..6],
+            &kinds[..4],
             &[
                 TokenKind::True,
                 TokenKind::False,
                 TokenKind::Yes,
                 TokenKind::No,
-                TokenKind::Accept,
-                TokenKind::Reject,
             ]
         );
     }
 
     #[test]
     fn lex_duration_keywords() {
-        let kinds = lex_kinds("years months weeks days hours minutes seconds").unwrap();
+        let kinds = lex_kinds("year month week day hour minute second").unwrap();
         assert_eq!(
             &kinds[..7],
             &[

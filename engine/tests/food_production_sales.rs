@@ -21,7 +21,7 @@ fn run(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Response {
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&now), data_map, false, None)
+        .run(None, spec, Some(&now), data_map, None, false)
         .unwrap()
 }
 
@@ -32,7 +32,7 @@ fn run_at(engine: &Engine, spec: &str, data: &[(&str, &str)], effective: &str) -
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&dt), data_map, false, None)
+        .run(None, spec, Some(&dt), data_map, None, false)
         .unwrap()
 }
 
@@ -78,7 +78,8 @@ fn vetoed(resp: &lemma::Response, rule: &str) -> bool {
 fn ingredient_cost_per_batch() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("ingredient_costing.lemma"),
             r#"
 spec ingredient_costing
 uses lemma units
@@ -105,9 +106,9 @@ rule flour_cost: flour_needed * flour_price_per_kg
 rule sugar_cost: sugar_needed * sugar_price_per_kg
 
 rule batch_ingredient_cost: flour_cost + sugar_cost
-"#,
-            src("ingredient_costing.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "ingredient_costing", &[]);
@@ -142,7 +143,8 @@ rule batch_ingredient_cost: flour_cost + sugar_cost
 fn batch_yield_and_packaging() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("batch_packaging.lemma"),
             r#"
 spec batch_packaging
 
@@ -153,9 +155,9 @@ data cookies_per_box: 12
 rule good_cookies: batch_size - reject_rate * batch_size
 rule full_boxes: floor(good_cookies / cookies_per_box)
 rule leftover_cookies: good_cookies % cookies_per_box
-"#,
-            src("batch_packaging.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "batch_packaging", &[]);
@@ -177,7 +179,7 @@ rule leftover_cookies: good_cookies % cookies_per_box
 // SCENARIO 3: Production throughput with duration units
 //
 // A production line runs at 200 units/hour.
-// Shift is 8 hours, but 30 min changeover + 15 min breaks.
+// Shift is 8 hour, but 30 min changeover + 15 min breaks.
 // How many units per shift?
 //
 // Exercises: duration arithmetic, as-conversion, compound calculation
@@ -187,23 +189,24 @@ rule leftover_cookies: good_cookies % cookies_per_box
 fn production_throughput_per_shift() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("throughput.lemma"),
             r#"
 spec production_throughput
 uses lemma units
 
 data units_per_hour: 200
-data shift_length: 8 hours
-data changeover_time: 30 minutes
-data break_time: 15 minutes
+data shift_length: 8 hour
+data changeover_time: 30 minute
+data break_time: 15 minute
 
 rule productive_time: shift_length - changeover_time - break_time
-rule productive_hours: productive_time as hours as number
+rule productive_hours: productive_time as hour as number
 rule units_per_shift: productive_hours * units_per_hour
 rule meets_daily_target: units_per_shift >= 1400
-"#,
-            src("throughput.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "production_throughput", &[]);
@@ -224,7 +227,7 @@ rule meets_daily_target: units_per_shift >= 1400
 // SCENARIO 4: Shelf life and expiry date
 //
 // Product has 90-day shelf life from production.
-// Delivery takes 3 days. Customer wants 60 days minimum remaining.
+// Delivery takes 3 day. Customer wants 60 day minimum remaining.
 // Can we fulfill?
 //
 // Exercises: date + duration, date comparison, date ranges
@@ -234,45 +237,46 @@ rule meets_daily_target: units_per_shift >= 1400
 fn shelf_life_check() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("shelf_life.lemma"),
             r#"
 spec shelf_life
 uses lemma units
 
 data production_date: 2025-06-01
-data shelf_life_days: 90 days
-data delivery_days: 3 days
-data min_remaining_days: 60 days
+data shelf_life_days: 90 day
+data delivery_days: 3 day
+data min_remaining_days: 60 day
 
 rule expiry_date: production_date + shelf_life_days
 rule arrival_date: production_date + delivery_days
-rule days_remaining_at_arrival: (arrival_date...expiry_date) as days
+rule days_remaining_at_arrival: (arrival_date...expiry_date) as day
 rule meets_shelf_requirement: days_remaining_at_arrival >= min_remaining_days
-"#,
-            src("shelf_life.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "shelf_life", &[]);
 
-    // expiry = 2025-06-01 + 90 days = 2025-08-30
+    // expiry = 2025-06-01 + 90 day = 2025-08-30
     // QUIRK: date + duration displays as datetime with time component
     let expiry = display(&resp, "expiry_date");
-    assert_eq!(expiry, "2025-08-30T00:00:00Z", "production + 90 days");
+    assert_eq!(expiry, "2025-08-30T00:00:00Z", "production + 90 day");
 
-    // arrival = 2025-06-01 + 3 days = 2025-06-04
+    // arrival = 2025-06-01 + 3 day = 2025-06-04
     let arrival = display(&resp, "arrival_date");
-    assert_eq!(arrival, "2025-06-04T00:00:00Z", "production + 3 days");
+    assert_eq!(arrival, "2025-06-04T00:00:00Z", "production + 3 day");
 
-    // remaining = (2025-06-04...2025-08-30) as days = 87 days
+    // remaining = (2025-06-04...2025-08-30) as day = 87 day
     let remaining = display(&resp, "days_remaining_at_arrival");
     assert_eq!(
-        remaining, "87 days",
-        "87 days shelf life remaining at arrival"
+        remaining, "87 day",
+        "87 day shelf life remaining at arrival"
     );
 
     let meets = display(&resp, "meets_shelf_requirement");
-    assert_eq!(meets, "true", "87 >= 60 days remaining");
+    assert_eq!(meets, "true", "87 >= 60 day remaining");
 }
 
 // ===========================================================================
@@ -289,7 +293,8 @@ rule meets_shelf_requirement: days_remaining_at_arrival >= min_remaining_days
 fn freight_cost_weight_tiers() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("freight.lemma"),
             r#"
 spec freight
 uses lemma units
@@ -310,9 +315,9 @@ rule refrigeration_surcharge: 0%
 
 rule surcharge_amount: base_freight * refrigeration_surcharge
 rule total_freight: base_freight + surcharge_amount
-"#,
-            src("freight.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // 750kg non-refrigerated: rate = 6, freight = 7.5 * 6 = 45
@@ -374,7 +379,8 @@ rule total_freight: base_freight + surcharge_amount
 fn volume_discount_and_moq() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("wholesale.lemma"),
             r#"
 spec wholesale_order
 
@@ -382,7 +388,7 @@ data unit_price: 2.40
 data order_measure: number -> minimum 0
 data moq: 50
 
-rule measure_check: accept
+rule measure_check: true
   unless order_measure < moq then veto "Below minimum order measure"
 
 rule volume_discount: 0%
@@ -397,9 +403,9 @@ rule order_value: effective_price * order_measure
 rule free_shipping: order_value >= 2000
 rule shipping_cost: 35
   unless free_shipping then 0
-"#,
-            src("wholesale.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Order 750 units: discount = 12%, effective = 2.40 * 0.88 = 2.112
@@ -445,7 +451,8 @@ rule shipping_cost: 35
 fn multi_currency_pricing() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("currency.lemma"),
             r#"
 spec currency_pricing
 
@@ -467,9 +474,9 @@ rule us_markup_amount: price_usd * us_markup
 rule uk_markup_amount: price_gbp * uk_markup
 rule us_retail: price_usd + us_markup_amount
 rule uk_retail: price_gbp + uk_markup_amount
-"#,
-            src("currency.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "currency_pricing", &[]);
@@ -510,7 +517,8 @@ rule uk_retail: price_gbp + uk_markup_amount
 fn production_planning_cross_spec() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("production.lemma"),
             r#"
 spec recipe
 
@@ -529,9 +537,9 @@ data customer_order_quantity: number -> minimum 1
 rule batches_needed: ceil(customer_order_quantity / r.net_yield)
 rule total_production: batches_needed * r.yield_per_batch
 rule expected_waste: total_production * r.reject_rate
-"#,
-            src("production.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(
@@ -568,7 +576,8 @@ rule expected_waste: total_production * r.reject_rate
 fn compound_unit_cost_per_kg() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("cost_per_weight.lemma"),
             r#"
 spec cost_per_weight
 uses lemma units
@@ -580,15 +589,15 @@ data cost_rate: measure
   -> unit eur_per_kg eur/kilogram
 
 data shipment_weight: 340 kilogram
-data rate: cost_rate -> default 1.85 eur_per_kg
+data rate: cost_rate -> suggest 1.85 eur_per_kg
 
 rule total_cost: (rate * shipment_weight) as eur
-"#,
-            src("cost_per_weight.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    let resp = run(&engine, "cost_per_weight", &[]);
+    let resp = run(&engine, "cost_per_weight", &[("rate", "1.85 eur_per_kg")]);
 
     // 1.85 eur/kg * 340 kg = 629 eur
     let cost = display(&resp, "total_cost");
@@ -608,7 +617,8 @@ rule total_cost: (rate * shipment_weight) as eur
 fn nutritional_density() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("nutrition.lemma"),
             r#"
 spec nutrition
 uses lemma units
@@ -619,9 +629,9 @@ data batch_weight: 2 kilogram
 rule sugar_fraction: (sugar_per_batch as kilogram as number) / (batch_weight as kilogram as number)
 rule sugar_per_100g: sugar_fraction * 100
 rule high_sugar_label: sugar_per_100g > 22.5
-"#,
-            src("nutrition.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "nutrition", &[]);
@@ -652,8 +662,7 @@ rule high_sugar_label: sugar_per_100g > 22.5
 fn pallet_loading() {
     let mut engine = Engine::new();
     engine
-        .load(
-            r#"
+        .load([(src("pallet_truck.lemma"), r#"
 spec pallet_truck
 uses lemma units
 
@@ -672,9 +681,7 @@ rule boxes_per_pallet: boxes_by_count
 
 rule boxes_per_truck: boxes_per_pallet * pallets_per_truck
 rule weight_per_truck: boxes_per_truck * (box_weight as kilogram as number)
-"#,
-            src("pallet_truck.lemma"),
-        )
+"#.to_string())])
         .unwrap();
 
     let resp = run(&engine, "pallet_truck", &[]);
@@ -717,7 +724,8 @@ rule weight_per_truck: boxes_per_truck * (box_weight as kilogram as number)
 fn seasonal_pricing() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("seasonal.lemma"),
             r#"
 spec ingredient_prices
 
@@ -747,9 +755,9 @@ rule cream_per_serving: prices.cream_cost / 4
 rule berry_per_serving: prices.berry_cost / 8
 rule dessert_cost: cream_per_serving + berry_per_serving
 rule menu_line_total: dessert_cost * servings
-"#,
-            src("seasonal.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Winter pricing (before June)
@@ -770,39 +778,40 @@ rule menu_line_total: dessert_cost * servings
 // ===========================================================================
 // SCENARIO 13: Food safety — temperature hold time
 //
-// Product must not be in 5°C–60°C "danger zone" for more than 2 hours.
+// Product must not be in 5°C–60°C "danger zone" for more than 2 hour.
 // Cooling log: entered zone at 14:30, exited at 16:15.
 // Is it safe?
 //
-// Exercises: time range, span as hours, duration comparison
+// Exercises: time range, span as hour, duration comparison
 // ===========================================================================
 
 #[test]
 fn temperature_danger_zone_hold_time() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("food_safety.lemma"),
             r#"
 spec food_safety
 uses lemma units
 
 data danger_zone_entry: 14:30
 data danger_zone_exit: 16:15
-data max_hold_time: 2 hours
+data max_hold_time: 2 hour
 
-rule time_in_zone: (danger_zone_entry...danger_zone_exit) as hours
+rule time_in_zone: (danger_zone_entry...danger_zone_exit) as hour
 rule hold_exceeded: time_in_zone > max_hold_time
 rule is_safe: not hold_exceeded
-"#,
-            src("food_safety.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "food_safety", &[]);
 
-    // 14:30 to 16:15 = 1h45m = 1.75 hours (signature hour → display uses hour)
+    // 14:30 to 16:15 = 1h45m = 1.75 hour (signature hour → display uses hour)
     let tiz = display(&resp, "time_in_zone");
-    assert_eq!(tiz, "1.75 hours", "14:30 to 16:15 = 1.75h");
+    assert_eq!(tiz, "1.75 hour", "14:30 to 16:15 = 1.75h");
 
     let exceeded = display(&resp, "hold_exceeded");
     assert_eq!(exceeded, "false", "1.75h < 2h → not exceeded");
@@ -824,7 +833,8 @@ rule is_safe: not hold_exceeded
 fn full_order_pipeline() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("order_pipeline.lemma"),
             r#"
 spec batch_recipe
 
@@ -850,9 +860,9 @@ rule gross_profit: order_revenue - production_cost
 rule actual_margin: gross_profit / order_revenue
 rule margin_pct: actual_margin as percent
 rule margin_check: margin_pct >= target_margin
-"#,
-            src("order_pipeline.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "sales_order", &[("order_quantity", "500")]);
@@ -883,7 +893,8 @@ rule margin_check: margin_pct >= target_margin
 fn allergen_compliance_veto() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("allergen.lemma"),
             r#"
 spec allergen_check
 
@@ -895,19 +906,19 @@ data destination: text
 data contains_peanut: boolean
 data contains_gluten: boolean
 
-rule peanut_clearance: accept
+rule peanut_clearance: true
   unless contains_peanut and destination is "JP"
     then veto "Peanut products banned in target market"
 
-rule gluten_clearance: accept
+rule gluten_clearance: true
 
 rule can_ship: peanut_clearance and gluten_clearance
 
 rule shipment_status: "Cleared for export"
   unless can_ship is veto then "BLOCKED"
-"#,
-            src("allergen.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Peanut product to Japan → veto
@@ -945,10 +956,10 @@ rule shipment_status: "Cleared for export"
 }
 
 // ===========================================================================
-// SCENARIO 16: Unit conversion chain — grams to tonnes
+// SCENARIO 16: Unit conversion chain — gram to tonne
 //
 // Warehouse receives deliveries in various units.
-// Need total in tonnes for capacity planning.
+// Need total in tonne for capacity planning.
 //
 // Exercises: multi-step unit conversion within mass family
 // ===========================================================================
@@ -957,7 +968,8 @@ rule shipment_status: "Cleared for export"
 fn mass_conversion_chain() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("warehouse.lemma"),
             r#"
 spec warehouse
 uses lemma units
@@ -975,9 +987,9 @@ rule total_tonnes: total_kg / 1000
 rule warehouse_capacity_tonnes: 50
 rule utilization: total_tonnes / warehouse_capacity_tonnes
 rule is_near_capacity: utilization > 0.8
-"#,
-            src("warehouse.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "warehouse", &[]);
@@ -989,8 +1001,8 @@ rule is_near_capacity: utilization > 0.8
     let total = display(&resp, "total_kg");
     assert_eq!(total, "5050", "2500 + 750 + 1800 = 5050 kg");
 
-    let tonnes = display(&resp, "total_tonnes");
-    assert_eq!(tonnes, "5.05", "5050 / 1000 = 5.05 tonnes");
+    let tonne = display(&resp, "total_tonnes");
+    assert_eq!(tonne, "5.05", "5050 / 1000 = 5.05 tonne");
 
     // utilization = 5.05 / 50 = 0.101
     let util = display(&resp, "utilization");
@@ -1008,7 +1020,8 @@ rule is_near_capacity: utilization > 0.8
 fn display_uses_signature_unit_after_as_cast() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("mass_convert.lemma"),
             r#"
 spec mass_convert
 uses lemma units
@@ -1017,9 +1030,9 @@ data sugar: 800 gram
 
 rule sugar_kg: sugar as kilogram
 rule sugar_chain: sugar as kilogram as number
-"#,
-            src("mass_convert.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run(&engine, "mass_convert", &[]);

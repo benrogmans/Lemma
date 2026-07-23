@@ -10,7 +10,7 @@ fn decimal_lit(s: &str) -> Decimal {
 fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, true)
         .unwrap();
     response
         .results
@@ -38,7 +38,7 @@ rule are_equal: time_nyc is time_london
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -64,7 +64,7 @@ rule nyc_is_later: time_nyc > time_tokyo
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -85,11 +85,11 @@ fn test_timezone_arithmetic_preserved() {
 spec test
 uses lemma units
 data start_time: 2024-03-15T10:00:00+01:00
-rule later: start_time + 2 hours
+rule later: start_time + 2 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -121,11 +121,11 @@ fn test_negative_timezone_offset() {
 spec test
 uses lemma units
 data west_coast: 2024-03-15T09:00:00-08:00
-rule later: west_coast + 3 hours
+rule later: west_coast + 3 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -152,11 +152,11 @@ fn test_timezone_crossing_midnight() {
 spec test
 uses lemma units
 data evening: 2024-03-15T23:00:00+05:30
-rule next_day: evening + 2 hours
+rule next_day: evening + 2 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -188,20 +188,20 @@ spec test
 uses lemma units
 data time1: 2024-03-15T10:00:00-05:00
 data time2: 2024-03-15T16:00:00+01:00
-rule hours_diff: time1...time2 as hours as number
+rule hours_diff: time1...time2 as hour as number
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
-        value: lemma::ValueKind::Number(hours),
+        value: lemma::ValueKind::Number(hour),
         ..
     } = get_rule_value(&engine, "test", "hours_diff")
     {
         assert_eq!(
-            lemma::ValueKind::Number(hours)
+            lemma::ValueKind::Number(hour)
                 .as_decimal_magnitude()
                 .unwrap(),
             decimal_lit("0")
@@ -222,7 +222,7 @@ rule preserved: nepal_time
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -256,7 +256,7 @@ rule later: hawaii + 1 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {
@@ -286,7 +286,7 @@ rule earlier: kiribati - 1 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     if let lemma::LiteralValue {

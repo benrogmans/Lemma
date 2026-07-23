@@ -1,5 +1,5 @@
-use lemma::DateTimeValue;
-use lemma::Engine;
+use lemma::{DateTimeValue, Engine};
+use std::collections::HashMap;
 
 #[test]
 fn necessary_data_include_nested_spec_data_for_local_rule_deps() {
@@ -28,60 +28,67 @@ rule total: calc.total
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan(None, "cashier", Some(&now)).unwrap();
-
-    // Schema for all rules: cashier.total depends on pricing.total (via calc.total),
-    // so cashier's schema must include nested data like calc.price.
-    let schema_all = plan.schema(&lemma::DataOverlay::default());
+    let show_all = engine.show(None, "cashier", Some(&now)).unwrap();
     assert!(
-        schema_all.data.contains_key("calc.price"),
-        "Expected schema data to include calc.price, got: {:?}",
-        schema_all.data.keys().collect::<Vec<_>>()
+        show_all.data.contains_key("calc.price"),
+        "Expected show data to include calc.price, got: {:?}",
+        show_all.data.keys().collect::<Vec<_>>()
     );
-    let price_type = &schema_all.data.get("calc.price").unwrap().lemma_type;
+    let price_type = &show_all.data.get("calc.price").unwrap().lemma_type;
     assert!(
         price_type.is_measure(),
         "Expected calc.price to be a measure type, got {:?}",
         price_type.name()
     );
 
-    // Schema for specific rule: same result for cashier.total
-    let schema_total = plan
-        .schema_for_rules(&["total".to_string()], &lemma::DataOverlay::default())
-        .unwrap();
-    let scoped_price_type = &schema_total
-        .data
-        .get("calc.price")
-        .expect("schema_for_rules must include calc.price with same typing as full schema")
-        .lemma_type;
+    let response = engine
+        .run(
+            None,
+            "cashier",
+            Some(&now),
+            HashMap::new(),
+            Some(&["total".to_string()]),
+            false,
+        )
+        .expect("run must succeed");
+    let total = response.results.get("total").expect("total rule");
     assert!(
-        scoped_price_type.is_measure(),
-        "scoped schema must preserve nested measure type for calc.price"
+        total.missing_data.iter().any(|k| k == "calc.price"),
+        "unbound calc.price must appear in total.missing_data: {:?}",
+        total.missing_data
     );
+    let show_price_type = &show_all.data.get("calc.price").unwrap().lemma_type;
     assert_eq!(
-        scoped_price_type.name(),
+        show_price_type.name(),
         price_type.name(),
-        "scoped schema must match full schema type for calc.price"
+        "show must preserve nested measure type for calc.price"
     );
 }
 
 #[test]
-fn schema_errors_on_unknown_rule() {
+fn run_errors_on_unknown_rule() {
     let mut engine = Engine::new();
     engine
-        .load(
-            "spec test\ndata x: 1\nrule y: x",
+        .load([(
             lemma::SourceType::Volatile,
-        )
+            "spec test\ndata x: 1\nrule y: x".to_string(),
+        )])
         .unwrap();
     let now = DateTimeValue::now();
 
-    let plan = engine.get_plan(None, "test", Some(&now)).unwrap();
-    let result =
-        plan.schema_for_rules(&["nonexistent".to_string()], &lemma::DataOverlay::default());
+    let result = engine.run(
+        None,
+        "test",
+        Some(&now),
+        HashMap::new(),
+        Some(&["nonexistent".to_string()]),
+        false,
+    );
     assert!(result.is_err(), "Expected error for unknown rule");
     assert!(
         result.unwrap_err().to_string().contains("not found"),

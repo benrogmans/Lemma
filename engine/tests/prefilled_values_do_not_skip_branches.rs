@@ -1,9 +1,7 @@
 //! Spec prefilled values (`data is_member: false`) must not cause
 //! `collect_needed_data_paths` to treat unless arms as dead. Only caller overlay
-//! may skip branch inputs. Covers schema, `schema_for_rules`, and `response.data`.
+//! may skip branch inputs. Covers static show and per-rule `missing_data`.
 
-use lemma::DataOverlay;
-use lemma::DataValueInput;
 use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
@@ -23,52 +21,43 @@ rule vat: discounted_price * 21%
 rule total: discounted_price + vat
 "#;
 
-const CHOOSER_SPEC: &str = r#"
-spec chooser
-
-data mode: text -> options "simple" "complex"
-data simple_input: number
-data complex_input_a: number
-data complex_input_b: number
-
-rule result: veto "pick mode"
-  unless mode is "simple" then simple_input
-  unless mode is "complex" then complex_input_a + complex_input_b
-"#;
-
-fn data_path_names(response: &lemma::Response) -> Vec<String> {
-    response
-        .data
-        .iter()
-        .flat_map(|group| group.data.iter())
-        .map(|data| data.path.input_key())
-        .collect()
+fn missing_data_union(response: &lemma::Response) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut names = Vec::new();
+    for result in response.results.values() {
+        for key in &result.missing_data {
+            if seen.insert(key.clone()) {
+                names.push(key.clone());
+            }
+        }
+    }
+    names
 }
 
 #[test]
-fn schema_includes_prefilled_value_in_live_unless() {
+fn show_includes_prefilled_value_in_live_unless() {
     let mut engine = Engine::new();
     engine
-        .load(PRICING_SPEC, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, PRICING_SPEC.to_string())])
         .expect("pricing spec must load");
     let now = DateTimeValue::now();
-    let schema = engine
-        .schema(None, "pricing", Some(&now))
-        .expect("schema must succeed");
+    let show = engine
+        .show(None, "pricing", Some(&now))
+        .expect("show must succeed");
 
     assert!(
-        schema.data.contains_key("is_member"),
+        show.data.contains_key("is_member"),
         "is_member must appear even when spec prefills false: {:?}",
-        schema.data.keys().collect::<Vec<_>>()
+        show.data.keys().collect::<Vec<_>>()
     );
     assert!(
-        schema.data["is_member"].prefilled.is_some(),
+        show.data["is_member"].prefilled.is_some(),
         "is_member must carry prefilled from spec literal"
     );
 }
 
 #[test]
-fn schema_includes_overridable_prefilled_value_in_live_unless() {
+fn show_includes_overridable_prefilled_value_in_live_unless() {
     let code = r#"
 spec t
 data base_price: 100
@@ -80,19 +69,19 @@ rule total: quantity
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must load");
     let now = DateTimeValue::now();
-    let schema = engine
-        .schema(None, "t", Some(&now))
-        .expect("schema must succeed");
+    let show = engine
+        .show(None, "t", Some(&now))
+        .expect("show must succeed");
 
     assert!(
-        schema.data.contains_key("base_price"),
+        show.data.contains_key("base_price"),
         "base_price must appear when unless arm can become live via override: {:?}",
-        schema.data.keys().collect::<Vec<_>>()
+        show.data.keys().collect::<Vec<_>>()
     );
-    let entry = schema
+    let entry = show
         .data
         .get("base_price")
         .expect("base_price entry must exist");
@@ -103,7 +92,7 @@ rule total: quantity
 }
 
 #[test]
-fn schema_omits_input_when_unless_never_applies() {
+fn show_and_run_omit_flag_when_unless_and_is_statically_false() {
     let code = r#"
 spec t
 data flag: boolean
@@ -114,76 +103,77 @@ rule total: 1
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must load");
     let now = DateTimeValue::now();
-    let schema = engine
-        .schema(None, "t", Some(&now))
-        .expect("schema must succeed");
+    let show = engine
+        .show(None, "t", Some(&now))
+        .expect("show must succeed");
 
     assert!(
-        !schema.data.contains_key("flag"),
-        "flag must not appear when unless arm can never apply: {:?}",
-        schema.data.keys().collect::<Vec<_>>()
+        !show.data.contains_key("flag"),
+        "flag must not appear in show when unless condition is statically false; keys: {:?}",
+        show.data.keys().collect::<Vec<_>>()
+    );
+
+    let response = engine
+        .run(
+            None,
+            "t",
+            Some(&now),
+            HashMap::new(),
+            Some(&["discount".to_string()]),
+            false,
+        )
+        .expect("run must succeed");
+    let names = missing_data_union(&response);
+    assert!(
+        !names.contains(&"flag".to_string()),
+        "flag must not appear in missing_data when unless is statically false: {names:?}"
     );
 }
 
 #[test]
-fn schema_omits_dead_branch_inputs_when_mode_supplied() {
+fn prefilled_is_member_bound_not_in_missing_data() {
     let mut engine = Engine::new();
     engine
-        .load(CHOOSER_SPEC, lemma::SourceType::Volatile)
-        .expect("chooser spec must load");
-    let now = DateTimeValue::now();
-    let plan = engine.get_plan(None, "chooser", Some(&now)).unwrap();
-
-    let overlay = DataOverlay::resolve(
-        plan,
-        [(
-            "mode".to_string(),
-            DataValueInput::convenience("simple".to_string()),
-        )]
-        .into(),
-        engine.limits(),
-    )
-    .expect("overlay must resolve");
-
-    let schema = plan
-        .schema_for_rules(&["result".to_string()], &overlay)
-        .expect("schema must succeed");
-
-    assert!(
-        schema.data.contains_key("simple_input"),
-        "simple_input must remain when mode is simple"
-    );
-    assert!(
-        !schema.data.contains_key("complex_input_a"),
-        "complex_input_a must be skipped when mode is simple"
-    );
-    assert!(
-        !schema.data.contains_key("complex_input_b"),
-        "complex_input_b must be skipped when mode is simple"
-    );
-}
-
-#[test]
-fn response_includes_prefilled_value_referenced_by_live_unless() {
-    let mut engine = Engine::new();
-    engine
-        .load(PRICING_SPEC, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, PRICING_SPEC.to_string())])
         .expect("pricing spec must load");
     let now = DateTimeValue::now();
     let mut inputs = HashMap::new();
     inputs.insert("quantity".to_string(), "5".to_string());
 
+    let show = engine
+        .show(None, "pricing", Some(&now))
+        .expect("show must succeed");
+    assert!(
+        show.data.contains_key("is_member"),
+        "is_member must stay in show when unless arm may still apply"
+    );
+    assert!(
+        show.data["is_member"].prefilled.is_some(),
+        "is_member must carry prefilled in show"
+    );
+
     let response = engine
-        .run(None, "pricing", Some(&now), inputs, false, None)
+        .run(
+            None,
+            "pricing",
+            Some(&now),
+            inputs,
+            Some(&["discount".to_string()]),
+            false,
+        )
         .expect("evaluation must succeed");
 
-    let names = data_path_names(&response);
+    let names = missing_data_union(&response);
     assert!(
-        names.contains(&"is_member".to_string()),
-        "is_member must appear in response.data when unless arm may still apply: {names:?}"
+        !names.contains(&"is_member".to_string()),
+        "prefilled is_member is bound and must not appear in missing_data: {names:?}"
+    );
+    assert!(
+        !names.contains(&"quantity".to_string()),
+        "supplied quantity must not appear in missing_data: {names:?}"
     );
 }
 
@@ -191,14 +181,14 @@ fn response_includes_prefilled_value_referenced_by_live_unless() {
 fn eval_honors_supplied_override_for_unless_arm() {
     let mut engine = Engine::new();
     engine
-        .load(PRICING_SPEC, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, PRICING_SPEC.to_string())])
         .expect("pricing spec must load");
     let now = DateTimeValue::now();
 
-    let default_schema = engine
-        .schema(None, "pricing", Some(&now))
-        .expect("schema must succeed");
-    assert!(default_schema.data.contains_key("is_member"));
+    let default_show = engine
+        .show(None, "pricing", Some(&now))
+        .expect("show must succeed");
+    assert!(default_show.data.contains_key("is_member"));
 
     let mut inputs = HashMap::new();
     inputs.insert("quantity".to_string(), "5".to_string());
@@ -210,8 +200,8 @@ fn eval_honors_supplied_override_for_unless_arm() {
             "pricing",
             Some(&now),
             inputs,
-            false,
             Some(&["discount".to_string()]),
+            false,
         )
         .expect("evaluation must succeed");
 

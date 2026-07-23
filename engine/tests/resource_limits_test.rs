@@ -14,7 +14,7 @@ fn test_source_size_limit() {
     // Create a file larger than 100 bytes
     let large_code = "spec test\ndata x: 1\n".repeat(10); // ~200 bytes
 
-    let result = engine.load(&large_code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &large_code.to_string())]);
 
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
@@ -31,7 +31,7 @@ fn expression_exceeding_max_depth_is_rejected() {
     // 5 nested parens = depth 6 (1 for rule expr + 5 for parens)
     let code = "spec test\ndata x: 1\nrule r: (((((1 + 1) + 1) + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for expression depth");
@@ -46,10 +46,10 @@ fn expression_depth_error_has_source_location() {
     };
     let code = "spec test\ndata x: 1\nrule r: (((1 + 1) + 1) + 1) + 1";
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(
-        code,
+    let result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+        code.to_string(),
+    )]);
     let load_err = result.unwrap_err();
     let err = load_err
         .errors
@@ -74,7 +74,7 @@ fn expression_count_exceeding_limit_is_rejected() {
     // a + b + c + d → 7 nodes (4 refs + 3 arithmetic), exceeds 3
     let code = "spec test\ndata a: 1\ndata b: 2\ndata c: 3\ndata d: 4\nrule r: a + b + c + d";
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for expression count");
@@ -94,7 +94,7 @@ fn expression_count_catches_deep_sqrt_without_depth_guard() {
     }
     let code = format!("spec test\ndata x: 1\nrule r: {}", expr);
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expression count should catch deep sqrt even when depth limit is high");
@@ -109,10 +109,10 @@ fn expression_count_error_has_source_location() {
     };
     let code = "spec test\ndata x: 1\nrule r: x + 1 + 2";
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(
-        code,
+    let result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+        code.to_string(),
+    )]);
     let load_err = result.unwrap_err();
     let err = load_err
         .errors
@@ -134,10 +134,10 @@ fn test_data_value_size_limit() {
 
     let mut engine = Engine::with_limits(limits);
     engine
-        .load(
-            "spec test\ndata name: text\nrule result: name",
+        .load([(
             lemma::SourceType::Volatile,
-        )
+            "spec test\ndata name: text\nrule result: name".to_string(),
+        )])
         .unwrap();
 
     let large_string = "a".repeat(100);
@@ -145,14 +145,19 @@ fn test_data_value_size_limit() {
     data.insert("name".to_string(), large_string);
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, false, None);
-
-    match result {
-        Err(Error::ResourceLimitExceeded { ref limit_name, .. }) => {
-            assert_eq!(limit_name, "max_data_value_bytes");
-        }
-        _ => panic!("Expected ResourceLimitExceeded error for large data value"),
-    }
+    let response = engine
+        .run(None, "test", Some(&now), data, None, false)
+        .expect("oversized data value must not abort evaluation");
+    let result = response.results.get("result").expect("result rule");
+    assert!(
+        result.vetoed,
+        "oversized data value must veto the dependent rule"
+    );
+    let reason = result.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("max_data_value_bytes"),
+        "veto reason must mention limit, got: {reason}"
+    );
 }
 
 // --- Name length limits ---
@@ -163,6 +168,34 @@ fn find_resource_limit_name(errors: &[Error]) -> Option<String> {
         Error::ResourceLimitExceeded { limit_name, .. } => Some(limit_name.clone()),
         _ => None,
     })
+}
+
+/// Wide unless chain over distinct data fields — many unique NormalForm cells,
+/// no Rule-overlay sharing. Must hit `max_normalized_expression_nodes`.
+#[test]
+fn non_sharing_wide_unless_hits_normalized_node_budget() {
+    let arm_count = 40;
+    let mut code = String::from("spec blowup\n");
+    for i in 0..arm_count {
+        code.push_str(&format!("data d{i}: boolean\n"));
+    }
+    code.push_str("rule r: 0\n");
+    for i in 0..arm_count {
+        code.push_str(&format!("  unless d{i} then {i}\n"));
+    }
+
+    let limits = ResourceLimits {
+        max_normalized_expression_nodes: 50,
+        max_expression_count: 100_000,
+        max_expression_depth: 1_000,
+        ..ResourceLimits::default()
+    };
+    let mut engine = Engine::with_limits(limits);
+    let result = engine.load([(lemma::SourceType::Volatile, code)]);
+    let load_err = result.expect_err("wide non-sharing unless must exceed NF cell budget");
+    let limit_err = find_resource_limit_name(&load_err.errors)
+        .expect("expected ResourceLimitExceeded for normalized nodes");
+    assert_eq!(limit_err, "max_normalized_expression_nodes");
 }
 
 // --- Spec dependency depth / DAG size limits ---
@@ -189,7 +222,7 @@ fn spec_chain_exceeding_dependency_depth_is_rejected() {
         ..ResourceLimits::default()
     };
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(spec_chain(6), lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, spec_chain(6))]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for dependency depth");
@@ -204,7 +237,7 @@ fn spec_chain_within_dependency_depth_loads() {
     };
     let mut engine = Engine::with_limits(limits);
     engine
-        .load(spec_chain(4), lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, spec_chain(4))])
         .expect("chain of 4 has depth 3, within the limit");
 }
 
@@ -212,7 +245,7 @@ fn spec_chain_within_dependency_depth_loads() {
 fn spec_chain_within_default_depth_loads() {
     let mut engine = Engine::new();
     engine
-        .load(spec_chain(6), lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, spec_chain(6))])
         .expect("chain of 6 loads under the default depth limit");
 }
 
@@ -244,7 +277,7 @@ uses d: leaf_d
 rule total: a.r + b.r + c.r + d.r
 "#;
     let mut engine = Engine::with_limits(limits);
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for DAG size");
@@ -256,7 +289,7 @@ fn spec_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::MAX_SPEC_NAME_LENGTH + 1);
     let code = format!("spec {name}\ndata x: 1");
     let mut engine = Engine::default();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for spec name");
@@ -268,7 +301,7 @@ fn data_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code = format!("spec test\ndata {name}: 1");
     let mut engine = Engine::default();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for data name");
@@ -280,7 +313,7 @@ fn data_binding_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code = format!("spec test\ndata other.{name}: 1");
     let mut engine = Engine::default();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for data binding name");
@@ -292,7 +325,7 @@ fn rule_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::MAX_RULE_NAME_LENGTH + 1);
     let code = format!("spec test\nrule {name}: 1");
     let mut engine = Engine::default();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let limit_err = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for rule name");
@@ -304,7 +337,7 @@ fn data_type_name_exceeding_max_length_is_rejected() {
     let name = "a".repeat(lemma::MAX_DATA_NAME_LENGTH + 1);
     let code = format!("spec test\ndata {name}: number\ndata x: 1");
     let mut engine = Engine::default();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for data name");
@@ -317,68 +350,11 @@ fn data_import_name_exceeding_max_length_is_rejected() {
     let code =
         format!("spec other\ndata v: number\n\nspec test\nuses {name}: other\ndata x: number");
     let mut engine = Engine::default();
-    let result = engine.load(&code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, &code.to_string())]);
     let load_err = result.unwrap_err();
     let rle = find_resource_limit_name(&load_err.errors)
         .expect("expected ResourceLimitExceeded for data import name");
     assert_eq!(rle, "max_data_name_length");
-}
-
-// --- Engine-wide total expression count ---
-
-#[test]
-fn total_expression_count_accumulates_across_files() {
-    let limits = ResourceLimits {
-        max_total_expression_count: 10,
-        ..ResourceLimits::default()
-    };
-    let mut engine = Engine::with_limits(limits);
-
-    // file 1: rule r: a + b → 3 expression nodes (ref a, ref b, arithmetic)
-    engine
-        .load(
-            "spec s1\ndata a: 1\ndata b: 2\nrule r: a + b",
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("f1.lemma"))),
-        )
-        .expect("first file should succeed");
-
-    // file 2: another 3+ nodes, pushing past the limit of 10
-    engine
-        .load(
-            "spec s2\ndata c: 1\ndata d: 2\nrule r: c + d + c + d",
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("f2.lemma"))),
-        )
-        .expect("second file should succeed");
-
-    // file 3: should push past the limit
-    let result = engine.load(
-        "spec s3\ndata e: 1\ndata f: 2\nrule r: e + f + e + f + e + f",
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("f3.lemma"))),
-    );
-    let load_err = result.unwrap_err();
-    let rle = find_resource_limit_name(&load_err.errors)
-        .expect("expected ResourceLimitExceeded for total expression count");
-    assert_eq!(rle, "max_total_expression_count");
-}
-
-#[test]
-fn single_file_exceeding_total_expression_count_is_rejected() {
-    let limits = ResourceLimits {
-        max_total_expression_count: 3,
-        max_expression_count: 4096,
-        ..ResourceLimits::default()
-    };
-    let mut engine = Engine::with_limits(limits);
-
-    // a + b + c + d → 7 nodes, exceeds total limit of 3
-    let result = engine.load(
-        "spec test\ndata a: 1\nrule r: a + a + a + a",
-        lemma::SourceType::Volatile,
-    );
-    let load_err = result.unwrap_err();
-    let rle = find_resource_limit_name(&load_err.errors)
-        .expect("expected ResourceLimitExceeded for total expression count");
-    assert_eq!(rle, "max_total_expression_count");
 }
 
 /// Scaling test: incremental rule counts to find performance cliffs.
@@ -407,21 +383,20 @@ fn performance_test_10k_rules() {
     let limits = ResourceLimits {
         max_source_size_bytes: 100 * 1024 * 1024,
         max_expression_count: nodes + 1000,
-        max_total_expression_count: nodes + 1000,
         ..ResourceLimits::default()
     };
     let mut engine = Engine::with_limits(limits);
 
     let start = Instant::now();
     engine
-        .load(&code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, &code.to_string())])
         .unwrap_or_else(|errs| panic!("{num_rules} rules failed: {:?}", errs));
     let elapsed = start.elapsed();
 
     let now = DateTimeValue::now();
     let eval_start = Instant::now();
     let resp = engine
-        .run(None, "test", Some(&now), HashMap::new(), false, None)
+        .run(None, "test", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let eval_time = eval_start.elapsed();
 
@@ -494,26 +469,25 @@ fn bench_deep_chains_body() {
         let limits = ResourceLimits {
             max_source_size_bytes: 100 * 1024 * 1024,
             max_expression_count: est_nodes + 1000,
-            max_total_expression_count: est_nodes + 1000,
             ..ResourceLimits::default()
         };
         let mut engine = Engine::with_limits(limits);
 
         let start = Instant::now();
         engine
-            .load(
-                &code,
+            .load([(
                 lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                     "chain.lemma",
                 ))),
-            )
+                &code.to_string(),
+            )])
             .unwrap_or_else(|errs| panic!("linear {num_rules} rules failed: {:?}", errs));
         let elapsed = start.elapsed();
 
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
         let resp = engine
-            .run(None, "chain", Some(&now), HashMap::new(), false, None)
+            .run(None, "chain", Some(&now), HashMap::new(), None, false)
             .unwrap();
         let eval_time = eval_start.elapsed();
 
@@ -532,26 +506,25 @@ fn bench_deep_chains_body() {
         let limits = ResourceLimits {
             max_source_size_bytes: 100 * 1024 * 1024,
             max_expression_count: est_nodes + 1000,
-            max_total_expression_count: est_nodes + 1000,
             ..ResourceLimits::default()
         };
         let mut engine = Engine::with_limits(limits);
 
         let start = Instant::now();
         engine
-            .load(
-                &code,
+            .load([(
                 lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                     "tree.lemma",
                 ))),
-            )
+                &code.to_string(),
+            )])
             .unwrap_or_else(|errs| panic!("tree depth {depth} failed: {:?}", errs));
         let elapsed = start.elapsed();
 
         let now = DateTimeValue::now();
         let eval_start = Instant::now();
         let resp = engine
-            .run(None, "tree", Some(&now), HashMap::new(), false, None)
+            .run(None, "tree", Some(&now), HashMap::new(), None, false)
             .unwrap();
         let eval_time = eval_start.elapsed();
 

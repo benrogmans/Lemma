@@ -14,15 +14,17 @@ fn source() -> lemma::SourceType {
 fn assert_loads(code: &str) {
     let mut engine = Engine::new();
     engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect("spec must load and plan");
 }
 
 fn eval_display(code: &str, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("spec must load");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("spec must load");
     let response = engine
-        .run(None, spec_name, None, HashMap::new(), true, None)
+        .run(None, spec_name, None, HashMap::new(), None, true)
         .expect("spec must evaluate");
     response
         .results
@@ -47,9 +49,9 @@ uses u: units
 data total_eur: 100 eur
 data weight: 10 kg
 data starch_levy_per_kg: u.price_per_weight
-  -> default 0.1 eur_per_kg
+  -> suggest 0.1 eur_per_kg
 data amortization_per_kg: u.price_per_weight
-  -> default 0.2 eur_per_kg
+  -> suggest 0.2 eur_per_kg
 rule base_cost_per_kg: total_eur / weight
 "#;
 

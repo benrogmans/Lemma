@@ -41,7 +41,7 @@ npx lemma run shipping
 npx lemma run tax_calculation --rules=tax_owed
 npx lemma run tax_calculation income=75000 filing_status="married"
 npx lemma list
-npx lemma schema pricing
+npx lemma show pricing
 npx lemma server --prefix ./examples --port 8012
 ```
 

@@ -10,7 +10,7 @@ fn source() -> lemma::SourceType {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(code, source())
+        .load([(source(), code.to_string())])
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -19,14 +19,16 @@ fn load_err_joined(engine: &mut Engine, code: &str) -> String {
 }
 
 fn load_ok(engine: &mut Engine, code: &str) {
-    engine.load(code, source()).unwrap_or_else(|errs| {
-        let joined = errs
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        panic!("expected load to succeed, got: {joined}");
-    });
+    engine
+        .load([(source(), code.to_string())])
+        .unwrap_or_else(|errs| {
+            let joined = errs
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!("expected load to succeed, got: {joined}");
+        });
 }
 
 const INNER_SPEC: &str = r#"spec product_structure

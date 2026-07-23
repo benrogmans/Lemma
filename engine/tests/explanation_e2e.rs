@@ -5,14 +5,15 @@ use std::collections::HashMap;
 fn explanation_generated_during_evaluation() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_explanation
 data base_value: 100
 rule doubled: base_value * 2
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
@@ -21,8 +22,8 @@ rule doubled: base_value * 2
             "test_explanation",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .unwrap();
 
@@ -38,7 +39,7 @@ rule doubled: base_value * 2
     );
 
     let explanation = doubled.explanation.as_ref().expect("explanation built");
-    assert_eq!(explanation.rule.rule, "doubled");
+    assert_eq!(explanation.name.rule, "doubled");
     assert!(format_explanation(explanation).contains("base_value"));
 }
 
@@ -46,15 +47,16 @@ rule doubled: base_value * 2
 fn explanation_with_rule_reference() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_explanation_ref
 data base_value: 50
 rule doubled: base_value * 2
 rule quadruple: doubled * 2
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
@@ -63,8 +65,8 @@ rule quadruple: doubled * 2
             "test_explanation_ref",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .unwrap();
 
@@ -85,25 +87,26 @@ rule quadruple: doubled * 2
         .as_str()
         .expect("embedded rule child type");
     assert_eq!(child_type, "rule");
-    assert_eq!(json["children"][0]["rule"], "doubled");
+    assert_eq!(json["children"][0]["name"], "doubled");
 }
 
 #[test]
 fn explanation_unless_branch_causes() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_unless
 data flag: false
 rule out: 1 unless flag then 2
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_unless", Some(&now), HashMap::new(), true, None)
+        .run(None, "test_unless", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let explanation = response
@@ -116,25 +119,26 @@ rule out: 1 unless flag then 2
     assert_eq!(explanation.causes.len(), 1);
     // The condition `flag` was false; the cause states the fact that held.
     assert_eq!(explanation.causes[0].condition, "flag is false");
-    assert_eq!(explanation.causes[0].value, "true");
+    assert_eq!(explanation.causes[0].value.as_deref(), Some("true"));
 }
 
 #[test]
 fn explanation_user_veto() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test_veto
 data price: -5
 rule validated: price unless price < 0 then veto "negative"
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_veto", Some(&now), HashMap::new(), true, None)
+        .run(None, "test_veto", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let result = response.results.get("validated").expect("validated");
@@ -147,7 +151,8 @@ rule validated: price unless price < 0 then veto "negative"
 fn explanation_cross_spec_rule() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec helper
 rule helper_value: 10
@@ -155,13 +160,13 @@ rule helper_value: 10
 spec main
 uses helper
 rule use_cross_spec: helper.helper_value + 1
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "main", Some(&now), HashMap::new(), true, None)
+        .run(None, "main", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let explanation = response
@@ -179,18 +184,19 @@ rule use_cross_spec: helper.helper_value + 1
 fn explanation_unit_conversion_steps() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec t
 data weight: measure -> unit kg 1 -> unit gram 0.001
 data w: 2 kg
 rule in_grams: w as gram
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
-        .run(None, "t", None, HashMap::new(), true, None)
+        .run(None, "t", None, HashMap::new(), None, true)
         .unwrap();
     let explanation = response
         .results

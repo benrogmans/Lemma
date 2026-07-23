@@ -30,8 +30,7 @@ cargo nextest run -p lemma-engine --tests
 | `veto.rs` | Veto propagation, unless interaction |
 | `veto_inversion.rs` | Veto + inversion |
 | `missing_data_propagation.rs` | Missing data through rules |
-| `branch_aware_missing_data.rs` | `Response::missing_data` ordering |
-| `explanation_e2e.rs` | Explanation / operation traces |
+| `branch_aware_missing_data.rs` | Per-rule `missing_data` and missing-data veto propagation |
 
 ### Inversion
 
@@ -95,7 +94,7 @@ cargo nextest run -p lemma-engine --tests
 | `unit_percentage_operations.rs` | Percentage on units |
 | `decimal_storage_pipeline.rs` | Decimal storage in results/JSON |
 
-### Data, bindings, literals, schema
+### Data, bindings, literals, show
 
 | File | Focus |
 |------|--------|
@@ -106,8 +105,28 @@ cargo nextest run -p lemma-engine --tests
 | `data_references.rs` | Cross-data references |
 | `data_with_values_contract.rs` | Data-with-values contract |
 | `typed_values.rs` | Typed value handling |
-| `schema_defaults_distinction.rs` | Schema vs defaults |
+| `show_suggestion_distinction.rs` | Show vs suggestions (`-> suggest` never commits) |
+| `show_only_rule_used_data.rs` | Show lists only data reachable from rules |
+| `show_with_bindings.rs` | Show + `with` / prefilled bindings |
+| `show_unless_last_wins_pruning.rs` | Show after static unless collapse |
+| `show_unit_constraints.rs` | Show unit / suggest magnitudes |
+| `show_uncommittable_bounds.rs` | Show bounds that cannot commit |
+| `accept_reject_removed.rs` | `accept` / `reject` keywords removed |
+| `overlay_veto_as_value.rs` | Overlay veto as value |
 | `meta_fields.rs` | Meta fields on specs |
+
+### Explanation / NormalForm eval
+
+| File | Focus |
+|------|--------|
+| `explanation_e2e.rs` | Explanation / operation traces |
+| `explanation_format.rs` | Explanation formatting + JSON |
+| `explanation_parity.rs` | Explain true/false value parity |
+| `explanation_complete_narration.rs` | Piecewise / algebra / conversion explanation contracts |
+| `explanation_provenance_oracles.rs` | Origin / rule-embed explanation oracles |
+| `tree_evaluator.rs` | NormalForm tree evaluator |
+| `normalization_strict_semantics.rs` | Normalize contracts |
+| `transitive_normalization.rs` | Cross-rule sharing / fold contracts |
 
 ### Spec graph, imports, references
 
@@ -148,7 +167,7 @@ cargo nextest run -p lemma-engine --tests
 
 | File | Focus |
 |------|--------|
-| `load_batch_wasm_planning_parity.rs` | WASM vs native planning parity |
+| `load_wasm_planning_parity.rs` | WASM vs native planning parity |
 | `repro_finance_dual_slice_registry_uses.rs` | Registry + dual slice |
 | `resource_limits_test.rs` | Resource limits |
 
@@ -180,7 +199,7 @@ Coverage for these lives mainly in this directory (integration) or in `engine/sr
 | `computation/decimal_math.rs` | |
 | `computation/mod.rs` | |
 | `evaluation/expression.rs` | |
-| `evaluation/explanation.rs` | |
+| `evaluation/explanations.rs` |
 | `inversion/target.rs`, `inversion/derived.rs` | |
 | `literals.rs` | Partial coverage via `src/tests/ast.rs` |
 | `parsing/parser.rs` | Lexer/AST have unit tests |
@@ -198,22 +217,22 @@ Prefer adding **unit** tests beside the module when testing private helpers; add
 | Layer | Where | API | Typical assertion |
 |-------|--------|-----|-------------------|
 | Unit | `engine/src/**` `#[cfg(test)]`, `engine/src/tests/` | Private + public | Parser nodes, planner invariants, `LiteralValue`, serde |
-| Integration (this dir) | `engine/tests/*.rs` | Public `lemma::*` only | `Engine::load` → `run` / `get_plan` / `invert` |
+| Integration (this dir) | `engine/tests/*.rs` | Public `lemma::*` only | `Engine::load` → `run` / `show` / `invert` |
 | CLI | `cli/tests/integrations/*` | `lemma` binary, MCP JSON | stdout, HTTP, tool payloads |
-| WASM npm | `engine/packages/npm/test.js` | JS `Engine` | Shape of load/run/list/schema |
+| WASM npm | `engine/packages/npm/test.js` | JS `Engine` | Shape of load/run/list/show |
 | Hex | `engine/packages/hex/test/` | `Lemma.*` NIF | Lifecycle, list groups, run JSON |
 
-**~519** lib unit tests vs **~1470** integration `#[test]` functions across 76 binaries (run `cargo nextest run -p lemma-engine --lib` / `--tests` for current counts).
+**Integration binaries:** one per `engine/tests/*.rs` file (**126** as of this refresh). Run `cargo nextest run -p lemma-engine --lib` / `--tests` for current test counts.
 
 ### Primary APIs used here
 
 | API | ~Files | Role |
 |-----|--------|------|
-| `Engine::load` | 74 | Parse + plan workspace sources |
-| `Engine::run` | ~55 | Evaluate rules |
-| `Engine::get_plan` | 9 | Planning/schema without full eval |
-| `Engine::load_batch` | 4 | Dependency bundles (WASM-style) |
-| `Engine::invert` | 3 | Inversion only in dedicated files |
+| `Engine::load` | most | Parse + plan workspace sources |
+| `Engine::run` | many | Evaluate rules |
+| `Engine::show` | many (`show_*`, response/data contracts) | Spec interface wire without full eval |
+| `Engine::load` (batch) | few | Dependency bundles (multi-source load) |
+| `Engine::invert` | few | Inversion only in dedicated files |
 | `parse` / `format_source` | 2 | `formatter.rs`, `format_weather_clothing_integration.rs` (no `Engine`) |
 
 `inversion_display_serialize.rs` tests `Domain` JSON only (no engine).
@@ -227,10 +246,10 @@ Prefer adding **unit** tests beside the module when testing private helpers; add
 | `inversion/` | Moderate (~45) | `inversion_*`, `test_discount_inversion`, `veto_inversion` |
 | `computation/datetime`, `rational`, `units` | datetime/rational heavy | `datetime_*`, `arithmetic_*`, `measure_*`, `ratio_*` |
 | `computation/arithmetic`, `comparison`, `range` | **None** | `arithmetic_type_combinations`, `math_ops`, `range_*`, `equal_operator` |
-| `evaluation/expression`, `explanation` | **None** | E2E via `run` in most files |
+| `evaluation/expression`, `explanations` | **None** | E2E via `run` in most files |
 | `engine.rs` | ~32 | `integration_*`, `coffee_order`, registry repros |
 | `formatting/` | ~25 | `formatter`, `format_weather_clothing_integration` |
-| `registry` | ~8 | `repo_keyword`, `load_batch_wasm_planning_parity`, repros |
+| `registry` | ~8 | `repo_keyword`, `load_wasm_planning_parity`, repros |
 | `literals.rs` | via `src/tests/ast.rs` | `data_literals_coverage`, `ratio_runtime_input` |
 
 ### Overlap clusters (consolidation candidates)
@@ -247,7 +266,7 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 | Range | `range_generic`, `range_semantics_table`, `date_range` |
 | Spec graph | `nested_spec_references`, `cross_spec_references`, `required_data_names_nested_spec`, `inline_type_imports` |
 | Temporal | `temporal_slicing`, `type_import_temporal`, `temporal_range_references`, `temporal_type_resolver_instant`, `temporal_timezone_ordering`, `temporal_interface_deep_slice`, `temporal_boundary_explosion` |
-| Registry / plan identity | `spec_name_repository_plan_collision`, `repro_finance_dual_slice_registry_uses`, `load_batch_wasm_planning_parity` |
+| Registry / plan identity | `spec_name_repository_plan_collision`, `repro_finance_dual_slice_registry_uses`, `load_wasm_planning_parity` |
 | Example E2E | `coffee_order`, `documentation_examples`, `documentation_fences`, `integration_examples`, `integration_comprehensive` |
 | Data QA matrix | `data_literals_coverage`, `data_type_declarations_coverage`, `data_binding_type_validation`, `data_with_values_contract`, `data_nested_bindings_coverage`, `data_references` |
 
@@ -256,7 +275,7 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 | File | Intent |
 |------|--------|
 | `spec_name_repository_plan_collision.rs` | **Passes** when `get_plan` returns distinct plans per repository for same basename; **fails** if `plan_sets` aliases by name only (see module doc) |
-| `repro_finance_dual_slice_registry_uses.rs` | Same for WASM `load_batch` + duplicate `finance` basename |
+| `repro_finance_dual_slice_registry_uses.rs` | Same for WASM batch `load` + duplicate `finance` basename |
 | `data_literals_coverage.rs` | Pins literal RHS invariants; header says some cases may stay red — currently all green |
 | `data_type_declarations_coverage.rs`, `data_binding_type_validation.rs`, `data_references.rs` | Constraint matrices; do not weaken assertions |
 | `temporal_slicing.rs` | TDD guard for multi-slice planning |
@@ -282,7 +301,3 @@ See [cli/tests/README.md](../../cli/tests/README.md): `run`, `mcp`, `server`, `e
 ### Shared integration helpers
 
 [support/](support/) — per-file helpers (`get_rule_value`, `eval_rule_bool`, `make_effective*`). Each integration test imports only the files it needs via `#[path = "support/..."]`.
-
-### Implementation report
-
-[REPORT.md](REPORT.md) — what changed in the audit follow-up, quality assessment, and verification commands.

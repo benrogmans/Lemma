@@ -1,4 +1,7 @@
 //! Load and run every ```lemma fence in repo markdown and text files.
+//!
+//! Consecutive ```lemma fences separated only by whitespace load as one
+//! workspace source (so multi-spec examples may stay in separate visual blocks).
 
 use lemma::{
     parse, resolve_registry_references, Context, DateTimeValue, Engine, LemmaBase, ResourceLimits,
@@ -49,6 +52,8 @@ fn collect_markdown_and_text_files(root: &Path) -> Vec<PathBuf> {
 struct LemmaFence {
     /// 1-based line number of the opening `` ```lemma `` marker in the source file.
     line: usize,
+    /// Inclusive 1-based line of the closing `` ``` ``.
+    end_line: usize,
     content: String,
 }
 
@@ -72,6 +77,7 @@ fn extract_lemma_fences(content: &str) -> Vec<LemmaFence> {
             if !block.is_empty() {
                 blocks.push(LemmaFence {
                     line: fence_line,
+                    end_line: line_number,
                     content: block,
                 });
             }
@@ -82,7 +88,32 @@ fn extract_lemma_fences(content: &str) -> Vec<LemmaFence> {
             current.push('\n');
         }
     }
-    blocks
+    group_whitespace_adjacent_fences(content, blocks)
+}
+
+/// Merge fences that have only blank/whitespace lines between them into one load unit.
+fn group_whitespace_adjacent_fences(file: &str, fences: Vec<LemmaFence>) -> Vec<LemmaFence> {
+    let lines: Vec<&str> = file.lines().collect();
+    let mut groups: Vec<LemmaFence> = Vec::new();
+    for fence in fences {
+        if let Some(prev) = groups.last_mut() {
+            let between_start = prev.end_line; // 1-based closing ``` line
+            let between_end = fence.line.saturating_sub(1);
+            let only_whitespace = (between_start..between_end).all(|idx| {
+                lines
+                    .get(idx)
+                    .is_none_or(|line| line.chars().all(char::is_whitespace))
+            });
+            if only_whitespace {
+                prev.content.push_str("\n\n");
+                prev.content.push_str(&fence.content);
+                prev.end_line = fence.end_line;
+                continue;
+            }
+        }
+        groups.push(fence);
+    }
+    groups
 }
 
 fn fence_label(path: &Path, line: usize) -> String {
@@ -122,7 +153,7 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
     let mut ctx = Context::new();
     for (parsed_repo, specs) in &parsed.repositories {
         for spec in specs {
-            ctx.insert_spec(Arc::clone(parsed_repo), Arc::new(spec.clone()))
+            ctx.insert_spec(Arc::clone(parsed_repo), spec.clone())
                 .unwrap_or_else(|e| panic!("insert spec for fence at {label} failed: {e}"));
         }
     }
@@ -151,12 +182,8 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
         if local.contains(source_id) {
             continue;
         }
-        let dep_id = match source_id {
-            SourceType::Registry(repo) => repo.name.as_deref(),
-            _ => None,
-        };
         engine
-            .load_batch(HashMap::from([(source_id.clone(), code.clone())]), dep_id)
+            .load([(source_id.clone(), code.clone())])
             .unwrap_or_else(|errs| {
                 panic!(
                     "load registry dep for ```lemma fence at {label} failed: {}",
@@ -169,7 +196,7 @@ async fn load_fence_engine(path: &Path, fence: &LemmaFence) -> Engine {
     }
 
     engine
-        .load(fence.content.clone(), workspace_source)
+        .load([(workspace_source, fence.content.clone())])
         .unwrap_or_else(|errs| {
             panic!(
                 "load ```lemma fence at {label} failed: {}",
@@ -199,8 +226,8 @@ async fn run_fence(path: &Path, fence: &LemmaFence) {
                 &spec_name,
                 Some(&now),
                 HashMap::new(),
-                false,
                 None,
+                false,
             )
             .unwrap_or_else(|e| {
                 panic!("run ```lemma fence at {label} spec {spec_name} failed: {e}")
@@ -208,7 +235,7 @@ async fn run_fence(path: &Path, fence: &LemmaFence) {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "current_thread")]
 async fn all_lemma_fences_load_and_run() {
     let root = workspace_root();
     let files = collect_markdown_and_text_files(&root);
@@ -222,4 +249,32 @@ async fn all_lemma_fences_load_and_run() {
         }
     }
     assert!(ran > 0, "must run at least one ```lemma fence");
+}
+
+#[test]
+fn consecutive_whitespace_separated_fences_group() {
+    let file = "\
+```lemma
+spec a
+data x: 1
+```
+
+```lemma
+spec b
+uses a
+rule r: a.x
+```
+
+prose here
+
+```lemma
+spec c
+data y: 2
+```
+";
+    let groups = extract_lemma_fences(file);
+    assert_eq!(groups.len(), 2, "got {} groups", groups.len());
+    assert!(groups[0].content.contains("spec a") && groups[0].content.contains("spec b"));
+    assert!(groups[1].content.contains("spec c"));
+    assert!(!groups[1].content.contains("spec a"));
 }
