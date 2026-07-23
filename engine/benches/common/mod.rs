@@ -1,19 +1,14 @@
-use lemma::{DataValueInput, DateGranularity, DateTimeValue, Engine, SourceType};
+use lemma::{DateGranularity, DateTimeValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 pub struct Fixture {
     pub spec_name: &'static str,
-    pub label: &'static str,
+    pub lemma_path: &'static str,
     pub source: &'static str,
-    /// Typed inputs for this fixture. JSON sidecar is parsed once when
-    /// fixtures are built; timed loops clone this map per call.
-    pub data: HashMap<String, DataValueInput>,
-    pub effective: DateTimeValue,
 }
 
-fn effective() -> DateTimeValue {
+pub fn effective() -> DateTimeValue {
     DateTimeValue {
         year: 2026,
         month: 1,
@@ -27,13 +22,54 @@ fn effective() -> DateTimeValue {
     }
 }
 
-/// Terminal rule timed in the latency benches (`evaluate`, `memory`).
-#[allow(dead_code)]
-pub fn terminal_rule(spec_name: &str) -> &'static str {
-    match spec_name {
-        "bench_shipping" | "bench_pricing" => "total",
-        "bench_order_pipeline" => "grand_total",
-        other => panic!("BUG: no terminal rule for bench spec '{other}'"),
+fn shipping_inputs() -> HashMap<String, String> {
+    HashMap::from([
+        ("weight".into(), "3".into()),
+        ("destination".into(), "domestic".into()),
+        ("is_member".into(), "false".into()),
+    ])
+}
+
+fn pricing_inputs() -> HashMap<String, String> {
+    HashMap::from([
+        ("product_type".into(), "premium".into()),
+        ("quantity".into(), "25".into()),
+        ("unit_price".into(), "100".into()),
+        ("coupon_percent".into(), "5".into()),
+        ("loyalty_years".into(), "2".into()),
+        ("is_member".into(), "true".into()),
+        ("is_loyalty".into(), "true".into()),
+        ("is_tax_exempt".into(), "false".into()),
+    ])
+}
+
+fn order_pipeline_inputs() -> HashMap<String, String> {
+    HashMap::from([
+        ("customer_tier".into(), "gold".into()),
+        ("payment_method".into(), "credit".into()),
+        ("shipping_zone".into(), "national".into()),
+        ("quantity".into(), "12".into()),
+        ("unit_price".into(), "85".into()),
+        ("package_weight".into(), "3.5".into()),
+        ("delivery_distance".into(), "180".into()),
+        ("loyalty_points".into(), "6500".into()),
+        ("coupon_percent".into(), "10".into()),
+        ("is_fragile".into(), "true".into()),
+        ("is_express".into(), "true".into()),
+        ("is_hazardous".into(), "false".into()),
+        ("is_gift".into(), "false".into()),
+        ("is_first_time".into(), "false".into()),
+    ])
+}
+
+impl Fixture {
+    pub fn inputs(&self) -> HashMap<String, String> {
+        match self.spec_name {
+            "bench_shipping" => shipping_inputs(),
+            "bench_pricing" => pricing_inputs(),
+            "bench_order_pipeline" => order_pipeline_inputs(),
+            other => panic!("BUG: no inputs for bench spec '{other}'"),
+        }
     }
 }
 
@@ -41,87 +77,22 @@ pub fn fixtures() -> Vec<Fixture> {
     vec![
         Fixture {
             spec_name: "bench_shipping",
-            label: "engine/benches/specs/shipping.lemma",
+            lemma_path: "engine/benches/specs/shipping.lemma",
             source: include_str!("../specs/shipping.lemma"),
-            data: parse_data_values(include_str!("../specs/shipping.inputs.json").as_bytes()),
-            effective: effective(),
         },
         Fixture {
             spec_name: "bench_pricing",
-            label: "engine/benches/specs/pricing.lemma",
+            lemma_path: "engine/benches/specs/pricing.lemma",
             source: include_str!("../specs/pricing.lemma"),
-            data: parse_data_values(include_str!("../specs/pricing.inputs.json").as_bytes()),
-            effective: effective(),
         },
         Fixture {
             spec_name: "bench_order_pipeline",
-            label: "engine/benches/specs/order_pipeline.lemma",
+            lemma_path: "engine/benches/specs/order_pipeline.lemma",
             source: include_str!("../specs/order_pipeline.lemma"),
-            data: parse_data_values(include_str!("../specs/order_pipeline.inputs.json").as_bytes()),
-            effective: effective(),
         },
     ]
 }
 
-pub fn build_engine(fixture: &Fixture) -> Engine {
-    let mut engine = Engine::new();
-    let source_type = SourceType::Path(Arc::new(PathBuf::from(fixture.label)));
-    engine
-        .load(fixture.source, source_type)
-        .expect("BUG: bench fixture spec must load");
-    engine
-}
-
-fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput, String> {
-    use std::collections::BTreeMap;
-    match value {
-        serde_json::Value::String(s) => Ok(DataValueInput::Convenience(s)),
-        serde_json::Value::Bool(b) => Ok(DataValueInput::Boolean(b)),
-        serde_json::Value::Number(n) => Ok(DataValueInput::Convenience(n.to_string())),
-        serde_json::Value::Object(obj) => {
-            if obj.is_empty() {
-                return Err("data value object must not be empty".to_string());
-            }
-            if obj.len() == 2 && obj.contains_key("value") && obj.contains_key("unit") {
-                return Err(
-                    "the {value, unit} object shape is not supported; use a unit map like {\"eur\": \"84\"}"
-                        .to_string(),
-                );
-            }
-            if obj.values().all(|v| v.is_string()) {
-                let map: BTreeMap<String, String> = obj
-                    .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            v.as_str()
-                                .expect("BUG: object values checked as strings")
-                                .to_string(),
-                        )
-                    })
-                    .collect();
-                return Ok(DataValueInput::MeasureMap(map));
-            }
-            Err("data value object must be a unit map with string magnitudes".to_string())
-        }
-        serde_json::Value::Null => Err("data value must not be null".to_string()),
-        serde_json::Value::Array(_) => Err("data value must not be an array".to_string()),
-    }
-}
-
-/// Parse a fixture's pinned `*.inputs.json` into [`DataValueInput`] values.
-///
-/// Called once per fixture at bench setup. Timed loops clone the result.
-fn parse_data_values(raw_bytes: &[u8]) -> HashMap<String, DataValueInput> {
-    let map: HashMap<String, serde_json::Value> = serde_json::from_slice(raw_bytes)
-        .expect("BUG: bench fixture inputs JSON must parse as HashMap<String, serde_json::Value>");
-    map.into_iter()
-        .map(|(k, v)| {
-            (
-                k,
-                data_input_from_json_value(v)
-                    .expect("BUG: bench fixture data value must be supported"),
-            )
-        })
-        .collect()
+pub fn source_path(label: &str) -> PathBuf {
+    PathBuf::from(label)
 }

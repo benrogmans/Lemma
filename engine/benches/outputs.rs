@@ -3,34 +3,24 @@
 //! No timing, no warmup, no iteration loop. Runs each fixture once and
 //! prints a JSON document the xtask report can diff against the Python
 //! benchmark's output dump.
-//!
-//! The shape is one record per fixture:
-//!
-//! ```json
-//! {
-//!   "fixtures": [
-//!     {
-//!       "spec_name": "bench_shipping",
-//!       "outputs": {
-//!         "base_rate": { "kind": "number", "value": "5", "unit": null },
-//!         "member_discount": { "kind": "ratio", "value": "0.1", "unit": "percent" }
-//!       }
-//!     }
-//!   ]
-//! }
-//! ```
-//!
-//! Normalisation strategy: serialise each [`lemma::ValueKind`] through its
-//! existing serde impl (defined in `engine/src/planning/semantics.rs` around
-//! line 2186), then unpack the single-key object into a flat `{kind, value,
-//! unit}` triple. Veto results are surfaced with `kind = "veto"` and the
-//! veto's `Display` reason in `value`.
 
-use lemma::{OperationResult, VetoType};
+use lemma::{Engine, OperationResult, SourceType, VetoType};
 use serde::Serialize;
 use serde_json::Value;
+use std::sync::Arc;
 
 mod common;
+
+fn build_engine(fixture: &common::Fixture) -> Engine {
+    let mut engine = Engine::new();
+    engine
+        .load([(
+            SourceType::Path(Arc::new(common::source_path(fixture.lemma_path))),
+            fixture.source.to_string(),
+        )])
+        .expect("BUG: bench fixture spec must load");
+    engine
+}
 
 #[derive(Serialize)]
 struct Document {
@@ -166,13 +156,17 @@ fn normalize_veto(veto: &VetoType) -> Output {
 fn main() {
     let mut fixtures = Vec::new();
     for fixture in common::fixtures() {
-        let engine = common::build_engine(&fixture);
-        let plan = engine
-            .get_plan(None, fixture.spec_name, Some(&fixture.effective))
-            .expect("BUG: bench fixture must produce execution plan");
-        let data = fixture.data.clone();
+        let engine = build_engine(&fixture);
+        let data = fixture.inputs();
         let response = engine
-            .run_plan(plan, Some(&fixture.effective), data, true, None)
+            .run(
+                None,
+                fixture.spec_name,
+                Some(&common::effective()),
+                data,
+                None,
+                true,
+            )
             .expect("BUG: outputs bench fixture must evaluate");
 
         let mut outputs = serde_json::Map::new();

@@ -15,7 +15,9 @@ rule product: max_val * two
     );
 
     let mut engine = Engine::new();
-    engine.load(&code, SourceType::Volatile).unwrap();
+    engine
+        .load([(SourceType::Volatile, &code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -24,8 +26,8 @@ rule product: max_val * two
             "bigint_exact",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("evaluation must complete");
 
@@ -38,7 +40,7 @@ rule product: max_val * two
     assert_eq!(
         rule.veto_reason.as_deref(),
         Some("Calculated result exceeds decimal value limit"),
-        "response materialization must veto uncommittable rule output, not fail with numeric overflow"
+        "response materialization must veto magnitude overflow, not fail with numeric overflow"
     );
     assert_ne!(
         rule.veto_reason.as_deref(),

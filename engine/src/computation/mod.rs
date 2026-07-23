@@ -12,4 +12,4 @@ pub use measure_math::mathematical_computation_preserves_measure_magnitude;
 
 pub use arithmetic::arithmetic_operation;
 pub use comparison::comparison_operation;
-pub use units::{convert_unit, convert_unit_operand, UnitResolutionContext};
+pub use units::{convert_unit_operand, UnitResolutionContext};

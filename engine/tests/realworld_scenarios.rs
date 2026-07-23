@@ -19,7 +19,7 @@ fn run_spec(engine: &Engine, spec: &str, data: &[(&str, &str)]) -> lemma::Respon
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&now), data_map, false, None)
+        .run(None, spec, Some(&now), data_map, None, false)
         .unwrap()
 }
 
@@ -52,7 +52,8 @@ fn rule_vetoed(response: &lemma::Response, rule_name: &str) -> bool {
 fn scenario_insurance_premium_basic() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("insurance.lemma"),
             r#"
 spec insurance_premium
 
@@ -85,9 +86,9 @@ rule is_high_risk: age >= 60 and smoker
 rule coverage_check: yes
   unless coverage_amount > 500000 and age >= 70
     then veto "Coverage exceeds limit for age group"
-"#,
-            src("insurance.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // 25-year-old non-smoker, no conditions, 100k coverage
@@ -117,7 +118,8 @@ rule coverage_check: yes
 fn scenario_insurance_veto_propagation() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("insurance.lemma"),
             r#"
 spec insurance_premium
 
@@ -148,9 +150,9 @@ rule monthly_premium: annual_premium / 12
 rule coverage_check: yes
   unless coverage_amount > 500000 and age >= 70
     then veto "Coverage exceeds limit for age group"
-"#,
-            src("insurance.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // 75-year-old, 600k coverage should veto
@@ -180,33 +182,30 @@ rule coverage_check: yes
 fn scenario_compound_interest() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("interest.lemma"),
             r#"
 spec compound_interest
 
 data principal: number -> minimum 0
 data annual_rate: ratio -> minimum 0% -> maximum 100%
-data years: number -> minimum 1 -> maximum 50
+data year: number -> minimum 1 -> maximum 50
 
-rule growth_factor: (100% + annual_rate) ^ years
+rule growth_factor: (100% + annual_rate) ^ year
 
 rule future_value: principal * growth_factor
 
 rule total_interest: future_value - principal
-"#,
-            src("interest.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    // 1000 at 10% for 3 years = 1000 * 1.1^3 = 1331
+    // 1000 at 10% for 3 year = 1000 * 1.1^3 = 1331
     let resp = run_spec(
         &engine,
         "compound_interest",
-        &[
-            ("principal", "1000"),
-            ("annual_rate", "10%"),
-            ("years", "3"),
-        ],
+        &[("principal", "1000"), ("annual_rate", "10%"), ("year", "3")],
     );
 
     let display = rule_display(&resp, "future_value");
@@ -222,7 +221,8 @@ rule total_interest: future_value - principal
 fn scenario_cross_spec_order_composition() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("invoice.lemma"),
             r#"
 spec tax_rates
 
@@ -249,9 +249,9 @@ with items.quantity: 10
 rule net_total: items.subtotal
 rule tax_amount: net_total * tax.effective_tax
 rule gross_total: net_total + tax_amount
-"#,
-            src("invoice.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "invoice", &[]);
@@ -272,7 +272,8 @@ rule gross_total: net_total + tax_amount
 fn scenario_veto_lookup_table() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("tax.lemma"),
             r#"
 spec tax_lookup
 
@@ -291,9 +292,9 @@ rule vat_rate: veto "Unknown country for VAT"
   unless country is "US" then 0%
 
 rule has_vat: vat_rate is not veto
-"#,
-            src("tax.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "tax_lookup", &[("country", "DE")]);
@@ -311,7 +312,8 @@ rule has_vat: vat_rate is not veto
 fn scenario_stacked_discounts() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("discounts.lemma"),
             r#"
 spec stacked_discounts
 
@@ -323,9 +325,9 @@ data coupon_discount: 5%
 rule after_member: price - member_discount * price
 rule after_seasonal: after_member - seasonal_discount * after_member
 rule final_price: after_seasonal - coupon_discount * after_seasonal
-"#,
-            src("discounts.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // price = 1000
@@ -346,7 +348,8 @@ rule final_price: after_seasonal - coupon_discount * after_seasonal
 fn scenario_si_unit_conversion() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("logistics.lemma"),
             r#"
 spec logistics
 uses lemma units
@@ -358,9 +361,9 @@ data speed: 60 kilometer
 rule weight_kg: package_weight as kilogram
 rule is_heavy: package_weight > 20 kilogram
 rule is_light: package_weight < 1 kilogram
-"#,
-            src("logistics.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "logistics", &[]);
@@ -383,7 +386,8 @@ rule is_light: package_weight < 1 kilogram
 fn scenario_date_range_membership() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("employment.lemma"),
             r#"
 spec employment
 uses lemma units
@@ -391,12 +395,12 @@ uses lemma units
 data hire_date: 2023-03-15
 data review_date: 2024-03-15
 
-rule tenure_days: (hire_date...review_date) as days
+rule tenure_days: (hire_date...review_date) as day
 rule in_first_year: hire_date in 2023-01-01...2024-01-01
 rule in_q1_2023: hire_date in 2023-01-01...2023-04-01
-"#,
-            src("employment.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "employment", &[]);
@@ -408,9 +412,9 @@ rule in_q1_2023: hire_date in 2023-01-01...2023-04-01
     let in_first = rule_display(&resp, "in_first_year");
     assert_eq!(in_first, "true", "hire_date is in first year");
 
-    // tenure: 2023-03-15 to 2024-03-15 = 366 days (2024 is leap year)
+    // tenure: 2023-03-15 to 2024-03-15 = 366 day (2024 is leap year)
     let tenure = rule_display(&resp, "tenure_days");
-    assert_eq!(tenure, "366 days", "one year including leap day");
+    assert_eq!(tenure, "366 day", "one year including leap day");
 }
 
 // ===========================================================================
@@ -422,7 +426,8 @@ rule in_q1_2023: hire_date in 2023-01-01...2023-04-01
 fn scenario_boolean_logic() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("access.lemma"),
             r#"
 spec access_control
 
@@ -445,12 +450,12 @@ rule access_level: 0
   unless is_verified then 1
   unless is_trusted then 2
   unless is_admin then 3
-"#,
-            src("access.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
-    // Verified non-admin, 60 days, with 2FA
+    // Verified non-admin, 60 day, with 2FA
     let resp = run_spec(
         &engine,
         "access_control",
@@ -478,7 +483,8 @@ rule access_level: 0
 fn scenario_division_by_zero_vetoes() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("division.lemma"),
             r#"
 spec division_test
 
@@ -487,9 +493,9 @@ data denominator: number
 
 rule division_ratio: numerator / denominator
 rule double_ratio: division_ratio * 2
-"#,
-            src("division.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(
@@ -517,7 +523,8 @@ rule double_ratio: division_ratio * 2
 fn scenario_math_operations() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("math.lemma"),
             r#"
 spec math_ops
 
@@ -528,9 +535,9 @@ rule rounded: round(value / 3)
 rule floored: floor(value / 3)
 rule ceiled: ceil(value / 3)
 rule absolute: abs(0 - value)
-"#,
-            src("math.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "math_ops", &[("value", "20")]);
@@ -560,7 +567,8 @@ rule absolute: abs(0 - value)
 fn scenario_number_range_bands() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("grading.lemma"),
             r#"
 spec grading
 
@@ -573,9 +581,9 @@ rule grade: "F"
   unless score in 90...101 then "A"
 
 rule is_passing: score >= 60
-"#,
-            src("grading.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Score of 85 should be "B"
@@ -608,7 +616,8 @@ rule is_passing: score >= 60
 fn scenario_temporal_spec_versions() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("temporal.lemma"),
             r#"
 spec vat_rates
 
@@ -628,9 +637,9 @@ data amount: number -> minimum 0
 
 rule tax: amount * vat.rate
 rule total: amount + tax
-"#,
-            src("temporal.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Evaluate at a date after 2024-01-01 — should use 21%
@@ -642,8 +651,8 @@ rule total: amount + tax
             "invoice_calc",
             Some(&effective),
             data_map,
-            false,
             None,
+            false,
         )
         .unwrap();
     let tax = rule_display(&resp, "tax");
@@ -658,8 +667,8 @@ rule total: amount + tax
             "invoice_calc",
             Some(&effective_old),
             data_map2,
-            false,
             None,
+            false,
         )
         .unwrap();
     let tax2 = rule_display(&resp2, "tax");
@@ -678,7 +687,8 @@ rule total: amount + tax
 fn scenario_is_veto_check() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("validation.lemma"),
             r#"
 spec validation
 
@@ -693,9 +703,9 @@ rule is_invalid: validated is veto
 
 rule safe_value: validated
   unless is_invalid then 0
-"#,
-            src("validation.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // Valid input
@@ -723,14 +733,15 @@ rule safe_value: validated
 #[test]
 fn scenario_percentage_subtract_rejected() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        src("pct_ops.lemma"),
         r#"
 spec percent_ops
 data amount: number
 rule bad: amount - 10%
-"#,
-        src("pct_ops.lemma"),
-    );
+"#
+        .to_string(),
+    )]);
     assert!(result.is_err());
     let msg = result
         .unwrap_err()
@@ -745,14 +756,15 @@ rule bad: amount - 10%
 fn scenario_percentage_multiply() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("pct_ops.lemma"),
             r#"
 spec percent_ops
 data amount: number
 rule times_fifty_pct: amount * 50%
-"#,
-            src("pct_ops.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     let resp = run_spec(&engine, "percent_ops", &[("amount", "200")]);
@@ -769,7 +781,8 @@ rule times_fifty_pct: amount * 50%
 fn scenario_unless_last_wins() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            src("priority.lemma"),
             r#"
 spec priority_rules
 
@@ -783,9 +796,9 @@ rule priority: "low"
   unless urgency >= 8 then "critical"
   unless is_vip then "critical"
   unless is_internal then "internal"
-"#,
-            src("priority.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
 
     // urgency=9, vip=true, internal=true → last match is "internal"

@@ -11,7 +11,7 @@ rule net_multiplier: 1 - discount
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(
         result.is_err(),
         "number - ratio should be rejected at planning"
@@ -34,23 +34,25 @@ fn test_duration_operations() {
     let code = r#"
 spec scheduling
 uses lemma units
-data meeting_length: 30 minutes
+data meeting_length: 30 minute
 rule double_meeting: meeting_length * 2
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "scheduling", Some(&now), HashMap::new(), true, None)
+        .run(None, "scheduling", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let rule = response.results.get("double_meeting").unwrap();
     let measure = rule.measure.as_ref().expect("measure map");
     assert_eq!(
-        measure.get("minutes").map(String::as_str),
+        measure.get("minute").map(String::as_str),
         Some("60"),
-        "30 minutes * 2 = 60 minutes"
+        "30 minute * 2 = 60 minute"
     );
 }
 
@@ -60,15 +62,17 @@ fn test_date_arithmetic_with_duration() {
 spec dates
 uses lemma units
 data start: 2024-01-15
-rule end: start + 7 days
+rule end: start + 7 day
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "dates", Some(&now), HashMap::new(), true, None)
+        .run(None, "dates", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let result = response
         .results
@@ -104,11 +108,13 @@ rule can_access: is_active and not is_premium
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "logic", Some(&now), HashMap::new(), true, None)
+        .run(None, "logic", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let result = response
         .results

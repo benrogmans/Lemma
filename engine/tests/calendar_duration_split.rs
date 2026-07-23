@@ -10,10 +10,12 @@ fn source() -> lemma::SourceType {
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, false)
         .expect("Should evaluate");
     response
         .results
@@ -26,7 +28,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -73,7 +75,7 @@ rule end: start + 1 month"#;
 fn duration_and_calendar_addition_rejected() {
     let code = r#"spec s
 uses lemma units
-data a: 1 weeks
+data a: 1 week
 data b: 1 month
 rule total: a + b"#;
     expect_plan_error(code, "Cannot add unrelated measure types");
@@ -84,7 +86,7 @@ fn calendar_to_duration_conversion_rejected() {
     let code = r#"spec s
 uses lemma units
 data c: 1 month
-rule seconds: c as seconds as number"#;
+rule second: c as second as number"#;
     expect_plan_error(code, "different measure families");
 }
 
@@ -92,7 +94,7 @@ rule seconds: c as seconds as number"#;
 fn duration_typed_slot_rejects_calendar_default() {
     let code = r#"spec s
 uses lemma units
-data d: units.duration -> default 1 month"#;
+data d: units.duration -> suggest 1 month"#;
     expect_plan_error(code, "Unit 'month' is for calendar data");
     expect_plan_error(code, "Valid 'duration' units are");
 }
@@ -102,7 +104,7 @@ fn weight_measure_calendar_default_lists_measure_units() {
     let code = r#"spec s
 uses lemma units
 data weight: measure -> unit gram 1 -> unit kilogram 1000
-data w: weight -> default 1 month"#;
+data w: weight -> suggest 1 month"#;
     expect_plan_error(code, "Unit 'month' is for calendar data");
     expect_plan_error(code, "Valid 'weight' units are");
 }
@@ -111,7 +113,7 @@ data w: weight -> default 1 month"#;
 fn text_calendar_default_suggests_quoted_text() {
     let code = r#"spec s
 uses lemma units
-data notes: text -> default 1 month"#;
+data notes: text -> suggest 1 month"#;
     expect_plan_error(code, "Unit 'month' is for calendar data");
     expect_plan_error(code, "double quotes");
 }

@@ -15,8 +15,8 @@ pub fn eval_rule_bool(
             spec_name,
             Some(effective),
             data,
-            false,
             Some(&[rule.to_string()]),
+            false,
         )
         .expect("run");
     let rule_result = response.get(rule).unwrap_or_else(|_| panic!("rule {rule}"));

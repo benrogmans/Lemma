@@ -25,7 +25,7 @@ Runs an ignored test that builds and runs each fuzz target for 30s with a 5s tim
 
 ## Running Fuzz Tests
 
-### Quick Test (30 seconds)
+### Quick Test (30 second)
 ```bash
 cargo +nightly fuzz run fuzz_parser -- -max_total_time=30
 ```

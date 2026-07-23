@@ -1,5 +1,5 @@
-use lemma::{DataValueInput, DateTimeValue, TimezoneValue};
-use lemma::{DateGranularity, Engine, LiteralValue, ValueKind};
+use lemma::{DateGranularity, ValueKind};
+use lemma::{DateTimeValue, Engine, LiteralValue, TimezoneValue};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,22 +32,18 @@ fn eval_literal_with_data(
     data: HashMap<String, String>,
 ) -> LiteralValue {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
-    let data_values: HashMap<String, DataValueInput> = data
-        .into_iter()
-        .map(|(k, v)| (k, DataValueInput::convenience(v)))
-        .collect();
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
-            data_values,
-            true,
+            data,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -72,19 +68,28 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 }
 
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
+    eval_bool_with_data(code, spec_name, rule_name, HashMap::new())
+}
+
+fn eval_bool_with_data(
+    code: &str,
+    spec_name: &str,
+    rule_name: &str,
+    data: HashMap<String, String>,
+) -> bool {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
-            HashMap::new(),
-            true,
+            data,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -97,7 +102,7 @@ fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -254,12 +259,16 @@ rule ok: ((0...100) + 50) >= 149"#;
 #[test]
 fn p18_range_through_rules() {
     let code = r#"spec test
-data lower: number -> default 0
-data upper: number -> default 100
-data value: number -> default 50
+data lower: number -> suggest 0
+data upper: number -> suggest 100
+data value: number -> suggest 50
 rule bounds: lower...upper
 rule check: value in bounds"#;
-    assert!(eval_bool(code, "test", "check"));
+    let mut data = HashMap::new();
+    data.insert("lower".to_string(), "0".to_string());
+    data.insert("upper".to_string(), "100".to_string());
+    data.insert("value".to_string(), "50".to_string());
+    assert!(eval_bool_with_data(code, "test", "check", data));
 }
 
 #[test]
@@ -276,9 +285,11 @@ rule adjusted: bounds + adjustment"#;
 #[test]
 fn p20_user_declared() {
     let code = r#"spec test
-data bounds: number range -> default 0...100
+data bounds: number range -> suggest 0...100
 rule check: 50 in bounds"#;
-    assert!(eval_bool(code, "test", "check"));
+    let mut data = HashMap::new();
+    data.insert("bounds".to_string(), "0...100".to_string());
+    assert!(eval_bool_with_data(code, "test", "check", data));
 }
 
 #[test]
@@ -424,16 +435,23 @@ rule margin_ok: span_with_allowance >= 5500 gram"#;
 fn q15_user_declared() {
     let code = r#"spec test
 data weight: measure -> unit gram 1 -> unit kilogram 1000
-data acceptable: weight range -> default 30 kilogram...35 kilogram
+data acceptable: weight range -> suggest 30 kilogram...35 kilogram
 rule check: 32 kilogram in acceptable"#;
-    assert!(eval_bool(code, "test", "check"));
+    let mut data = HashMap::new();
+    data.insert(
+        "acceptable".to_string(),
+        "30 kilogram...35 kilogram".to_string(),
+    );
+    assert!(eval_bool_with_data(code, "test", "check", data));
 }
 
 #[test]
 fn q15_mixed_unit_endpoints_gram_to_kilogram() {
     let code = r#"spec test
 data weight: measure -> unit gram 1 -> unit kilogram 1000
-data band: weight range -> default 3000 gram...35 kilogram
+data band_low: 3000 gram
+data band_high: 35 kilogram
+rule band: band_low...band_high
 rule inside: 3200 gram in band
 rule lower: 3000 gram in band
 rule upper_excluded: 35 kilogram in band"#;
@@ -446,11 +464,13 @@ rule upper_excluded: 35 kilogram in band"#;
 fn q16_money_named_range() {
     let code = r#"spec test
 data money: measure -> unit eur 1.00
-data estimated: money range -> default 30 eur...50 eur
+data estimated: money range -> suggest 30 eur...50 eur
 rule inside: 40 eur in estimated
 rule span: (30 eur...50 eur) >= 20 eur"#;
-    assert!(eval_bool(code, "test", "inside"));
-    assert!(eval_bool(code, "test", "span"));
+    let mut data = HashMap::new();
+    data.insert("estimated".to_string(), "30 eur...50 eur".to_string());
+    assert!(eval_bool_with_data(code, "test", "inside", data.clone()));
+    assert!(eval_bool_with_data(code, "test", "span", data));
 }
 
 // =============================================================================
@@ -586,7 +606,7 @@ data bad: label range"#;
 fn s5_date_vs_duration() {
     let code = r#"spec test
 uses lemma units
-rule bad: 2024-01-01...7 days"#;
+rule bad: 2024-01-01...7 day"#;
     expect_plan_error(code, "range");
 }
 
@@ -618,4 +638,28 @@ data rate: measure
 data hourly_rate: 50 eur_per_hour
 rule bad: hourly_rate * (0...100)"#;
     expect_plan_error(code, "range");
+}
+
+#[test]
+fn range_ellipsis_binds_tighter_than_multiply() {
+    // Docs: `rate * a...b` parses as `rate * (a...b)` because `...` binds tighter than `*`.
+    // Number × number-range is rejected at planning — proving the range formed first.
+    expect_plan_error(
+        r#"spec test
+rule bad: 2 * 0...10"#,
+        "range",
+    );
+
+    // `(rate * a)...b` makes the product a range endpoint — valid number range.
+    let code = r#"spec test
+rule ok: (2 * 0)...10
+rule width: ((2 * 0)...10) as number"#;
+    let lit = eval_literal(code, "test", "width");
+    match lit.value {
+        ValueKind::Number(n) => {
+            let dec = ValueKind::Number(n).as_decimal_magnitude().unwrap();
+            assert_eq!(dec, rust_decimal::Decimal::from(10));
+        }
+        other => panic!("expected number span width 10, got {other:?}"),
+    }
 }

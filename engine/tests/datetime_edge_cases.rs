@@ -15,7 +15,7 @@ rule check: leap_date
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
@@ -39,7 +39,7 @@ rule check: leap_date
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "check");
@@ -63,7 +63,7 @@ rule next_day: start_date + 1 day
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
@@ -87,7 +87,7 @@ rule next_day: start_date + 1 day
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
@@ -111,7 +111,7 @@ rule next_month: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
@@ -135,7 +135,7 @@ rule next_month: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_month");
@@ -159,7 +159,7 @@ rule next_year: leap_date + 1 year
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_year");
@@ -183,7 +183,7 @@ rule four_years_later: leap_date + 4 year
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "four_years_later");
@@ -207,7 +207,7 @@ rule three_months_ago: start_date - 3 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "three_months_ago");
@@ -231,7 +231,7 @@ rule twenty_months_later: start_date + 20 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "twenty_months_later");
@@ -255,7 +255,7 @@ rule last_year: start_date - 1 year
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "last_year");
@@ -276,18 +276,18 @@ spec test
 uses lemma units
 data start_date: 2024-01-01
 data end_date: 2025-01-01
-rule days_diff: start_date...end_date as seconds as number
+rule days_diff: start_date...end_date as second as number
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
-    if let lemma::ValueKind::Number(seconds) = &lit.value {
-        // 366 days = 31,622,400 seconds
+    if let lemma::ValueKind::Number(second) = &lit.value {
+        // 366 day = 31,622,400 second
         assert_eq!(
-            lemma::ValueKind::Number(seconds.clone())
+            lemma::ValueKind::Number(second.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             rust_decimal::Decimal::from(31_622_400)
@@ -305,18 +305,18 @@ spec test
 uses lemma units
 data start_date: 2023-01-01
 data end_date: 2024-01-01
-rule days_diff: start_date...end_date as seconds as number
+rule days_diff: start_date...end_date as second as number
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "days_diff");
-    if let lemma::ValueKind::Number(seconds) = &lit.value {
-        // 365 days = 31,536,000 seconds
+    if let lemma::ValueKind::Number(second) = &lit.value {
+        // 365 day = 31,536,000 second
         assert_eq!(
-            lemma::ValueKind::Number(seconds.clone())
+            lemma::ValueKind::Number(second.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             rust_decimal::Decimal::from(31_536_000)
@@ -333,11 +333,11 @@ fn test_add_hours_crossing_midnight() {
 spec test
 uses lemma units
 data start_datetime: 2024-03-15T22:00:00
-rule next_day: start_datetime + 5 hours
+rule next_day: start_datetime + 5 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "next_day");
@@ -359,11 +359,11 @@ fn test_subtract_hours_crossing_midnight_backward() {
 spec test
 uses lemma units
 data start_datetime: 2024-03-16T02:00:00
-rule prev_day: start_datetime - 5 hours
+rule prev_day: start_datetime - 5 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "prev_day");
@@ -385,11 +385,11 @@ fn test_add_minutes_precise() {
 spec test
 uses lemma units
 data start_time: 2024-03-15T10:30:45
-rule later: start_time + 90 minutes
+rule later: start_time + 90 minute
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
@@ -409,11 +409,11 @@ fn test_add_seconds_overflow_to_minutes() {
 spec test
 uses lemma units
 data start_time: 2024-03-15T10:30:30
-rule later: start_time + 90 seconds
+rule later: start_time + 90 second
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
@@ -433,11 +433,11 @@ fn test_time_arithmetic_crossing_midnight() {
 spec test
 uses lemma units
 data evening_time: 23:30:00
-rule after_midnight: evening_time + 90 minutes
+rule after_midnight: evening_time + 90 minute
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "after_midnight");
@@ -461,7 +461,7 @@ data end_time: 15:30:00
 rule timespan: end_time - start_time
     "#;
 
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -487,7 +487,7 @@ data end_time: 10:00:00
 rule timespan: end_time - start_time
     "#;
 
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -509,11 +509,11 @@ fn test_add_large_duration_days() {
 spec test
 uses lemma units
 data start_date: 2024-01-01
-rule future: start_date + 1000 days
+rule future: start_date + 1000 day
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "future");
@@ -533,11 +533,11 @@ fn test_fractional_hours() {
 spec test
 uses lemma units
 data start_time: 2024-03-15T10:00:00
-rule later: start_time + 2.5 hours
+rule later: start_time + 2.5 hour
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "later");
@@ -562,7 +562,7 @@ rule is_before: date1 < date2
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "is_before");
@@ -584,7 +584,7 @@ rule april: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "april");
@@ -604,10 +604,10 @@ fn time_plus_extreme_duration_vetoes_instead_of_panic() {
 spec test
 uses lemma units
 data t: 12:00:00+00:00
-rule result: t + 9999999999999 seconds
+rule result: t + 9999999999999 second
     "#;
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("parse");
     let now = lemma::DateTimeValue::now();
     let response = engine
@@ -616,8 +616,8 @@ rule result: t + 9999999999999 seconds
             "test",
             Some(&now),
             std::collections::HashMap::new(),
-            false,
             Some(&["result".to_string()]),
+            false,
         )
         .expect("run");
     let rule_result = response.get("result").expect("rule exists");
@@ -631,10 +631,10 @@ fn time_minus_extreme_duration_vetoes_instead_of_panic() {
 spec test
 uses lemma units
 data t: 12:00:00+00:00
-rule result: t - 9999999999999 seconds
+rule result: t - 9999999999999 second
     "#;
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("parse");
     let now = lemma::DateTimeValue::now();
     let response = engine
@@ -643,8 +643,8 @@ rule result: t - 9999999999999 seconds
             "test",
             Some(&now),
             std::collections::HashMap::new(),
-            false,
             Some(&["result".to_string()]),
+            false,
         )
         .expect("run");
     let rule_result = response.get("result").expect("rule exists");
@@ -665,7 +665,7 @@ rule january: start_date + 1 month
     "#;
 
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("Failed to parse");
 
     let lit = get_rule_value(&engine, "test", "january");

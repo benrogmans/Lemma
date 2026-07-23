@@ -10,8 +10,8 @@ pub fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> Lite
             spec_name,
             Some(&now),
             HashMap::new(),
-            false,
             Some(&[rule_name.to_string()]),
+            false,
         )
         .expect("run");
     let rule_result = response

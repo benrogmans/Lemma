@@ -16,10 +16,12 @@ data money: measure
 fn eval_literal(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, true)
         .expect("Should evaluate");
     response
         .results
@@ -46,10 +48,12 @@ fn eval_rule_measure_unit(
 ) -> String {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), true, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, true)
         .expect("Should evaluate");
     response
         .results
@@ -72,7 +76,7 @@ fn eval_bool(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> bool {
 fn expect_plan_error(code: impl AsRef<str>, expected_fragment: &str) {
     let code = code.as_ref();
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -180,7 +184,7 @@ fn is_numeric_context_character(character: char) -> bool {
 fn arith_add_mixed_aliases() {
     let code = r#"spec test
 uses lemma units
-rule value: (2 hours + 30 minutes) as minutes"#;
+rule value: (2 hour + 30 minute) as minute"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["150", "minute"]);
 }
@@ -189,7 +193,7 @@ rule value: (2 hours + 30 minutes) as minutes"#;
 fn arith_subtract_mixed_aliases() {
     let code = r#"spec test
 uses lemma units
-rule value: (2 hour - 30 minutes) as minute"#;
+rule value: (2 hour - 30 minute) as minute"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["90", "minute"]);
 }
@@ -198,7 +202,7 @@ rule value: (2 hour - 30 minutes) as minute"#;
 fn arith_negative_duration_result() {
     let code = r#"spec test
 uses lemma units
-rule value: (30 minutes - 2 hours) as minutes"#;
+rule value: (30 minute - 2 hour) as minute"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["-90", "minute"]);
 }
@@ -207,7 +211,7 @@ rule value: (30 minutes - 2 hours) as minutes"#;
 fn arith_duration_times_number() {
     let code = r#"spec test
 uses lemma units
-rule value: (2 hours * 3) as hours as number"#;
+rule value: (2 hour * 3) as hour as number"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["6"]);
 }
@@ -216,7 +220,7 @@ rule value: (2 hours * 3) as hours as number"#;
 fn arith_number_times_duration() {
     let code = r#"spec test
 uses lemma units
-rule value: (3 * 2 hours) as hours as number"#;
+rule value: (3 * 2 hour) as hour as number"#;
     let value = eval_rule(code, "test", "value");
     assert_contains_all(&value, &["6"]);
 }
@@ -225,9 +229,9 @@ rule value: (3 * 2 hours) as hours as number"#;
 fn arith_duration_divided_by_number() {
     let code = r#"spec test
 uses lemma units
-rule value: (2 hours / 2) as minutes"#;
+rule value: (2 hour / 2) as minute"#;
     assert_eq!(
-        eval_rule_measure_unit(code, "test", "value", "minutes"),
+        eval_rule_measure_unit(code, "test", "value", "minute"),
         "60"
     );
 }
@@ -236,7 +240,7 @@ rule value: (2 hours / 2) as minutes"#;
 fn arith_duration_divided_by_duration_yields_number() {
     let code = r#"spec test
 uses lemma units
-rule value: 2 hours / 30 minutes"#;
+rule value: 2 hour / 30 minute"#;
     assert_eq!(eval_rule(code, "test", "value"), "4");
 }
 
@@ -244,7 +248,7 @@ rule value: 2 hours / 30 minutes"#;
 fn arith_named_duration_compare_same_alias_family() {
     let code = r#"spec test
 uses lemma units
-rule ok: 2 hours > 90 minutes"#;
+rule ok: 2 hour > 90 minute"#;
     assert!(eval_bool(code, "test", "ok"));
 }
 
@@ -252,7 +256,7 @@ rule ok: 2 hours > 90 minutes"#;
 fn arith_named_duration_compare_equal_after_conversion() {
     let code = r#"spec test
 uses lemma units
-rule ok: 2 hours >= 120 minutes"#;
+rule ok: 2 hour >= 120 minute"#;
     assert!(eval_bool(code, "test", "ok"));
 }
 
@@ -261,7 +265,7 @@ fn arith_number_cast_to_duration_for_comparison() {
     let code = r#"spec test
 uses lemma units
 data threshold: 1.5
-rule ok: (2 hours as hours as number) > threshold"#;
+rule ok: (2 hour as hour as number) > threshold"#;
     assert!(eval_bool(code, "test", "ok"));
 }
 
@@ -269,7 +273,7 @@ rule ok: (2 hours as hours as number) > threshold"#;
 fn arith_named_duration_compare_to_bare_number_rejected() {
     let code = r#"spec test
 uses lemma units
-rule ok: 2 hours > 5"#;
+rule ok: 2 hour > 5"#;
     expect_plan_error(code, "number");
 }
 
@@ -277,7 +281,7 @@ rule ok: 2 hours > 5"#;
 fn arith_named_duration_plus_calendar_rejected() {
     let code = r#"spec test
 uses lemma units
-rule value: 2 hours + 3 month"#;
+rule value: 2 hour + 3 month"#;
     expect_plan_error(code, "calendar");
 }
 
@@ -287,7 +291,7 @@ fn arith_named_duration_plus_unrelated_measure_rejected() {
         r#"spec test
 uses lemma units
 {money}
-rule value: 2 hours + 5 eur"#,
+rule value: 2 hour + 5 eur"#,
         money = MONEY_TYPEDEF
     );
     expect_plan_error(code, "unrelated");
@@ -300,7 +304,7 @@ fn arith_named_duration_cast_to_unrelated_unit_rejected() {
 uses lemma units
 {money}
 data elapsed: units.duration
-data d: elapsed -> default 2 hours
+data d: elapsed -> suggest 2 hour
 rule value: d as eur"#,
         money = MONEY_TYPEDEF
     );
@@ -312,6 +316,6 @@ fn arith_bare_number_not_implicitly_duration_compatible() {
     let code = r#"spec test
 uses lemma units
 data threshold: 1.5
-rule ok: 2 hours > threshold"#;
+rule ok: 2 hour > threshold"#;
     expect_plan_error(code, "Cannot compare");
 }

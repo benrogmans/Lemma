@@ -2,15 +2,14 @@ use crate::computation::rational::NumericFailure;
 use crate::evaluation::explanations::Explanation;
 use crate::evaluation::operations::{OperationResult, VetoType};
 
-const DECIMAL_VALUE_LIMIT_VETO_MESSAGE: &str = "Calculated result exceeds decimal value limit";
 use crate::parsing::ast::DateTimeValue;
 use crate::planning::semantics::{
-    range_element_type_specification, DataPath, LemmaType, LiteralValue, RulePath,
+    range_element_type_specification, LemmaType, LiteralUnitMapFailure, LiteralValue, RulePath,
     SemanticDateTime, SemanticTime, Source, TypeSpecification, ValueKind,
 };
 use indexmap::IndexMap;
 use serde::Serialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Rule info with resolved expressions for use in evaluation response.
@@ -21,14 +20,6 @@ pub struct EvaluatedRule {
     pub path: RulePath,
     pub source_location: Source,
     pub rule_type: LemmaType,
-}
-
-/// Grouped data from a specific spec (semantics types only).
-#[derive(Debug, Clone, Serialize)]
-pub struct DataGroup {
-    pub data_path: String,
-    pub referencing_data_name: String,
-    pub data: Vec<crate::planning::semantics::Data>,
 }
 
 /// Calendar value on a rule result.
@@ -78,7 +69,6 @@ pub struct Response {
     pub spec_effective_from: Option<DateTimeValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec_effective_to: Option<DateTimeValue>,
-    pub data: Vec<DataGroup>,
     pub results: IndexMap<String, RuleResult>,
 }
 
@@ -117,20 +107,22 @@ pub struct RuleResult {
     pub range: Option<RangeResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<Explanation>,
+    /// Unbound caller data paths still live for this rule under the current overlay
+    /// (`DataPath::input_key` strings, same keys as `Show.data`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub missing_data: Vec<String>,
 }
 
 impl RuleResult {
     /// Materialize a rule evaluation result for API output.
     ///
-    /// `expression_units` is the plan's expression-scope index
-    /// ([`crate::planning::ExecutionPlan::expression_unit_index`]).
-    /// Declared units on `rule_type` are used first; the expression index covers compound signatures.
+    /// Measure and ratio payloads expand into every unit declared on `rule_type`.
     pub fn from_operation_result(
         rule: EvaluatedRule,
         operation_result: &OperationResult,
         rule_type: &LemmaType,
-        expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
         explanation: Option<Explanation>,
+        missing_data: Vec<String>,
     ) -> Self {
         let rule_type_name = rule_type.name().to_string();
         match operation_result {
@@ -154,6 +146,7 @@ impl RuleResult {
                 calendar: None,
                 range: None,
                 explanation,
+                missing_data,
             },
             OperationResult::Value(literal) => match &literal.value {
                 ValueKind::Range(from, to) => {
@@ -162,8 +155,8 @@ impl RuleResult {
                     let from_type = endpoint_materialization_type(from, &endpoint_type);
                     let to_type = endpoint_materialization_type(to, &endpoint_type);
                     match (
-                        materialize_payload(from, &from_type, expression_units),
-                        materialize_payload(to, &to_type, expression_units),
+                        materialize_payload(from, &from_type),
+                        materialize_payload(to, &to_type),
                     ) {
                         (Ok(from_payload), Ok(to_payload)) => Self {
                             rule,
@@ -185,6 +178,7 @@ impl RuleResult {
                                 to: to_payload,
                             }),
                             explanation,
+                            missing_data,
                         },
                         (Err(failure), _) | (_, Err(failure)) => {
                             vetoed_rule_result_for_materialization_failure(
@@ -192,11 +186,12 @@ impl RuleResult {
                                 rule_type_name,
                                 explanation,
                                 failure,
+                                missing_data,
                             )
                         }
                     }
                 }
-                _ => match materialize_payload(literal, rule_type, expression_units) {
+                _ => match materialize_payload(literal, rule_type) {
                     Ok(payload) => Self {
                         rule,
                         veto_detail: None,
@@ -214,12 +209,14 @@ impl RuleResult {
                         calendar: payload.calendar,
                         range: None,
                         explanation,
+                        missing_data,
                     },
                     Err(failure) => vetoed_rule_result_for_materialization_failure(
                         rule,
                         rule_type_name,
                         explanation,
                         failure,
+                        missing_data,
                     ),
                 },
             },
@@ -446,7 +443,7 @@ enum MaterializationFailure {
     OutOfMemory,
 }
 
-fn map_commit_failure(failure: NumericFailure) -> MaterializationFailure {
+fn map_materialization_failure(failure: NumericFailure) -> MaterializationFailure {
     match failure {
         NumericFailure::Overflow => MaterializationFailure::DecimalLimit,
         NumericFailure::OutOfMemory => MaterializationFailure::OutOfMemory,
@@ -474,7 +471,7 @@ fn map_unit_conversion_failure(failure: NumericFailure) -> MaterializationFailur
 
 fn materialization_failure_message(failure: MaterializationFailure) -> &'static str {
     match failure {
-        MaterializationFailure::DecimalLimit => DECIMAL_VALUE_LIMIT_VETO_MESSAGE,
+        MaterializationFailure::DecimalLimit => "Calculated result exceeds decimal value limit",
         MaterializationFailure::NumericOverflow => "numeric overflow",
         MaterializationFailure::OutOfMemory => "out of memory",
     }
@@ -485,6 +482,7 @@ fn vetoed_rule_result_for_materialization_failure(
     rule_type_name: String,
     explanation: Option<Explanation>,
     failure: MaterializationFailure,
+    missing_data: Vec<String>,
 ) -> RuleResult {
     let veto = VetoType::computation(materialization_failure_message(failure).to_string());
     RuleResult {
@@ -504,13 +502,13 @@ fn vetoed_rule_result_for_materialization_failure(
         calendar: None,
         range: None,
         explanation,
+        missing_data,
     }
 }
 
 fn materialize_payload(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
-    _expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
 ) -> Result<RuleResultPayload, MaterializationFailure> {
     match &literal.value {
         ValueKind::Measure(rational, sig) if literal.lemma_type.is_calendar_like() => {
@@ -519,7 +517,7 @@ fn materialize_payload(
             let value = literal
                 .lemma_type
                 .try_materialize_rational_as_decimal_string(rational)
-                .map_err(map_commit_failure)?;
+                .map_err(map_materialization_failure)?;
             Ok(RuleResultPayload {
                 calendar: Some(CalendarResult {
                     value,
@@ -539,7 +537,7 @@ fn materialize_payload(
         ValueKind::Number(rational) => {
             let number = result_type
                 .try_materialize_rational_as_decimal_string(rational)
-                .map_err(map_commit_failure)?;
+                .map_err(map_materialization_failure)?;
             Ok(RuleResultPayload {
                 number: Some(number),
                 ..RuleResultPayload::default()
@@ -567,88 +565,29 @@ fn materialize_payload(
     }
 }
 
+fn map_literal_unit_map_failure(failure: LiteralUnitMapFailure) -> MaterializationFailure {
+    match failure {
+        LiteralUnitMapFailure::Commit(nf) => map_materialization_failure(nf),
+        LiteralUnitMapFailure::UnitConversion(nf) => map_unit_conversion_failure(nf),
+    }
+}
+
 fn measure_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
 ) -> Result<BTreeMap<String, String>, MaterializationFailure> {
-    use crate::computation::rational::checked_div;
-
-    let unit_names = result_type
-        .measure_unit_names()
-        .expect("BUG: rule result measure must have declared units");
-    let ValueKind::Measure(magnitude, _signature) = &literal.value else {
-        panic!("BUG: measure_to_unit_map called with non-measure value");
-    };
-    let mut map = BTreeMap::new();
-    for unit_name in unit_names {
-        let unit_factor = result_type.measure_unit_factor(unit_name);
-        let magnitude_in_unit =
-            checked_div(magnitude, unit_factor).map_err(map_unit_conversion_failure)?;
-        let materialized = result_type
-            .try_materialize_rational_as_decimal_string(&magnitude_in_unit)
-            .map_err(map_commit_failure)?;
-        map.insert(unit_name.to_string(), materialized);
-    }
-    Ok(map)
+    result_type
+        .measure_literal_in_all_units(literal)
+        .map_err(map_literal_unit_map_failure)
 }
 
 fn ratio_to_unit_map(
     literal: &crate::planning::semantics::LiteralValue,
     result_type: &LemmaType,
 ) -> Result<BTreeMap<String, String>, MaterializationFailure> {
-    use crate::computation::rational::checked_mul;
-    let materialization_type = match &result_type.specifications {
-        TypeSpecification::Ratio { .. } => result_type,
-        TypeSpecification::RatioRange { .. } => {
-            let element = range_element_type_specification(&result_type.specifications)
-                .expect("BUG: ratio range rule type must have ratio element specification");
-            let TypeSpecification::Ratio {
-                units, decimals, ..
-            } = element
-            else {
-                panic!("BUG: ratio range element spec must be Ratio");
-            };
-            return ratio_to_unit_map(
-                literal,
-                &LemmaType::primitive(TypeSpecification::Ratio {
-                    minimum: None,
-                    maximum: None,
-                    decimals,
-                    units,
-                    help: String::new(),
-                }),
-            );
-        }
-        _ => {
-            panic!(
-                "BUG: ratio_to_unit_map called with non-ratio type {}",
-                result_type.name()
-            );
-        }
-    };
-    let units = match &materialization_type.specifications {
-        TypeSpecification::Ratio { units, .. } => units,
-        _ => unreachable!("BUG: ratio materialization type must be Ratio"),
-    };
-    let ValueKind::Ratio(canonical, _) = &literal.value else {
-        panic!("BUG: ratio_to_unit_map called with non-ratio value");
-    };
-    if units.is_empty() {
-        panic!(
-            "BUG: rule result ratio type '{}' must have declared units",
-            result_type.name()
-        );
-    }
-    let mut map = BTreeMap::new();
-    for unit in units.iter() {
-        let magnitude_in_unit =
-            checked_mul(canonical, &unit.value).map_err(map_unit_conversion_failure)?;
-        let materialized = materialization_type
-            .try_materialize_rational_as_decimal_string(&magnitude_in_unit)
-            .map_err(map_commit_failure)?;
-        map.insert(unit.name.clone(), materialized);
-    }
-    Ok(map)
+    result_type
+        .ratio_literal_in_all_units(literal)
+        .map_err(map_literal_unit_map_failure)
 }
 
 impl Response {
@@ -664,28 +603,6 @@ impl Response {
     pub fn add_result(&mut self, result: RuleResult) {
         self.results.insert(result.rule.name.clone(), result);
     }
-
-    /// All [`DataPath`]s reported as missing by any rule result (`VetoType::MissingData`).
-    #[must_use]
-    pub fn missing_data(&self) -> BTreeSet<DataPath> {
-        self.missing_data_ordered().into_iter().collect()
-    }
-
-    /// [`DataPath`]s with `MissingData` vetos, in **rule result order** (matches evaluation order),
-    /// first occurrence only.
-    #[must_use]
-    pub fn missing_data_ordered(&self) -> Vec<DataPath> {
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for rr in self.results.values() {
-            if let Some(VetoType::MissingData { data }) = &rr.veto_detail {
-                if seen.insert(data.clone()) {
-                    out.push(data.clone());
-                }
-            }
-        }
-        out
-    }
 }
 
 #[cfg(test)]
@@ -693,11 +610,10 @@ mod tests {
     use super::*;
     use crate::literals::DateGranularity;
     use crate::planning::semantics::{
-        primitive_number, BaseMeasureVector, LemmaType, LiteralValue, MeasureUnit, MeasureUnits,
-        RatioUnit, RatioUnits, RulePath, Span, TypeExtends, TypeSpecification,
+        primitive_number, BaseMeasureVector, DataPath, LemmaType, LiteralValue, MeasureUnit,
+        MeasureUnits, RatioUnit, RatioUnits, RulePath, Span, TypeExtends, TypeSpecification,
     };
     use rust_decimal::Decimal;
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn dummy_source() -> Source {
@@ -724,7 +640,6 @@ mod tests {
     #[test]
     fn test_response_serialization() {
         let mut results = IndexMap::new();
-        let expression_units = std::collections::HashMap::new();
         results.insert(
             "test_rule".to_string(),
             RuleResult::from_operation_result(
@@ -733,8 +648,8 @@ mod tests {
                     42,
                 ))),
                 primitive_number(),
-                &expression_units,
                 None,
+                Vec::new(),
             ),
         );
         let response = Response {
@@ -743,7 +658,6 @@ mod tests {
             spec_hash: None,
             spec_effective_from: None,
             spec_effective_to: None,
-            data: vec![],
             results,
         };
 
@@ -756,21 +670,21 @@ mod tests {
 
     #[test]
     fn response_number_json_never_uses_fraction_notation() {
-        use crate::computation::rational::{commit_rational_to_decimal, decimal_to_rational};
+        use crate::computation::rational::decimal_to_rational;
 
         let rational = decimal_to_rational(Decimal::new(1, 1) / Decimal::new(3, 1)).unwrap();
-        let decimal_string = commit_rational_to_decimal(&rational).unwrap().to_string();
+        let decimal_string = rational.try_to_decimal().unwrap().to_string();
         let mut results = IndexMap::new();
         results.insert(
             "third".to_string(),
             RuleResult::from_operation_result(
                 dummy_evaluated_rule("third", primitive_number()),
                 &OperationResult::from_literal(LiteralValue::number_from_decimal(
-                    commit_rational_to_decimal(&rational).unwrap(),
+                    rational.try_to_decimal().unwrap(),
                 )),
                 primitive_number(),
-                &std::collections::HashMap::new(),
                 None,
+                Vec::new(),
             ),
         );
         // Override committed decimal number field to match serialization path under test
@@ -785,7 +699,6 @@ mod tests {
             spec_hash: None,
             spec_effective_from: None,
             spec_effective_to: None,
-            data: vec![],
             results,
         };
 
@@ -802,15 +715,15 @@ mod tests {
 
     #[test]
     fn test_rule_result_veto() {
-        let expression_units = std::collections::HashMap::new();
         let missing = RuleResult::from_operation_result(
             dummy_evaluated_rule("rule3", &LemmaType::veto_type()),
-            &OperationResult::Veto(VetoType::MissingData {
-                data: DataPath::new(vec![], "data1".to_string()),
-            }),
+            &OperationResult::Veto(VetoType::missing_data(
+                DataPath::new(vec![], "data1".to_string()),
+                None,
+            )),
             &LemmaType::veto_type(),
-            &expression_units,
             None,
+            Vec::new(),
         );
         assert!(missing.vetoed);
         assert!(missing.veto_reason.as_ref().unwrap().contains("data1"));
@@ -821,8 +734,8 @@ mod tests {
                 message: Some("Vetoed".to_string()),
             }),
             &LemmaType::veto_type(),
-            &expression_units,
             None,
+            Vec::new(),
         );
         assert_eq!(veto.veto_reason.as_deref(), Some("Vetoed"));
     }
@@ -834,11 +747,12 @@ mod tests {
             "number".to_string(),
             None,
             MaterializationFailure::OutOfMemory,
+            Vec::new(),
         );
         assert_eq!(result.veto_reason.as_deref(), Some("out of memory"));
         assert_ne!(
             result.veto_reason.as_deref(),
-            Some(DECIMAL_VALUE_LIMIT_VETO_MESSAGE)
+            Some("Calculated result exceeds decimal value limit")
         );
     }
 
@@ -849,10 +763,11 @@ mod tests {
             "number".to_string(),
             None,
             MaterializationFailure::DecimalLimit,
+            Vec::new(),
         );
         assert_eq!(
             result.veto_reason.as_deref(),
-            Some(DECIMAL_VALUE_LIMIT_VETO_MESSAGE)
+            Some("Calculated result exceeds decimal value limit")
         );
     }
 
@@ -871,7 +786,7 @@ mod tests {
                         decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                     MeasureUnit {
                         name: "usd".to_string(),
@@ -883,7 +798,7 @@ mod tests {
                         decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                 ]),
                 traits: Vec::new(),
@@ -910,13 +825,12 @@ mod tests {
             ),
             lemma_type: Arc::new(money.clone()),
         };
-        let expression_units = HashMap::new();
         let result = RuleResult::from_operation_result(
             dummy_evaluated_rule("total", &money),
             &OperationResult::from_literal(ten_usd),
             &money,
-            &expression_units,
             None,
+            Vec::new(),
         );
         let measure = result.measure.expect("measure map");
         assert_eq!(measure.get("usd"), Some(&"10.00".to_string()));
@@ -926,7 +840,6 @@ mod tests {
     #[test]
     fn test_measure_materialization_multi_unit() {
         let money = test_money_type();
-        let expression_units = HashMap::new();
         let ten_eur = LiteralValue {
             value: ValueKind::Measure(
                 crate::computation::rational::decimal_to_rational(Decimal::from(10)).expect("ten"),
@@ -938,8 +851,8 @@ mod tests {
             dummy_evaluated_rule("total", &money),
             &OperationResult::from_literal(ten_eur),
             &money,
-            &expression_units,
             None,
+            Vec::new(),
         );
         let measure = result.measure.expect("measure map");
         assert_eq!(measure.get("eur"), Some(&"10.00".to_string()));
@@ -962,7 +875,7 @@ mod tests {
                         decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                     MeasureUnit {
                         name: "usd".to_string(),
@@ -974,7 +887,7 @@ mod tests {
                         decomposition: BaseMeasureVector::new(),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                 ]),
                 traits: Vec::new(),
@@ -995,8 +908,8 @@ mod tests {
             dummy_evaluated_rule("delivery_cost", &money),
             &OperationResult::from_literal(three_twelve_eur),
             &money,
-            &HashMap::new(),
             None,
+            Vec::new(),
         );
         let measure = result.measure.expect("measure map");
         assert_eq!(measure.get("eur"), Some(&"3.12".to_string()));
@@ -1020,7 +933,7 @@ mod tests {
                         .expect("percent"),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                     RatioUnit {
                         name: "basis_points".to_string(),
@@ -1030,14 +943,13 @@ mod tests {
                         .expect("bp"),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                 ]),
                 help: String::new(),
             },
             TypeExtends::Primitive,
         );
-        let expression_units = HashMap::new();
         let half = crate::computation::rational::rational_new(1, 2);
         let lit = LiteralValue {
             value: ValueKind::Ratio(half, Some("percent".to_string())),
@@ -1047,8 +959,8 @@ mod tests {
             dummy_evaluated_rule("rate_out", &ratio_type),
             &OperationResult::from_literal(lit),
             &ratio_type,
-            &expression_units,
             None,
+            Vec::new(),
         );
         let ratio = result.ratio.expect("ratio map");
         assert_eq!(ratio.get("percent"), Some(&"50".to_string()));
@@ -1062,7 +974,8 @@ mod tests {
 
         let mut engine = Engine::new();
         engine
-            .load(
+            .load([(
+                SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
                 r#"
 spec consumer 2025-01-01
 uses d: dep 2025-10-01
@@ -1084,9 +997,9 @@ data money: measure
  -> unit eur 1.00
  -> unit usd 0.91
  -> decimals 2
-"#,
-                SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
-            )
+"#
+                .to_string(),
+            )])
             .expect("load");
         let effective = crate::literals::DateTimeValue {
             year: 2025,
@@ -1106,8 +1019,8 @@ data money: measure
                 "consumer",
                 Some(&effective),
                 std::collections::HashMap::new(),
-                false,
                 None,
+                false,
             )
             .expect("run");
         let out = response.results.get("out").expect("out rule");
@@ -1119,21 +1032,19 @@ data money: measure
 
     #[test]
     fn materialized_literal_roundtrips_number() {
-        let expression_units = HashMap::new();
         let literal = LiteralValue::number_from_decimal(Decimal::from(42));
         let rule_result = RuleResult::from_operation_result(
             dummy_evaluated_rule("answer", primitive_number()),
             &OperationResult::from_literal(literal.clone()),
             primitive_number(),
-            &expression_units,
             None,
+            Vec::new(),
         );
         assert_eq!(rule_result.materialized_literal(), literal);
     }
 
     #[test]
     fn materialized_literal_roundtrips_measure() {
-        let expression_units = HashMap::new();
         let money = test_money_type();
         let literal = LiteralValue::measure_with_type(
             crate::computation::rational::rational_new(60, 1),
@@ -1144,8 +1055,8 @@ data money: measure
             dummy_evaluated_rule("pay", &money),
             &OperationResult::from_literal(literal.clone()),
             &money,
-            &expression_units,
             None,
+            Vec::new(),
         );
         assert_eq!(rule_result.materialized_literal(), literal);
     }

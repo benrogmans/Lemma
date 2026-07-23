@@ -19,14 +19,16 @@ uses base_data: base
 rule total: base_data.price * base_data.quantity
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let total = response
         .results
@@ -54,14 +56,16 @@ uses base_data: base
 rule derived_value: base_data.doubled + 10
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let derived_value = response
         .results
@@ -90,14 +94,16 @@ uses employee: base_employee
 rule manager_bonus: employee.annual_salary * 0.15
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "manager", Some(&now), HashMap::new(), false, None)
+        .run(None, "manager", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let bonus = response
         .results
@@ -128,14 +134,16 @@ with config.quantity: 3
 rule derived_total: config.total
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let total = response
         .results
@@ -172,18 +180,18 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
 "#;
 
     engine
-        .load(config_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, config_spec.to_string())])
         .unwrap();
     engine
-        .load(order_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, order_spec.to_string())])
         .unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let total = response
         .results
@@ -213,14 +221,16 @@ rule status: "invalid"
   unless base_data.is_valid then "valid"
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let status = response
         .results
@@ -248,14 +258,16 @@ uses base_data: base
 rule combined: base_data.input + base_data.calculated
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let combined = response
         .results
@@ -286,14 +298,16 @@ with b.y: 200
 rule sum: b.x + b.y + b.z
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let sum = response
         .results
@@ -325,14 +339,16 @@ with config.quantity: 3
 rule total: config.price * config.quantity
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "derived", Some(&now), HashMap::new(), false, None)
+        .run(None, "derived", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let total = response
         .results
@@ -372,18 +388,18 @@ rule total2: base2.base.total
 "#;
 
     engine
-        .load(example1_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, example1_spec.to_string())])
         .unwrap();
     engine
-        .load(example2_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, example2_spec.to_string())])
         .unwrap();
     engine
-        .load(example3_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, example3_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "example3", Some(&now), HashMap::new(), false, None)
+        .run(None, "example3", Some(&now), HashMap::new(), None, false)
         .unwrap();
 
     let total1 = response
@@ -418,11 +434,13 @@ uses p: pricing
 rule total: p.base_price
 "#;
 
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false, None)
+        .run(None, "order", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let total = response
         .results
@@ -459,9 +477,11 @@ rule salary_with_bonus: employee.annual_salary
 rule employee_summary: employee.monthly_salary
 "#;
 
-    engine.load(base_spec, lemma::SourceType::Volatile).unwrap();
     engine
-        .load(derived_spec, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, base_spec.to_string())])
+        .unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, derived_spec.to_string())])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -471,8 +491,8 @@ rule employee_summary: employee.monthly_salary
             "specific_employee",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 
@@ -509,11 +529,13 @@ uses p: pricing
 rule total: p.base_price
 "#;
 
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "order", Some(&now), HashMap::new(), false, None)
+        .run(None, "order", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let total = response
         .results
@@ -534,18 +556,18 @@ fn cross_spec_lemma_duration_unless_short_is_yes_when_one_hour() {
 spec t
 uses lemma units
 rule short: yes
-  unless units.duration >= 2 hours then no
+  unless units.duration >= 2 hour then no
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must load");
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
     data.insert("units.duration".to_string(), "1 hour".to_string());
     let resp = engine
-        .run(None, "t", Some(&now), data, false, None)
+        .run(None, "t", Some(&now), data, None, false)
         .expect("evaluation must run");
 
     let short = resp
@@ -571,18 +593,18 @@ fn cross_spec_lemma_duration_unless_short_is_no_when_three_hours() {
 spec t
 uses lemma units
 rule short: yes
-  unless units.duration >= 2 hours then no
+  unless units.duration >= 2 hour then no
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must load");
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
-    data.insert("units.duration".to_string(), "3 hours".to_string());
+    data.insert("units.duration".to_string(), "3 hour".to_string());
     let resp = engine
-        .run(None, "t", Some(&now), data, false, None)
+        .run(None, "t", Some(&now), data, None, false)
         .expect("evaluation must run");
 
     let short = resp
@@ -591,13 +613,13 @@ rule short: yes
         .expect("rule 'short' must be present");
     if short.vetoed {
         panic!(
-            "expected short = no when units.duration is 3 hours, got veto: {}",
+            "expected short = no when units.duration is 3 hour, got veto: {}",
             short.veto_reason.as_deref().unwrap_or("Vetoed")
         );
     }
     let out = short.display.clone().expect("display");
     assert!(
         out == "no" || out == "false",
-        "expected short = no when units.duration is 3 hours, got: {out}"
+        "expected short = no when units.duration is 3 hour, got: {out}"
     );
 }

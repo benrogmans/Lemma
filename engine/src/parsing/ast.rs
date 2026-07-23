@@ -82,9 +82,7 @@ use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-pub use crate::literals::{
-    BooleanValue, DateGranularity, DateTimeValue, TimeValue, TimezoneValue, Value,
-};
+pub use crate::literals::{BooleanValue, DateTimeValue, TimeValue, TimezoneValue, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EffectiveDate {
@@ -193,14 +191,6 @@ impl LemmaRepository {
         self.dependency = Some(dependency_id.into());
         self
     }
-
-    /// Identity used for interning, equality, and hashing. Just the name.
-    /// `dependency`, `start_line` and `source_type` are excluded so the same
-    /// repository declared in multiple places is treated as one.
-    #[must_use]
-    pub fn identity(&self) -> Option<&str> {
-        self.name.as_deref()
-    }
 }
 
 impl PartialEq for LemmaRepository {
@@ -266,9 +256,10 @@ impl fmt::Display for RepositoryQualifier {
 /// [`crate::engine::Context`], not via fields on this structure.
 ///
 /// `LemmaSpec` has **no global identity**. There is no `PartialEq`, `Eq`, `Ord`,
-/// or `Hash` implementation. Consumers must either:
-/// - compare `Arc<LemmaSpec>` by pointer with `Arc::ptr_eq` (valid within a single `Context`), or
-/// - key by the explicit composite `(Arc<LemmaRepository>, name, EffectiveDate)` triple.
+/// or `Hash` implementation. Within one [`crate::engine::Context`], planning
+/// compares Context-owned rows by address (`std::ptr::eq`) or by
+/// `(repository, name, EffectiveDate)`. Outside a live Context, key by that
+/// composite triple.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LemmaSpec {
     pub name: String,
@@ -400,9 +391,9 @@ impl CalendarPeriodUnit {
     #[must_use]
     pub fn from_keyword(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
-            "year" | "years" => Some(Self::Year),
-            "month" | "months" => Some(Self::Month),
-            "week" | "weeks" => Some(Self::Week),
+            "year" => Some(Self::Year),
+            "month" => Some(Self::Month),
+            "week" => Some(Self::Week),
             _ => None,
         }
     }
@@ -456,7 +447,7 @@ pub enum ExpressionKind {
     DateCalendar(DateCalendarKind, CalendarPeriodUnit, Arc<Expression>),
     /// Range literal: `{left_expr}...{right_expr}`
     RangeLiteral(Arc<Expression>, Arc<Expression>),
-    /// Relative date range: `past 7 days` / `future 30 days`
+    /// Relative date range: `past 7 day` / `future 30 day`
     PastFutureRange(DateRelativeKind, Arc<Expression>),
     /// Range containment: `{value_expr} in {range_expr}`
     RangeContainment(Arc<Expression>, Arc<Expression>),
@@ -590,12 +581,11 @@ pub enum NegationType {
 
 /// A veto expression that prohibits any valid verdict from the rule
 ///
-/// Unlike `reject` (which is just an alias for boolean `false`), a veto
-/// prevents the rule from producing any valid result. This is used for
-/// validation and constraint enforcement.
+/// A veto prevents the rule from producing any valid result. This is used for
+/// validation and constraint enforcement — distinct from boolean `false`.
 ///
 /// Example: `veto "Must be over 18"` - blocks the rule entirely with a message
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct VetoExpression {
     pub message: Option<String>,
 }
@@ -617,15 +607,6 @@ pub enum MathematicalComputation {
     Floor,
     Ceil,
     Round,
-}
-
-/// Logical computations
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LogicalComputation {
-    And,
-    Or,
-    Not,
 }
 
 /// A spec reference written in source.
@@ -693,6 +674,17 @@ impl SpecRef {
         self.effective
             .clone()
             .map_or_else(|| effective.clone(), EffectiveDate::DateTimeValue)
+    }
+
+    /// Concrete instant for evaluation or navigation: explicit ref pin wins, else consumer bound.
+    /// Returns `None` when neither side names a concrete instant (consumer at Origin, no ref pin).
+    pub fn resolved_instant(
+        &self,
+        consumer_effective_from: Option<&DateTimeValue>,
+    ) -> Option<DateTimeValue> {
+        self.effective
+            .clone()
+            .or_else(|| consumer_effective_from.cloned())
     }
 }
 
@@ -810,11 +802,13 @@ impl fmt::Display for CommandArg {
 #[serde(rename_all = "snake_case")]
 pub enum TypeConstraintCommand {
     Help,
-    Default,
+    Suggest,
     Unit,
     Trait,
     Minimum,
     Maximum,
+    Lower,
+    Upper,
     Decimals,
     Option,
     Options,
@@ -825,11 +819,13 @@ impl fmt::Display for TypeConstraintCommand {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
             TypeConstraintCommand::Help => "help",
-            TypeConstraintCommand::Default => "default",
+            TypeConstraintCommand::Suggest => "suggest",
             TypeConstraintCommand::Unit => "unit",
             TypeConstraintCommand::Trait => "trait",
             TypeConstraintCommand::Minimum => "minimum",
             TypeConstraintCommand::Maximum => "maximum",
+            TypeConstraintCommand::Lower => "lower",
+            TypeConstraintCommand::Upper => "upper",
             TypeConstraintCommand::Decimals => "decimals",
             TypeConstraintCommand::Option => "option",
             TypeConstraintCommand::Options => "options",
@@ -844,11 +840,13 @@ impl fmt::Display for TypeConstraintCommand {
 pub fn try_parse_type_constraint_command(s: &str) -> Option<TypeConstraintCommand> {
     match s.trim().to_lowercase().as_str() {
         "help" => Some(TypeConstraintCommand::Help),
-        "default" => Some(TypeConstraintCommand::Default),
+        "suggest" => Some(TypeConstraintCommand::Suggest),
         "unit" => Some(TypeConstraintCommand::Unit),
         "trait" => Some(TypeConstraintCommand::Trait),
         "minimum" => Some(TypeConstraintCommand::Minimum),
         "maximum" => Some(TypeConstraintCommand::Maximum),
+        "lower" => Some(TypeConstraintCommand::Lower),
+        "upper" => Some(TypeConstraintCommand::Upper),
         "decimals" => Some(TypeConstraintCommand::Decimals),
         "option" => Some(TypeConstraintCommand::Option),
         "options" => Some(TypeConstraintCommand::Options),
@@ -1137,13 +1135,7 @@ pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
         ExpressionKind::Comparison(..) | ExpressionKind::ResultIsVeto(..) => 4,
         ExpressionKind::RangeContainment(..) => 4,
         ExpressionKind::DateRelative(..) | ExpressionKind::DateCalendar(..) => 4,
-        ExpressionKind::Arithmetic(_, op, _) => match op {
-            ArithmeticComputation::Add | ArithmeticComputation::Subtract => 5,
-            ArithmeticComputation::Multiply
-            | ArithmeticComputation::Divide
-            | ArithmeticComputation::Modulo => 6,
-            ArithmeticComputation::Power => 7,
-        },
+        ExpressionKind::Arithmetic(_, op, _) => arithmetic_precedence(op),
         ExpressionKind::UnitConversion(..) => 8,
         ExpressionKind::RangeLiteral(..) => 9,
         ExpressionKind::MathematicalComputation(..) => 10,
@@ -1155,13 +1147,75 @@ pub fn expression_precedence(kind: &ExpressionKind) -> u8 {
     }
 }
 
+/// Precedence for an arithmetic operator. Must match [`expression_precedence`].
+pub fn arithmetic_precedence(op: &ArithmeticComputation) -> u8 {
+    match op {
+        ArithmeticComputation::Add | ArithmeticComputation::Subtract => 5,
+        ArithmeticComputation::Multiply
+        | ArithmeticComputation::Divide
+        | ArithmeticComputation::Modulo => 6,
+        ArithmeticComputation::Power => 7,
+    }
+}
+
+/// Operand position under a parent operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperandSide {
+    Left,
+    Right,
+}
+
+/// Associativity of a binary (or n-ary chain) operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Associativity {
+    Left,
+    Right,
+}
+
+/// Whether a child expression must be wrapped in parentheses when printed under a parent.
+///
+/// - `parent_assoc == None`: unary / prefix parent — wrap only when `child_prec < parent_prec`.
+/// - `Some(Left)`: wrap looser children, and same-prec **right** children.
+/// - `Some(Right)`: wrap looser children, and same-prec **left** children.
+pub fn operand_needs_parentheses(
+    child_prec: u8,
+    parent_prec: u8,
+    side: OperandSide,
+    parent_assoc: Option<Associativity>,
+) -> bool {
+    if child_prec < parent_prec {
+        return true;
+    }
+    if child_prec > parent_prec {
+        return false;
+    }
+    match parent_assoc {
+        None => false,
+        Some(Associativity::Left) => matches!(side, OperandSide::Right),
+        Some(Associativity::Right) => matches!(side, OperandSide::Left),
+    }
+}
+
+pub fn arithmetic_associativity(op: &ArithmeticComputation) -> Associativity {
+    match op {
+        ArithmeticComputation::Power => Associativity::Right,
+        ArithmeticComputation::Add
+        | ArithmeticComputation::Subtract
+        | ArithmeticComputation::Multiply
+        | ArithmeticComputation::Divide
+        | ArithmeticComputation::Modulo => Associativity::Left,
+    }
+}
+
 fn write_expression_child(
     f: &mut fmt::Formatter<'_>,
     child: &Expression,
     parent_prec: u8,
+    side: OperandSide,
+    parent_assoc: Option<Associativity>,
 ) -> fmt::Result {
     let child_prec = expression_precedence(&child.kind);
-    if child_prec < parent_prec {
+    if operand_needs_parentheses(child_prec, parent_prec, side, parent_assoc) {
         write!(f, "({})", child)
     } else {
         write!(f, "{}", child)
@@ -1175,19 +1229,20 @@ impl fmt::Display for Expression {
             ExpressionKind::Reference(r) => write!(f, "{}", r),
             ExpressionKind::Arithmetic(left, op, right) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, left, my_prec)?;
+                let assoc = Some(arithmetic_associativity(op));
+                write_expression_child(f, left, my_prec, OperandSide::Left, assoc)?;
                 write!(f, " {} ", op)?;
-                write_expression_child(f, right, my_prec)
+                write_expression_child(f, right, my_prec, OperandSide::Right, assoc)
             }
             ExpressionKind::Comparison(left, op, right) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, left, my_prec)?;
+                write_expression_child(f, left, my_prec, OperandSide::Left, None)?;
                 write!(f, " {} ", op)?;
-                write_expression_child(f, right, my_prec)
+                write_expression_child(f, right, my_prec, OperandSide::Right, None)
             }
             ExpressionKind::UnitConversion(value, target) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, value, my_prec)?;
+                write_expression_child(f, value, my_prec, OperandSide::Left, None)?;
                 write!(f, " as {}", target)
             }
             ExpressionKind::LogicalNegation(expr, negation) => {
@@ -1195,29 +1250,30 @@ impl fmt::Display for Expression {
                     (negation, &expr.kind)
                 {
                     let my_prec = expression_precedence(&self.kind);
-                    write_expression_child(f, operand, my_prec)?;
+                    write_expression_child(f, operand, my_prec, OperandSide::Left, None)?;
                     write!(f, " is not veto")
                 } else {
                     let my_prec = expression_precedence(&self.kind);
                     write!(f, "not ")?;
-                    write_expression_child(f, expr, my_prec)
+                    write_expression_child(f, expr, my_prec, OperandSide::Right, None)
                 }
             }
             ExpressionKind::ResultIsVeto(operand) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, operand, my_prec)?;
+                write_expression_child(f, operand, my_prec, OperandSide::Left, None)?;
                 write!(f, " is veto")
             }
             ExpressionKind::LogicalAnd(left, right) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, left, my_prec)?;
+                let assoc = Some(Associativity::Left);
+                write_expression_child(f, left, my_prec, OperandSide::Left, assoc)?;
                 write!(f, " and ")?;
-                write_expression_child(f, right, my_prec)
+                write_expression_child(f, right, my_prec, OperandSide::Right, assoc)
             }
             ExpressionKind::MathematicalComputation(op, operand) => {
                 let my_prec = expression_precedence(&self.kind);
                 write!(f, "{} ", op)?;
-                write_expression_child(f, operand, my_prec)
+                write_expression_child(f, operand, my_prec, OperandSide::Right, None)
             }
             ExpressionKind::Veto(veto) => match &veto.message {
                 Some(msg) => write!(f, "veto {}", quote_lemma_text(msg)),
@@ -1233,20 +1289,23 @@ impl fmt::Display for Expression {
             }
             ExpressionKind::RangeLiteral(left, right) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, left, my_prec)?;
+                write_expression_child(f, left, my_prec, OperandSide::Left, None)?;
                 write!(f, "...")?;
-                write_expression_child(f, right, my_prec)
+                write_expression_child(f, right, my_prec, OperandSide::Right, None)
             }
             ExpressionKind::PastFutureRange(kind, offset_expr) => {
-                write!(f, "{} ", kind)?;
+                match kind {
+                    DateRelativeKind::InPast => write!(f, "past ")?,
+                    DateRelativeKind::InFuture => write!(f, "future ")?,
+                }
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, offset_expr, my_prec)
+                write_expression_child(f, offset_expr, my_prec, OperandSide::Right, None)
             }
             ExpressionKind::RangeContainment(value, range) => {
                 let my_prec = expression_precedence(&self.kind);
-                write_expression_child(f, value, my_prec)?;
+                write_expression_child(f, value, my_prec, OperandSide::Left, None)?;
                 write!(f, " in ")?;
-                write_expression_child(f, range, my_prec)
+                write_expression_child(f, range, my_prec, OperandSide::Right, None)
             }
         }
     }
@@ -1255,7 +1314,7 @@ impl fmt::Display for Expression {
 impl fmt::Display for ConversionTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConversionTarget::Type(kind) => write!(f, "{:?}", kind),
+            ConversionTarget::Type(kind) => write!(f, "{kind}"),
             ConversionTarget::Unit { unit_name } => write!(f, "{unit_name}"),
         }
     }
@@ -1303,16 +1362,6 @@ impl fmt::Display for MathematicalComputation {
             MathematicalComputation::Floor => write!(f, "floor"),
             MathematicalComputation::Ceil => write!(f, "ceil"),
             MathematicalComputation::Round => write!(f, "round"),
-        }
-    }
-}
-
-impl fmt::Display for LogicalComputation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LogicalComputation::And => write!(f, "and"),
-            LogicalComputation::Or => write!(f, "or"),
-            LogicalComputation::Not => write!(f, "not"),
         }
     }
 }
@@ -1796,12 +1845,13 @@ pub(crate) fn canonicalize_repository(repository: &mut LemmaRepository) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::literals::DateGranularity;
 
     #[test]
     fn test_conversion_target_display() {
         assert_eq!(
             format!("{}", ConversionTarget::Type(PrimitiveKind::Number)),
-            "Number"
+            "number"
         );
     }
 
@@ -1972,14 +2022,14 @@ mod tests {
                 primitive: PrimitiveKind::Text,
             }),
             constraints: Some(vec![(
-                TypeConstraintCommand::Default,
+                TypeConstraintCommand::Suggest,
                 vec![text_arg("single")],
             )]),
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "text -> default \"single\""
+            "text -> suggest \"single\""
         );
     }
 
@@ -1990,12 +2040,12 @@ mod tests {
                 primitive: PrimitiveKind::Number,
             }),
             constraints: Some(vec![(
-                TypeConstraintCommand::Default,
+                TypeConstraintCommand::Suggest,
                 vec![number_arg("10")],
             )]),
             value: None,
         };
-        assert_eq!(format!("{}", AsLemmaSource(&fv)), "number -> default 10");
+        assert_eq!(format!("{}", AsLemmaSource(&fv)), "number -> suggest 10");
     }
 
     #[test]
@@ -2083,12 +2133,12 @@ mod tests {
                 primitive: PrimitiveKind::Boolean,
             }),
             constraints: Some(vec![(
-                TypeConstraintCommand::Default,
+                TypeConstraintCommand::Suggest,
                 vec![boolean_arg(BooleanValue::True)],
             )]),
             value: None,
         };
-        assert_eq!(format!("{}", AsLemmaSource(&fv)), "boolean -> default true");
+        assert_eq!(format!("{}", AsLemmaSource(&fv)), "boolean -> suggest true");
     }
 
     #[test]
@@ -2098,34 +2148,34 @@ mod tests {
                 name: "duration".to_string(),
             }),
             constraints: Some(vec![(
-                TypeConstraintCommand::Default,
-                vec![duration_arg("40", "hours")],
+                TypeConstraintCommand::Suggest,
+                vec![duration_arg("40", "hour")],
             )]),
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "duration -> default 40 hours"
+            "duration -> suggest 40 hour"
         );
     }
 
     #[test]
     fn as_lemma_source_named_type_default_quoted() {
         // Named types (user-defined): the parser produces a typed Text literal for
-        // quoted default values like `default "single"`.
+        // quoted suggestion values like `suggest "single"`.
         let fv = DataValue::Definition {
             base: Some(ParentType::Custom {
                 name: "filing_status_type".to_string(),
             }),
             constraints: Some(vec![(
-                TypeConstraintCommand::Default,
+                TypeConstraintCommand::Suggest,
                 vec![text_arg("single")],
             )]),
             value: None,
         };
         assert_eq!(
             format!("{}", AsLemmaSource(&fv)),
-            "filing_status_type -> default \"single\""
+            "filing_status_type -> suggest \"single\""
         );
     }
 
@@ -2162,8 +2212,8 @@ mod tests {
 
     #[test]
     fn unit_arg_display_metre_per_second() {
-        let arg = unit_arg_expr(Decimal::ONE, &[("metre", 1), ("second", -1)]);
-        assert_eq!(format!("{arg}"), "metre/second");
+        let arg = unit_arg_expr(Decimal::ONE, &[("meter", 1), ("second", -1)]);
+        assert_eq!(format!("{arg}"), "meter/second");
         assert!(
             !format!("{arg}").contains("second^-1"),
             "must not print denominator as negative exponent"
@@ -2186,14 +2236,14 @@ mod tests {
     fn unit_arg_display_numeric_prefix_metre_per_second() {
         use std::str::FromStr;
         let prefix = Decimal::from_str("3.6").expect("decimal");
-        let arg = unit_arg_expr(prefix, &[("metre", 1), ("second", -1)]);
-        assert_eq!(format!("{arg}"), "3.6 metre/second");
+        let arg = unit_arg_expr(prefix, &[("meter", 1), ("second", -1)]);
+        assert_eq!(format!("{arg}"), "3.6 meter/second");
     }
 
     #[test]
     fn unit_arg_display_metre_per_second_times_kg() {
-        let arg = unit_arg_expr(Decimal::ONE, &[("metre", 1), ("second", -1), ("kg", 1)]);
-        assert_eq!(format!("{arg}"), "metre/second * kg");
+        let arg = unit_arg_expr(Decimal::ONE, &[("meter", 1), ("second", -1), ("kg", 1)]);
+        assert_eq!(format!("{arg}"), "meter/second * kg");
     }
 
     #[test]

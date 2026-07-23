@@ -7,11 +7,12 @@
 
 use lemma::{DateTimeValue, Engine};
 use std::collections::HashMap;
+use std::time::Instant;
 
 fn load(code: &str) -> Engine {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must load");
     engine
 }
@@ -23,7 +24,7 @@ fn run(engine: &Engine, spec: &str, inputs: &[(&str, &str)]) -> lemma::Response 
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&now), data, false, None)
+        .run(None, spec, Some(&now), data, None, false)
         .expect("evaluation must succeed")
 }
 
@@ -195,31 +196,34 @@ rule r: x ^ 0
 }
 
 #[test]
-fn self_doubling_rule_chain_is_a_planning_error_not_a_crash() {
-    // Each rule references its predecessor twice; transitive inlining
-    // doubles the materialized expression per step. Planning must reject
-    // the chain with a resource-limit error in bounded time — never
-    // exhaust memory or overflow the compiler's operand indices.
+fn self_doubling_rule_chain_shares_graph_cells() {
+    // Each rule references its predecessor twice. Shared NormalForm graph
+    // growth is linear in chain length — not Expression tree blowup.
+    // Cell-count band is asserted in transitive_normalization_plan_shape::
+    // doubling_chain_graph_stays_linear (crate-private normal_forms table).
+    let n = 40;
     let mut code = String::from("\nspec doubling\ndata input: number\nrule r0: input > 0\n");
-    for index in 1..=40 {
+    for index in 1..=n {
         code.push_str(&format!(
             "rule r{index}: r{previous} and not r{previous}\n",
             previous = index - 1
         ));
     }
 
+    let started = Instant::now();
     let mut engine = Engine::new();
-    let load_result = engine.load(&code, lemma::SourceType::Volatile);
-    let error_text = match load_result {
-        Err(errors) => errors
-            .iter()
-            .map(|error| error.to_string())
-            .collect::<Vec<_>>()
-            .join(", "),
-        Ok(()) => panic!("the self-doubling chain must be rejected at planning time"),
-    };
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("shared-graph self-doubling chain must plan");
+    let response = run(&engine, "doubling", &[("input", "1")]);
+    let result = rule_result(&response, &format!("r{n}"));
+    assert!(!result.vetoed);
+    assert_eq!(result.display.as_deref(), Some("false"));
+    // Regression guard only (not a microbench). Pre-DAG-collect walks blew past
+    // this at much smaller n (~18s at n=12).
     assert!(
-        error_text.contains("max_normalized_expression_nodes"),
-        "expected the expression node limit error, got: {error_text}"
+        started.elapsed().as_secs_f64() < 2.0,
+        "doubling n={n} load+run took {:?}; expected shared-graph path",
+        started.elapsed()
     );
 }

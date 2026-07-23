@@ -1,10 +1,6 @@
-//! Parity tests: the explanation must agree with the authoritative virtual
-//! machine result on non-happy paths, and must keep narrating source parts
-//! the virtual machine logically skipped.
-//!
-//! Note: `or` is not surface syntax (the parser never constructs
-//! `LogicalComputation::Or`), so disjunction parity is pinned at the unit
-//! level in `evaluation::branch_semantics` and `planning::normalize` tests.
+//! Parity tests: the explanation must agree with the authoritative tree-walk
+//! result on non-happy paths, and must keep narrating source parts the
+//! evaluator logically skipped (e.g. short-circuit).
 
 use lemma::{format_explanation, DateTimeValue, Engine};
 use std::collections::HashMap;
@@ -12,7 +8,7 @@ use std::collections::HashMap;
 fn load(code: &str) -> Engine {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must load");
     engine
 }
@@ -24,7 +20,7 @@ fn run_explain(engine: &Engine, spec: &str, inputs: &[(&str, &str)]) -> lemma::R
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
     engine
-        .run(None, spec, Some(&now), data, true, None)
+        .run(None, spec, Some(&now), data, None, true)
         .expect("evaluation must succeed")
 }
 
@@ -141,7 +137,7 @@ rule huge: 10 ^ 100
 }
 
 #[test]
-fn explanation_narrates_operands_the_virtual_machine_skipped() {
+fn explanation_narrates_operands_the_evaluator_skipped() {
     let engine = load(
         r#"
 spec vision
@@ -151,9 +147,9 @@ rule r: flag and expensive_check
 "#,
     );
 
-    // `flag` is false, so the compiled conjunction short-circuits and the
-    // virtual machine never reads `expensive_check`. The explanation walks
-    // the source and must still narrate the skipped operand with its value.
+    // `flag` is false, so conjunction short-circuits and the value walk never
+    // reads `expensive_check`. The explanation still narrates the skipped
+    // operand with its value.
     let response = run_explain(
         &engine,
         "vision",
@@ -167,7 +163,7 @@ rule r: flag and expensive_check
     let rendered = format_explanation(explanation);
     assert!(
         rendered.contains("expensive_check"),
-        "the explanation must narrate the source operand the virtual machine \
+        "the explanation must narrate the source operand the value walk \
          short-circuited past:\n{rendered}"
     );
 }

@@ -1,13 +1,5 @@
-//! Regression shield: [`crate::planning::plan`] stores results in an [`indexmap::IndexMap`] keyed
-//! only by [`LemmaSpec::name`] (see [`engine/src/planning/mod.rs`] `plan_spec`), and
-//! [`Engine::apply_planning_result`] then does `plan_sets.insert(r.name.clone(), ...)`.
-//!
-//! Different repositories legitimately reuse the same spec basename (names live per repository).
-//! Until planning and `plan_sets` key by `(repository, spec)` (or equivalent), the second caller
-//! clobbers slice identity and [`Engine::get_plan`] returns the wrong [`ExecutionPlan`] for at
-//! least one repository.
-//!
-//! This test **must fail** until that design is fixed; remove or rewrite when the landmine is gone.
+//! Regression: `Engine::plans` key by `(repository, name)`.
+//! Different repositories may reuse the same spec basename without clobbering plans.
 
 use lemma::DateTimeValue;
 use lemma::{Engine, SourceType};
@@ -42,48 +34,37 @@ fn rule_answer_decimal(response: &lemma::Response) -> Decimal {
 fn distinct_repositories_same_spec_basename_must_not_alias_execution_plan() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            path_source("alpha.lemma"),
             r#"repo alpha
 spec duped
 rule answer: 1
-"#,
-            path_source("alpha.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .expect("alpha repository loads");
 
     engine
-        .load(
+        .load([(
+            path_source("beta.lemma"),
             r#"repo beta
 spec duped
 rule answer: 99
-"#,
-            path_source("beta.lemma"),
-        )
+"#
+            .to_string(),
+        )])
         .expect("beta repository loads");
 
     let now = DateTimeValue::now();
 
-    let plan_alpha = engine
-        .get_plan(Some("alpha"), "duped", Some(&now))
-        .expect("alpha/duped plan exists");
-    let plan_beta = engine
-        .get_plan(Some("beta"), "duped", Some(&now))
-        .expect("beta/duped plan exists");
-
-    assert_ne!(
-        std::ptr::from_ref(plan_alpha),
-        std::ptr::from_ref(plan_beta),
-        "BUG: plan_sets and planning results are keyed only by spec.name — \
-         alpha::duped and beta::duped must not share the same &ExecutionPlan"
-    );
     let run_alpha = engine
         .run(
             Some("alpha"),
             "duped",
             Some(&now),
             Default::default(),
-            true,
             None,
+            true,
         )
         .expect("run alpha");
     let run_beta = engine
@@ -92,8 +73,8 @@ rule answer: 99
             "duped",
             Some(&now),
             Default::default(),
-            true,
             None,
+            true,
         )
         .expect("run beta");
 

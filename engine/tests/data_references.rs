@@ -25,13 +25,16 @@ fn load_err_joined(engine_res: Result<(), lemma::Errors>) -> String {
 #[test]
 fn local_fill_literal_rejected_at_parse() {
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        r#"spec s
-with x: 42"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-    ));
+    let joined = load_err_joined(
+        engine.load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+            r#"spec s
+with x: 42"#
+                .to_string(),
+        )]),
+    );
     assert!(
         joined.contains("imported spec") || joined.contains("alias.field"),
         "local with must be rejected at parse, got: {joined}"
@@ -41,17 +44,20 @@ with x: 42"#,
 #[test]
 fn local_fill_import_reference_rejected_at_parse() {
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        r#"spec inner
+    let joined = load_err_joined(
+        engine.load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+            r#"spec inner
 data v: number
 
 spec outer
 uses i: inner
-with copy: i.v"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-    ));
+with copy: i.v"#
+                .to_string(),
+        )]),
+    );
     assert!(
         joined.contains("imported spec") || joined.contains("alias.field"),
         "local with must be rejected at parse, got: {joined}"
@@ -62,7 +68,7 @@ with copy: i.v"#,
 fn binding_reference_copies_cross_spec_target_value() {
     let code = r#"
 spec law
-data other: number -> default 99
+data other: number -> suggest 99
 
 spec inner
 uses l: law
@@ -77,17 +83,19 @@ rule answer: lic.slot
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "reference.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("lw.other".to_string(), "99".to_string());
     let result = engine
-        .run(None, "top", Some(&now), HashMap::new(), false, None)
+        .run(None, "top", Some(&now), data, None, false)
         .expect("should run");
 
     assert_eq!(rule_value(&result, "answer"), "99");
@@ -107,12 +115,12 @@ with i.b: i.a
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
+    let joined = load_err_joined(engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    ));
+        code.to_string(),
+    )]));
 
     assert!(
         joined.contains("Circular data reference"),
@@ -132,12 +140,12 @@ with i.x: i.x
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
+    let joined = load_err_joined(engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    ));
+        code.to_string(),
+    )]));
 
     assert!(
         joined.contains("Circular data reference"),
@@ -152,7 +160,7 @@ spec inner
 data n: number
 
 spec source_spec
-data s: text -> default "hello"
+data s: text -> suggest "hello"
 
 spec outer
 uses i: inner
@@ -162,12 +170,12 @@ rule r: i.n
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
+    let joined = load_err_joined(engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    ));
+        code.to_string(),
+    )]));
 
     assert!(
         joined.contains("type mismatch"),
@@ -188,12 +196,12 @@ rule r: i.slot
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
+    let joined = load_err_joined(engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    ));
+        code.to_string(),
+    )]));
 
     assert!(
         joined.to_lowercase().contains("circular") || joined.to_lowercase().contains("cycle"),
@@ -218,12 +226,12 @@ rule r: i.v
 "#;
 
     let mut engine = Engine::new();
-    let joined = load_err_joined(engine.load(
-        code,
+    let joined = load_err_joined(engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    ));
+        code.to_string(),
+    )]));
 
     assert!(
         joined.contains("type mismatch"),
@@ -238,7 +246,7 @@ spec inner
 data limited: number -> maximum 5
 
 spec source_spec
-data v: number -> default 10
+data v: number -> suggest 10
 
 spec outer
 uses i: inner
@@ -248,17 +256,19 @@ rule r: i.limited
 "#;
 
     let mut engine = Engine::new();
-    let load_result = engine.load(
-        code,
+    let load_result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    );
+        code.to_string(),
+    )]);
 
     match load_result {
         Ok(()) => {
             let now = DateTimeValue::now();
-            let run_result = engine.run(None, "outer", Some(&now), HashMap::new(), false, None);
+            let mut data = HashMap::new();
+            data.insert("src.v".to_string(), "10".to_string());
+            let run_result = engine.run(None, "outer", Some(&now), data, None, false);
 
             match run_result {
                 Ok(resp) => {
@@ -302,25 +312,27 @@ rule r: i.limited
 fn local_non_dotted_rhs_stays_definition() {
     let code = r#"
 spec s
-data age: number -> default 30
+data age: number -> suggest 30
 data person: age
 rule r: person
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "reference.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect("loads: `data person: age` is a typedef reference, not a value-copy reference");
 
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("person".to_string(), "30".to_string());
     let result = engine
-        .run(None, "s", Some(&now), HashMap::new(), false, None)
-        .expect("evaluates; `person` is typed 'age' and inherits its default");
+        .run(None, "s", Some(&now), data, None, false)
+        .expect("evaluates; `person` is typed 'age' and uses supplied value");
 
     assert_eq!(rule_value(&result, "r"), "30");
 }
@@ -333,24 +345,26 @@ data slot: number
 
 spec outer
 uses i: inner
-data src: number -> default 123
+data src: number -> suggest 123
 with i.slot: src
 rule r: i.slot
 "#;
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "reference.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect("non-dotted RHS in binding context must resolve in the enclosing spec");
 
     let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("src".to_string(), "123".to_string());
     let result = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false, None)
+        .run(None, "outer", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&result, "r"), "123");
 }
@@ -374,12 +388,12 @@ rule r: i.payment
 "#;
 
     let mut engine = Engine::new();
-    let res = engine.load(
-        code,
+    let res = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "reference.lemma",
         ))),
-    );
+        code.to_string(),
+    )]);
     let joined = load_err_joined(res);
     assert!(
         joined.contains("measure family")

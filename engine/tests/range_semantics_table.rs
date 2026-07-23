@@ -26,18 +26,18 @@ fn default_effective() -> DateTimeValue {
 
 fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
             HashMap::new(),
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -59,18 +59,18 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> String {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
             HashMap::new(),
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -93,7 +93,7 @@ fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -297,9 +297,9 @@ rule cmp: (10%...50%) >= 40%"#;
 fn date_mixed_duration_arithmetic_uses_range_size() {
     let code = r#"spec test
 uses lemma units
-rule plus: (2024-02-15...2024-03-15 + 1 day) as days as number
-rule minus: (2024-02-15...2024-03-15 - 1 day) as days as number
-rule rminus: (40 days - (2024-02-15...2024-03-15)) as days as number"#;
+rule plus: (2024-02-15...2024-03-15 + 1 day) as day as number
+rule minus: (2024-02-15...2024-03-15 - 1 day) as day as number
+rule rminus: (40 day - (2024-02-15...2024-03-15)) as day as number"#;
     assert_contains_all(&eval_rule(code, "test", "plus"), &["30"]);
     assert_contains_all(&eval_rule(code, "test", "minus"), &["28"]);
     assert_contains_all(&eval_rule(code, "test", "rminus"), &["11"]);
@@ -309,10 +309,10 @@ rule rminus: (40 days - (2024-02-15...2024-03-15)) as days as number"#;
 fn date_range_arithmetic_and_comparison_use_sizes() {
     let code = r#"spec test
 uses lemma units
-rule sum: ((2024-01-01...2024-01-03) + (2024-02-01...2024-02-02)) as days as number
-rule diff: ((2024-01-01...2024-01-03) - (2024-02-01...2024-02-02)) as days as number
-rule cmp: (2024-01-01...2024-01-03) >= 2 days
-rule reversed: (2024-01-03...2024-01-01) as days as number"#;
+rule sum: ((2024-01-01...2024-01-03) + (2024-02-01...2024-02-02)) as day as number
+rule diff: ((2024-01-01...2024-01-03) - (2024-02-01...2024-02-02)) as day as number
+rule cmp: (2024-01-01...2024-01-03) >= 2 day
+rule reversed: (2024-01-03...2024-01-01) as day as number"#;
     assert_contains_all(&eval_rule(code, "test", "sum"), &["3"]);
     assert_contains_all(&eval_rule(code, "test", "diff"), &["1"]);
     assert!(eval_bool(code, "test", "cmp"));

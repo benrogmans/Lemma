@@ -1,12 +1,8 @@
-//! QA coverage for parse-time `DataValue::Definition` (schema / constraints / literals).
+//! QA coverage for parse-time `DataValue::Definition` (constraints / literals).
 //!
 //! Matrix: every primitive keyword x applicable-vs-incompatible constraint.
 //! Named-typedef references: happy + unknown + name-collision with rule.
 //! Qualified parent types (`uses` plus `data x: alias.TypeName`): happy + unknown + errors.
-//!
-//! Tests that encode INTENDED behavior stay as written. Several are expected
-//! to be red (e.g. `text -> decimals 2` may be silently accepted). Do NOT
-//! mask, delete, or weaken.
 
 use lemma::DateTimeValue;
 use lemma::Engine;
@@ -14,10 +10,10 @@ use std::collections::HashMap;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -30,10 +26,10 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
-        )
+            code.to_string(),
+        )])
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -59,7 +55,7 @@ fn run(
     data: HashMap<String, String>,
 ) -> Result<lemma::Response, lemma::Error> {
     let now = DateTimeValue::now();
-    engine.run(None, spec, Some(&now), data, false, None)
+    engine.run(None, spec, Some(&now), data, None, false)
 }
 
 // ─── Type-only data + missing at runtime → MissingData veto ──────────
@@ -304,26 +300,31 @@ rule r: n
     );
 }
 
-// ─── Default constraint ──────────────────────────────────────────────
+// ─── Suggest constraint ──────────────────────────────────────────────
 
 #[test]
-fn default_constraint_supplies_value_when_missing() {
+fn suggest_constraint_does_not_commit_when_missing() {
     let code = r#"
 spec s
-data n: number -> default 42
+data n: number -> suggest 42
 rule r: n
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    assert_eq!(rule_value(&resp, "r"), "42");
+    let rr = resp.results.get("r").unwrap();
+    assert!(
+        rr.vetoed,
+        "suggestion must not commit; missing n must veto, got: {:?}",
+        rr.veto_reason
+    );
 }
 
 #[test]
-fn default_is_overridden_by_user_value() {
+fn suggest_is_overridden_by_user_value() {
     let code = r#"
 spec s
-data n: number -> default 42
+data n: number -> suggest 42
 rule r: n
 "#;
     let mut engine = Engine::new();
@@ -335,34 +336,33 @@ rule r: n
 }
 
 #[test]
-fn default_that_violates_sibling_constraint_is_rejected() {
-    // Default 3 violates `minimum 5` on the same chain.
+fn suggest_that_violates_sibling_constraint_is_rejected() {
+    // Suggest 3 violates `minimum 5` on the same chain.
     let code = r#"
 spec s
-data n: number -> default 3 -> minimum 5
+data n: number -> suggest 3 -> minimum 5
 rule r: n
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        !joined.is_empty()
-            && (joined.contains("default") || joined.contains("minimum") || joined.contains("3")),
-        "default violating minimum on same chain must be rejected, got: {joined}"
+        joined.contains("suggestion") && (joined.contains("minimum") || joined.contains("3")),
+        "suggestion violating minimum on same chain must be rejected, got: {joined}"
     );
 }
 
 #[test]
-fn default_of_wrong_primitive_is_rejected() {
+fn suggest_of_wrong_primitive_is_rejected() {
     let code = r#"
 spec s
-data n: number -> default "not a number"
+data n: number -> suggest "not a number"
 rule r: n
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        !joined.is_empty(),
-        "default of wrong primitive must be rejected; engine silently accepted it"
+        joined.contains("suggest") && joined.contains("number"),
+        "wrong-primitive suggestion must name suggest + number, got: {joined}"
     );
 }
 
@@ -378,10 +378,10 @@ data n: number -> minimum 5 -> minimum 10
 rule r: n
 "#;
     let mut engine = Engine::new();
-    match engine.load(
-        code,
+    match engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
-    ) {
+        code.to_string(),
+    )]) {
         Ok(()) => {
             let mut data = HashMap::new();
             data.insert("n".to_string(), "7".to_string());
@@ -402,8 +402,8 @@ rule r: n
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(
-                !joined.is_empty(),
-                "rejection must carry a message, not empty errors"
+                joined.contains("minimum"),
+                "chained minimum rejection must mention minimum, got: {joined}"
             );
         }
     }
@@ -556,7 +556,77 @@ rule r: dep.money
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        !joined.is_empty(),
-        "unknown spec in `uses` must be rejected"
+        joined.contains("nonexistent_spec"),
+        "unknown spec in `uses` must name missing parent, got: {joined}"
     );
+}
+
+#[test]
+fn show_exposes_default_help_for_each_primitive() {
+    let code = r#"
+spec help_defaults
+uses lemma units
+data flag: boolean
+data n: number
+data n_band: number range
+data label: text
+data amount: measure -> unit eur 1
+data band: measure range -> unit eur 1
+data rate: ratio
+data rate_band: ratio range
+data when: date
+data period: date range
+data clock: time
+data shift: time range
+rule use_flag: flag
+rule use_n: n
+rule use_n_band: n_band
+rule use_label: label
+rule use_amount: amount
+rule use_band: band
+rule use_rate: rate
+rule use_rate_band: rate_band
+rule use_when: when
+rule use_period: period
+rule use_clock: clock
+rule use_shift: shift
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code);
+    let now = DateTimeValue::now();
+    let show = engine
+        .show(None, "help_defaults", Some(&now))
+        .expect("show");
+
+    let expected = [
+        ("flag", "Whether this holds (true or false)."),
+        ("n", "A dimensionless number."),
+        ("n_band", "The lower and upper bound of the number range."),
+        ("label", "A text value."),
+        ("amount", "A numeric amount in one of this type's units."),
+        (
+            "band",
+            "The lower and upper bound of the measure range in the same unit.",
+        ),
+        (
+            "rate",
+            "A ratio in one of this type's units (e.g. percent).",
+        ),
+        ("rate_band", "The lower and upper bound of the ratio range."),
+        ("when", "A date, or a date and time with optional timezone."),
+        ("period", "The start date and end date of the date range."),
+        ("clock", "A time of day, with optional timezone."),
+        ("shift", "The start time and end time of the time range."),
+    ];
+    for (name, help) in expected {
+        let entry = show
+            .data
+            .get(name)
+            .unwrap_or_else(|| panic!("missing data {name}"));
+        assert_eq!(
+            entry.lemma_type.specifications.help(),
+            help,
+            "default help for {name}"
+        );
+    }
 }

@@ -1,5 +1,5 @@
 //! TDD tests for the ratio complement idiom: `price * (100% - discount)`,
-//! `(100% + rate) ^ years`, and operand-order correctness for ratio/number
+//! `(100% + rate) ^ year`, and operand-order correctness for ratio/number
 //! mixed arithmetic.
 
 use lemma::{DateTimeValue, Engine};
@@ -12,7 +12,7 @@ fn eval(code: &str, spec: &str, rule: &str) -> String {
 fn eval_with_data(code: &str, spec: &str, rule: &str, data: HashMap<String, String>) -> String {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .unwrap_or_else(|errs| {
             panic!(
                 "load failed: {}",
@@ -24,7 +24,7 @@ fn eval_with_data(code: &str, spec: &str, rule: &str, data: HashMap<String, Stri
         });
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), data, false, None)
+        .run(None, spec, Some(&now), data, None, false)
         .expect("eval failed");
     let result = resp
         .results
@@ -40,7 +40,7 @@ fn eval_with_data(code: &str, spec: &str, rule: &str, data: HashMap<String, Stri
 
 fn expect_plan_error(code: &str, fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "expected planning error, got Ok");
     let msg = result
         .unwrap_err()
@@ -104,13 +104,13 @@ fn complement_compound_interest() {
     let code = r#"spec t
 data principal: number
 data annual_rate: ratio
-data years: number
-rule growth: (100% + annual_rate) ^ years
+data year: number
+rule growth: (100% + annual_rate) ^ year
 rule future_value: principal * growth"#;
     let data = HashMap::from([
         ("principal".into(), "1000".into()),
         ("annual_rate".into(), "10%".into()),
-        ("years".into(), "3".into()),
+        ("year".into(), "3".into()),
     ]);
     assert_eq!(eval_with_data(code, "t", "future_value", data), "1331");
 }

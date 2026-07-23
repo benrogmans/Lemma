@@ -57,7 +57,3 @@ harness = false
 [[bench]]
 name = "outputs"
 harness = false
-
-[[bench]]
-name = "internal_micro"
-harness = false

@@ -1,51 +1,74 @@
 """Benchmark the Python ports of the Lemma bench specs.
 
-Per-call measured boundary: pre-built typed Inputs -> terminal rule value.
-Fixture JSON is parsed once per spec before warmup; the timed loop calls
-``compute_terminal(inputs)`` only. A separate pass runs ``compute(inputs)``
-for the full rule output dump used in numerical accuracy comparison.
-
-Emits one JSON document to stdout:
-
-  {
-    "fixtures": [
-      {
-        "spec_name": "bench_shipping",
-        "iterations_latency": 100000,
-        "latency_median_ns": <f>,
-        "latency_std_dev_ns": <f>,
-        "outputs": { "<rule_name>": "<string>" }
-      },
-      ...
-    ]
-  }
+Timed loop on both sides: build inline input literals, evaluate terminal rule.
+Lemma side (Criterion): parse + plan + eval from in-memory source every call.
+Python side: build_inputs + compute_terminal from imported module every call.
+Harness stdout is JSON for xtask ingestion only (not timed).
 """
 
 import dataclasses
 import gc
+import importlib
 import json
 import statistics
 import sys
 import time
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from business_rules import order_pipeline, pricing, shipping
 from business_rules.rational import rational_to_decimal_string
 
-SPECS_DIR = Path(__file__).resolve().parent.parent / "specs"
-
-WARMUP_ITERATIONS = 1_000
-LATENCY_ITERATIONS = 100_000
+WARMUP_ITERATIONS = 100
+LATENCY_ITERATIONS = 10_000
 
 
-SPECS = [
-    ("bench_shipping", "shipping.inputs.json", shipping),
-    ("bench_pricing", "pricing.inputs.json", pricing),
-    ("bench_order_pipeline", "order_pipeline.inputs.json", order_pipeline),
+def shipping_raw() -> dict[str, str]:
+    return {
+        "weight": "3",
+        "destination": "domestic",
+        "is_member": "false",
+    }
+
+
+def pricing_raw() -> dict[str, str]:
+    return {
+        "product_type": "premium",
+        "quantity": "25",
+        "unit_price": "100",
+        "coupon_percent": "5",
+        "loyalty_years": "2",
+        "is_member": "true",
+        "is_loyalty": "true",
+        "is_tax_exempt": "false",
+    }
+
+
+def order_pipeline_raw() -> dict[str, str]:
+    return {
+        "customer_tier": "gold",
+        "payment_method": "credit",
+        "shipping_zone": "national",
+        "quantity": "12",
+        "unit_price": "85",
+        "package_weight": "3.5",
+        "delivery_distance": "180",
+        "loyalty_points": "6500",
+        "coupon_percent": "10",
+        "is_fragile": "true",
+        "is_express": "true",
+        "is_hazardous": "false",
+        "is_gift": "false",
+        "is_first_time": "false",
+    }
+
+
+SPECS: list[tuple[str, str, Callable[[], dict[str, str]]]] = [
+    ("bench_shipping", "business_rules.shipping", shipping_raw),
+    ("bench_pricing", "business_rules.pricing", pricing_raw),
+    ("bench_order_pipeline", "business_rules.order_pipeline", order_pipeline_raw),
 ]
 
 
@@ -62,15 +85,6 @@ def render_value(value: Any) -> str:
 
 
 def render_outputs(outputs: Any) -> dict[str, str]:
-    """Render Outputs fields to a flat ``{rule_name: string_value}`` dict.
-
-    Fields named ``<rule>_veto`` are not emitted directly. When the
-    companion ``<rule>`` field exists and ``<rule>_veto`` is non-None,
-    the rule is reported with the veto reason as its value (mirroring
-    Lemma's `OperationResult::Veto` which replaces the boolean/numeric
-    result entirely). When ``<rule>_veto`` is None the rule renders
-    normally.
-    """
     field_names = {field.name for field in dataclasses.fields(outputs)}
     rendered: dict[str, str] = {}
     for field in dataclasses.fields(outputs):
@@ -88,15 +102,17 @@ def render_outputs(outputs: Any) -> dict[str, str]:
     return rendered
 
 
-def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
-    raw_dict = json.loads((SPECS_DIR / inputs_file).read_bytes())
-    build_inputs = module.build_inputs
-    compute_terminal = module.compute_terminal
-    compute = module.compute
-    inputs = build_inputs(raw_dict)
+def bench_spec(
+    spec_name: str, module_name: str, raw_builder: Callable[[], dict[str, str]]
+) -> dict[str, Any]:
+    module = importlib.import_module(module_name)
+
+    def run_one() -> Any:
+        inputs = module.build_inputs(raw_builder())
+        return module.compute_terminal(inputs)
 
     for _ in range(WARMUP_ITERATIONS):
-        compute_terminal(inputs)
+        run_one()
 
     samples: list[int] = [0] * LATENCY_ITERATIONS
     perf_counter_ns = time.perf_counter_ns
@@ -105,7 +121,7 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     try:
         for i in range(LATENCY_ITERATIONS):
             start = perf_counter_ns()
-            compute_terminal(inputs)
+            run_one()
             samples[i] = perf_counter_ns() - start
     finally:
         gc.enable()
@@ -113,8 +129,8 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
     median_ns = statistics.median(samples)
     std_dev_ns = statistics.pstdev(samples)
 
-    outputs = compute(inputs)
-    rendered = render_outputs(outputs)
+    inputs = module.build_inputs(raw_builder())
+    rendered = render_outputs(module.compute(inputs))
 
     return {
         "spec_name": spec_name,
@@ -126,7 +142,10 @@ def bench_spec(spec_name: str, inputs_file: str, module: Any) -> dict[str, Any]:
 
 
 def main() -> None:
-    fixtures = [bench_spec(spec, inputs, module) for spec, inputs, module in SPECS]
+    fixtures = [
+        bench_spec(spec_name, module_name, raw_builder)
+        for spec_name, module_name, raw_builder in SPECS
+    ]
     json.dump({"fixtures": fixtures}, sys.stdout)
     sys.stdout.write("\n")
 

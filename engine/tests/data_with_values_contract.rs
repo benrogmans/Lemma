@@ -1,9 +1,8 @@
-//! QA coverage for the `DataOverlay::resolve` contract on every
-//! `DataDefinition` variant.
+//! QA coverage for caller-data binding on every `DataDefinition` variant.
 //!
 //! Matrix:
-//!   - unknown key → error
-//!   - SpecRef → error (no value)
+//!   - unknown key → ignored
+//!   - SpecRef override → evaluation completes (import alias ignored like unknown)
 //!   - schema-backed [`DataDefinition::TypeDeclaration`] → success
 //!   - Value → replaces literal
 //!   - Reference → replaces reference target copy
@@ -53,7 +52,7 @@ fn rule_value(result: &lemma::Response, name: &str) -> String {
 }
 
 #[test]
-fn unknown_key_is_rejected() {
+fn unknown_key_is_ignored() {
     let code = r#"
 spec s
 data x: number
@@ -61,10 +60,10 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -72,21 +71,17 @@ rule r: x
     data.insert("does_not_exist".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(None, "s", Some(&now), data, false, None)
-        .expect_err("unknown key must fail");
-    let s = err.to_string();
-    assert!(
-        s.contains("does_not_exist") || s.contains("not found"),
-        "unknown key error must name the key, got: {s}"
-    );
+    let response = engine
+        .run(None, "s", Some(&now), data, None, false)
+        .expect("unknown keys must not abort evaluation");
+    assert_eq!(rule_value(&response, "r"), "1");
 }
 
 #[test]
-fn override_spec_reference_is_rejected() {
+fn override_spec_reference_completes_evaluation() {
     let code = r#"
 spec inner
-data x: number -> default 1
+data x: number -> suggest 1
 
 spec outer
 uses i: inner
@@ -94,10 +89,10 @@ rule r: i.x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -105,18 +100,20 @@ rule r: i.x
     data.insert("i".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let err = engine
-        .run(None, "outer", Some(&now), data, false, None)
-        .expect_err("spec-ref override must fail");
-    let s = err.to_string();
+    let response = engine
+        .run(None, "outer", Some(&now), data, None, false)
+        .expect("spec-ref override must not abort evaluation");
+    let r = response.results.get("r").expect("r");
     assert!(
-        s.contains("spec reference") && s.contains("cannot provide"),
-        "override on SpecRef must have the exact error pattern, got: {s}"
+        r.vetoed,
+        "import override ignored; i.x unbound (default never commits)"
     );
+    let reason = r.veto_reason.as_deref().expect("veto reason");
+    assert!(reason.contains("Missing data"), "got: {reason}");
 }
 
 #[test]
-fn override_of_schema_declaration_succeeds() {
+fn override_of_type_declaration_succeeds() {
     let code = r#"
 spec s
 data x: number
@@ -124,10 +121,10 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -135,7 +132,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false, None)
+        .run(None, "s", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "42");
 }
@@ -149,10 +146,10 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -160,7 +157,7 @@ rule r: x
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, false, None)
+        .run(None, "s", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "99");
 }
@@ -174,10 +171,10 @@ rule r: age
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -185,7 +182,7 @@ rule r: age
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "r",
         "number",
     );
@@ -200,10 +197,10 @@ rule r: n
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -211,7 +208,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "r",
         "minimum",
     );
@@ -226,10 +223,10 @@ rule r: n
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -237,7 +234,7 @@ rule r: n
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "r",
         "maximum",
     );
@@ -252,10 +249,10 @@ rule r: msg
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -263,7 +260,7 @@ rule r: msg
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "r",
         "length",
     );
@@ -278,10 +275,10 @@ data color: text -> options red green blue
 rule r: color
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(
-        code,
+    let load_result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-    );
+        code.to_string(),
+    )]);
     if let Err(errors) = &load_result {
         // If `options` on text is not yet supported, this test pins the gap.
         panic!(
@@ -300,7 +297,7 @@ rule r: color
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "s", Some(&now), data, false, None),
+        engine.run(None, "s", Some(&now), data, None, false),
         "r",
         "option",
     );
@@ -315,15 +312,15 @@ rule r: x
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), false, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "10");
 }
@@ -332,7 +329,7 @@ rule r: x
 fn override_on_reference_replaces_and_wins_over_target() {
     let code = r#"
 spec inner
-data v: number -> default 1
+data v: number -> suggest 1
 
 spec outer
 uses i: inner
@@ -341,10 +338,10 @@ rule r: i.v
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -352,7 +349,7 @@ rule r: i.v
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), data, false, None)
+        .run(None, "outer", Some(&now), data, None, false)
         .expect("evaluates");
     assert_eq!(rule_value(&resp, "r"), "500");
 }
@@ -373,10 +370,10 @@ with i.n: i.v
 rule r: i.n
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(
-        code,
+    let load_result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("w.lemma"))),
-    );
+        code.to_string(),
+    )]);
     load_result.expect("binding with i.n must plan");
 
     let mut data = HashMap::new();
@@ -384,7 +381,7 @@ rule r: i.n
 
     let now = DateTimeValue::now();
     assert_rule_vetoed(
-        engine.run(None, "outer", Some(&now), data, false, None),
+        engine.run(None, "outer", Some(&now), data, None, false),
         "r",
         "maximum",
     );

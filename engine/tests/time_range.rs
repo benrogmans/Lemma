@@ -28,18 +28,18 @@ fn default_effective() -> DateTimeValue {
 
 fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
             HashMap::new(),
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -56,10 +56,53 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
 }
 
 fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
-    match eval_literal(code, spec_name, rule_name).value {
+    eval_bool_with_data(code, spec_name, rule_name, HashMap::new())
+}
+
+fn eval_bool_with_data(
+    code: &str,
+    spec_name: &str,
+    rule_name: &str,
+    data: HashMap<String, String>,
+) -> bool {
+    match eval_literal_with_data(code, spec_name, rule_name, data).value {
         ValueKind::Boolean(val) => val,
         other => panic!("Expected Boolean, got {:?}", other),
     }
+}
+
+fn eval_literal_with_data(
+    code: &str,
+    spec_name: &str,
+    rule_name: &str,
+    data: HashMap<String, String>,
+) -> LiteralValue {
+    let mut engine = Engine::new();
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
+    let effective = default_effective();
+    let response = engine
+        .run(
+            None,
+            spec_name,
+            Some(&effective),
+            data,
+            Some(&[rule_name.to_string()]),
+            true,
+        )
+        .expect("Should evaluate");
+    response
+        .results
+        .get(rule_name)
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .explanation
+        .as_ref()
+        .expect("explanation")
+        .result
+        .value()
+        .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
+        .clone()
 }
 
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
@@ -68,7 +111,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -89,13 +132,15 @@ const USES_UNITS: &str = "uses lemma units";
 #[test]
 fn declared_time_range_default_and_containment() {
     let code = r#"spec test
-data window: time range -> default 09:00...17:00
+data window: time range -> suggest 09:00...17:00
 rule inside: 12:30 in window
 rule lower: 09:00 in window
 rule upper_excluded: 17:00 in window"#;
-    assert!(eval_bool(code, "test", "inside"));
-    assert!(eval_bool(code, "test", "lower"));
-    assert!(!eval_bool(code, "test", "upper_excluded"));
+    let mut data = HashMap::new();
+    data.insert("window".to_string(), "09:00...17:00".to_string());
+    assert!(eval_bool_with_data(code, "test", "inside", data.clone()));
+    assert!(eval_bool_with_data(code, "test", "lower", data.clone()));
+    assert!(!eval_bool_with_data(code, "test", "upper_excluded", data));
 }
 
 #[test]
@@ -103,10 +148,10 @@ fn span_as_hours() {
     let code = format!(
         r#"spec test
 {USES_UNITS}
-rule span: (09:00...17:00) as hours as number"#
+rule span: (09:00...17:00) as hour as number"#
     );
     let out = eval_rule(&code, "test", "span");
-    assert!(out.contains('8'), "expected span 8 hours, got {out}");
+    assert!(out.contains('8'), "expected span 8 hour, got {out}");
 }
 
 #[test]
@@ -114,10 +159,10 @@ fn span_as_minutes() {
     let code = format!(
         r#"spec test
 {USES_UNITS}
-rule span: (09:00...17:00) as minutes as number"#
+rule span: (09:00...17:00) as minute as number"#
     );
     let out = eval_rule(&code, "test", "span");
-    assert!(out.contains("480"), "expected span 480 minutes, got {out}");
+    assert!(out.contains("480"), "expected span 480 minute, got {out}");
 }
 
 #[test]
@@ -149,7 +194,7 @@ fn reversed_clock_order_half_open_no_wraparound() {
     let code = format!(
         r#"spec test
 {USES_UNITS}
-rule span: (22:00...02:00) as hours as number
+rule span: (22:00...02:00) as hour as number
 rule three_inside: 03:00 in 22:00...02:00
 rule ten_inside: 10:00 in 22:00...02:00
 rule midnight_outside: 01:00 in 22:00...02:00

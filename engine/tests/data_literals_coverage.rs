@@ -10,12 +10,12 @@ use std::collections::HashMap;
 
 fn load_ok(engine: &mut Engine, code: &str) {
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "literals.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap_or_else(|errs| {
             let joined = errs
                 .iter()
@@ -28,12 +28,12 @@ fn load_ok(engine: &mut Engine, code: &str) {
 
 fn load_err_joined(engine: &mut Engine, code: &str) -> String {
     let err = engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "literals.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect_err("expected load to fail");
     err.iter()
         .map(|e| e.to_string())
@@ -68,14 +68,14 @@ fn rule_measure_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> S
 fn run(engine: &Engine, spec: &str) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(None, spec, Some(&now), HashMap::new(), true, None)
+        .run(None, spec, Some(&now), HashMap::new(), None, true)
         .expect("run")
 }
 
 fn run_explain(engine: &Engine, spec: &str) -> lemma::Response {
     let now = DateTimeValue::now();
     engine
-        .run(None, spec, Some(&now), HashMap::new(), true, None)
+        .run(None, spec, Some(&now), HashMap::new(), None, true)
         .expect("run")
 }
 
@@ -103,6 +103,22 @@ rule r: n
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     assert_eq!(rule_value(&run(&engine, "s"), "r"), "3.14");
+}
+
+#[test]
+fn number_literal_scientific_notation() {
+    let code = r#"
+spec s
+data big: 1.23e10
+data small: 5e-3
+rule r_big: big
+rule r_small: small
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code);
+    let response = run(&engine, "s");
+    assert_eq!(rule_value(&response, "r_big"), "12300000000");
+    assert_eq!(rule_value(&response, "r_small"), "0.005");
 }
 
 #[test]
@@ -396,7 +412,7 @@ fn duration_literal_weeks() {
     let code = r#"
 spec s
 uses lemma units
-data d: 2 weeks
+data d: 2 week
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -410,12 +426,12 @@ fn duration_literal_days() {
     let code = r#"
 spec s
 uses lemma units
-data d: 7 days
+data d: 7 day
 rule r: d
 "#;
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
-    assert_eq!(rule_measure_unit(&run(&engine, "s"), "r", "days"), "7");
+    assert_eq!(rule_measure_unit(&run(&engine, "s"), "r", "day"), "7");
 }
 
 #[test]
@@ -423,7 +439,7 @@ fn duration_literal_hours() {
     let code = r#"
 spec s
 uses lemma units
-data d: 12 hours
+data d: 12 hour
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -437,7 +453,7 @@ fn duration_literal_minutes() {
     let code = r#"
 spec s
 uses lemma units
-data d: 90 minutes
+data d: 90 minute
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -451,7 +467,7 @@ fn duration_literal_seconds() {
     let code = r#"
 spec s
 uses lemma units
-data d: 45 seconds
+data d: 45 second
 rule r: d
 "#;
     let mut engine = Engine::new();
@@ -467,21 +483,21 @@ fn duration_literal_negative_rejected_or_supported_consistently() {
     let code = r#"
 spec s
 uses lemma units
-data d: -5 days
+data d: -5 day
 rule r: d
 "#;
     let mut engine = Engine::new();
-    match engine.load(
-        code,
+    match engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
             "literals.lemma",
         ))),
-    ) {
+        code.to_string(),
+    )]) {
         Ok(()) => {
             let out = rule_value(&run(&engine, "s"), "r");
             assert!(
                 out.contains("-5") && out.contains("day"),
-                "if -5 days is accepted, it must preserve the sign; got: {out}"
+                "if -5 day is accepted, it must preserve the sign; got: {out}"
             );
         }
         Err(errs) => {

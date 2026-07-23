@@ -1,0 +1,5 @@
+# Maven build output
+target/
+
+# Built host natives (copied by scripts/copy-native.sh); CI/release populate multi-target set.
+src/main/resources/native/

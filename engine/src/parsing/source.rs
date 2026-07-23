@@ -1,4 +1,4 @@
-use crate::parsing::ast::{LemmaRepository, Span};
+use crate::parsing::ast::Span;
 use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
@@ -8,23 +8,30 @@ use std::sync::Arc;
 #[serde(rename_all = "snake_case")]
 pub enum SourceType {
     Path(Arc<PathBuf>),
+    Dependency(String),
     Volatile,
-    Registry(Arc<LemmaRepository>),
 }
 
 impl fmt::Display for SourceType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SourceType::Path(path) => write!(f, "{}", path.display()),
+            SourceType::Dependency(id) => write!(f, "{id}"),
             SourceType::Volatile => write!(f, "volatile"),
-            SourceType::Registry(repo) => {
-                if let Some(name) = &repo.name {
-                    write!(f, "{}", name)
-                } else {
-                    write!(f, "<anonymous registry>")
-                }
-            }
         }
+    }
+}
+
+impl SourceType {
+    /// Decode a binding-layer source label (JS/Hex/Java `load` labeled form) into a [`SourceType`].
+    pub fn from_binding_label(label: &str) -> Result<Self, String> {
+        if label.trim().is_empty() {
+            return Err("source label must be non-empty".to_string());
+        }
+        if label.starts_with('@') {
+            return Ok(SourceType::Dependency(label.to_string()));
+        }
+        Ok(SourceType::Path(Arc::new(PathBuf::from(label))))
     }
 }
 
@@ -169,5 +176,23 @@ mod tests {
             },
         );
         assert_eq!(loc.text_from(&sources).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn from_binding_label_path_and_dependency() {
+        assert_eq!(
+            SourceType::from_binding_label("app.lemma").unwrap(),
+            SourceType::Path(Arc::new(PathBuf::from("app.lemma")))
+        );
+        assert_eq!(
+            SourceType::from_binding_label("@iso/countries").unwrap(),
+            SourceType::Dependency("@iso/countries".to_string())
+        );
+        assert_eq!(
+            SourceType::from_binding_label("volatile").unwrap(),
+            SourceType::Path(Arc::new(PathBuf::from("volatile")))
+        );
+        assert!(SourceType::from_binding_label("").is_err());
+        assert!(SourceType::from_binding_label("   ").is_err());
     }
 }

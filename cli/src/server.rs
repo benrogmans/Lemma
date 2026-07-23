@@ -8,11 +8,11 @@ pub mod http {
         routing::get,
         Router,
     };
-    use lemma::collect_lemma_sources as engine_collect_sources;
     use lemma::DateTimeValue;
     use lemma::Engine;
     use lemma_cli::deps::{dependency_identifier_from_dependency_path, lemma_deps_dir};
     use serde::Deserialize;
+    use std::fs;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     use std::net::SocketAddr;
@@ -57,7 +57,7 @@ pub mod http {
     fn resolve_effective(
         raw: Option<&str>,
     ) -> Result<DateTimeValue, (StatusCode, Json<ErrorResponse>)> {
-        lemma::Engine::resolve_effective(raw).map_err(|e| {
+        lemma::resolve_effective(raw).map_err(|e| {
             (
                 StatusCode::BAD_REQUEST,
                 Json(ErrorResponse {
@@ -108,26 +108,8 @@ pub mod http {
     #[derive(serde::Serialize)]
     struct GetSpecResponse {
         spec_set_id: String,
-        effective_from: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        data: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        rules: Option<serde_json::Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        meta: Option<serde_json::Value>,
-        versions: Vec<VersionEntry>,
-    }
-
-    /// Temporal version entry for a single spec row.
-    ///
-    /// Ranges are half-open: `[effective_from, effective_to)`. `effective_from = None`
-    /// means the range is unbounded at the start (no earlier version exists).
-    /// `effective_to = None` means the range is unbounded at the end (no later
-    /// version exists; this row is still the latest).
-    #[derive(serde::Serialize)]
-    struct VersionEntry {
-        effective_from: Option<String>,
-        effective_to: Option<String>,
+        #[serde(flatten)]
+        show: lemma::Show,
     }
 
     /// Build Memento-Datetime, Vary for the resolved spec.
@@ -152,9 +134,9 @@ pub mod http {
 
     /// Start the Lemma HTTP server.
     ///
-    ///         The server auto-generates typed REST endpoints for each loaded spec:
-    /// - `GET /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as query params
-    /// - `POST /{spec}/{rules?}` — evaluate rules (all if rules omitted), data as JSON or form body
+    /// The server auto-generates typed REST endpoints for each loaded spec:
+    /// - `GET /{spec}` — show interface (data, rules, versions); no evaluate, no data query params
+    /// - `POST /{spec}` — evaluate (`?rules=` scopes which rules to run); data as JSON or form body
     ///
     /// Meta routes:
     /// - `GET /` — list all specs
@@ -197,12 +179,12 @@ pub mod http {
         };
 
         let router = Router::new()
-            .route("/", get(list_specs))
+            .route("/", get(list))
             .route("/health", get(health_check))
             .route("/openapi.json", get(openapi_spec))
             .route("/docs", get(scalar_docs))
             .route("/scalar.js", get(scalar_js))
-            .route("/{*path}", get(spec_get_schema).post(spec_post_evaluate))
+            .route("/{*path}", get(spec_get_show).post(spec_post_evaluate))
             .fallback(fallback_404);
         let router = if cors {
             info!("Permissive CORS enabled (--cors): cross-origin browser requests allowed");
@@ -234,45 +216,11 @@ pub mod http {
     // Meta routes
     // -----------------------------------------------------------------------
 
-    /// One entry per loaded spec: schema on success, error message on failure.
-    /// Specs never silently disappear from the list.
-    #[derive(serde::Serialize)]
-    #[serde(untagged)]
-    enum SpecListEntry {
-        Schema {
-            name: String,
-            schema: Box<lemma::SpecSchema>,
-        },
-        Error {
-            name: String,
-            error: String,
-        },
-    }
-
-    async fn list_specs(
+    async fn list(
         State(state): State<AppState>,
-        Query(q): Query<EffectiveQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-        let now = resolve_effective(q.effective.as_deref())?;
         let engine = engine_snapshot(&state).await;
-
-        let specs: Vec<SpecListEntry> = engine
-            .get_workspace()
-            .specs
-            .iter()
-            .map(|ss| match engine.schema(None, &ss.name, Some(&now)) {
-                Ok(schema) => SpecListEntry::Schema {
-                    name: ss.name.clone(),
-                    schema: Box::new(schema),
-                },
-                Err(e) => SpecListEntry::Error {
-                    name: ss.name.clone(),
-                    error: e.message().to_string(),
-                },
-            })
-            .collect();
-
-        Ok(Json(specs))
+        Ok(Json(engine.list()))
     }
 
     async fn health_check() -> impl IntoResponse {
@@ -340,6 +288,37 @@ pub mod http {
           content: 'Powered by Lemma';
           font-size: var(--scalar-mini, 10px);
         }
+        /*
+         * Evaluate client Response → Body (not .response-body-virtual).
+         * Scalar hardcodes overflow-y-hidden + max-h-fit on the Body panel, so
+         * CodeMirror grows to full JSON height and the pane clips with no scroll.
+         */
+        .scalar-app .response-section-content-body.overflow-y-hidden,
+        .scalar-app .response-section-content-body {
+          overflow-y: auto !important;
+          max-height: 70vh !important;
+          min-height: 0 !important;
+        }
+        .scalar-app .response-section-content-body.diclosure-panel,
+        .scalar-app .response-section-content-body .diclosure-panel {
+          max-height: 70vh !important;
+          overflow-y: auto !important;
+          min-height: 0 !important;
+        }
+        .scalar-app .response-section-content-body .body-raw,
+        .scalar-app .response-section-content-body .body-raw-scroller {
+          max-height: 70vh !important;
+          min-height: 0 !important;
+          overflow-y: auto !important;
+        }
+        .scalar-app .response-section-content-body .cm-editor {
+          height: auto !important;
+          max-height: 70vh !important;
+        }
+        .scalar-app .response-section-content-body .cm-scroller {
+          max-height: 70vh !important;
+          overflow-y: auto !important;
+        }
       `"#;
 
         let config_js = if sources.len() == 1 {
@@ -397,14 +376,41 @@ pub mod http {
     }
 
     // -----------------------------------------------------------------------
-    // Doc path (wildcard): GET = schema with versions, POST = evaluate
+    // Doc path (wildcard): GET = show, POST = evaluate
     // -----------------------------------------------------------------------
 
-    /// `GET /{*path}` — schema of resolved version; path = specset id. `Accept-Datetime` for temporal, `?rules=` to scope.
-    async fn spec_get_schema(
+    fn data_values_for_run(
+        data: std::collections::HashMap<String, lemma::DataValueInput>,
+    ) -> Result<std::collections::HashMap<String, String>, (StatusCode, Json<ErrorResponse>)> {
+        data.into_iter()
+            .map(|(key, value)| {
+                let string_value = match value {
+                    lemma::DataValueInput::Convenience(s) => s,
+                    lemma::DataValueInput::Boolean(b) => b.to_string(),
+                    lemma::DataValueInput::MeasureMap(map) | lemma::DataValueInput::RatioMap(map) => {
+                        if map.len() == 1 {
+                            let (unit, magnitude) = map.into_iter().next().expect("BUG: map len checked");
+                            format!("{magnitude} {unit}")
+                        } else {
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                Json(ErrorResponse {
+                                    error: format!(
+                                        "data field '{key}' uses a multi-key unit map; pass a convenience string instead"
+                                    ),
+                                }),
+                            ));
+                        }
+                    }
+                };
+                Ok((key, string_value))
+            })
+            .collect()
+    }
+
+    async fn spec_get_show(
         State(state): State<AppState>,
         Path(path): Path<String>,
-        Query(q): Query<SpecQuery>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
         let spec_set_id = parse_spec_path(&path);
@@ -422,8 +428,8 @@ pub mod http {
 
         catch_engine_panic(AssertUnwindSafe(
             || -> Result<_, (StatusCode, Json<ErrorResponse>)> {
-                let schema = engine
-                    .schema(None, &spec_name, Some(&effective))
+                let show = engine
+                    .show(None, &spec_name, Some(&effective))
                     .map_err(|e| {
                         (
                             lemma_error_to_status(&e),
@@ -433,75 +439,12 @@ pub mod http {
                         )
                     })?;
 
-                let rule_names = q.rules.as_deref().map(parse_rule_names).unwrap_or_default();
-                let schema = if rule_names.is_empty() {
-                    schema
-                } else {
-                    let plan = engine
-                        .get_plan(None, &spec_name, Some(&effective))
-                        .map_err(|e| {
-                            (
-                                lemma_error_to_status(&e),
-                                Json(ErrorResponse {
-                                    error: e.to_string(),
-                                }),
-                            )
-                        })?;
-                    plan.schema_for_rules(&rule_names, &lemma::DataOverlay::default())
-                        .map_err(|err| {
-                            (
-                                lemma_error_to_status(&err),
-                                Json(ErrorResponse {
-                                    error: err.to_string(),
-                                }),
-                            )
-                        })?
-                };
-
-                let spec_arc = engine.get_spec(&spec_name, Some(&effective)).map_err(|e| {
-                    (
-                        lemma_error_to_status(&e),
-                        Json(ErrorResponse {
-                            error: e.to_string(),
-                        }),
-                    )
-                })?;
-
-                let versions: Vec<VersionEntry> = engine
-                    .get_workspace()
-                    .specs
-                    .iter()
-                    .filter(|ss| ss.name == spec_arc.name)
-                    .flat_map(|ss| ss.iter_with_ranges())
-                    .map(|(_, effective_from, effective_to)| VersionEntry {
-                        effective_from: effective_from.as_ref().map(|d| d.to_string()),
-                        effective_to: effective_to.as_ref().map(|d| d.to_string()),
-                    })
-                    .collect();
-
-                let effective_from_str = spec_arc.effective_from().map(|d| d.to_string());
-
-                let body = GetSpecResponse {
-                    spec_set_id,
-                    effective_from: effective_from_str,
-                    data: Some(
-                        serde_json::to_value(&schema.data)
-                            .expect("BUG: failed to serialize schema data"),
-                    ),
-                    rules: Some(
-                        serde_json::to_value(&schema.rules)
-                            .expect("BUG: failed to serialize schema rules"),
-                    ),
-                    meta: Some(
-                        serde_json::to_value(&schema.meta)
-                            .expect("BUG: failed to serialize schema meta"),
-                    ),
-                    versions,
-                };
+                let effective_from = show.effective_from.clone();
+                let body = GetSpecResponse { spec_set_id, show };
 
                 let mut response = Json(body).into_response();
                 let headers_mut = response.headers_mut();
-                for (k, v) in spec_response_headers(spec_arc.effective_from()) {
+                for (k, v) in spec_response_headers(effective_from.as_ref()) {
                     headers_mut.insert(k, v);
                 }
                 Ok(response)
@@ -594,6 +537,8 @@ pub mod http {
 
         let data_values = parse_post_evaluate_body(&headers, &body)?;
 
+        let data_strings = data_values_for_run(data_values)?;
+
         let parsed_rules: Option<Vec<String>> = match q.rules.as_deref() {
             None => None,
             Some(rules_query) => {
@@ -617,24 +562,14 @@ pub mod http {
         // evaluation is loop-free/terminating by design; the wall-clock
         // timeout is a boundary safeguard, not an engine mechanism.
         let eval_task = tokio::task::spawn_blocking(move || {
-            let plan = engine
-                .get_plan(None, &spec_name, Some(&effective))
-                .map_err(|err| {
-                    (
-                        lemma_error_to_status(&err),
-                        Json(ErrorResponse {
-                            error: err.to_string(),
-                        }),
-                    )
-                })?;
-
             let response = engine
-                .run_plan(
-                    plan,
+                .run(
+                    None,
+                    &spec_name,
                     Some(&effective),
-                    data_values,
-                    include_explanations,
+                    data_strings,
                     parsed_rules.as_deref(),
+                    include_explanations,
                 )
                 .map_err(|err| {
                     (
@@ -645,10 +580,7 @@ pub mod http {
                     )
                 })?;
 
-            let effective_from = engine
-                .get_spec(&spec_name, Some(&effective))
-                .ok()
-                .and_then(|spec_arc| spec_arc.effective_from().cloned());
+            let effective_from = response.spec_effective_from.clone();
             let payload = Formatter.response_json_value(&response, include_explanations);
             Ok((payload, effective_from))
         });
@@ -833,7 +765,18 @@ pub mod http {
                             runtime.block_on(async {
                                 match reload_engine(&workdir_clone).await {
                                     Ok(new_engine) => {
-                                        let spec_count = new_engine.get_workspace().specs.len();
+                                        let workspace_specs = new_engine
+                                            .list()
+                                            .into_iter()
+                                            .find(|repository_group| repository_group.repository.is_none())
+                                            .expect("BUG: workspace repository must exist after Engine::new")
+                                            .specs;
+                                        let unique_specs: std::collections::BTreeSet<&str> =
+                                            workspace_specs
+                                                .iter()
+                                                .map(|ls| ls.name.as_str())
+                                                .collect();
+                                        let spec_count = unique_specs.len();
                                         // Write lock held only for the Arc swap.
                                         *engine_clone.write().await = Arc::new(new_engine);
                                         info!("Reloaded engine with {} spec(s)", spec_count);
@@ -887,21 +830,26 @@ pub mod http {
             }
         }
 
+        let mut sources =
+            Vec::with_capacity(deps_paths.len().saturating_add(workspace_paths.len()));
+
         for dep_path in &deps_paths {
             let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
-            let sources = match engine_collect_sources(std::slice::from_ref(dep_path)) {
-                Ok(s) => s,
-                Err(e) => {
-                    for err in e.iter() {
-                        tracing::error!(
-                            "{}",
-                            crate::error_formatter::format_error(err, &e.sources)
-                        );
-                    }
-                    anyhow::bail!("Workspace load failed ({} error(s))", e.errors.len());
-                }
-            };
-            if let Err(load_err) = engine.load_batch(sources, Some(&dependency_id)) {
+            let content = fs::read_to_string(dep_path)?;
+            sources.push((
+                lemma::SourceType::Dependency(dependency_id.to_string()),
+                content,
+            ));
+        }
+        for path in &workspace_paths {
+            let content = fs::read_to_string(path)?;
+            sources.push((
+                lemma::SourceType::Path(std::sync::Arc::new(path.clone())),
+                content,
+            ));
+        }
+        if !sources.is_empty() {
+            if let Err(load_err) = engine.load(sources) {
                 for err in load_err.iter() {
                     tracing::error!(
                         "{}",
@@ -910,24 +858,6 @@ pub mod http {
                 }
                 anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
             }
-        }
-        let sources = match engine_collect_sources(&workspace_paths) {
-            Ok(s) => s,
-            Err(e) => {
-                for err in e.iter() {
-                    tracing::error!("{}", crate::error_formatter::format_error(err, &e.sources));
-                }
-                anyhow::bail!("Workspace load failed ({} error(s))", e.errors.len());
-            }
-        };
-        if let Err(load_err) = engine.load_batch(sources, None) {
-            for err in load_err.iter() {
-                tracing::error!(
-                    "{}",
-                    crate::error_formatter::format_error(err, &load_err.sources)
-                );
-            }
-            anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
         }
         Ok(engine)
     }

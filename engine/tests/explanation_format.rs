@@ -10,23 +10,25 @@ fn explanation_json(response: &lemma::Response, rule: &str) -> Value {
 fn explanation_unless_default_matched() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data x: text -> option "a" -> option "b"
 rule out: 1 unless x is "b" then 2
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let mut data = HashMap::new();
     data.insert("x".into(), "a".into());
     let response = engine
-        .run(None, "t", None, data, true, Some(&["out".to_string()]))
+        .run(None, "t", None, data, Some(&["out".to_string()]), true)
         .unwrap();
     let explanation = explanation_json(&response, "out");
 
-    assert_eq!(explanation["rule"], "out");
+    assert_eq!(explanation["type"], "rule");
+    assert_eq!(explanation["name"], "out");
     assert_eq!(explanation["result"], "1");
     assert_eq!(explanation["body"], "1");
     let causes = explanation["causes"].as_array().unwrap();
@@ -34,7 +36,7 @@ rule out: 1 unless x is "b" then 2
     assert_eq!(causes[0]["condition"], "x is not b");
     assert_eq!(causes[0]["value"], "true");
     let cause_children = causes[0]["children"].as_array().unwrap();
-    assert_eq!(cause_children[0]["data"], "x");
+    assert_eq!(cause_children[0]["name"], "x");
     assert_eq!(cause_children[0]["display"], "a");
 }
 
@@ -42,7 +44,8 @@ rule out: 1 unless x is "b" then 2
 fn explanation_compose_with_data_operands() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data money: measure -> unit eur 1 -> decimals 2
@@ -50,9 +53,9 @@ data price: 100 eur
 data quantity: number
 data q: 3
 rule total: price * q
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
         .run(
@@ -60,8 +63,8 @@ rule total: price * q
             "t",
             None,
             HashMap::new(),
-            true,
             Some(&["total".to_string()]),
+            true,
         )
         .unwrap();
     let explanation = explanation_json(&response, "total");
@@ -69,10 +72,10 @@ rule total: price * q
     assert_eq!(explanation["body"], "price * q");
     let children = explanation["children"].as_array().unwrap();
     assert_eq!(children.len(), 2);
-    assert_eq!(children[0]["type"], "data_input");
-    assert_eq!(children[0]["data"], "price");
+    assert_eq!(children[0]["type"], "data");
+    assert_eq!(children[0]["name"], "price");
     assert_eq!(children[0]["display"], "100.00 eur");
-    assert_eq!(children[1]["data"], "q");
+    assert_eq!(children[1]["name"], "q");
     assert_eq!(children[1]["display"], "3");
 }
 
@@ -80,7 +83,8 @@ rule total: price * q
 fn explanation_rule_addition_expands_both_rules() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data n: number
@@ -88,9 +92,9 @@ data x: 5
 rule base: x * 2
 rule a: base + 1
 rule b: a + base
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
         .run(
@@ -98,8 +102,8 @@ rule b: a + base
             "t",
             None,
             HashMap::new(),
-            true,
             Some(&["b".to_string()]),
+            true,
         )
         .unwrap();
     let explanation = explanation_json(&response, "b");
@@ -108,23 +112,24 @@ rule b: a + base
     let children = explanation["children"].as_array().unwrap();
     assert_eq!(children.len(), 2);
     assert_eq!(children[0]["type"], "rule");
-    assert_eq!(children[0]["rule"], "a");
+    assert_eq!(children[0]["name"], "a");
     assert_eq!(children[1]["type"], "rule");
-    assert_eq!(children[1]["rule"], "base");
+    assert_eq!(children[1]["name"], "base");
 }
 
 #[test]
 fn explanation_veto_missing_data() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data n: number
 rule out: n * 2
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
         .run(
@@ -132,16 +137,18 @@ rule out: n * 2
             "t",
             None,
             HashMap::new(),
-            true,
             Some(&["out".to_string()]),
+            true,
         )
         .unwrap();
     let explanation = explanation_json(&response, "out");
 
     assert_eq!(explanation["result"], "Missing data: n");
+    // Walk-faithful: missing data leaf is data; veto text is on result (and display).
     let children = explanation["children"].as_array().unwrap();
-    assert_eq!(children[0]["type"], "veto");
-    assert!(children[0]["message"]
+    assert_eq!(children[0]["type"], "data");
+    assert_eq!(children[0]["name"], "n");
+    assert!(children[0]["display"]
         .as_str()
         .unwrap()
         .contains("Missing data: n"));
@@ -151,15 +158,16 @@ rule out: n * 2
 fn explanation_always_built_by_engine() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data n: number
 data x: 5
 rule out: x + 1
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
         .run(
@@ -167,8 +175,8 @@ rule out: x + 1
             "t",
             None,
             HashMap::new(),
-            true,
             Some(&["out".to_string()]),
+            true,
         )
         .unwrap();
     let json: Value = serde_json::to_value(&response).unwrap();
@@ -180,7 +188,9 @@ fn explanation_json_compact_for_net_salary() {
     let source =
         std::fs::read_to_string("../documentation/examples/nl/tax/net_salary.lemma").unwrap();
     let mut engine = Engine::new();
-    engine.load(&source, SourceType::Volatile).unwrap();
+    engine
+        .load([(SourceType::Volatile, &source.to_string())])
+        .unwrap();
     let mut data = HashMap::new();
     data.insert("gross_salary".into(), "5000 eur".into());
     data.insert("pay_period".into(), "month".into());
@@ -190,8 +200,8 @@ fn explanation_json_compact_for_net_salary() {
             "net_salary",
             None,
             data,
-            true,
             Some(&["net_salary".to_string()]),
+            true,
         )
         .unwrap();
     let explanation = response
@@ -215,16 +225,17 @@ fn explanation_json_compact_for_net_salary() {
 fn explanation_logical_and_in_body() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data contract_start: 2020-01-01
 data contract_end: 2030-01-01
 data current_date: 2025-01-01
 rule active: current_date >= contract_start and current_date <= contract_end
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
         .run(
@@ -232,8 +243,8 @@ rule active: current_date >= contract_start and current_date <= contract_end
             "t",
             None,
             HashMap::new(),
-            true,
             Some(&["active".to_string()]),
+            true,
         )
         .unwrap();
     let explanation = explanation_json(&response, "active");
@@ -250,15 +261,16 @@ rule active: current_date >= contract_start and current_date <= contract_end
 fn explanation_unit_conversion() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data weight: measure -> unit kg 1 -> unit gram 0.001
 data w: 2 kg
 rule in_grams: w as gram
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let response = engine
         .run(
@@ -266,8 +278,8 @@ rule in_grams: w as gram
             "t",
             None,
             HashMap::new(),
-            true,
             Some(&["in_grams".to_string()]),
+            true,
         )
         .unwrap();
     let explanation = explanation_json(&response, "in_grams");
@@ -286,23 +298,24 @@ rule in_grams: w as gram
 fn explain_parameter_gates_explanation_build() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Volatile,
             r#"
 spec t
 data x: text -> option "a" -> option "b"
 rule out: 1 unless x is "b" then 2
-"#,
-            SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap();
     let mut data = HashMap::new();
     data.insert("x".into(), "a".into());
     let without = engine
-        .run(None, "t", None, data.clone(), false, None)
+        .run(None, "t", None, data.clone(), None, false)
         .unwrap();
     assert!(without.results["out"].explanation.is_none());
     let with = engine
-        .run(None, "t", None, data, true, Some(&["out".to_string()]))
+        .run(None, "t", None, data, Some(&["out".to_string()]), true)
         .unwrap();
     assert!(with.results["out"].explanation.is_some());
 }

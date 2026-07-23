@@ -31,7 +31,8 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
 fn qualified_parent_data_import_resolves_child_at_qualifier_not_root_slice() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
             r#"
 spec child 2025-01-01
 data money: measure
@@ -53,9 +54,9 @@ rule val: 1.00 usd
 spec app 2025-01-01
 uses d: dep 2025-07-01
 rule out: d.val
-"#,
-            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .expect("planning must resolve money type with usd when dep is pinned to 2025-07");
 
     let r = engine
@@ -64,8 +65,8 @@ rule out: d.val
             "app",
             Some(&date(2025, 3, 1)),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("run");
     assert_rule_value(&r, "out", "1.00 usd");

@@ -3,7 +3,6 @@
 //! These tests encode **intended** behavior for normalized expression evaluation and
 //! needs_data derived from live Piecewise arms.
 
-use lemma::DataPath;
 use lemma::DateGranularity;
 use lemma::DateTimeValue;
 use lemma::Engine;
@@ -37,7 +36,7 @@ fn effective_2026() -> DateTimeValue {
 
 fn load_volatile(engine: &mut Engine, code: &str) {
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("spec must plan");
 }
 
@@ -63,20 +62,17 @@ fn assert_veto_reason_contains(rr: &lemma::RuleResult, needle: &str) {
 }
 
 #[test]
-fn missing_data_ordered_empty_when_all_datas_provided() {
+fn missing_data_empty_when_all_datas_provided() {
     let mut engine = Engine::new();
     let code = std::fs::read_to_string(coffee_example_path()).expect("read example");
     engine
-        .load(
-            &code,
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from("01_coffee_order.lemma"))),
-        )
+            &code.to_string(),
+        )])
         .expect("load");
 
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "coffee_order", Some(&now))
-        .expect("plan");
 
     let mut data = HashMap::new();
     data.insert("product".to_string(), "latte".to_string());
@@ -86,53 +82,50 @@ fn missing_data_ordered_empty_when_all_datas_provided() {
     data.insert("age".to_string(), "30".to_string());
 
     let response = engine
-        .run_plan(
-            plan,
-            Some(&now),
-            data.into_iter()
-                .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-                .collect(),
-            false,
-            None,
-        )
+        .run(None, "coffee_order", Some(&now), data, None, false)
         .expect("run");
-    assert!(
-        response.missing_data_ordered().is_empty(),
-        "all data provided: {:?}",
-        response.missing_data_ordered()
-    );
+    for result in response.results.values() {
+        assert!(
+            result.missing_data.is_empty(),
+            "all data provided: {} {:?}",
+            result.rule.name,
+            result.missing_data
+        );
+    }
 }
 
 #[test]
-fn missing_data_ordered_includes_product_when_no_inputs() {
+fn missing_data_includes_product_when_no_inputs() {
     let mut engine = Engine::new();
     let code = std::fs::read_to_string(coffee_example_path()).expect("read example");
     engine
-        .load(
-            &code,
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from("01_coffee_order.lemma"))),
-        )
+            &code.to_string(),
+        )])
         .expect("load");
 
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "coffee_order", Some(&now))
-        .expect("plan");
-
     let response = engine
-        .run_plan(plan, Some(&now), HashMap::new(), false, None)
+        .run(
+            None,
+            "coffee_order",
+            Some(&now),
+            HashMap::new(),
+            None,
+            false,
+        )
         .expect("run");
 
-    let ordered = response.missing_data_ordered();
+    let union: Vec<&String> = response
+        .results
+        .values()
+        .flat_map(|r| r.missing_data.iter())
+        .collect();
     assert!(
-        ordered.contains(&DataPath::local("product".to_string())),
-        "expected product among missing data, got {:?}",
-        ordered
-    );
-    assert_eq!(
-        ordered.len(),
-        response.missing_data().len(),
-        "set vs ordered length"
+        union.iter().any(|k| *k == "product"),
+        "expected product among missing_data, got {:?}",
+        union
     );
 }
 
@@ -153,7 +146,7 @@ rule total: base_price * 2
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "pricing", Some(&now), HashMap::new(), false, None)
+        .run(None, "pricing", Some(&now), HashMap::new(), None, false)
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "base_price"), "Missing data");
@@ -165,10 +158,10 @@ fn coffee_order_dependent_rules_propagate_missing_product_not_default_veto() {
     let mut engine = Engine::new();
     let code = std::fs::read_to_string(coffee_example_path()).expect("read example");
     engine
-        .load(
-            &code,
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from("01_coffee_order.lemma"))),
-        )
+            &code.to_string(),
+        )])
         .expect("load");
 
     let now = DateTimeValue::now();
@@ -178,8 +171,8 @@ fn coffee_order_dependent_rules_propagate_missing_product_not_default_veto() {
             "coffee_order",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("run");
 
@@ -217,7 +210,7 @@ rule gross_annual: gross * periods_per_year
     let mut data = HashMap::new();
     data.insert("gross".to_string(), "5000".to_string());
     let response = engine
-        .run(None, "payroll", Some(&now), data, false, None)
+        .run(None, "payroll", Some(&now), data, None, false)
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "periods_per_year"), "pay_period");
@@ -238,17 +231,17 @@ fn net_salary_per_period_outputs_veto_when_pay_period_missing() {
     let mut engine = Engine::new();
     let code = std::fs::read_to_string(net_salary_example_path()).expect("read example");
     engine
-        .load(
-            &code,
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from("nl/tax/net_salary.lemma"))),
-        )
+            &code.to_string(),
+        )])
         .expect("load");
 
     let effective = effective_2026();
     let mut data = HashMap::new();
     data.insert("gross_salary".to_string(), "5000 eur".to_string());
     let response = engine
-        .run(None, "net_salary", Some(&effective), data, false, None)
+        .run(None, "net_salary", Some(&effective), data, None, false)
         .expect("run");
 
     assert_veto_reason_contains(rule_by_name(&response, "periods_per_year"), "pay_period");

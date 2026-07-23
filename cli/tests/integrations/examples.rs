@@ -38,14 +38,15 @@ fn test_example_07_shipping_policy() {
         .arg("destination_region=North Holland")
         .arg("is_po_box=false")
         .arg("is_expedited=false")
-        .arg("is_hazardous=false");
+        .arg("is_hazardous=false")
+        .arg("customer_tier=gold");
 
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("final_shipping"))
         .stdout(predicate::str::contains("23.6")) // NL base 22.00 + weight 7.50 = 29.50, gold discount 20% = 5.90, final = 23.60
         .stdout(predicate::str::contains("estimated_delivery_days"))
-        .stdout(predicate::str::contains("2")); // NL delivery is 2 days
+        .stdout(predicate::str::contains("2")); // NL delivery is 2 day
 }
 
 #[test]

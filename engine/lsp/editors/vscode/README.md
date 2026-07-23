@@ -46,7 +46,7 @@ Format on save uses the LSP. If the LSP does not start, formatting (and diagnost
 
 The extension is published under the **Lemma** publisher. Search for **Lemma Language** or **lemma-language** in the Extensions view.
 
-- **After first publish:** The marketplace can take from **about 10 minutes up to several hours** to index a new or updated extension. If you don’t see it, wait and try again, or search by publisher: `@lemma`.
+- **After first publish:** The marketplace can take from **about 10 minute up to several hour** to index a new or updated extension. If you don’t see it, wait and try again, or search by publisher: `@lemma`.
 - **LSP when installed from marketplace:** The extension does **not** bundle the `lemma` binary. Install `lemma` via `npm install -g lemma` or `cargo install lemma`. When developing in the Lemma repo, the extension auto-detects `target/release/lemma`.
 
 ## Verify locally

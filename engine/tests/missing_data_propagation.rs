@@ -27,18 +27,18 @@ rule total: rules.final_total
 "#;
 
     engine
-        .load(
-            private_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "private.lemma",
             ))),
-        )
+            private_spec.to_string(),
+        )])
         .unwrap();
     engine
-        .load(
-            main_spec,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("main.lemma"))),
-        )
+            main_spec.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
@@ -49,8 +49,8 @@ rule total: rules.final_total
             "rules_and_unless",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
 
@@ -87,14 +87,16 @@ rule subtotal: price * quantity
 rule message: "Order processed"
 "#;
 
-    engine.load(spec, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, spec.to_string())])
+        .unwrap();
 
     let mut data = std::collections::HashMap::new();
     data.insert("price".to_string(), "10".to_string());
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test_spec", Some(&now), data, false, None)
+        .run(None, "test_spec", Some(&now), data, None, false)
         .unwrap();
 
     // subtotal should fail due to missing measure
@@ -136,23 +138,23 @@ rule r: i.slot
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "missing.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "outer", Some(&now), HashMap::new(), false, None)
+        .run(None, "outer", Some(&now), HashMap::new(), None, false)
         .expect("evaluates");
 
     let rr = resp.results.get("r").expect("rule 'r'");
     assert!(rr.vetoed, "expected MissingData veto");
     match rr.veto_detail.as_ref().expect("veto detail") {
-        lemma::VetoType::MissingData { data } => {
+        lemma::VetoType::MissingData { data, .. } => {
             let shown = data.to_string();
             assert!(
                 shown.contains("slot") || shown.contains("i.slot"),
@@ -169,7 +171,7 @@ rule r: i.slot
 fn rule_target_reference_veto_propagates_to_consumer() {
     let code = r#"
 spec inner
-data denom: number -> default 0
+data denom: 0
 rule divided: 10 / denom
 
 spec top
@@ -178,17 +180,17 @@ rule out: i.divided
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "missing.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .expect("rule-target reference must be accepted at plan time");
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "top", Some(&now), HashMap::new(), false, None)
+        .run(None, "top", Some(&now), HashMap::new(), None, false)
         .expect("evaluator must run; veto is a domain result, not an error");
 
     let rr = resp.results.get("out").expect("rule 'out'");

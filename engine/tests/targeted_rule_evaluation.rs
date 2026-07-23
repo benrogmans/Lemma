@@ -1,37 +1,47 @@
-//! Targeted rule evaluation: `rules` slice scopes VM (explain:false) and response.
+//! Targeted rule evaluation: `rules` slice scopes tree eval (explain:false) and response.
 
-use lemma::{DataValueInput, DateTimeValue, Engine};
+use lemma::{DateTimeValue, Engine};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+fn order_pipeline_inputs() -> HashMap<String, String> {
+    HashMap::from([
+        ("customer_tier".into(), "gold".into()),
+        ("payment_method".into(), "credit".into()),
+        ("shipping_zone".into(), "national".into()),
+        ("quantity".into(), "12".into()),
+        ("unit_price".into(), "85".into()),
+        ("package_weight".into(), "3.5".into()),
+        ("delivery_distance".into(), "180".into()),
+        ("loyalty_points".into(), "6500".into()),
+        ("coupon_percent".into(), "10".into()),
+        ("is_fragile".into(), "true".into()),
+        ("is_express".into(), "true".into()),
+        ("is_hazardous".into(), "false".into()),
+        ("is_gift".into(), "false".into()),
+        ("is_first_time".into(), "false".into()),
+    ])
+}
+
 fn load_order_pipeline() -> (Engine, HashMap<String, String>) {
     let mut engine = Engine::new();
     engine
-        .load(
-            include_str!("../benches/specs/order_pipeline.lemma"),
+        .load([(
             lemma::SourceType::Path(Arc::new(PathBuf::from(
                 "engine/benches/specs/order_pipeline.lemma",
             ))),
-        )
+            include_str!("../benches/specs/order_pipeline.lemma"),
+        )])
         .expect("load order_pipeline");
-    let json: serde_json::Value =
-        serde_json::from_str(include_str!("../benches/specs/order_pipeline.inputs.json"))
-            .expect("parse inputs");
-    let data = json
-        .as_object()
-        .expect("object inputs")
-        .iter()
-        .map(|(k, v)| (k.clone(), v.as_str().expect("string input").to_string()))
-        .collect();
-    (engine, data)
+    (engine, order_pipeline_inputs())
 }
 
 fn explanation_tree_has_rule_node(value: &serde_json::Value, rule_name: &str) -> bool {
     match value {
         serde_json::Value::Object(obj) => {
             if obj.get("type").and_then(|t| t.as_str()) == Some("rule")
-                && obj.get("rule").and_then(|r| r.as_str()) == Some(rule_name)
+                && obj.get("name").and_then(|r| r.as_str()) == Some(rule_name)
             {
                 return true;
             }
@@ -55,8 +65,8 @@ fn targeted_eval_one_rule_explain_false() {
             "bench_order_pipeline",
             Some(&now),
             data,
-            false,
             Some(&["grand_total".to_string()]),
+            false,
         )
         .expect("run");
 
@@ -77,8 +87,8 @@ fn explain_true_subset_full_embed() {
             "bench_order_pipeline",
             Some(&now),
             data,
-            true,
             Some(&["grand_total".to_string()]),
+            true,
         )
         .expect("run");
 
@@ -99,15 +109,15 @@ fn explain_true_subset_full_embed() {
 fn empty_rules_errors() {
     let (engine, data) = load_order_pipeline();
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "bench_order_pipeline", Some(&now))
-        .expect("plan");
-    let data_values: HashMap<String, DataValueInput> = data
-        .into_iter()
-        .map(|(k, v)| (k, DataValueInput::convenience(v)))
-        .collect();
     let err = engine
-        .run_plan(plan, Some(&now), data_values, false, Some(&[]))
+        .run(
+            None,
+            "bench_order_pipeline",
+            Some(&now),
+            data,
+            Some(&[]),
+            false,
+        )
         .expect_err("empty rules");
     assert!(err.to_string().contains("at least one rule required"));
 }
@@ -122,8 +132,8 @@ fn unknown_rule_errors() {
             "bench_order_pipeline",
             Some(&now),
             data,
-            false,
             Some(&["not_a_real_rule".to_string()]),
+            false,
         )
         .expect_err("unknown rule");
     assert!(err.to_string().contains("not_a_real_rule"));
@@ -133,17 +143,14 @@ fn unknown_rule_errors() {
 fn all_local_rules_explain_false() {
     let (engine, data) = load_order_pipeline();
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "bench_order_pipeline", Some(&now))
-        .expect("plan");
-    let rule_count = plan.local_rule_names().len();
-    let data_values: HashMap<String, DataValueInput> = data
-        .into_iter()
-        .map(|(k, v)| (k, DataValueInput::convenience(v)))
-        .collect();
     let response = engine
-        .run_plan(plan, Some(&now), data_values, false, None)
+        .run(None, "bench_order_pipeline", Some(&now), data, None, false)
         .expect("run");
+    let rule_count = engine
+        .show(None, "bench_order_pipeline", Some(&now))
+        .expect("show")
+        .rules
+        .len();
     assert_eq!(response.results.len(), rule_count);
     assert!(response.results.contains_key("grand_total"));
     assert!(response.results.contains_key("is_high_value"));
@@ -153,13 +160,14 @@ fn all_local_rules_explain_false() {
 fn ratio_canonical_matches_materialized() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec ratio_canonical
 rule rate: 23 percent
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .expect("load");
     let now = DateTimeValue::now();
     let response = engine
@@ -168,8 +176,8 @@ rule rate: 23 percent
             "ratio_canonical",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .expect("run");
     let rate = response.results.get("rate").expect("rate key canonical");

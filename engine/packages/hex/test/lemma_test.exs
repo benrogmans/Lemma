@@ -14,7 +14,7 @@ defmodule LemmaTest do
   @embedded_repo "lemma"
 
   defp embedded_stdlib_group?(group) do
-    group[:repository][:name] == @embedded_repo
+    group["repository"] == @embedded_repo
   end
 
   defp workspace_groups(groups) do
@@ -26,11 +26,17 @@ defmodule LemmaTest do
   end
 
   defp spec_count(groups) do
-    groups |> Enum.map(fn g -> length(g.specs) end) |> Enum.sum()
+    groups |> Enum.map(fn g -> length(g["specs"]) end) |> Enum.sum()
   end
 
   defp workspace_spec_count(groups) do
     groups |> workspace_groups() |> spec_count()
+  end
+
+  defp date_iso(nil), do: nil
+
+  defp date_iso(%{"year" => year, "month" => month, "day" => day}) do
+    :io_lib.format("~4..0w-~2..0w-~2..0w", [year, month, day]) |> List.to_string()
   end
 
   # Explanation trees embed source paths (e.g. original vs formatted); compare evaluation payloads only.
@@ -82,43 +88,43 @@ defmodule LemmaTest do
     end
 
     test "enforces max_normalized_expression_nodes during planning" do
-      # A self-referencing rule chain that grows exponentially
-      chain =
-        """
-        spec exponential
-        data x: number
-        rule r0: x
-        rule r1: r0 * 2 + r0
-        rule r2: r1 * 2 + r1
-        rule r3: r2 * 2 + r2
-        rule r4: r3 * 2 + r3
-        rule r5: r4 * 2 + r4
-        rule r6: r5 * 2 + r5
-        rule r7: r6 * 2 + r6
-        rule r8: r7 * 2 + r7
-        """
+      # Wide unless over distinct data — many unique NormalForm cells, no Rule-overlay
+      # sharing. Shared self-doubling chains stay linear and no longer trip this limit.
+      arm_count = 40
 
-      # With very low limit, the exponentially growing rule chain should exceed it
-      {:ok, engine} = Lemma.new(%{"max_normalized_expression_nodes" => 100})
-      result = Lemma.load(engine, chain, "chain.lemma")
+      data =
+        Enum.map_join(0..(arm_count - 1), "\n", fn i -> "data d#{i}: boolean" end)
+
+      arms =
+        Enum.map_join(0..(arm_count - 1), "\n", fn i -> "  unless d#{i} then #{i}" end)
+
+      blowup = """
+      spec blowup
+      #{data}
+      rule r: 0
+      #{arms}
+      """
+
+      {:ok, engine} = Lemma.new(%{"max_normalized_expression_nodes" => 50})
+      result = Lemma.load(engine, %{"blowup.lemma" => blowup})
       assert {:error, errors} = result
       assert is_list(errors)
 
       error = hd(errors)
       assert error[:kind] == "resource_limit"
-      assert error[:message] =~ "expression nodes"
+      assert error[:message] =~ "expression nodes" or error[:message] =~ "normal-form"
     end
   end
 
-  describe "load/3" do
-    test "loads a valid spec" do
+  describe "load/2 binary" do
+    test "loads inline volatile source" do
       {:ok, engine} = Lemma.new()
-      assert :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
+      assert :ok = Lemma.load(engine, @simple_spec)
     end
 
-    test "returns errors for invalid spec" do
+    test "returns errors for invalid inline source" do
       {:ok, engine} = Lemma.new()
-      assert {:error, errors} = Lemma.load(engine, "spec bad\ndata x: [bogus]", "bad.lemma")
+      assert {:error, errors} = Lemma.load(engine, "spec bad\ndata x: [bogus]")
       assert is_list(errors)
       assert length(errors) > 0
       first = hd(errors)
@@ -126,58 +132,65 @@ defmodule LemmaTest do
       assert Map.has_key?(first, :message)
       assert first[:kind] == "parsing"
     end
-
-    test "uses 'inline' as default source label" do
-      {:ok, engine} = Lemma.new()
-      assert :ok = Lemma.load(engine, "spec inline_test\ndata x: 1\nrule y: x + 1")
-    end
   end
 
-  describe "load_batch/3" do
-    test "loads multiple sources in one pass" do
+  describe "load/2 labeled" do
+    test "loads a labeled spec from a map" do
       {:ok, engine} = Lemma.new()
-
-      sources = %{
-        "a.lemma" => "repo batch_repo\nspec one\ndata x: 1",
-        "b.lemma" => "repo batch_repo\nspec two\ndata y: 2"
-      }
-
-      assert :ok = Lemma.load_batch(engine, sources)
-      assert {:ok, groups} = Lemma.list(engine)
-      batch = Enum.find(groups, fn g -> g.repository[:name] == "batch_repo" end)
-      assert batch != nil
-      names = batch.specs |> Enum.map(& &1[:name]) |> Enum.sort()
-      assert names == ["one", "two"]
+      assert :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
     end
 
-    test "invalid sources map returns error tuple not exception" do
+    test "loads from a list of label-code tuples" do
       {:ok, engine} = Lemma.new()
-      assert {:error, errors} = Lemma.load_batch(engine, :not_a_map)
-      assert is_list(errors)
-      assert hd(errors).kind == "request"
+
+      assert :ok =
+               Lemma.load(engine, [
+                 {"pricing.lemma", @simple_spec}
+               ])
+    end
+
+    test "path label volatile loads as Path not Volatile" do
+      {:ok, engine} = Lemma.new()
+
+      assert :ok =
+               Lemma.load(engine, %{
+                 "volatile" => "spec inline_test\ndata x: 1\nrule y: x + 1"
+               })
+
+      {:ok, show} = Lemma.show(engine, nil, "inline_test")
+      assert show["source_type"] == %{"path" => "volatile"}
+    end
+
+    test "rejects empty source label" do
+      {:ok, engine} = Lemma.new()
+
+      assert {:error, errors} =
+               Lemma.load(engine, %{
+                 "" => "spec inline_test\ndata x: 1\nrule y: x + 1"
+               })
+
+      assert hd(errors)[:kind] == "request"
     end
   end
 
   describe "list/1" do
-    test "lists loaded specs with inline schema" do
+    test "lists loaded specs with metadata" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
+      :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
       assert {:ok, groups} = Lemma.list(engine)
       assert is_list(groups)
       assert length(workspace_groups(groups)) == 1
       group = hd(workspace_groups(groups))
-      assert group[:repository][:name] == nil
-      assert group[:repository][:dependency] == nil
-      assert length(group[:specs]) == 1
-      assert group[:repository][:start_line] == 1
-      spec = hd(group[:specs])
-      assert spec[:name] == "pricing"
-      assert spec[:start_line] == 1
-      assert spec[:attribute] == "pricing.lemma"
-      assert is_map(spec[:schema])
-      assert spec[:schema]["spec"] == "pricing"
-      assert is_map(spec[:schema]["data"])
-      assert is_map(spec[:schema]["rules"])
+      assert group["repository"] == nil
+      assert length(group["specs"]) == 1
+      spec = hd(group["specs"])
+      assert spec["name"] == "pricing"
+      refute Map.has_key?(spec, "start_line")
+      refute Map.has_key?(spec, "source_type")
+
+      {:ok, show} = Lemma.show(engine, nil, "pricing")
+      assert show["start_line"] == 1
+      assert show["source_type"] == %{"path" => "pricing.lemma"}
     end
 
     test "fresh engine lists embedded stdlib repository" do
@@ -185,26 +198,26 @@ defmodule LemmaTest do
       {:ok, groups} = Lemma.list(engine)
       embedded = embedded_stdlib_group(groups)
       assert embedded != nil
-      assert embedded[:repository][:dependency] == @embedded_repo
-      assert hd(embedded.specs)[:name] == "units"
+      assert embedded["repository"] == @embedded_repo
+      assert hd(embedded["specs"])["name"] == "units"
     end
 
     test "effective_from is nil when not set" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
+      :ok = Lemma.load(engine, %{"test.lemma" => "spec no_effective\ndata x: 1"})
       {:ok, groups} = Lemma.list(engine)
       [group] = workspace_groups(groups)
-      spec = hd(group.specs)
-      assert spec[:effective_from] == nil
+      spec = hd(group["specs"])
+      assert spec["effective_from"] == nil
     end
 
     test "effective_to is nil for an unversioned spec (no successor)" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec no_effective\ndata x: 1", "test.lemma")
+      :ok = Lemma.load(engine, %{"test.lemma" => "spec no_effective\ndata x: 1"})
       {:ok, groups} = Lemma.list(engine)
       [group] = workspace_groups(groups)
-      spec = hd(group.specs)
-      assert spec[:effective_to] == nil
+      spec = hd(group["specs"])
+      assert spec["effective_to"] == nil
     end
 
     test "effective_to equals the next version's effective_from for earlier rows" do
@@ -220,34 +233,62 @@ defmodule LemmaTest do
       rule total: base
       """
 
-      :ok = Lemma.load(engine, code, "temporal.lemma")
+      :ok = Lemma.load(engine, %{"temporal.lemma" => code})
       {:ok, groups} = Lemma.list(engine)
       assert length(workspace_groups(groups)) == 1
-      entries = hd(workspace_groups(groups)).specs
+      entries = hd(workspace_groups(groups))["specs"]
       assert length(entries) == 2
 
       [earlier, latest] = entries
-      assert earlier[:effective_from] == "2025-01-01"
-      assert earlier[:effective_to] == "2026-01-01"
-      assert latest[:effective_from] == "2026-01-01"
-      assert latest[:effective_to] == nil
+      assert date_iso(earlier["effective_from"]) == "2025-01-01"
+      assert date_iso(earlier["effective_to"]) == "2026-01-01"
+      assert date_iso(latest["effective_from"]) == "2026-01-01"
+      assert latest["effective_to"] == nil
     end
   end
 
-  describe "schema/3" do
-    test "returns schema for loaded spec with DataEntry + kind-tagged types" do
+  describe "source/4" do
+    test "returns embedded lemma repo source" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
-      assert {:ok, schema} = Lemma.schema(engine, "pricing")
-      assert is_map(schema)
-      assert schema["spec"] == "pricing"
-      assert is_map(schema["data"])
-      assert is_map(schema["rules"])
-      assert Map.has_key?(schema["data"], "quantity")
-      assert Map.has_key?(schema["rules"], "total")
-      assert Map.has_key?(schema["rules"], "discount")
+      assert {:ok, source} = Lemma.source(engine, @embedded_repo, nil, nil)
+      assert source =~ "spec units"
+      assert source =~ "trait duration"
+    end
 
-      quantity = schema["data"]["quantity"]
+    test "nil repository returns workspace source after load" do
+      {:ok, engine} = Lemma.new()
+      :ok = Lemma.load(engine, %{"ws.lemma" => @simple_spec})
+      assert {:ok, source} = Lemma.source(engine, nil, nil, nil)
+      assert source =~ "spec pricing"
+    end
+
+    test "spec slice source" do
+      {:ok, engine} = Lemma.new()
+      :ok = Lemma.load(engine, %{"ws.lemma" => @simple_spec})
+      assert {:ok, source} = Lemma.source(engine, nil, "pricing", nil)
+      assert source =~ "spec pricing"
+    end
+
+    test "unknown qualifier returns error" do
+      {:ok, engine} = Lemma.new()
+      assert {:error, _} = Lemma.source(engine, "workspace", nil, nil)
+    end
+  end
+
+  describe "show/4" do
+    test "returns show for loaded spec with DataEntry + kind-tagged types" do
+      {:ok, engine} = Lemma.new()
+      :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
+      assert {:ok, show} = Lemma.show(engine, nil, "pricing")
+      assert is_map(show)
+      assert show["spec"] == "pricing"
+      assert is_map(show["data"])
+      assert is_map(show["rules"])
+      assert Map.has_key?(show["data"], "quantity")
+      assert Map.has_key?(show["rules"], "total")
+      assert Map.has_key?(show["rules"], "discount")
+
+      quantity = show["data"]["quantity"]
       assert is_map(quantity), "DataEntry is a named object, not a tuple"
       assert is_map(quantity["type"])
       assert is_binary(quantity["type"]["kind"]), "type carries `kind` discriminator"
@@ -255,28 +296,48 @@ defmodule LemmaTest do
 
     test "returns error for unknown spec" do
       {:ok, engine} = Lemma.new()
-      assert {:error, _} = Lemma.schema(engine, "nonexistent")
+      assert {:error, _} = Lemma.show(engine, nil, "nonexistent")
     end
   end
 
   describe "run/3" do
     test "runs spec with provided data" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
-      assert {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "5"})
+      :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
+
+      assert {:ok, response} =
+               Lemma.run(engine, %{spec: "pricing"}, %{data: %{"quantity" => "5"}})
+
       assert is_map(response)
       assert response["spec"] == "pricing"
+      refute Map.has_key?(response, "data")
       results = response["results"]
       assert is_map(results)
       total = results["total"]
       assert total["display"] == "50"
       assert total["number"] == "50"
+      refute Map.has_key?(total, "missing_data")
+    end
+
+    test "exposes per-rule missing_data when inputs unbound" do
+      {:ok, engine} = Lemma.new()
+      :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
+
+      assert {:ok, response} = Lemma.run(engine, %{spec: "pricing"}, %{})
+
+      refute Map.has_key?(response, "data")
+      total = response["results"]["total"]
+      assert is_list(total["missing_data"])
+      assert "quantity" in total["missing_data"]
     end
 
     test "runs spec with measure triggering unless clause" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, @simple_spec, "pricing.lemma")
-      {:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "10"})
+      :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
+
+      {:ok, response} =
+        Lemma.run(engine, %{spec: "pricing"}, %{data: %{"quantity" => "10"}})
+
       results = response["results"]
       assert results["discount"]["display"] == "5"
       assert results["discount"]["number"] == "5"
@@ -284,8 +345,8 @@ defmodule LemmaTest do
 
     test "runs spec with no optional data" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec simple\ndata x: 1\nrule y: x + 1", "s.lemma")
-      {:ok, response} = Lemma.run(engine, "simple")
+      :ok = Lemma.load(engine, %{"s.lemma" => "spec simple\ndata x: 1\nrule y: x + 1"})
+      {:ok, response} = Lemma.run(engine, %{spec: "simple"})
       results = response["results"]
       assert results["y"]["display"] == "2"
       assert results["y"]["number"] == "2"
@@ -293,18 +354,18 @@ defmodule LemmaTest do
 
     test "returns error for unknown spec" do
       {:ok, engine} = Lemma.new()
-      assert {:error, _} = Lemma.run(engine, "nonexistent")
+      assert {:error, _} = Lemma.run(engine, %{spec: "nonexistent"})
     end
   end
 
-  describe "remove_spec/3" do
+  describe "remove/3" do
     test "removes a loaded spec" do
       {:ok, engine} = Lemma.new()
-      :ok = Lemma.load(engine, "spec removable\ndata x: 1\nrule y: x + 1", "rm.lemma")
+      :ok = Lemma.load(engine, %{"rm.lemma" => "spec removable\ndata x: 1\nrule y: x + 1"})
       {:ok, groups} = Lemma.list(engine)
       assert workspace_spec_count(groups) == 1
 
-      assert :ok = Lemma.remove_spec(engine, "removable", "2025-01-01")
+      assert :ok = Lemma.remove(engine, nil, "removable", "2025-01-01")
 
       {:ok, specs} = Lemma.list(engine)
       assert workspace_spec_count(specs) == 0
@@ -313,7 +374,7 @@ defmodule LemmaTest do
 
     test "returns error for unknown spec" do
       {:ok, engine} = Lemma.new()
-      assert {:error, _} = Lemma.remove_spec(engine, "ghost", "2025-01-01")
+      assert {:error, _} = Lemma.remove(engine, nil, "ghost", "2025-01-01")
     end
   end
 
@@ -321,35 +382,12 @@ defmodule LemmaTest do
     test "engines are independent" do
       {:ok, e1} = Lemma.new()
       {:ok, e2} = Lemma.new()
-      :ok = Lemma.load(e1, "spec a\ndata x: 1\nrule y: x + 1", "a.lemma")
+      :ok = Lemma.load(e1, %{"a.lemma" => "spec a\ndata x: 1\nrule y: x + 1"})
       {:ok, groups1} = Lemma.list(e1)
       {:ok, groups2} = Lemma.list(e2)
       assert workspace_spec_count(groups1) == 1
       assert workspace_spec_count(groups2) == 0
       assert embedded_stdlib_group(groups2) != nil
-    end
-  end
-
-  describe "load_from_paths/2" do
-    test "loads specs from a directory" do
-      dir = System.tmp_dir!()
-      path = Path.join(dir, "hex_test_spec.lemma")
-      File.write!(path, "spec from_file\ndata x: 1\nrule y: x + 1")
-
-      {:ok, engine} = Lemma.new()
-      assert :ok = Lemma.load_from_paths(engine, [path])
-      {:ok, groups} = Lemma.list(engine)
-      names = Enum.flat_map(groups, fn g -> Enum.map(g.specs, & &1[:name]) end)
-      assert "from_file" in names
-    after
-      File.rm(Path.join(System.tmp_dir!(), "hex_test_spec.lemma"))
-    end
-
-    test "nonexistent .lemma file returns error" do
-      {:ok, engine} = Lemma.new()
-      result = Lemma.load_from_paths(engine, ["/nonexistent/path/spec.lemma"])
-      # Engine skips paths that don't exist on disk (is_file and is_dir both false)
-      assert result == :ok
     end
   end
 
@@ -377,11 +415,11 @@ defmodule LemmaTest do
 
       {:ok, e1} = Lemma.new()
       {:ok, e2} = Lemma.new()
-      :ok = Lemma.load(e1, input, "original")
-      :ok = Lemma.load(e2, formatted, "formatted")
+      :ok = Lemma.load(e1, %{"original" => input})
+      :ok = Lemma.load(e2, %{"formatted" => formatted})
 
-      {:ok, r1} = Lemma.run(e1, "fmt", data: %{"x" => "5"})
-      {:ok, r2} = Lemma.run(e2, "fmt", data: %{"x" => "5"})
+      {:ok, r1} = Lemma.run(e1, %{spec: "fmt"}, %{data: %{"x" => "5"}})
+      {:ok, r2} = Lemma.run(e2, %{spec: "fmt"}, %{data: %{"x" => "5"}})
 
       assert comparable_rule_result(r1["results"]["y"]) ==
                comparable_rule_result(r2["results"]["y"])

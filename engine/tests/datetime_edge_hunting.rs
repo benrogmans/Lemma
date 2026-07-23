@@ -47,7 +47,7 @@ fn eval_bool_with_datas(
     data: HashMap<String, String>,
 ) -> bool {
     let response = engine
-        .run(None, spec_name, Some(eff), data, true, None)
+        .run(None, spec_name, Some(eff), data, None, true)
         .unwrap();
     let rr = response
         .results
@@ -64,7 +64,7 @@ fn eval_value(
     eff: &DateTimeValue,
 ) -> lemma::LiteralValue {
     let response = engine
-        .run(None, spec_name, Some(eff), HashMap::new(), true, None)
+        .run(None, spec_name, Some(eff), HashMap::new(), None, true)
         .unwrap();
     response
         .results
@@ -92,7 +92,9 @@ spec test
 uses lemma units
 rule check: now in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     assert!(!eval_bool(
         &engine,
         "test",
@@ -109,7 +111,9 @@ spec test
 uses lemma units
 rule check: now in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     assert!(!eval_bool(
         &engine,
         "test",
@@ -124,9 +128,11 @@ fn now_in_past_0_days_excludes_now() {
     let code = r#"
 spec test
 uses lemma units
-rule check: now in past 0 days
+rule check: now in past 0 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     assert!(!eval_bool(
         &engine,
         "test",
@@ -141,9 +147,11 @@ fn now_in_future_0_days_excludes_now() {
     let code = r#"
 spec test
 uses lemma units
-rule check: now in future 0 days
+rule check: now in future 0 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     assert!(!eval_bool(
         &engine,
         "test",
@@ -167,7 +175,9 @@ uses lemma units
 data event_date: 2025-12-31
 rule check: event_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // effective on 2025-12-30 (Tuesday) is also ISO week 1 of 2026
     let eff = effective(2025, 12, 30, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
@@ -185,7 +195,9 @@ uses lemma units
 data event_date: 2027-01-01
 rule check: event_date in calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // effective is 2026-12-31 (Thursday), ISO week 53 of 2026
     let eff = effective(2026, 12, 31, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
@@ -202,7 +214,9 @@ uses lemma units
 data event_date: 2025-12-30
 rule check: event_date in past calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 1, 5, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -218,7 +232,9 @@ uses lemma units
 data event_date: 2025-12-25
 rule check: event_date in past calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2025, 12, 31, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -234,7 +250,9 @@ uses lemma units
 data event_date: 2026-01-02
 rule check: event_date in future calendar week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2025, 12, 24, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -250,10 +268,12 @@ fn in_past_with_date_arithmetic() {
 spec test
 uses lemma units
 data start_date: 2026-02-01
-rule check: (start_date + 30 days) in past
+rule check: (start_date + 30 day) in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-    // start_date + 30 days = 2026-03-03, which is before 2026-03-07
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
+    // start_date + 30 day = 2026-03-03, which is before 2026-03-07
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -265,10 +285,12 @@ fn in_future_with_date_arithmetic() {
 spec test
 uses lemma units
 data start_date: 2026-03-01
-rule check: (start_date + 30 days) in future
+rule check: (start_date + 30 day) in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-    // start_date + 30 days = 2026-03-31, which is after 2026-03-07
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
+    // start_date + 30 day = 2026-03-31, which is after 2026-03-07
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -279,10 +301,12 @@ fn now_plus_duration_produces_future_date() {
     let code = r#"
 spec test
 uses lemma units
-rule deadline: now + 30 days
+rule deadline: now + 30 day
 rule is_future: deadline in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "is_future", &eff));
 }
@@ -293,10 +317,12 @@ fn now_minus_duration_produces_past_date() {
     let code = r#"
 spec test
 uses lemma units
-rule past_point: now - 30 days
+rule past_point: now - 30 day
 rule is_past: past_point in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "is_past", &eff));
 }
@@ -316,10 +342,12 @@ fn in_past_weeks_tolerance() {
 spec test
 uses lemma units
 data event: 2026-03-01
-rule check: event in past 2 weeks
+rule check: event in past 2 week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
-    // 2 weeks = 14 days, window starts 2026-02-21T12:00:00Z
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
+    // 2 week = 14 day, window starts 2026-02-21T12:00:00Z
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -331,9 +359,11 @@ fn in_past_hours_tolerance() {
 spec test
 uses lemma units
 data event: 2026-03-07T08:00:00Z
-rule check: event in past 6 hours
+rule check: event in past 6 hour
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -345,9 +375,11 @@ fn in_past_minutes_tolerance() {
 spec test
 uses lemma units
 data event: 2026-03-07T11:30:00Z
-rule check: event in past 45 minutes
+rule check: event in past 45 minute
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -359,9 +391,11 @@ fn in_future_weeks_tolerance() {
 spec test
 uses lemma units
 data event: 2026-03-15
-rule check: event in future 2 weeks
+rule check: event in future 2 week
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -381,7 +415,9 @@ uses lemma units
 data event: 2026-03-07
 rule check: event in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -396,7 +432,9 @@ uses lemma units
 data event: 2026-03-07
 rule check: event in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 0, 0, 0);
     assert!(!eval_bool(&engine, "test", "check", &eff));
 }
@@ -417,7 +455,9 @@ uses lemma units
 data event: 2026-03-07T01:00:00+05:00
 rule check: event in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 6, 21, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -434,7 +474,9 @@ uses lemma units
 data event: 2026-03-06T20:00:00-05:00
 rule check: event in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 0, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -452,13 +494,15 @@ uses lemma units
 data event: 2027-01-01T00:30:00+02:00
 rule check: event in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 6, 15, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
 
 // =============================================================================
-// fractional seconds round-trip
+// fractional second round-trip
 // =============================================================================
 
 #[test]
@@ -471,7 +515,9 @@ data event: 2026-03-07T12:00:00.500000Z
 data event2: 2026-03-07T12:00:00.499999Z
 rule check: event > event2
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -485,7 +531,9 @@ uses lemma units
 data event: 2026-03-07T12:00:00.000001Z
 rule check: event in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // now has microsecond 2 → event (us=1) < now (us=2) → in past
     let eff = effective_us(2026, 3, 7, 12, 0, 0, 2);
     assert!(eval_bool(&engine, "test", "check", &eff));
@@ -500,7 +548,9 @@ uses lemma units
 data event: 2026-03-07T12:00:00.000001Z
 rule check: event in future
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // now has microsecond 0, event has microsecond 1 → event > now → in future
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
@@ -519,10 +569,12 @@ uses lemma units
 data order_date: 2026-03-05
 data amount: 100
 rule discount: 0
-  unless order_date in past 3 days then 10
-  unless order_date in past 3 days and amount > 50 then 20
+  unless order_date in past 3 day then 10
+  unless order_date in past 3 day and amount > 50 then 20
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_value(&engine, "test", "discount", &eff);
     if let ValueKind::Number(n) = &lit.value {
@@ -543,16 +595,18 @@ fn now_arithmetic_in_rule_chain() {
     let code = r#"
 spec test
 uses lemma units
-rule thirty_days_ago: now - 30 days
-rule sixty_days_ago: now - 60 days
-rule window_size: sixty_days_ago...thirty_days_ago as seconds as number
+rule thirty_days_ago: now - 30 day
+rule sixty_days_ago: now - 60 day
+rule window_size: sixty_days_ago...thirty_days_ago as second as number
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     let lit = eval_value(&engine, "test", "window_size", &eff);
-    if let ValueKind::Number(seconds) = &lit.value {
+    if let ValueKind::Number(second) = &lit.value {
         assert_eq!(
-            lemma::ValueKind::Number(seconds.clone())
+            lemma::ValueKind::Number(second.clone())
                 .as_decimal_magnitude()
                 .unwrap(),
             rust_decimal::Decimal::from(2_592_000)
@@ -575,7 +629,9 @@ uses lemma units
 data event: 2026-04-01
 rule check: not (event in past)
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -589,7 +645,9 @@ uses lemma units
 data event: 2026-01-01
 rule check: not (event in future)
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -621,7 +679,9 @@ uses lemma units
 data event: 1900-01-01
 rule check: event in past
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -635,7 +695,9 @@ uses lemma units
 data event: 1900-01-01
 rule check: event not in calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -653,7 +715,9 @@ uses lemma units
 data event: 2024-02-29
 rule check: event in calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // now is March 2024 → Feb 29 should NOT be in current calendar month
     let eff = effective(2024, 3, 7, 12, 0, 0);
     assert!(!eval_bool(&engine, "test", "check", &eff));
@@ -668,7 +732,9 @@ uses lemma units
 data event: 2024-02-29
 rule check: event in past calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2024, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -684,9 +750,11 @@ fn in_past_365_days_tolerance() {
 spec test
 uses lemma units
 data event: 2025-06-15
-rule check: event in past 365 days
+rule check: event in past 365 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
@@ -698,9 +766,11 @@ fn in_past_365_days_outside() {
 spec test
 uses lemma units
 data event: 2024-01-01
-rule check: event in past 365 days
+rule check: event in past 365 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_bool(&engine, "test", "check", &eff));
 }
@@ -721,7 +791,9 @@ rule start_this_month: start_date in calendar month
 rule end_last_year: end_date in past calendar year
 rule both: start_this_month and end_last_year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(eval_bool(&engine, "test", "both", &eff));
 }
@@ -739,7 +811,9 @@ uses lemma units
 data event: 2025-12-31T23:59:59Z
 rule check: event in past calendar year
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     // now = 2026-01-01T00:00:00Z → past calendar year = 2025
     let eff = effective(2026, 1, 1, 0, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
@@ -754,13 +828,15 @@ uses lemma units
 data event: 2026-02-28T23:59:59Z
 rule check: event in past calendar month
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 1, 0, 0, 0);
     assert!(eval_bool(&engine, "test", "check", &eff));
 }
 
 // =============================================================================
-// ensuring `in past N days` with future date returns false
+// ensuring `in past N day` with future date returns false
 // =============================================================================
 
 #[test]
@@ -770,9 +846,11 @@ fn in_past_tolerance_with_future_date() {
 spec test
 uses lemma units
 data event: 2026-04-01
-rule check: event in past 7 days
+rule check: event in past 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_bool(&engine, "test", "check", &eff));
 }
@@ -784,9 +862,11 @@ fn in_future_tolerance_with_past_date() {
 spec test
 uses lemma units
 data event: 2026-01-01
-rule check: event in future 7 days
+rule check: event in future 7 day
     "#;
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
     let eff = effective(2026, 3, 7, 12, 0, 0);
     assert!(!eval_bool(&engine, "test", "check", &eff));
 }

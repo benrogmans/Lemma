@@ -12,8 +12,7 @@ use crate::planning::semantics::{
 use std::sync::Arc;
 
 /// Describes what type-resolution infrastructure is available at call sites that
-/// still resolve unit names from an expression-scope index (arithmetic naming,
-/// explanation equivalence across families).
+/// still resolve unit names from an expression-scope index (e.g. arithmetic naming).
 #[derive(Copy, Clone)]
 pub enum UnitResolutionContext<'a> {
     WithIndex(
@@ -227,8 +226,8 @@ fn convert_span_measure_to_unit(
 
 fn semantic_calendar_unit(unit_name: &str) -> SemanticCalendarUnit {
     match unit_name {
-        "month" | "months" => SemanticCalendarUnit::Month,
-        "year" | "years" => SemanticCalendarUnit::Year,
+        "month" => SemanticCalendarUnit::Month,
+        "year" => SemanticCalendarUnit::Year,
         other => unreachable!("BUG: unknown calendar unit '{other}' after planning"),
     }
 }
@@ -274,12 +273,17 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             LiteralValue::number_with_type(rational_value.clone(), primitive_number_arc().clone()),
         ),
         ValueKind::Measure(magnitude, signature) => {
-            let factor = match signature.as_slice() {
-                [(unit_name, 1)] => value.lemma_type.measure_unit_factor(unit_name).clone(),
-                [] => rational_one(),
-                _ => panic!(
-                    "BUG: cast_to_number with compound signature must be rejected at planning"
-                ),
+            let factor = if signature.is_empty() {
+                rational_one()
+            } else if signature.len() == 1 && signature[0].1 == 1 {
+                crate::planning::semantics::signature_factor(
+                    signature,
+                    &std::collections::HashMap::new(),
+                    Some(value.lemma_type.as_ref()),
+                )
+                .expect("BUG: de-canonicalization by unit factor must not fail")
+            } else {
+                panic!("BUG: cast_to_number with compound signature must be rejected at planning")
             };
             let in_unit = checked_div(magnitude, &factor)
                 .expect("BUG: de-canonicalization by unit factor must not fail");

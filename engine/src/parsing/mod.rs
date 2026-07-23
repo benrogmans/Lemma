@@ -308,15 +308,15 @@ rule is_adult: age >= 21"#;
     #[test]
     fn parse_duration_literals_in_rules() {
         let test_cases = vec![
-            ("2 years", "years"),
-            ("6 months", "months"),
-            ("52 weeks", "weeks"),
-            ("365 days", "days"),
-            ("24 hours", "hours"),
-            ("60 minutes", "minutes"),
-            ("3600 seconds", "seconds"),
-            ("1000 milliseconds", "milliseconds"),
-            ("500000 microseconds", "microseconds"),
+            ("2 year", "year"),
+            ("6 month", "month"),
+            ("52 week", "week"),
+            ("365 day", "day"),
+            ("24 hour", "hour"),
+            ("60 minute", "minute"),
+            ("3600 second", "second"),
+            ("1000 millisecond", "millisecond"),
+            ("500000 microsecond", "microsecond"),
             ("50 percent", "percent"),
         ];
 
@@ -341,46 +341,43 @@ rule is_adult: age >= 21"#;
     fn parse_comparisons_with_duration_unit_conversions() {
         let test_cases = vec![
             (
-                "(duration as hours) > 2",
+                "(duration as hour) > 2",
                 "duration conversion in comparison with parens",
             ),
             (
-                "(meeting_time as minutes) >= 30",
+                "(meeting_time as minute) >= 30",
                 "duration conversion with gte",
             ),
             (
-                "(project_length as days) < 100",
+                "(project_length as day) < 100",
                 "duration conversion with lt",
             ),
             (
-                "(delay as seconds) is 60",
+                "(delay as second) is 60",
                 "duration conversion with equality",
             ),
             (
-                "(1 hours) > (30 minutes)",
+                "(1 hour) > (30 minute)",
                 "duration conversions on both sides",
             ),
+            ("duration as hour > 2", "duration conversion without parens"),
             (
-                "duration as hours > 2",
-                "duration conversion without parens",
-            ),
-            (
-                "meeting_time as seconds > 3600",
+                "meeting_time as second > 3600",
                 "variable duration conversion in comparison",
             ),
             (
-                "project_length as days > deadline_days",
+                "project_length as day > deadline_days",
                 "two variables with duration conversion",
             ),
             (
-                "duration as hours >= 1 and duration as hours <= 8",
+                "duration as hour >= 1 and duration as hour <= 8",
                 "multiple duration comparisons",
             ),
             (
-                "(2024-06-01...2024-06-15) as days as number >= 7",
+                "(2024-06-01...2024-06-15) as day as number >= 7",
                 "chained as conversion before comparison",
             ),
-            ("duration as hours as number > 2", "chained as on duration"),
+            ("duration as hour as number > 2", "chained as on duration"),
         ];
 
         for (expr, description) in test_cases {
@@ -403,7 +400,7 @@ rule is_adult: age >= 21"#;
     #[test]
     fn parse_rejects_token_after_unit_conversion() {
         let result = parse(
-            "spec test\nuses lemma units\nrule ok: (2024-06-01...2024-06-15) as days foo",
+            "spec test\nuses lemma units\nrule ok: (2024-06-01...2024-06-15) as day foo",
             crate::parsing::source::SourceType::Volatile,
             &ResourceLimits::default(),
         );
@@ -463,7 +460,7 @@ rule b: 1"#,
             r#"spec s
 rule rate: 10 usd as eur
 uses lemma units
-rule hours: 1 hour"#,
+rule hour: 1 hour"#,
             crate::parsing::source::SourceType::Volatile,
             &ResourceLimits::default(),
         );
@@ -527,7 +524,7 @@ rule rate: 10 usd
             (
                 "chained as before sibling rule",
                 r#"spec s
-rule rate: (2024-01-01...2024-01-02) as days as number
+rule rate: (2024-01-01...2024-01-02) as day as number
 rule other: 1"#,
             ),
         ];
@@ -580,15 +577,15 @@ rule z: 5 as usd + c as usd"#,
                 "duration + literal",
                 r#"spec test
 uses lemma units
-rule z: duration as hours + 1"#,
+rule z: duration as hour + 1"#,
             ),
             (
                 "duration + comparison",
                 r#"spec test
 uses lemma units
 data duration: units.duration
-  -> default 1 hour
-rule z: duration as hours + 1 > 0"#,
+  -> suggest 1 hour
+rule z: duration as hour + 1 > 0"#,
             ),
             (
                 "date range + ref",
@@ -597,7 +594,7 @@ uses lemma units
 data age: date range
 data c: measure
   -> unit eur 1
-rule z: age as days + c"#,
+rule z: age as day + c"#,
             ),
         ];
         for (label, source) in cases {

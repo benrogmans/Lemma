@@ -16,22 +16,24 @@ cargo add lemma-engine --rename lemma
 ## Usage
 
 ```rust
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SourceType};
+use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 let mut engine = Engine::new();
 
-engine.load(
+engine.load([(
+    SourceType::Path(Arc::new(PathBuf::from("example.lemma"))),
     r#"
     spec compensation
     data base_salary: 60000
     data bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
     rule total: base_salary + bonus
-"#,
-    SourceType::Labeled("example.lemma"),
-)?;
+"#
+    .to_string(),
+)])?;
 
 let now = DateTimeValue::now();
 let response = engine.run(
@@ -39,6 +41,7 @@ let response = engine.run(
     "compensation",
     Some(&now),
     HashMap::new(),
+    None,
     false,
 )?;
 
@@ -52,13 +55,15 @@ for (rule_name, rule_result) in &response.results {
 ## Providing values at runtime
 
 ```rust
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SourceType};
+use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 let mut engine = Engine::new();
 
-engine.load(
+engine.load([(
+    SourceType::Path(Arc::new(PathBuf::from("example.lemma"))),
     r#"
     spec shipping
 
@@ -71,9 +76,9 @@ engine.load(
 
     rule valid: weight <= 30 kilogram
       unless weight > 30 kilogram then veto "Package too heavy for shipping"
-"#,
-    SourceType::Labeled("example.lemma"),
-)?;
+"#
+    .to_string(),
+)])?;
 
 let mut values = HashMap::new();
 values.insert("weight".to_string(), "12 kilogram".to_string());
@@ -85,13 +90,35 @@ let response = engine.run(
     "shipping",
     Some(&now),
     values,
+    None,
     false,
 )?;
 ```
 
+## Show vs run discovery
+
+`Engine::show` returns the static planning interface: data used by the spec's rules, plus local rule result types.
+
+For requirements on a partial run, call `run` and inspect each rule's `missing_data` (`string[]` input keys). Types, prefilled literals, and `-> suggest` hints are on `Engine::show` (`Show.data`) only. Bound inputs (caller overlay or spec prefilled) are omitted from `missing_data`; suggestions do not bind until supplied in `run`'s data. Pass `explain: true` as the last `run` argument to attach per-rule explanation trees ([explanation.v1.json](../schemas/explanation.v1.json)).
+
+```rust
+let response = engine.run(
+    None,
+    "shipping",
+    Some(&now),
+    HashMap::new(),
+    Some(&["rate".to_string()]),
+    false,
+)?;
+
+for key in &response.results["rate"].missing_data {
+    println!("need: {key}");
+}
+```
+
 ## Embedded units stdlib
 
-`Engine::new()` loads `repo lemma` / `spec units` at compile time (import with `uses lemma units`). It always appears in `Engine::list`. Inspect formatted source with `engine.format_repository("lemma")`.
+`Engine::new()` loads `repo lemma` / `spec units` at compile time (import with `uses lemma units`). It always appears in `Engine::list`. Formatted source: `engine.source(Some("lemma"), None, None)?`.
 
 ## API docs
 

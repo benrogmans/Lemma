@@ -40,8 +40,8 @@ data criminal_record : false
 data has_passport    : true
 data has_visa        : false
 data passport_valid  : true
-data debt_amount     : number -> minimum 0 -> default 0
-data user_age        : number -> minimum 0 -> maximum 120 -> default 30
+data debt_amount     : number -> minimum 0 -> suggest 0
+data user_age        : number -> minimum 0 -> maximum 120 -> suggest 30
 
 rule is_adult:
   user_age >= 18

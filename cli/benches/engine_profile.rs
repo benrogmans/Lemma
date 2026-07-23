@@ -1,6 +1,6 @@
 // Criterion cases synced with xtask/src/benchmarks/cli.rs PROFILE_BENCH_CASES.
 use criterion::{criterion_group, criterion_main, Criterion};
-use lemma::{collect_lemma_sources as engine_collect_sources, *};
+use lemma::*;
 use std::collections::HashMap;
 
 fn load_engine() -> Engine {
@@ -23,9 +23,14 @@ fn load_engine() -> Engine {
         }
     }
 
+    let mut sources = Vec::with_capacity(paths.len());
+    for path in &paths {
+        let content = std::fs::read_to_string(path).expect("read example lemma file");
+        sources.push((SourceType::Path(std::sync::Arc::new(path.clone())), content));
+    }
+
     let mut engine = Engine::new();
-    let sources = engine_collect_sources(&paths).expect("specs must load");
-    engine.load_batch(sources, None).expect("specs must load");
+    engine.load(sources).expect("specs must load");
     engine
 }
 
@@ -53,27 +58,9 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
     group.bench_function("engine_evaluate", |b| {
         b.iter(|| {
             let resp = engine
-                .run(None, spec, Some(&now), data.clone(), false, None)
+                .run(None, spec, Some(&now), data.clone(), None, false)
                 .expect("run");
             std::hint::black_box(resp);
-        });
-    });
-
-    group.bench_function("data_parsing", |b| {
-        let base_plan = engine
-            .get_plan(None, spec, Some(&now))
-            .expect("plan exists");
-        b.iter(|| {
-            let overlay = lemma::DataOverlay::resolve(
-                base_plan,
-                data.clone()
-                    .into_iter()
-                    .map(|(k, v)| (k, lemma::DataValueInput::convenience(v)))
-                    .collect(),
-                &ResourceLimits::default(),
-            )
-            .expect("DataOverlay::resolve");
-            std::hint::black_box(overlay);
         });
     });
 
@@ -85,8 +72,8 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
                     spec,
                     Some(&now),
                     data.clone(),
-                    false,
                     Some(&[String::from("periods_per_year")]),
+                    false,
                 )
                 .expect("run");
             std::hint::black_box(resp);
@@ -95,7 +82,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_envelope", |b| {
         let response = engine
-            .run(None, spec, Some(&now), data.clone(), false, None)
+            .run(None, spec, Some(&now), data.clone(), None, false)
             .expect("run");
         b.iter(|| {
             let envelope = build_envelope(&response, spec, &now);
@@ -106,7 +93,7 @@ fn bench_dutch_salary_profile(c: &mut Criterion) {
 
     group.bench_function("json_raw_response", |b| {
         let response = engine
-            .run(None, spec, Some(&now), data.clone(), false, None)
+            .run(None, spec, Some(&now), data.clone(), None, false)
             .expect("run");
         b.iter(|| {
             let json = serde_json::to_vec(&response).expect("serialize");

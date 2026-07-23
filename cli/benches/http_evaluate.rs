@@ -97,10 +97,10 @@ fn bench_evaluate(c: &mut Criterion) {
 
     group.finish();
 
-    // --- schema retrieval (GET, no evaluation) ---
-    let mut schema_group = c.benchmark_group("schema");
+    // --- show retrieval (GET, no evaluation) ---
+    let mut show_group = c.benchmark_group("show");
 
-    schema_group.bench_function("dutch_salary", |b| {
+    show_group.bench_function("dutch_salary", |b| {
         b.iter(|| {
             let resp = client
                 .get(format!("{BASE}/net_salary"))
@@ -110,7 +110,7 @@ fn bench_evaluate(c: &mut Criterion) {
         });
     });
 
-    schema_group.finish();
+    show_group.finish();
 }
 
 criterion_group!(benches, bench_evaluate);

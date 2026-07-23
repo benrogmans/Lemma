@@ -5,8 +5,7 @@
 
 use super::common::{
     capture_environment, capture_stdout, format_latency_ns, format_ratio, push_environment_block,
-    read_latency_estimate, read_relative, run_criterion_bench, write_report, EnvironmentInfo,
-    LatencyRow,
+    read_latency_estimate, run_engine_criterion_bench, write_report, EnvironmentInfo, LatencyRow,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -15,30 +14,62 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 
-/// Spec name -> (lemma source path, inputs JSON path) under workspace root.
+/// Spec metadata for the engine benchmark report.
 /// Order here is the order rendered in the report.
 pub const FIXTURES: &[Fixture] = &[
     Fixture {
         spec_name: "bench_shipping",
         lemma_path: "engine/benches/specs/shipping.lemma",
-        inputs_path: "engine/benches/specs/shipping.inputs.json",
+        python_module: "business_rules.shipping",
+        inputs: &[
+            ("weight", "3"),
+            ("destination", "domestic"),
+            ("is_member", "false"),
+        ],
     },
     Fixture {
         spec_name: "bench_pricing",
         lemma_path: "engine/benches/specs/pricing.lemma",
-        inputs_path: "engine/benches/specs/pricing.inputs.json",
+        python_module: "business_rules.pricing",
+        inputs: &[
+            ("product_type", "premium"),
+            ("quantity", "25"),
+            ("unit_price", "100"),
+            ("coupon_percent", "5"),
+            ("loyalty_years", "2"),
+            ("is_member", "true"),
+            ("is_loyalty", "true"),
+            ("is_tax_exempt", "false"),
+        ],
     },
     Fixture {
         spec_name: "bench_order_pipeline",
         lemma_path: "engine/benches/specs/order_pipeline.lemma",
-        inputs_path: "engine/benches/specs/order_pipeline.inputs.json",
+        python_module: "business_rules.order_pipeline",
+        inputs: &[
+            ("customer_tier", "gold"),
+            ("payment_method", "credit"),
+            ("shipping_zone", "national"),
+            ("quantity", "12"),
+            ("unit_price", "85"),
+            ("package_weight", "3.5"),
+            ("delivery_distance", "180"),
+            ("loyalty_points", "6500"),
+            ("coupon_percent", "10"),
+            ("is_fragile", "true"),
+            ("is_express", "true"),
+            ("is_hazardous", "false"),
+            ("is_gift", "false"),
+            ("is_first_time", "false"),
+        ],
     },
 ];
 
 pub struct Fixture {
     pub spec_name: &'static str,
     pub lemma_path: &'static str,
-    pub inputs_path: &'static str,
+    pub python_module: &'static str,
+    pub inputs: &'static [(&'static str, &'static str)],
 }
 
 const BENCH_EFFECTIVE_ISO: &str = "2026-01-01T00:00:00Z";
@@ -80,7 +111,7 @@ struct LemmaOutput {
 pub fn run(root: &Path) -> Result<(), String> {
     require_python3()?;
 
-    run_criterion_bench(root, "lemma-engine", "evaluate")?;
+    run_engine_criterion_bench(root, "lemma-engine", "evaluate")?;
     let memory_stdout = run_memory_bench(root)?;
     let outputs_stdout = run_outputs_bench(root)?;
     let outputs_report: OutputsReport = serde_json::from_str(outputs_stdout.trim())
@@ -91,11 +122,14 @@ pub fn run(root: &Path) -> Result<(), String> {
 
     let mut latency_rows: BTreeMap<&'static str, LatencyRow> = BTreeMap::new();
     let mut explain_latency_rows: BTreeMap<&'static str, LatencyRow> = BTreeMap::new();
+    let mut compile_rows: BTreeMap<&'static str, LatencyRow> = BTreeMap::new();
     for fixture in FIXTURES {
-        let untraced = read_latency_estimate(root, fixture.spec_name, "run_plan")?;
+        let untraced = read_latency_estimate(root, fixture.spec_name, "evaluate")?;
         latency_rows.insert(fixture.spec_name, untraced);
-        let explain = read_latency_estimate(root, fixture.spec_name, "run_plan_explain")?;
+        let explain = read_latency_estimate(root, fixture.spec_name, "evaluate_explain")?;
         explain_latency_rows.insert(fixture.spec_name, explain);
+        let compile = read_latency_estimate(root, fixture.spec_name, "plan")?;
+        compile_rows.insert(fixture.spec_name, compile);
     }
 
     let python_by_spec: BTreeMap<String, &PythonFixture> = python_report
@@ -129,11 +163,11 @@ pub fn run(root: &Path) -> Result<(), String> {
     let python_version = capture_stdout("python3", &["--version"], None)?;
 
     let report = compose_report(ComposeReportContext {
-        root,
         env: &env,
         python_version: &python_version,
         latency_rows: &latency_rows,
         explain_latency_rows: &explain_latency_rows,
+        compile_rows: &compile_rows,
         python_by_spec: &python_by_spec,
         accuracy: &accuracy,
         memory_rows: &memory_rows,
@@ -162,6 +196,7 @@ fn require_python3() -> Result<(), String> {
 fn run_memory_bench(root: &Path) -> Result<String, String> {
     let output = Command::new("cargo")
         .current_dir(root)
+        .env("CARGO_TARGET_DIR", root.join("target"))
         .args(["bench", "-p", "lemma-engine", "--bench", "memory"])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -230,6 +265,7 @@ fn parse_memory_bench_stdout(stdout: &str) -> Result<Vec<MemoryRow>, String> {
 fn run_outputs_bench(root: &Path) -> Result<String, String> {
     let output = Command::new("cargo")
         .current_dir(root)
+        .env("CARGO_TARGET_DIR", root.join("target"))
         .args(["bench", "-p", "lemma-engine", "--bench", "outputs"])
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
@@ -407,11 +443,11 @@ fn diff_pair(
 }
 
 struct ComposeReportContext<'a> {
-    root: &'a Path,
     env: &'a EnvironmentInfo,
     python_version: &'a str,
     latency_rows: &'a BTreeMap<&'static str, LatencyRow>,
     explain_latency_rows: &'a BTreeMap<&'static str, LatencyRow>,
+    compile_rows: &'a BTreeMap<&'static str, LatencyRow>,
     python_by_spec: &'a BTreeMap<String, &'a PythonFixture>,
     accuracy: &'a (AccuracyStats, Vec<AccuracyDeviation>),
     memory_rows: &'a [MemoryRow],
@@ -435,11 +471,11 @@ fn lemma_display_repr(lemma: &LemmaOutput) -> String {
 
 fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     let ComposeReportContext {
-        root,
         env,
         python_version,
         latency_rows,
         explain_latency_rows,
+        compile_rows,
         python_by_spec,
         accuracy,
         memory_rows,
@@ -450,39 +486,41 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     out.push_str("# Engine evaluation benchmarks\n\n");
     out.push_str(
         "Numbers are produced by `cargo benchmarks engine`. \
-         Lemma and the hand-written Python ports of the same business rules \
-         are measured on identical pinned inputs.\n\n",
+         Hand-written Lemma specs and hand-written Python ports of the same business rules \
+         are measured on identical inline inputs.\n\n",
     );
 
     out.push_str("## Methodology\n\n");
     out.push_str(
-        "- Per-call boundary on both sides: pre-built typed inputs -> terminal rule value in memory. \
-         Fixture JSON is loaded once per spec before warmup.\n",
+        "- Hand-written Lemma specs vs hand-written Python ports of the same rules, \
+         on identical inline inputs.\n",
     );
     out.push_str(
-        "- Lemma per-call work: clone a pre-built `HashMap<String, DataValueInput>`, \
-         then `Engine::run_plan(plan, Some(&effective), data, explain: false, Some(&[terminal_rule]))` \
-         where `terminal_rule` is `total` (shipping, pricing) or `grand_total` (order_pipeline). \
-         One VM pass per call. `run_plan` applies declared defaults via `DataOverlay::resolve`, \
-         converts data values to typed `LiteralValue`, evaluates the requested rule(s), and \
-         constructs a `Response` (explanation trees omitted).\n",
+        "- Cross-language latency compares per-request evaluation only — like comparing \
+         optimized C execution to Python, not C compile time to Python runtime.\n",
     );
     out.push_str(
-        "- Python per-call work: `compute_terminal(inputs)` where `inputs` is a pre-built \
-         `Inputs` dataclass lifted from the fixture JSON before warmup. \
-         Shipping and pricing evaluate through `total`; order_pipeline evaluates \
-         only through `grand_total` (same terminal rule as Lemma).\n",
+        "- Lemma: compile (`Engine::new()` + `load(in_memory_source)`, parse + plan) once \
+         before measurement; timed loop = inline input literals + `run_plan` → terminal rule. \
+         Terminal rule is `total` (shipping, pricing) or `grand_total` (order_pipeline).\n",
+    );
+    out.push_str(
+        "- Python: import module once before measurement; timed loop = inline input literals + \
+         `build_inputs(raw)` + `compute_terminal(inputs)`.\n",
+    );
+    out.push_str(
+        "- No disk I/O, no JSON input sidecars, no pre-built input maps outside the timed loop.\n",
     );
     out.push_str(&format!(
         "- Effective pinned to `{BENCH_EFFECTIVE_ISO}` (no timezone) on the Lemma side; Python rules carry no temporal logic.\n",
     ));
     out.push_str(
-        "- Latency: Criterion (3s warmup, 5s measurement) for Lemma; \
-         1_000 warmup + 100_000 measured `time.perf_counter_ns()` samples with \
+        "- Latency: Criterion (3s warmup, 30s measurement) for Lemma; \
+         100 warmup + 10_000 measured `time.perf_counter_ns()` samples with \
          `gc.disable()` bracketing for Python. Median and standard deviation reported.\n",
     );
     out.push_str(
-        "- Numerical precision: a separate pass compares all rule outputs. Lemma's \
+        "- Numerical precision: a separate untimed pass compares all rule outputs. Lemma's \
          `outputs` bench evaluates every local rule with explanations; Python's \
          `compute(inputs)` returns a full `Outputs` dataclass. Both sides use exact \
          rational arithmetic internally and commit to decimal strings at the output \
@@ -490,25 +528,33 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
          `rust_decimal::Decimal` (28-digit precision).\n",
     );
     out.push_str(
-        "- API note: `Engine::run_plan` accepts `HashMap<String, DataValueInput>`. \
-         The benchmark mirrors what native callers pay after constructing typed inputs; \
-         JSON parsing at API boundaries (CLI, WASM) is out of scope.\n",
-    );
-    out.push_str(
-        "- Memory: `stats_alloc` over 1_000 warmup + 10_000 measured `run_plan` calls per fixture \
-         (`cargo bench -p lemma-engine --bench memory`). Allocations and bytes are totals divided by iteration count.\n",
-    );
-    out.push_str(
-        "- Profiling: install [`cargo-flamegraph`](https://github.com/flamegraph-rs/flamegraph) \
-         and run `cargo flamegraph -p lemma-engine --bench evaluate -- --bench bench_order_pipeline/run_plan` \
-         to attribute CPU time inside a single fixture.\n",
-    );
-    out.push_str(
-        "- Micro-benchmarks: `cargo bench -p lemma-engine --bench internal_micro` isolates \
-         `DataOverlay::resolve` and full `run_plan` on `bench_order_pipeline`.\n\n",
+        "- Memory: `stats_alloc` over 100 warmup + 1_000 measured eval-only `evaluate` calls per fixture \
+         (`cargo bench -p lemma-engine --bench memory`). Engine loaded once per fixture; each iteration \
+         wraps inline inputs + `run_plan` in a fresh region.\n\n",
     );
 
     push_environment_block(&mut out, env, Some(python_version));
+
+    out.push_str("## Compile (Lemma, parse + plan)\n\n");
+    out.push_str(
+        "One-time cost per spec load. Not included in the Python/Lemma latency ratio; \
+         amortized across requests in production.\n\n",
+    );
+    out.push_str("| Spec | Median | Std dev |\n");
+    out.push_str("|------|-------:|--------:|\n");
+    for fixture in FIXTURES {
+        let compile = compile_rows
+            .get(fixture.spec_name)
+            .copied()
+            .ok_or_else(|| format!("missing compile row for {}", fixture.spec_name))?;
+        out.push_str(&format!(
+            "| `{}` | {} | {} |\n",
+            fixture.spec_name,
+            format_latency_ns(compile.median_ns),
+            format_latency_ns(compile.std_dev_ns),
+        ));
+    }
+    out.push('\n');
 
     out.push_str("## Latency\n\n");
     out.push_str(
@@ -535,14 +581,13 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     }
     out.push('\n');
 
-    out.push_str("## Explain latency (`run_plan_explain`)\n\n");
+    out.push_str("## Explain latency (`evaluate_explain`)\n\n");
     out.push_str(
-        "Same fixtures and terminal rules as the latency table, with `explain: true` \
-         (source-shaped bytecode, full rule VM, explanation recording). \
-         Ratio is explain median divided by `run_plan` median on the same machine run.\n\n",
+        "Same fixtures and terminal rules as the latency table, with `explain: true`. \
+         Ratio is explain median divided by `evaluate` median on the same machine run.\n\n",
     );
     out.push_str(
-        "| Spec | Terminal rule | `run_plan` median | `run_plan_explain` median | Explain / `run_plan` |\n",
+        "| Spec | Terminal rule | `evaluate` median | `evaluate_explain` median | Explain / `evaluate` |\n",
     );
     out.push_str(
         "|------|---------------|------------------:|--------------------------:|---------------------:|\n",
@@ -568,7 +613,7 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     }
     out.push('\n');
 
-    out.push_str("## Memory (per `run_plan` call)\n\n");
+    out.push_str("## Memory (per `evaluate` call)\n\n");
     out.push_str(
         "| Spec | Iterations | Allocations/eval | Bytes allocated/eval | Reallocations/eval | Net bytes retained/eval |\n",
     );
@@ -616,7 +661,7 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
          [`../../engine/benches/python/business_rules/`](../../engine/benches/python/business_rules). \
          Each module exports `Inputs`, `Outputs`, `TERMINAL_RULE`, `build_inputs(raw)`, \
          `compute_terminal(inputs)`, and `compute(inputs)`. \
-         Standard library only (`fractions`, `dataclasses`, `json`, `time`, \
+         Standard library only (`fractions`, `dataclasses`, `importlib`, `time`, \
          `gc`, `pathlib`, `statistics`). \
          The Python benchmark harness is [`../../engine/benches/python/benchmark.py`](../../engine/benches/python/benchmark.py).\n\n",
     );
@@ -624,20 +669,20 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     out.push_str("## Inputs\n\n");
     out.push_str(&format!(
         "All fixtures share `effective = {BENCH_EFFECTIVE_ISO}` (no timezone). \
-         Fixture JSON is parsed once per spec at setup into typed inputs on both sides.\n\n",
+         Input values are inline string literals built inside every timed iteration on both sides.\n\n",
     ));
     for fixture in FIXTURES {
-        let inputs = read_relative(root, fixture.inputs_path)?;
         let lemma_link = format!("../../{}", fixture.lemma_path);
-        let inputs_link = format!("../../{}", fixture.inputs_path);
         out.push_str(&format!("### `{}`\n\n", fixture.spec_name));
         out.push_str(&format!(
-            "Source: [`{}`]({lemma_link}). Inputs: [`{}`]({inputs_link}).\n\n",
-            fixture.lemma_path, fixture.inputs_path,
+            "Lemma source: [`{}`]({lemma_link}). Python module: `{}`.\n\n",
+            fixture.lemma_path, fixture.python_module,
         ));
-        out.push_str("```json\n");
-        out.push_str(inputs.trim_end());
-        out.push_str("\n```\n\n");
+        out.push_str("| Field | Value |\n|-------|-------|\n");
+        for (field, value) in fixture.inputs {
+            out.push_str(&format!("| `{field}` | `{value}` |\n"));
+        }
+        out.push('\n');
     }
 
     Ok(out)
@@ -669,7 +714,7 @@ mod tests {
     fn sample_python() -> PythonFixture {
         PythonFixture {
             spec_name: "bench_shipping".to_string(),
-            iterations_latency: 100_000,
+            iterations_latency: 10_000,
             latency_median_ns: 6_990.0,
             latency_std_dev_ns: 4_170.0,
             outputs: BTreeMap::new(),
@@ -696,7 +741,7 @@ mod tests {
         assert_eq!(cells.len(), 8, "row: {row}");
         assert_eq!(cells[0], "`bench_shipping`");
         assert_eq!(cells[4], "6.99 us");
-        assert_eq!(cells[5], "100000");
+        assert_eq!(cells[5], "10000");
         assert_eq!(
             cells[7],
             format_ratio(sample_python().latency_median_ns, 22_580.0)
@@ -705,7 +750,6 @@ mod tests {
 
     #[test]
     fn compose_report_mentions_engine_suite_command() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let env = EnvironmentInfo {
             rustc_version: "rustc test".to_string(),
             uname: "Linux test x86_64".to_string(),
@@ -716,11 +760,12 @@ mod tests {
             std_dev_ns: 1.0,
         };
         let mut latency_rows = BTreeMap::new();
+        let mut compile_rows = BTreeMap::new();
         let python_owned: Vec<PythonFixture> = FIXTURES
             .iter()
             .map(|fixture| PythonFixture {
                 spec_name: fixture.spec_name.to_string(),
-                iterations_latency: 100_000,
+                iterations_latency: 10_000,
                 latency_median_ns: 1.0,
                 latency_std_dev_ns: 1.0,
                 outputs: BTreeMap::new(),
@@ -730,17 +775,18 @@ mod tests {
         let mut explain_latency_rows = BTreeMap::new();
         for (fixture, python) in FIXTURES.iter().zip(python_owned.iter()) {
             latency_rows.insert(fixture.spec_name, row);
+            compile_rows.insert(fixture.spec_name, row);
             explain_latency_rows.insert(fixture.spec_name, row);
             python_by_spec.insert(fixture.spec_name.to_string(), python);
         }
         let accuracy = (AccuracyStats::default(), Vec::new());
 
         let report = compose_report(ComposeReportContext {
-            root: &root,
             env: &env,
             python_version: "Python 3.12.3",
             latency_rows: &latency_rows,
             explain_latency_rows: &explain_latency_rows,
+            compile_rows: &compile_rows,
             python_by_spec: &python_by_spec,
             accuracy: &accuracy,
             memory_rows: &[],
@@ -748,6 +794,7 @@ mod tests {
         .expect("compose");
 
         assert!(report.contains("cargo benchmarks engine"));
+        assert!(report.contains("Compile (Lemma, parse + plan)"));
         assert!(report.contains("../../engine/benches/specs/shipping.lemma"));
     }
 

@@ -11,11 +11,11 @@ fn path_source(file: &str) -> SourceType {
 fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("stdlib_lemma_units.lemma"))
+        .load([(path_source("stdlib_lemma_units.lemma"), code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), false, None)
+        .run(None, spec_name, Some(&now), HashMap::new(), None, false)
         .expect("run");
     response
         .results
@@ -26,30 +26,41 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
         .expect("display")
 }
 
+fn expect_plan_error(code: &str, source_file: &str) -> String {
+    let mut engine = Engine::new();
+    let err = engine
+        .load([(path_source(source_file), code.to_string())])
+        .expect_err("expected planning error");
+    err.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[test]
 fn uses_lemma_units_duration_typedef_and_literals() {
     let code = r#"spec consumer
 uses lemma units
 data age: units.duration
-rule hours: age as hours"#;
+rule hour: age as hour"#;
     let mut engine = Engine::new();
     engine
-        .load(code, path_source("consumer.lemma"))
+        .load([(path_source("consumer.lemma"), code.to_string())])
         .expect("plan");
     let now = DateTimeValue::now();
     let mut data = HashMap::new();
-    data.insert("age".to_string(), "90 minutes".to_string());
+    data.insert("age".to_string(), "90 minute".to_string());
     let response = engine
-        .run(None, "consumer", Some(&now), data, false, None)
+        .run(None, "consumer", Some(&now), data, None, false)
         .expect("run");
     assert_eq!(
         response
             .results
-            .get("hours")
-            .expect("hours rule")
+            .get("hour")
+            .expect("hour rule")
             .measure
             .as_ref()
-            .and_then(|m| m.get("hours"))
+            .and_then(|m| m.get("hour"))
             .map(String::as_str),
         Some("1.5")
     );
@@ -59,9 +70,9 @@ rule hours: age as hours"#;
 fn uses_lemma_units_length_and_duration_units_for_compound_cast() {
     let code = r#"spec speed_test
 uses lemma units
-data velocity: measure -> unit mps metre/second
-data dist: 100 metre
-data secs: 20 seconds
+data velocity: measure -> unit mps meter/second
+data dist: 100 meter
+data secs: 20 second
 rule speed: (dist / secs) as mps"#;
     let out = eval_rule(code, "speed_test", "speed");
     assert!(
@@ -71,19 +82,202 @@ rule speed: (dist / secs) as mps"#;
 }
 
 #[test]
+fn plural_duration_unit_is_unknown() {
+    let combined = expect_plan_error(
+        r#"spec bad
+uses lemma units
+rule x: 1 hours"#,
+        "plural_hours.lemma",
+    );
+    assert!(
+        !combined.is_empty(),
+        "expected planning error for plural hours, got: {combined:?}"
+    );
+}
+
+#[test]
+fn british_metre_unit_is_unknown() {
+    let combined = expect_plan_error(
+        r#"spec bad
+uses lemma units
+rule x: 1 metre"#,
+        "british_metre.lemma",
+    );
+    assert!(
+        !combined.is_empty(),
+        "expected planning error for metre, got: {combined:?}"
+    );
+}
+
+#[test]
+fn american_meter_converts() {
+    let out = eval_rule(
+        r#"spec length_test
+uses lemma units
+rule x: 1000 millimeter as meter"#,
+        "length_test",
+        "x",
+    );
+    assert!(
+        out.contains('1') && out.contains("meter"),
+        "expected 1 meter, got: {out}"
+    );
+}
+
+#[test]
+fn inch_as_centimeter() {
+    let out = eval_rule(
+        r#"spec imperial_length
+uses lemma units
+rule x: 1 inch as centimeter"#,
+        "imperial_length",
+        "x",
+    );
+    assert!(
+        out.contains("2.54") && out.contains("centimeter"),
+        "expected 2.54 centimeter, got: {out}"
+    );
+}
+
+#[test]
+fn pound_as_kilogram() {
+    let out = eval_rule(
+        r#"spec imperial_mass
+uses lemma units
+rule x: 1 pound as kilogram"#,
+        "imperial_mass",
+        "x",
+    );
+    assert!(
+        out.contains("0.45359237") && out.contains("kilogram"),
+        "expected 0.45359237 kilogram, got: {out}"
+    );
+}
+
+#[test]
+fn liter_as_milliliter() {
+    let out = eval_rule(
+        r#"spec volume_test
+uses lemma units
+rule x: 1 liter as milliliter"#,
+        "volume_test",
+        "x",
+    );
+    assert!(
+        out.contains("1000") && out.contains("milliliter"),
+        "expected 1000 milliliter, got: {out}"
+    );
+}
+
+#[test]
+fn mass_times_accel_as_newton() {
+    let out = eval_rule(
+        r#"spec force_test
+uses lemma units
+data acceleration: measure -> unit mps2 meter/second^2
+data m: 10 kilogram
+data a: 5 mps2
+rule f: (m * a) as newton"#,
+        "force_test",
+        "f",
+    );
+    assert!(
+        out.contains("50") && out.contains("newton"),
+        "expected 50 newton, got: {out}"
+    );
+}
+
+#[test]
+fn kilowatt_as_watt() {
+    let out = eval_rule(
+        r#"spec power_test
+uses lemma units
+rule x: 1 kilowatt as watt"#,
+        "power_test",
+        "x",
+    );
+    assert!(
+        out.contains("1000") && out.contains("watt"),
+        "expected 1000 watt, got: {out}"
+    );
+}
+
+#[test]
+fn byte_as_bit() {
+    let out = eval_rule(
+        r#"spec info_test
+uses lemma units
+rule x: 1 byte as bit"#,
+        "info_test",
+        "x",
+    );
+    assert!(
+        out.contains('8') && out.contains("bit"),
+        "expected 8 bit, got: {out}"
+    );
+}
+
+#[test]
+fn show_omits_stdlib_typedefs_with_no_rules() {
+    let engine = Engine::new();
+    let show = engine
+        .show(Some("lemma"), "units", None)
+        .expect("show lemma units");
+    assert!(
+        show.data.is_empty(),
+        "units has no rules so show.data must be empty; keys: {:?}",
+        show.data.keys().collect::<Vec<_>>()
+    );
+    let source = engine
+        .source(Some("lemma"), Some("units"), None)
+        .expect("source lemma units");
+    for expected in [
+        "duration",
+        "length",
+        "mass",
+        "force",
+        "pressure",
+        "energy",
+        "power",
+        "frequency",
+        "area",
+        "volume",
+        "information",
+        "charge",
+        "voltage",
+        "resistance",
+        "capacitance",
+        "temperature",
+        "current",
+        "substance",
+        "luminous_intensity",
+        "calendar",
+    ] {
+        assert!(
+            source.contains(expected),
+            "expected typedef {expected} in units source"
+        );
+    }
+}
+
+#[test]
+fn uses_lemma_units_kelvin_temperature() {
+    let display = eval_rule(
+        r#"spec temp
+uses lemma units
+rule r: 300 kelvin"#,
+        "temp",
+        "r",
+    );
+    assert_eq!(display, "300 kelvin");
+}
+
+#[test]
 fn uses_lemma_calendar_does_not_resolve_standalone_spec() {
     let code = r#"spec bad
 uses lemma calendar
 rule x: 1 year"#;
-    let mut engine = Engine::new();
-    let err = engine
-        .load(code, path_source("bad.lemma"))
-        .expect_err("uses lemma calendar must not resolve; use uses lemma units");
-    let combined = err
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ");
+    let combined = expect_plan_error(code, "bad.lemma");
     assert!(
         !combined.is_empty(),
         "expected planning error for uses lemma calendar, got: {combined:?}"
@@ -95,15 +289,7 @@ fn bare_uses_lemma_without_units_does_not_resolve_stdlib() {
     let code = r#"spec bad
 uses lemma
 rule x: 1 hour"#;
-    let mut engine = Engine::new();
-    let err = engine
-        .load(code, path_source("bad.lemma"))
-        .expect_err("bare uses lemma must not resolve embedded stdlib");
-    let combined = err
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join("; ");
+    let combined = expect_plan_error(code, "bad.lemma");
     assert!(
         !combined.is_empty(),
         "expected planning error for bare uses lemma, got: {combined:?}"

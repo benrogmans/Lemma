@@ -456,12 +456,12 @@ fn format_repo_sections_idempotent_under_format_parse_result_roundtrip() {
 fn format_compound_unit_metre_per_second_idempotent() {
     let source = r#"spec test
 data velocity: measure
-  -> unit mps metre/second
+  -> unit mps meter/second
 "#;
     let st = lemma::SourceType::Volatile;
     let once = format_source(source, st.clone()).expect("format");
     assert!(
-        once.contains("metre/second"),
+        once.contains("meter/second"),
         "formatted unit must use slash notation, got:\n{once}"
     );
     assert!(

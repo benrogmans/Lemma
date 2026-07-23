@@ -30,14 +30,11 @@ fuzz_target!(|data: &[u8]| {
     );
 
     let mut engine = Engine::new();
-    let loaded = engine.load(
-        &code,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_nested"))),
-    );
+    let loaded = engine.load([(lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_nested"))), &code.to_string())]);
 
     // Property: load Ok => evaluation must not panic.
     if loaded.is_ok() {
         let now = DateTimeValue::now();
-        let _ = engine.run(None, "fuzz_nested", Some(&now), HashMap::new(), false, None);
+        let _ = engine.run(None, "fuzz_nested", Some(&now), HashMap::new(), None, false);
     }
 });

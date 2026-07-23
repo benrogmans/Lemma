@@ -1,8 +1,8 @@
 /**
- * LSP client for the Lemma WASM playground.
+ * LSP client for the Lemma playground.
  *
  * Handles LSP JSON-RPC protocol framing (Content-Length headers),
- * stream plumbing for the WASM LSP server, and Monaco marker updates.
+ * stream plumbing for the in-process LSP server, and Monaco marker updates.
  */
 
 import { serve, ServerConfig } from './lsp.js';
@@ -92,7 +92,7 @@ export class LspClient {
     }
 
     /**
-     * Launch the WASM LSP server. Uses bundled serve/ServerConfig unless overridden.
+     * Launch the LSP server. Uses bundled serve/ServerConfig unless overridden.
      * @param {Function} [serveFn]  Optional; defaults to bundled LSP serve
      * @param {Function} [ServerConfigCls]  Optional; defaults to bundled ServerConfig
      */

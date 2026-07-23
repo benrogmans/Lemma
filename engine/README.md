@@ -11,10 +11,10 @@ Lemma is pre-1.0. The language and APIs are stable for most use cases, but break
 ## Why Lemma?
 
 - **Readable by business stakeholders** – rules look like the policies people already write
-- **Deterministic and auditable** – every evaluation returns a full trace explaining the result
+- **Deterministic and auditable** – opt in to a full explanation tree with `explain: true`
 - **Type-aware** – dates, percentages, units, and automatic conversions are first-class
 - **Composable** – specs extend and reference each other without boilerplate
-- **Multi-platform** – use the engine from Rust, power the CLI/HTTP server, or ship via WebAssembly
+- **Multi-platform** – use the engine from Rust, power the CLI/HTTP server, ship via WebAssembly, or embed on the JVM
 
 ## Quick start
 
@@ -22,28 +22,29 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.8.22"
+lemma-engine = "0.9.0"
 ```
 
 ### Minimal example
 
 ```rust
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SourceType};
+use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 let mut engine = Engine::new();
 
-engine.load(
+engine.load([(
+    SourceType::Path(Arc::new(std::path::PathBuf::from("example.lemma"))),
     r#"
     spec compensation
     data base_salary: 60000
     data bonus_rate: 10%
     rule bonus: base_salary * bonus_rate
     rule total: base_salary + bonus
-"#,
-    SourceType::Labeled("example.lemma"),
-)?;
+"#
+    .to_string(),
+)])?;
 
 let now = DateTimeValue::now();
 let response = engine.run(
@@ -51,6 +52,7 @@ let response = engine.run(
     "compensation",
     Some(&now),
     HashMap::new(),
+    None,
     false,
 )?;
 
@@ -64,13 +66,14 @@ for (rule_name, rule_result) in &response.results {
 ### Providing values at runtime
 
 ```rust
-use lemma::parsing::ast::DateTimeValue;
-use lemma::{Engine, SourceType};
+use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 let mut engine = Engine::new();
 
-engine.load(
+engine.load([(
+    SourceType::Path(Arc::new(std::path::PathBuf::from("shipping.lemma"))),
     r#"
     spec shipping
 
@@ -83,36 +86,108 @@ engine.load(
 
     rule valid: weight <= 30 kilogram
       unless weight > 30 kilogram then veto "Package too heavy for shipping"
-
-"#,
-    SourceType::Labeled("example.lemma"),
-)?;
-
-let mut values = HashMap::new();
-values.insert("weight".to_string(), "12 kilogram".to_string());
-values.insert("destination".to_string(), "international".to_string());
+"#
+    .to_string(),
+)])?;
 
 let now = DateTimeValue::now();
 let response = engine.run(
     None,
     "shipping",
     Some(&now),
-    values,
+    HashMap::from([
+        ("weight".to_string(), "12 kilogram".to_string()),
+        ("destination".to_string(), "international".to_string()),
+    ]),
+    None,
     false,
 )?;
 ```
 
+### Discovering required data
+
+`Engine::show` is static: data used by the spec's rules, plus local rule result types and temporal window. Types, prefilled literals, and `-> suggest` hints live on `Show.data`. For overlay-aware requirements on a partial run, call `run` and inspect each rule's `missing_data`:
+
+```rust
+let response = engine.run(
+    None,
+    "shipping",
+    Some(&now),
+    HashMap::new(),
+    Some(&["rate".to_string()]),
+    false,
+)?;
+
+for (name, result) in &response.results {
+    for key in &result.missing_data {
+        println!("rule {name} still needs: {key}");
+    }
+}
+```
+
+Bound inputs (caller overlay, spec prefilled literals, or data vetoes) are omitted from `missing_data`. Suggestions on `Show.data` do not bind until supplied in `run`'s data map.
+
+### Loading registry dependencies
+
+```rust
+use lemma::{Engine, SourceType};
+use std::fs;
+use std::sync::Arc;
+
+let mut engine = Engine::new();
+
+// After fetching from your registry:
+engine.load([(
+    SourceType::Dependency("@org/pkg".to_string()),
+    dependency_source,
+)])?;
+
+let workspace_text = fs::read_to_string("workspace.lemma")?;
+engine.load([(
+    SourceType::Path(Arc::new(std::path::PathBuf::from("workspace.lemma"))),
+    workspace_text,
+)])?;
+```
+
 ## Embedded units stdlib
 
-`Engine::new()` loads `repo lemma` / `spec units` from [`src/lemma/units.lemma.std`](src/lemma/units.lemma.std) at compile time (import with `uses lemma units`). The `.lemma.std` suffix keeps workspace discovery from loading it as a user spec. It always appears in [`Engine::list`](engine/src/engine.rs). Inspect formatted source with `engine.format_repository("lemma")`.
+`Engine::new()` loads the embedded `repo lemma` / `spec units` standard library internally via `SourceType::Dependency("lemma")`. It always appears in `Engine::list`. Formatted source: `engine.source(Some("lemma"), None, None)?`.
+
+Public `load` rejects `SourceType::Dependency("lemma")` — that id is reserved for the embedded stdlib.
+
+## Public Engine API
+
+| Method | Purpose |
+|--------|---------|
+| `new()` / `with_limits()` | Construct engine (stdlib pre-loaded) |
+| `load(sources)` | Load `(SourceType, text)` pairs; provenance from `SourceType` alone |
+| `list()` | All loaded repositories (`ResolvedRepository[]`: name, effective_from, effective_to per row) |
+| `show(repository, spec, effective)` | Interface + temporal window (`Show`; no Lemma text) |
+| `source(repository, spec?, effective)` | Formatted Lemma source (repo-wide when `spec` omitted) |
+| `run(repository, spec, effective, data, rules, explain)` | Evaluate; each `RuleResult` may include `missing_data`; `explanation` when `explain` is true ([schema](../documentation/schemas/explanation.v1.json)) |
+| `remove(repository, spec, effective)` | Remove a temporal spec slice |
+| `limits()` | Resource limits |
+
+Free function: `lemma::resolve_effective`.
+
+## Consumer API tiers
+
+**Tier 1 — always available** (all targets, `registry` feature optional): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), wire types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult` — explanation JSON uses `"type"` + `"name"`; see [`explanation.v1.json`](../documentation/schemas/explanation.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests — not a minimal “verbs only” crate.
+
+**Tier 2 — `registry` feature:** `Registry`, `LemmaBase`, `RegistryBundle`, `RegistryError*`, `Context`, `LemmaRepository`, `LemmaSpec`, `LemmaSpecSet`, and native `resolve_registry_references`.
+
+**Tier 3 — native only (`not(wasm32)`):** `lemma::deps` for filesystem dependency cache paths.
+
+`EffectiveDate` is planning-internal and not exported. Language-surface `Span` and `Source` are exported (parse/AST). LSP and CLI use `DateTimeValue` and `SpecRef::resolved_instant` at temporal boundaries.
 
 ## Features
 
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
 - **Page composition** – extend specs, bind data, and reuse rules across modules
-- **Audit trail** – every evaluation returns the operations that led to each result
-- **WebAssembly build** – `npm install @lemmabase/lemma-engine` to run Lemma in browsers and at the edge
+- **Audit trail** – with `explain: true`, each rule result carries a structured explanation (see [`documentation/schemas/explanation.v1.json`](../documentation/schemas/explanation.v1.json))
+- **JavaScript / TypeScript** – `npm install @lemmabase/lemma-engine` for browser, Node, and edge runtimes
+- **Java / Kotlin** – `com.lemmabase:lemma-engine` on Maven Central (`BigDecimal`-first JNI binding)
 
 Constraint-style **inversion** (what inputs would yield a given outcome?) is planned; it is not documented as a supported API yet.
 
@@ -138,7 +213,7 @@ cargo install lemma
 lemma server --port 8012
 ```
 
-### WebAssembly
+### JavaScript / TypeScript
 
 ```bash
 npm install @lemmabase/lemma-engine
@@ -150,6 +225,18 @@ const engine = await Lemma();
 ```
 
 Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.md](packages/npm/README.md).
+
+### Maven (Java / Kotlin)
+
+```xml
+<dependency>
+  <groupId>com.lemmabase</groupId>
+  <artifactId>lemma-engine</artifactId>
+  <version>0.9.0</version>
+</dependency>
+```
+
+Build/test: `cargo build -p lemma_jni` then `./mvnw test` under `engine/packages/maven/`. See [packages/maven/README.md](packages/maven/README.md).
 
 ## Documentation
 

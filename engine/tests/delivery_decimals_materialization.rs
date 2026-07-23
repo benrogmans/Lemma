@@ -2,7 +2,7 @@ use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 #[test]
-fn delivery_cost_materializes_converted_unit_with_schema_decimals() {
+fn delivery_cost_materializes_converted_unit_with_show_decimals() {
     let code = r#"
 spec delivery 2026-01-01
 
@@ -22,7 +22,9 @@ rule delivery_cost: 0.26 eur_per_km * distance
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, SourceType::Volatile).unwrap();
+    engine
+        .load([(SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let effective = DateTimeValue {
         year: 2026,
@@ -42,8 +44,8 @@ rule delivery_cost: 0.26 eur_per_km * distance
             "delivery",
             Some(&effective),
             HashMap::from([("distance".to_string(), "12 kilometer".to_string())]),
-            false,
             None,
+            false,
         )
         .expect("run");
 

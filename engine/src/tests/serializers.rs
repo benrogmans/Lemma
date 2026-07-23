@@ -1,6 +1,6 @@
+use crate::evaluation::operations::OperationResult;
 use crate::evaluation::response::{EvaluatedRule, Response, RuleResult};
 use crate::planning::semantics::{LiteralValue, RulePath, Source, Span};
-use crate::OperationResult;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
@@ -26,13 +26,12 @@ fn dummy_rule(name: &str) -> EvaluatedRule {
 }
 
 fn number_rule_result(name: &str, value: Decimal) -> RuleResult {
-    let expression_units = std::collections::HashMap::new();
     RuleResult::from_operation_result(
         dummy_rule(name),
         &OperationResult::from_literal(LiteralValue::number_from_decimal(value)),
         crate::planning::semantics::primitive_number(),
-        &expression_units,
         None,
+        Vec::new(),
     )
 }
 
@@ -49,7 +48,6 @@ fn test_response_serialization() {
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
-        data: vec![],
         results,
     };
 
@@ -78,7 +76,6 @@ fn response_number_json_is_scalar() {
         spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
-        data: vec![],
         results,
     };
     let json: serde_json::Value =

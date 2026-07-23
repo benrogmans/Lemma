@@ -82,20 +82,20 @@ rule total: subtotal - discount_amount
 "#;
 
     engine
-        .load(
-            examples,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "examples.lemma",
             ))),
-        )
+            examples.to_string(),
+        )])
         .expect("Failed to parse examples");
     engine
-        .load(
-            coffee_order,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "coffee_order.lemma",
             ))),
-        )
+            coffee_order.to_string(),
+        )])
         .expect("Failed to parse coffee_order");
 
     engine
@@ -113,7 +113,7 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         ("has_loyalty_card".to_string(), "false".to_string()),
     ]);
     let response = engine
-        .run(None, "coffee_order", Some(&now), data_values, true, None)
+        .run(None, "coffee_order", Some(&now), data_values, None, true)
         .expect("Evaluation failed");
 
     // Check base_price: espresso = 2.50 usd
@@ -338,7 +338,7 @@ fn test_coffee_order_latte_large_with_loyalty() {
         ("has_loyalty_card".to_string(), "true".to_string()),
     ]);
     let response = engine
-        .run(None, "coffee_order", Some(&now), data_values, true, None)
+        .run(None, "coffee_order", Some(&now), data_values, None, true)
         .expect("Evaluation failed");
 
     // Check base_price: latte = 3.50 usd
@@ -524,7 +524,7 @@ fn test_coffee_order_ordered_priority() {
     for (priority, expected) in priorities.iter().zip(expected_values.iter()) {
         let data_values = HashMap::from([("priority".to_string(), priority.to_string())]);
         let response = engine
-            .run(None, "coffee_order", Some(&now), data_values, true, None)
+            .run(None, "coffee_order", Some(&now), data_values, None, true)
             .expect("Evaluation failed");
 
         let ordered_priority = response
@@ -557,7 +557,7 @@ fn test_coffee_order_invalid_size_veto() {
         ("number_of_cups".to_string(), "1".to_string()),
     ]);
     let response = engine
-        .run(None, "coffee_order", Some(&now), data_values, true, None)
+        .run(None, "coffee_order", Some(&now), data_values, None, true)
         .expect("Evaluation should complete (even with veto)");
 
     let size_multiplier = response

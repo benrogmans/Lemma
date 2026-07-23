@@ -39,18 +39,18 @@ fn default_effective() -> DateTimeValue {
 
 fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
     let mut engine = Engine::new();
-    engine.load(code, source()).expect("Should parse and plan");
+    engine
+        .load([(source(), code.to_string())])
+        .expect("Should parse and plan");
     let effective = default_effective();
-    let plan = engine
-        .get_plan(None, spec_name, Some(&effective))
-        .expect("plan");
     let response = engine
-        .run_plan(
-            plan,
+        .run(
+            None,
+            spec_name,
             Some(&effective),
             HashMap::new(),
-            true,
             Some(&[rule_name.to_string()]),
+            true,
         )
         .expect("Should evaluate");
     response
@@ -72,7 +72,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
 
 fn expect_plan_error(code: &str, expected_fragment: &str) {
     let mut engine = Engine::new();
-    let result = engine.load(code, source());
+    let result = engine.load([(source(), code.to_string())]);
     assert!(result.is_err(), "Expected planning error");
     let combined = result
         .unwrap_err()
@@ -119,7 +119,7 @@ const MONEY: &str = r#"data money: measure
 
 const WEIGHT: &str = r#"data weight: measure
   -> unit stone 1
-  -> unit pound 14"#;
+  -> unit lb 14"#;
 
 // =============================================================================
 // DateRange
@@ -133,7 +133,7 @@ mod date_range {
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule span: 2024-01-01...2024-01-11 as days as number"#
+rule span: 2024-01-01...2024-01-11 as day as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["10"]);
     }
@@ -143,7 +143,7 @@ rule span: 2024-01-01...2024-01-11 as days as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule span: 2024-01-01...2024-01-02 as seconds as number"#
+rule span: 2024-01-01...2024-01-02 as second as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["86400"]);
     }
@@ -260,7 +260,7 @@ mod duration_measure_range {
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule span: (7 days...14 days) as days as number"#
+rule span: (7 day...14 day) as day as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["7"]);
     }
@@ -270,7 +270,7 @@ rule span: (7 days...14 days) as days as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule span: (2 hours...5 hours) as hours as number"#
+rule span: (2 hour...5 hour) as hour as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["3"]);
     }
@@ -280,7 +280,7 @@ rule span: (2 hours...5 hours) as hours as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule span: (7 days...14 days) as seconds as number"#
+rule span: (7 day...14 day) as second as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["604800"]);
     }
@@ -290,7 +290,7 @@ rule span: (7 days...14 days) as seconds as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule span: (7 days...2 weeks) as days as number"#
+rule span: (7 day...2 week) as day as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["7"]);
     }
@@ -301,7 +301,7 @@ rule span: (7 days...2 weeks) as days as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule bad: (7 days...14 days) as number"#
+rule bad: (7 day...14 day) as number"#
         );
         expect_plan_error(&code, "unit");
     }
@@ -312,7 +312,7 @@ rule bad: (7 days...14 days) as number"#
             r#"spec test
 {USES_UNITS}
 {WEIGHT}
-rule bad: (7 days...14 days) as stone as number"#
+rule bad: (7 day...14 day) as stone as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -322,7 +322,7 @@ rule bad: (7 days...14 days) as stone as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule bad: (7 days...14 days) as percent as number"#
+rule bad: (7 day...14 day) as percent as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -342,7 +342,7 @@ mod mass_measure_range {
             r#"spec test
 {USES_UNITS}
 {WEIGHT}
-rule bad: (3 stone...5 stone) as days as number"#
+rule bad: (3 stone...5 stone) as day as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -358,11 +358,11 @@ rule span: (3 stone...5 stone) as stone as number"#
     }
 
     #[test]
-    fn span_as_pound_cross_unit_within_family() {
+    fn span_as_lb_cross_unit_within_family() {
         let code = format!(
             r#"spec test
 {WEIGHT}
-rule span: (1 stone...3 stone) as pound as number"#
+rule span: (1 stone...3 stone) as lb as number"#
         );
         assert_contains_parts(&eval_rule(&code, "test", "span"), &["28"]);
     }
@@ -373,7 +373,7 @@ rule span: (1 stone...3 stone) as pound as number"#
             r#"spec test
 {USES_UNITS}
 data cargo: measure -> unit crate 1
-rule bad: (3 crate...5 crate) as days as number"#
+rule bad: (3 crate...5 crate) as day as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -388,7 +388,7 @@ mod money_measure_range {
             r#"spec test
 {USES_UNITS}
 {MONEY}
-rule bad: (10 eur...50 eur) as days as number"#
+rule bad: (10 eur...50 eur) as day as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -441,7 +441,7 @@ rule span: (100 permille...500 permille) as permille"#;
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule bad: (10%...50%) as days as number"#
+rule bad: (10%...50%) as day as number"#
         );
         expect_plan_error(&code, "convert");
     }
@@ -471,7 +471,7 @@ mod calendar_range_span {
         let code = format!(
             r#"spec test
 {USES_UNITS}
-rule bad: (18 year...67 year) as days as number"#
+rule bad: (18 year...67 year) as day as number"#
         );
         expect_plan_error(&code, "convert");
     }

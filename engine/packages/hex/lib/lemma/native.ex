@@ -18,24 +18,18 @@ defmodule Lemma.Native do
     )
 
   def lemma_new(_limits), do: :erlang.nif_error(:nif_not_loaded)
-  def lemma_load(_resource, _code, _source_label), do: :erlang.nif_error(:nif_not_loaded)
-  def lemma_load_from_paths(_resource, _paths), do: :erlang.nif_error(:nif_not_loaded)
-  def lemma_load_batch(_resource, _sources, _dependency), do: :erlang.nif_error(:nif_not_loaded)
+  def lemma_load(_resource, _sources), do: :erlang.nif_error(:nif_not_loaded)
   def lemma_list(_resource), do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_format_repository(_resource, _repository),
+  def lemma_show(_resource, _repository, _spec, _effective),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_schema(_resource, _spec, _effective_opt),
+  def lemma_source(_resource, _repository, _spec, _effective),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_execution_plan(_resource, _spec, _effective_opt),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def lemma_run(_resource, _target, _options), do: :erlang.nif_error(:nif_not_loaded)
 
-  def lemma_run(_resource, _spec, _effective_opt, _data_values),
-    do: :erlang.nif_error(:nif_not_loaded)
-
-  def lemma_remove_spec(_resource, _spec_name, _effective),
+  def lemma_remove(_resource, _repository, _spec_name, _effective),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_format(_code), do: :erlang.nif_error(:nif_not_loaded)

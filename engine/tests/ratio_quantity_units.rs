@@ -37,11 +37,13 @@ rule is_above_30: savings_ratio > 30%
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "savings", Some(&now), HashMap::new(), true, None)
+        .run(None, "savings", Some(&now), HashMap::new(), None, true)
         .unwrap();
 
     let ratio_result = response
@@ -83,11 +85,13 @@ rule tier: "low"
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "summary", Some(&now), HashMap::new(), true, None)
+        .run(None, "summary", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let tier = response.results.get("tier").expect("tier");
     assert_eq!(tier.text.as_deref(), Some("mid"));
@@ -104,7 +108,9 @@ rule above_20_permille: as_permille > 20 permille
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -113,8 +119,8 @@ rule above_20_permille: as_permille > 20 permille
             "permille_spec",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .unwrap();
     let as_permille = response.results.get("as_permille").expect("as_permille");
@@ -146,7 +152,9 @@ rule bad_conv: x as not_a_unit
 "#;
 
     let mut engine = Engine::new();
-    let err = engine.load(code, lemma::SourceType::Volatile).unwrap_err();
+    let err = engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap_err();
 
     let msg = format!("{:?}", err);
     assert!(
@@ -166,7 +174,7 @@ rule price: 100 - discount
 "#;
 
     let mut engine = Engine::new();
-    let result = engine.load(code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, code.to_string())]);
     assert!(result.is_err(), "number - ratio should be rejected");
     let msg = result
         .unwrap_err()
@@ -214,11 +222,13 @@ rule compared: plus_five > 25%
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "chained", Some(&now), HashMap::new(), true, None)
+        .run(None, "chained", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let pct = response.results.get("pct").expect("pct");
     let plus_five = response.results.get("plus_five").expect("plus_five");
@@ -263,11 +273,13 @@ rule share_above_20: share_pct > 20%
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "mixed", Some(&now), HashMap::new(), true, None)
+        .run(None, "mixed", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let as_eur = response.results.get("as_eur").expect("as_eur");
     let share_pct = response.results.get("share_pct").expect("share_pct");

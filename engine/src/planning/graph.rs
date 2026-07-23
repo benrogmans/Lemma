@@ -8,14 +8,14 @@ use crate::parsing::source::Source;
 use crate::planning::discovery;
 use crate::planning::semantics::{
     self, calendar_decomposition, canonicalize_signature, combine_decompositions,
-    conversion_target_to_semantic, duration_decomposition, materialize_raw_default,
+    conversion_target_to_semantic, duration_decomposition, materialize_raw_suggestion,
     number_with_unit_to_value_kind, parser_value_to_value_kind, primitive_boolean_arc,
     primitive_date_arc, primitive_date_range_arc, primitive_number_arc, primitive_text_arc,
     primitive_time_arc, range_type_specification_from_endpoints, value_kind_matches_spec,
     value_to_semantic, ArithmeticComputation, BaseMeasureVector, ComparisonComputation,
     DataDefinition, DataPath, Expression, ExpressionKind, LemmaType, LiteralValue, PathSegment,
-    RawDefault, ReferenceTarget, RulePath, SemanticConversionTarget, TypeDefiningSpec, TypeExtends,
-    TypeSpecification, ValueKind,
+    RawSuggestion, ReferenceTarget, RulePath, SemanticConversionTarget, TypeDefiningSpec,
+    TypeExtends, TypeSpecification, ValueKind,
 };
 use crate::Error;
 use ast::DataValue as ParsedDataValue;
@@ -55,42 +55,42 @@ pub(crate) enum BindingValue {
 }
 
 #[derive(Debug)]
-pub(crate) struct Graph {
+pub(crate) struct Graph<'a> {
     /// Root spec being planned (for error spec_context).
-    main_spec: Arc<LemmaSpec>,
+    main_spec: &'a LemmaSpec,
     data: IndexMap<DataPath, DataDefinition>,
-    rules: BTreeMap<RulePath, RuleNode>,
-    execution_order: Vec<RulePath>,
-    /// Order in which references must be resolved so each reference's target
-    /// (when it too is a reference) is already computed. References targeting
-    /// non-reference data have no ordering constraints amongst themselves and
-    /// appear in the order they are discovered.
-    reference_evaluation_order: Vec<DataPath>,
+    rules: BTreeMap<RulePath, RuleNode<'a>>,
+    /// Rules in dependency order (topo).
+    rule_order: Vec<RulePath>,
+    /// Data→data references in dependency order (topo). Targets before dependents
+    /// so chained references resolve. Refs to non-reference data are unordered
+    /// among themselves.
+    data_reference_order: Vec<DataPath>,
 }
 
-impl Graph {
+impl<'a> Graph<'a> {
     pub(crate) fn data(&self) -> &IndexMap<DataPath, DataDefinition> {
         &self.data
     }
 
-    pub(crate) fn rules(&self) -> &BTreeMap<RulePath, RuleNode> {
+    pub(crate) fn rules(&self) -> &BTreeMap<RulePath, RuleNode<'a>> {
         &self.rules
     }
 
-    pub(crate) fn rules_mut(&mut self) -> &mut BTreeMap<RulePath, RuleNode> {
+    pub(crate) fn rules_mut(&mut self) -> &mut BTreeMap<RulePath, RuleNode<'a>> {
         &mut self.rules
     }
 
-    pub(crate) fn execution_order(&self) -> &[RulePath] {
-        &self.execution_order
+    pub(crate) fn rule_order(&self) -> &[RulePath] {
+        &self.rule_order
     }
 
-    pub(crate) fn reference_evaluation_order(&self) -> &[DataPath] {
-        &self.reference_evaluation_order
+    pub(crate) fn data_reference_order(&self) -> &[DataPath] {
+        &self.data_reference_order
     }
 
-    pub(crate) fn main_spec(&self) -> &Arc<LemmaSpec> {
-        &self.main_spec
+    pub(crate) fn main_spec(&self) -> &LemmaSpec {
+        self.main_spec
     }
 
     /// Build the data map: one entry per data (Value or Import), with defaults and coercion applied.
@@ -103,14 +103,14 @@ impl Graph {
             target: ReferenceTarget,
             resolved_type: Arc<LemmaType>,
             local_constraints: Option<Vec<Constraint>>,
-            local_default: Option<ValueKind>,
+            local_suggestion: Option<ValueKind>,
         }
 
         let mut schema: HashMap<DataPath, Arc<LemmaType>> = HashMap::new();
-        let mut declared_defaults: HashMap<DataPath, ValueKind> = HashMap::new();
+        let mut declared_suggestions: HashMap<DataPath, ValueKind> = HashMap::new();
         let mut values: HashMap<DataPath, LiteralValue> = HashMap::new();
         let mut value_sources: HashMap<DataPath, Source> = HashMap::new();
-        let mut spec_arcs: HashMap<DataPath, Arc<LemmaSpec>> = HashMap::new();
+        let mut import_targets: HashMap<DataPath, String> = HashMap::new();
         let mut references: HashMap<DataPath, PendingReference> = HashMap::new();
 
         for (path, rfv) in self.data.iter() {
@@ -122,22 +122,22 @@ impl Graph {
                 }
                 DataDefinition::TypeDeclaration {
                     resolved_type,
-                    declared_default,
+                    declared_suggestion,
                     ..
                 } => {
                     schema.insert(path.clone(), Arc::clone(resolved_type));
-                    if let Some(dv) = declared_default {
-                        declared_defaults.insert(path.clone(), dv.clone());
+                    if let Some(dv) = declared_suggestion {
+                        declared_suggestions.insert(path.clone(), dv.clone());
                     }
                 }
-                DataDefinition::Import { spec: spec_arc, .. } => {
-                    spec_arcs.insert(path.clone(), Arc::clone(spec_arc));
+                DataDefinition::Import { target_name, .. } => {
+                    import_targets.insert(path.clone(), target_name.clone());
                 }
                 DataDefinition::Reference {
                     target,
                     resolved_type,
                     local_constraints,
-                    local_default,
+                    local_suggestion,
                     ..
                 } => {
                     schema.insert(path.clone(), Arc::clone(resolved_type));
@@ -147,7 +147,7 @@ impl Graph {
                             target: target.clone(),
                             resolved_type: Arc::clone(resolved_type),
                             local_constraints: local_constraints.clone(),
-                            local_default: local_default.clone(),
+                            local_suggestion: local_suggestion.clone(),
                         },
                     );
                 }
@@ -158,10 +158,7 @@ impl Graph {
         for (path, value) in values.iter_mut() {
             if let Some(type_name) = value.lemma_type.name.as_deref() {
                 if let Some(resolved) = resolved_by_type_name.get(type_name) {
-                    semantics::refresh_measure_literal_canonical_magnitude(
-                        value,
-                        resolved.as_ref(),
-                    );
+                    semantics::refresh_measure_literal_canonical_magnitude(value, resolved);
                 }
             }
             let Some(schema_type) = schema.get(path) else {
@@ -185,11 +182,11 @@ impl Graph {
         let mut data = IndexMap::new();
         for (path, rfv) in &self.data {
             let source = rfv.source().clone();
-            if let Some(spec_arc) = spec_arcs.remove(path) {
+            if let Some(target_name) = import_targets.remove(path) {
                 data.insert(
                     path.clone(),
                     DataDefinition::Import {
-                        spec: spec_arc,
+                        target_name,
                         source,
                     },
                 );
@@ -200,7 +197,7 @@ impl Graph {
                         target: pending.target,
                         resolved_type: pending.resolved_type,
                         local_constraints: pending.local_constraints,
-                        local_default: pending.local_default,
+                        local_suggestion: pending.local_suggestion,
                         source,
                     },
                 );
@@ -211,12 +208,12 @@ impl Graph {
                     .get(path)
                     .cloned()
                     .expect("non-spec-ref data has schema (value, reference, or type-only)");
-                let declared_default = declared_defaults.remove(path);
+                let declared_suggestion = declared_suggestions.remove(path);
                 data.insert(
                     path.clone(),
                     DataDefinition::TypeDeclaration {
                         resolved_type,
-                        declared_default,
+                        declared_suggestion,
                         source,
                     },
                 );
@@ -230,40 +227,10 @@ impl Graph {
         schema_type: &Arc<LemmaType>,
     ) -> Result<LiteralValue, String> {
         fn range_endpoint_schema_type(schema_type: &LemmaType) -> Option<Arc<LemmaType>> {
-            match &schema_type.specifications {
-                TypeSpecification::NumberRange { .. } => {
-                    Some(semantics::primitive_number_arc().clone())
-                }
-                TypeSpecification::DateRange { .. } => {
-                    Some(semantics::primitive_date_arc().clone())
-                }
-                TypeSpecification::TimeRange { .. } => {
-                    Some(semantics::primitive_time_arc().clone())
-                }
-                TypeSpecification::RatioRange { units, .. } => {
-                    Some(Arc::new(LemmaType::primitive(TypeSpecification::Ratio {
-                        minimum: None,
-                        maximum: None,
-                        decimals: None,
-                        units: units.clone(),
-                        help: String::new(),
-                    })))
-                }
-                TypeSpecification::MeasureRange {
-                    units,
-                    decomposition,
-                    ..
-                } => Some(Arc::new(LemmaType::primitive(TypeSpecification::Measure {
-                    minimum: None,
-                    maximum: None,
-                    decimals: None,
-                    units: units.clone(),
-                    traits: Vec::new(),
-                    decomposition: decomposition.clone(),
-                    help: String::new(),
-                }))),
-                _ => None,
-            }
+            schema_type
+                .specifications
+                .element_from_range()
+                .map(|element_spec| Arc::new(LemmaType::primitive(element_spec)))
         }
 
         let schema_ref = schema_type.as_ref();
@@ -391,7 +358,7 @@ impl Graph {
     ///      declaration in the nested spec).
     ///
     /// `ordered_reference_paths` is the dependency order from
-    /// [`Self::compute_reference_evaluation_order`] (targets before
+    /// [`Self::compute_data_reference_order`] (targets before
     /// dependents). Each resolution is applied immediately so a reference
     /// whose target is itself a reference reads the target's final resolved
     /// type — batched application would leave chains `Undetermined`.
@@ -427,7 +394,7 @@ impl Graph {
 
             let Some(target_entry) = self.data.get(&target_data_path) else {
                 errors.push(reference_error(
-                    &self.main_spec,
+                    self.main_spec,
                     &source,
                     format!(
                         "Data reference '{}' target '{}' does not exist",
@@ -443,7 +410,7 @@ impl Graph {
                 DataDefinition::Value { value, .. } => Arc::clone(&value.lemma_type),
                 DataDefinition::Import { .. } => {
                     errors.push(reference_error(
-                        &self.main_spec,
+                        self.main_spec,
                         &source,
                         format!(
                             "Data reference '{}' target '{}' is a spec reference and cannot carry a value",
@@ -468,7 +435,7 @@ impl Graph {
                     &target_data_path,
                     "target",
                 ) {
-                    errors.push(reference_error(&self.main_spec, &source, msg));
+                    errors.push(reference_error(self.main_spec, &source, msg));
                     continue;
                 }
             }
@@ -481,16 +448,16 @@ impl Graph {
                 Some(lhs) => lhs.clone(),
                 None => target_type_arc.as_ref().clone(),
             };
-            let mut raw_default: Option<RawDefault> = None;
+            let mut raw_suggestion: Option<RawSuggestion> = None;
             if let Some(constraints) = &local_constraints {
                 let constraint_type_name = merged.name();
                 match apply_constraints_to_spec(
-                    &self.main_spec,
+                    self.main_spec,
                     &constraint_type_name,
                     merged.specifications.clone(),
                     constraints,
                     &source,
-                    &mut raw_default,
+                    &mut raw_suggestion,
                 ) {
                     Ok(specs) => merged.specifications = specs,
                     Err(errs) => {
@@ -499,13 +466,13 @@ impl Graph {
                     }
                 }
             }
-            let captured_default = match raw_default {
+            let captured_suggestion = match raw_suggestion {
                 None => None,
                 Some(raw) => {
-                    match materialize_raw_default(raw, &merged.specifications, &merged.name()) {
+                    match materialize_raw_suggestion(raw, &merged.specifications, &merged.name()) {
                         Ok(vk) => Some(vk),
                         Err(message) => {
-                            errors.push(reference_error(&self.main_spec, &source, message));
+                            errors.push(reference_error(self.main_spec, &source, message));
                             continue;
                         }
                     }
@@ -516,13 +483,13 @@ impl Graph {
             // this one and must read the final merged type.
             if let Some(DataDefinition::Reference {
                 resolved_type,
-                local_default,
+                local_suggestion,
                 ..
             }) = self.data.get_mut(reference_path)
             {
                 *resolved_type = Arc::new(merged);
-                if captured_default.is_some() {
-                    *local_default = captured_default;
+                if captured_suggestion.is_some() {
+                    *local_suggestion = captured_suggestion;
                 }
             } else {
                 unreachable!("BUG: reference path disappeared during type resolution");
@@ -570,7 +537,7 @@ impl Graph {
 
             let Some(target_type) = computed_rule_types.get(target_rule_path) else {
                 errors.push(reference_error(
-                    &self.main_spec,
+                    self.main_spec,
                     source,
                     format!(
                         "Data reference '{}' target rule '{}' does not exist",
@@ -586,16 +553,16 @@ impl Graph {
             // evaluator will surface the rule's veto reason directly.
             if target_type.vetoed() || target_type.is_undetermined() {
                 let mut merged = target_type.as_ref().clone();
-                let mut raw_default: Option<RawDefault> = None;
+                let mut raw_suggestion: Option<RawSuggestion> = None;
                 if let Some(constraints) = local_constraints {
                     let constraint_type_name = merged.name();
                     match apply_constraints_to_spec(
-                        &self.main_spec,
+                        self.main_spec,
                         &constraint_type_name,
                         merged.specifications.clone(),
                         constraints,
                         source,
-                        &mut raw_default,
+                        &mut raw_suggestion,
                     ) {
                         Ok(specs) => merged.specifications = specs,
                         Err(errs) => {
@@ -604,19 +571,27 @@ impl Graph {
                         }
                     }
                 }
-                let captured_default = match raw_default {
+                let captured_suggestion = match raw_suggestion {
                     None => None,
                     Some(raw) => {
-                        match materialize_raw_default(raw, &merged.specifications, &merged.name()) {
+                        match materialize_raw_suggestion(
+                            raw,
+                            &merged.specifications,
+                            &merged.name(),
+                        ) {
                             Ok(vk) => Some(vk),
                             Err(message) => {
-                                errors.push(reference_error(&self.main_spec, source, message));
+                                errors.push(reference_error(self.main_spec, source, message));
                                 continue;
                             }
                         }
                     }
                 };
-                updates.push((reference_path.clone(), Arc::new(merged), captured_default));
+                updates.push((
+                    reference_path.clone(),
+                    Arc::new(merged),
+                    captured_suggestion,
+                ));
                 continue;
             }
 
@@ -629,12 +604,12 @@ impl Graph {
             if let Some(lhs) = lhs_declared_type {
                 if let Some(msg) = reference_kind_mismatch_message(
                     lhs,
-                    target_type.as_ref(),
+                    target_type,
                     reference_path,
                     target_rule_path,
                     "target rule",
                 ) {
-                    errors.push(reference_error(&self.main_spec, source, msg));
+                    errors.push(reference_error(self.main_spec, source, msg));
                     continue;
                 }
             }
@@ -645,16 +620,16 @@ impl Graph {
                 Some(lhs) => lhs.clone(),
                 None => target_type.as_ref().clone(),
             };
-            let mut raw_default: Option<RawDefault> = None;
+            let mut raw_suggestion: Option<RawSuggestion> = None;
             if let Some(constraints) = local_constraints {
                 let constraint_type_name = merged.name();
                 match apply_constraints_to_spec(
-                    &self.main_spec,
+                    self.main_spec,
                     &constraint_type_name,
                     merged.specifications.clone(),
                     constraints,
                     source,
-                    &mut raw_default,
+                    &mut raw_suggestion,
                 ) {
                     Ok(specs) => merged.specifications = specs,
                     Err(errs) => {
@@ -663,32 +638,36 @@ impl Graph {
                     }
                 }
             }
-            let captured_default = match raw_default {
+            let captured_suggestion = match raw_suggestion {
                 None => None,
                 Some(raw) => {
-                    match materialize_raw_default(raw, &merged.specifications, &merged.name()) {
+                    match materialize_raw_suggestion(raw, &merged.specifications, &merged.name()) {
                         Ok(vk) => Some(vk),
                         Err(message) => {
-                            errors.push(reference_error(&self.main_spec, source, message));
+                            errors.push(reference_error(self.main_spec, source, message));
                             continue;
                         }
                     }
                 }
             };
 
-            updates.push((reference_path.clone(), Arc::new(merged), captured_default));
+            updates.push((
+                reference_path.clone(),
+                Arc::new(merged),
+                captured_suggestion,
+            ));
         }
 
-        for (path, new_type, new_default) in updates {
+        for (path, new_type, new_suggestion) in updates {
             if let Some(DataDefinition::Reference {
                 resolved_type,
-                local_default,
+                local_suggestion,
                 ..
             }) = self.data.get_mut(&path)
             {
                 *resolved_type = new_type;
-                if new_default.is_some() {
-                    *local_default = new_default;
+                if new_suggestion.is_some() {
+                    *local_suggestion = new_suggestion;
                 }
             } else {
                 unreachable!(
@@ -705,10 +684,9 @@ impl Graph {
     }
 
     /// Add a `depends_on_rules` edge from every rule that reads a rule-target
-    /// reference data path to the reference's target rule. This ensures the
-    /// target rule is evaluated before the consumer (so the lazy reference
-    /// resolver in the evaluator finds the result), and lets the topological
-    /// sort detect cycles that flow through reference paths.
+    /// reference data path to the reference's target rule. Planning needs the
+    /// target in `completed_rules` (NormalFormId) before the consumer lowers,
+    /// and topological sort must detect cycles that flow through reference paths.
     ///
     /// Walks data-target reference chains so that a path `y: m.x` where
     /// `m.x: r` is a rule-target reference, still adds a dep edge from any
@@ -746,7 +724,7 @@ impl Graph {
     /// `Reference::Data` chain and record the eventual `Reference::Rule`
     /// target (if any). Includes direct rule-target references. Cycles
     /// among data-target references are not possible here because
-    /// `compute_reference_evaluation_order` already rejected them; we still
+    /// `compute_data_reference_order` already rejected them; we still
     /// guard with a visited set as defense-in-depth.
     fn transitive_reference_to_rule_map(&self) -> HashMap<DataPath, RulePath> {
         let mut out: HashMap<DataPath, RulePath> = HashMap::new();
@@ -781,7 +759,7 @@ impl Graph {
     /// they are resolved lazily on first read in the evaluator from the
     /// already-evaluated target rule's result. Cycles among data-target
     /// references are reported as planning errors.
-    fn compute_reference_evaluation_order(&self) -> Result<Vec<DataPath>, Vec<Error>> {
+    fn compute_data_reference_order(&self) -> Result<Vec<DataPath>, Vec<Error>> {
         let reference_paths: Vec<DataPath> = self
             .data
             .iter()
@@ -861,7 +839,7 @@ impl Graph {
                 .filter_map(|p| {
                     self.data.get(p).map(|entry| {
                         reference_error(
-                            &self.main_spec,
+                            self.main_spec,
                             entry.source(),
                             format!("Circular data reference ({})", cycle_display),
                         )
@@ -950,7 +928,7 @@ impl Graph {
                         message.clone(),
                         Some(source),
                         None::<String>,
-                        Some(Arc::clone(&self.main_spec)),
+                        Some(self.main_spec),
                         None,
                     )
                 })
@@ -963,7 +941,7 @@ impl Graph {
 }
 
 #[derive(Debug)]
-pub(crate) struct RuleNode {
+pub(crate) struct RuleNode<'a> {
     /// First branch has condition=None (default expression), subsequent branches are unless clauses.
     /// Resolved expressions (Reference -> DataPath or RulePath).
     pub branches: Vec<(Option<Expression>, Expression)>,
@@ -976,37 +954,45 @@ pub(crate) struct RuleNode {
     pub rule_type: Arc<LemmaType>,
 
     /// Spec this rule belongs to (for type resolution during validation)
-    pub spec_arc: Arc<LemmaSpec>,
+    pub spec: &'a LemmaSpec,
 }
 
-type ResolvedTypesMap = Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>, ResolvedSpecTypes)>;
+type ResolvedTypesMap<'a> = Vec<(Arc<LemmaRepository>, &'a LemmaSpec, ResolvedSpecTypes)>;
+
+/// Ok payload of [`GraphBuilder::build`]: data, rules, soft errors, resolved types.
+type GraphBuildOk<'a> = (
+    IndexMap<DataPath, DataDefinition>,
+    BTreeMap<RulePath, RuleNode<'a>>,
+    Vec<Error>,
+    ResolvedTypesMap<'a>,
+);
 
 struct GraphBuilder<'a> {
     data: IndexMap<DataPath, DataDefinition>,
-    rules: BTreeMap<RulePath, RuleNode>,
+    rules: BTreeMap<RulePath, RuleNode<'a>>,
     context: &'a Context,
-    local_types: ResolvedTypesMap,
+    local_types: ResolvedTypesMap<'a>,
     errors: Vec<Error>,
-    main_spec: Arc<LemmaSpec>,
+    main_spec: &'a LemmaSpec,
     main_repository: Arc<ast::LemmaRepository>,
     limits: &'a crate::limits::ResourceLimits,
 }
 
-struct RuleExpressionConversion<'a> {
-    spec: &'a Arc<LemmaSpec>,
-    data_map: &'a HashMap<String, &'a LemmaData>,
-    segments: &'a [PathSegment],
-    rule_names: &'a HashSet<&'a str>,
-    effective: &'a EffectiveDate,
-    depends_on_rules: &'a mut BTreeSet<RulePath>,
+struct RuleExpressionConversion<'a, 'b> {
+    spec: &'a LemmaSpec,
+    data_map: &'b HashMap<String, &'b LemmaData>,
+    segments: &'b [PathSegment],
+    rule_names: &'b HashSet<&'b str>,
+    effective: &'b EffectiveDate,
+    depends_on_rules: &'b mut BTreeSet<RulePath>,
 }
 
-fn reference_error(main_spec: &Arc<LemmaSpec>, source: &Source, message: String) -> Error {
+fn reference_error(main_spec: &LemmaSpec, source: &Source, message: String) -> Error {
     Error::validation_with_context(
         message,
         Some(source.clone()),
         None::<String>,
-        Some(Arc::clone(main_spec)),
+        Some(main_spec),
         None,
     )
 }
@@ -1069,7 +1055,7 @@ fn reference_kind_mismatch_message<P: fmt::Display>(
     None
 }
 
-/// Type name shown in `-> default` constraint errors (the declared type, not the data slot).
+/// Type name shown in `-> suggest` constraint errors (the declared type, not the data slot).
 fn constraint_application_type_name(parent: &ParentType, data_name: &str) -> String {
     match parent {
         ParentType::Custom { name } => name.clone(),
@@ -1079,17 +1065,28 @@ fn constraint_application_type_name(parent: &ParentType, data_name: &str) -> Str
     }
 }
 
+/// Named ranged types (`cargo_mass range`, `score range`) refresh from the element after
+/// decomposition. Apply their constraints only after that refresh so units/decomp exist and
+/// range-local bounds overwrite inherited endpoints as last writer.
+fn should_defer_ranged_constraints(parent: &ParentType) -> bool {
+    matches!(parent, ParentType::Ranged { .. })
+        && matches!(
+            element_parent_type(parent),
+            ParentType::Custom { .. } | ParentType::Qualified { .. }
+        )
+}
+
 /// Fold a list of definition-style constraints into a [`TypeSpecification`].
 /// Used for both the GraphBuilder's regular TypeDeclaration path and the
 /// post-build reference type-merging pass, so the underlying constraint
 /// application logic stays in one place.
 fn apply_constraints_to_spec(
-    spec: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
     type_name: &str,
     mut specs: TypeSpecification,
     constraints: &[Constraint],
     source: &crate::parsing::source::Source,
-    declared_default: &mut Option<RawDefault>,
+    declared_suggestion: &mut Option<RawSuggestion>,
 ) -> Result<TypeSpecification, Vec<Error>> {
     let mut errors = Vec::new();
 
@@ -1105,7 +1102,7 @@ fn apply_constraints_to_spec(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        Some(Arc::clone(spec)),
+                        Some(spec),
                         None,
                     ));
                 }
@@ -1116,49 +1113,67 @@ fn apply_constraints_to_spec(
         return Err(errors);
     }
 
-    let mut apply_one = |specs: TypeSpecification,
+    let mut apply_one = |specs: &mut TypeSpecification,
                          command: TypeConstraintCommand,
                          args: &[CommandArg],
-                         declared_default: &mut Option<RawDefault>|
-     -> TypeSpecification {
-        let specs_clone = specs.clone();
-        let mut default_before = declared_default.clone();
+                         declared_suggestion: &mut Option<RawSuggestion>| {
+        let mut default_before = declared_suggestion.clone();
         match specs.apply_constraint(type_name, command, args, &mut default_before) {
-            Ok(updated_specs) => {
-                *declared_default = default_before;
-                updated_specs
+            Ok(()) => {
+                *declared_suggestion = default_before;
             }
             Err(e) => {
+                // Commands fail before writing; specs is unchanged. No success-path clone.
                 errors.push(Error::validation_with_context(
                     format!("Failed to apply constraint '{}': {}", command, e),
                     Some(source.clone()),
                     None::<String>,
-                    Some(Arc::clone(spec)),
+                    Some(spec),
                     None,
                 ));
-                specs_clone
             }
         }
     };
 
-    let mut deferred: Vec<(TypeConstraintCommand, Vec<CommandArg>)> = Vec::new();
     for (command, args) in constraints {
         if matches!(
             command,
             TypeConstraintCommand::Unit | TypeConstraintCommand::Trait
         ) {
-            specs = apply_one(specs, *command, args, declared_default);
-        } else {
-            deferred.push((*command, args.clone()));
+            apply_one(&mut specs, *command, args, declared_suggestion);
         }
     }
-    for (command, args) in deferred {
-        specs = apply_one(specs, command, &args, declared_default);
+    for (command, args) in constraints {
+        if !matches!(
+            command,
+            TypeConstraintCommand::Unit | TypeConstraintCommand::Trait
+        ) {
+            apply_one(&mut specs, *command, args, declared_suggestion);
+        }
     }
     if !errors.is_empty() {
         return Err(errors);
     }
     Ok(specs)
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEXT_OPTION_CLONE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static TEXT_OPTION_CLONE_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn record_text_option_clone_bytes(specs: &TypeSpecification) {
+    TEXT_OPTION_CLONE_ENABLED.with(|enabled| {
+        if !enabled.get() {
+            return;
+        }
+        if let TypeSpecification::Text { options, .. } = specs {
+            let bytes: u64 = options.iter().map(|s| s.len() as u64).sum();
+            TEXT_OPTION_CLONE_BYTES.with(|count| count.set(count.get() + bytes));
+        }
+    });
 }
 
 /// Whether `expr` and every nested sub-expression carry a `source_location`.
@@ -1192,12 +1207,15 @@ fn expression_has_source_locations(expr: &ast::Expression) -> bool {
 }
 
 /// Boundary validation for programmatically constructed ASTs: every expression
-/// in every spec of the DAG must carry a `source_location`. Parser output always
-/// does; a miss means an external consumer built an invalid AST, which is an
-/// `Err(Error)` at this system boundary (not a panic).
-fn validate_ast_source_locations(dag: &[(Arc<LemmaRepository>, Arc<LemmaSpec>)]) -> Vec<Error> {
+/// in every spec of the ordered dependency list must carry a `source_location`.
+/// Parser output always does; a miss means an external consumer built an invalid
+/// AST, which is an `Err(Error)` at this system boundary (not a panic).
+fn validate_ast_source_locations(
+    ordered_dependencies: &[discovery::DependencySpec<'_>],
+) -> Vec<Error> {
     let mut errors = Vec::new();
-    for (_, spec) in dag {
+    for node in ordered_dependencies {
+        let spec = node.spec;
         for rule in &spec.rules {
             if !expression_has_source_locations(&rule.expression) {
                 errors.push(Error::validation(
@@ -1231,63 +1249,43 @@ fn validate_ast_source_locations(dag: &[(Arc<LemmaRepository>, Arc<LemmaSpec>)])
     errors
 }
 
-impl Graph {
-    /// Build the dependency graph for a single spec within a pre-resolved DAG slice.
+impl<'a> Graph<'a> {
+    /// Build the typed rule/data graph for main_spec using its ordered dependencies.
     pub(crate) fn build(
-        context: &Context,
+        context: &'a Context,
         repository: &Arc<LemmaRepository>,
-        main_spec: &Arc<LemmaSpec>,
-        dag: &[(Arc<LemmaRepository>, Arc<LemmaSpec>)],
+        main_spec: &'a LemmaSpec,
+        ordered_dependencies: &[discovery::DependencySpec<'a>],
         effective: &EffectiveDate,
-        limits: &crate::limits::ResourceLimits,
-    ) -> Result<(Graph, ResolvedTypesMap), Vec<Error>> {
-        let boundary_errors = validate_ast_source_locations(dag);
+        limits: &'a crate::limits::ResourceLimits,
+    ) -> Result<(Graph<'a>, ResolvedSpecTypes), Vec<Error>> {
+        let boundary_errors = validate_ast_source_locations(ordered_dependencies);
         if !boundary_errors.is_empty() {
             return Err(boundary_errors);
         }
 
-        let mut type_resolver = TypeResolver::new(context);
+        let mut errors: Vec<Error> = Vec::new();
 
-        let mut type_errors: Vec<Error> = Vec::new();
-        for (repo, spec) in dag {
-            type_errors.extend(type_resolver.register_all(repo, spec));
+        let mut type_resolver = TypeResolver::new(context);
+        for node in ordered_dependencies {
+            errors.extend(type_resolver.register_all(&node.repository, node.spec));
         }
 
-        let (data, rules, graph_errors, local_types) = {
-            let mut builder = GraphBuilder {
-                data: IndexMap::new(),
-                rules: BTreeMap::new(),
-                context,
-                local_types: Vec::new(),
-                errors: Vec::new(),
-                main_spec: Arc::clone(main_spec),
-                main_repository: Arc::clone(repository),
-                limits,
-            };
-
-            builder.build_spec(
-                main_spec,
-                repository,
-                Vec::new(),
-                HashMap::new(),
-                effective,
-                &type_resolver,
-            )?;
-
-            (
-                builder.data,
-                builder.rules,
-                builder.errors,
-                builder.local_types,
-            )
-        };
+        let (data, rules, graph_errors, local_types) = GraphBuilder::build(
+            context,
+            repository,
+            main_spec,
+            effective,
+            &type_resolver,
+            limits,
+        )?;
 
         let mut graph = Graph {
             data,
             rules,
-            execution_order: Vec::new(),
-            reference_evaluation_order: Vec::new(),
-            main_spec: Arc::clone(main_spec),
+            rule_order: Vec::new(),
+            data_reference_order: Vec::new(),
+            main_spec,
         };
 
         let validation_errors = match graph.validate(&local_types) {
@@ -1295,14 +1293,19 @@ impl Graph {
             Err(errors) => errors,
         };
 
-        let mut all_errors = type_errors;
-        all_errors.extend(graph_errors);
-        all_errors.extend(validation_errors);
+        errors.extend(graph_errors);
+        errors.extend(validation_errors);
 
-        if all_errors.is_empty() {
-            Ok((graph, local_types))
+        if errors.is_empty() {
+            let main_resolved_types = local_types
+                .into_iter()
+                .find_map(|(_, spec, types)| {
+                    discovery::same_loaded_spec(spec, main_spec).then_some(types)
+                })
+                .expect("BUG: main spec missing from local_types");
+            Ok((graph, main_resolved_types))
         } else {
-            Err(all_errors)
+            Err(errors)
         }
     }
 
@@ -1322,7 +1325,7 @@ impl Graph {
         // dependents, so reference→reference chains resolve) and the runtime
         // prepop copy order. Rule-target references are resolved lazily at
         // evaluation time — they do not participate in either.
-        let reference_order = match self.compute_reference_evaluation_order() {
+        let reference_order = match self.compute_data_reference_order() {
             Ok(order) => order,
             Err(circular_errors) => {
                 errors.extend(circular_errors);
@@ -1344,7 +1347,7 @@ impl Graph {
         // paths are detected.
         self.add_rule_reference_dependency_edges();
 
-        let execution_order = match self.topological_sort() {
+        let rule_order = match self.topological_sort() {
             Ok(order) => order,
             Err(circular_errors) => {
                 errors.extend(circular_errors);
@@ -1359,7 +1362,7 @@ impl Graph {
 
         // Phase 3: Infer types (pure, no errors). Looks through rule-target
         // references by consulting `computed_rule_types` for the target rule.
-        let inferred_types = infer_rule_types(self, &execution_order, resolved_types);
+        let inferred_types = infer_rule_types(self, &rule_order, resolved_types);
 
         // Phase 4: Now that target rule types are known, materialize each
         // rule-target reference's `resolved_type` (LHS check + target type +
@@ -1371,7 +1374,7 @@ impl Graph {
 
         // Phase 5: Check types (pure, returns Result)
         if let Err(type_errors) =
-            check_rule_types(self, &execution_order, &inferred_types, resolved_types)
+            check_rule_types(self, &rule_order, &inferred_types, resolved_types)
         {
             errors.extend(type_errors);
         }
@@ -1382,8 +1385,8 @@ impl Graph {
 
         // Phase 6: Apply (only on full success)
         apply_inferred_types(self, inferred_types);
-        self.execution_order = execution_order;
-        self.reference_evaluation_order = reference_order;
+        self.rule_order = rule_order;
+        self.data_reference_order = reference_order;
         Ok(())
     }
 }
@@ -1432,8 +1435,8 @@ fn uses_vs_data_duplicate_message(
     incoming: &ParsedDataValue,
 ) -> (String, Option<String>) {
     let (alias, target_spec) = match (existing, incoming) {
-        (DataDefinition::Import { spec, .. }, ParsedDataValue::Definition { .. }) => {
-            (name, spec.name.as_str())
+        (DataDefinition::Import { target_name, .. }, ParsedDataValue::Definition { .. }) => {
+            (name, target_name.as_str())
         }
         (
             DataDefinition::TypeDeclaration { .. } | DataDefinition::Value { .. },
@@ -1456,12 +1459,48 @@ fn uses_vs_data_duplicate_message(
 }
 
 impl<'a> GraphBuilder<'a> {
+    fn build(
+        context: &'a Context,
+        repository: &Arc<LemmaRepository>,
+        main_spec: &'a LemmaSpec,
+        effective: &EffectiveDate,
+        type_resolver: &TypeResolver<'a>,
+        limits: &'a crate::limits::ResourceLimits,
+    ) -> Result<GraphBuildOk<'a>, Vec<Error>> {
+        let mut builder = GraphBuilder {
+            data: IndexMap::new(),
+            rules: BTreeMap::new(),
+            context,
+            local_types: Vec::new(),
+            errors: Vec::new(),
+            main_spec,
+            main_repository: Arc::clone(repository),
+            limits,
+        };
+
+        builder.build_spec(
+            main_spec,
+            repository,
+            Vec::new(),
+            HashMap::new(),
+            effective,
+            type_resolver,
+        )?;
+
+        Ok((
+            builder.data,
+            builder.rules,
+            builder.errors,
+            builder.local_types,
+        ))
+    }
+
     fn engine_error(&self, message: impl Into<String>, source: &Source) -> Error {
         Error::validation_with_context(
             message.into(),
             Some(source.clone()),
             None::<String>,
-            Some(Arc::clone(&self.main_spec)),
+            Some(self.main_spec),
             None,
         )
     }
@@ -1490,9 +1529,9 @@ impl<'a> GraphBuilder<'a> {
         &self,
         spec_ref: &ast::SpecRef,
         effective: &EffectiveDate,
-        consumer_spec: &Arc<LemmaSpec>,
+        consumer_spec: &LemmaSpec,
         consumer_repository: &Arc<LemmaRepository>,
-    ) -> Result<(Arc<LemmaRepository>, Arc<LemmaSpec>), Error> {
+    ) -> Result<(Arc<LemmaRepository>, &'a LemmaSpec), Error> {
         discovery::resolve_spec_ref(
             self.context,
             spec_ref,
@@ -1513,12 +1552,12 @@ impl<'a> GraphBuilder<'a> {
         &mut self,
         data: &LemmaData,
         current_segment_names: &[String],
-        parent_spec: &Arc<LemmaSpec>,
+        parent_spec: &'a LemmaSpec,
         effective: &EffectiveDate,
     ) -> Option<(Vec<String>, BindingValue, Source)> {
         let binding_path_display = format!("{}", data.reference);
 
-        let mut walk_spec = Arc::clone(parent_spec);
+        let mut walk_spec = parent_spec;
 
         for segment in &data.reference.segments {
             let Some(seg_data) = walk_spec
@@ -1550,10 +1589,10 @@ impl<'a> GraphBuilder<'a> {
                 }
             };
 
-            let walk_repository = discovery::lookup_owning_repository(self.context, &walk_spec)
+            let walk_repository = discovery::lookup_owning_repository(self.context, walk_spec)
                 .unwrap_or_else(|| Arc::clone(&self.main_repository));
             walk_spec =
-                match self.resolve_spec_ref(spec_ref, effective, &walk_spec, &walk_repository) {
+                match self.resolve_spec_ref(spec_ref, effective, walk_spec, &walk_repository) {
                     Ok((_, arc)) => arc,
                     Err(e) => {
                         self.errors.push(e);
@@ -1618,7 +1657,7 @@ impl<'a> GraphBuilder<'a> {
     }
 
     /// Resolve a parsed [`ast::Reference`] appearing on the RHS of a `data x: ref`
-    /// assignment against the scope of `containing_spec_arc`. Returns an
+    /// assignment against the scope of `containing_spec`. Returns an
     /// [`ReferenceTarget`] pointing at a data path or rule path. Errors push into
     /// `self.errors`; this function returns `None` on failure (and does not
     /// return a proper `Result` because it mirrors `resolve_path_segments`'s
@@ -1627,18 +1666,18 @@ impl<'a> GraphBuilder<'a> {
         &mut self,
         reference: &ast::Reference,
         reference_source: &Source,
-        containing_spec_arc: &Arc<LemmaSpec>,
+        containing_spec: &'a LemmaSpec,
         containing_segments_names: &[String],
         effective: &EffectiveDate,
     ) -> Option<ReferenceTarget> {
-        let containing_data_map: HashMap<String, LemmaData> = containing_spec_arc
+        let containing_data_map: HashMap<String, LemmaData> = containing_spec
             .data
             .iter()
             .filter(|d| d.reference.is_local())
             .map(|d| (d.reference.name.clone(), d.clone()))
             .collect();
 
-        let containing_rule_names: HashSet<&str> = containing_spec_arc
+        let containing_rule_names: HashSet<&str> = containing_spec
             .rules
             .iter()
             .map(|r| r.name.as_str())
@@ -1648,7 +1687,7 @@ impl<'a> GraphBuilder<'a> {
             .iter()
             .map(|name| PathSegment {
                 data: name.clone(),
-                spec: containing_spec_arc.name.clone(),
+                spec: containing_spec.name.clone(),
             })
             .collect();
 
@@ -1659,7 +1698,7 @@ impl<'a> GraphBuilder<'a> {
                 self.errors.push(self.engine_error(
                     format!(
                         "Reference target '{}' is ambiguous: both a data and a rule in spec '{}'",
-                        reference.name, containing_spec_arc.name
+                        reference.name, containing_spec.name
                     ),
                     reference_source,
                 ));
@@ -1680,33 +1719,30 @@ impl<'a> GraphBuilder<'a> {
             self.errors.push(self.engine_error(
                 format!(
                     "Reference target '{}' not found in spec '{}'",
-                    reference.name, containing_spec_arc.name
+                    reference.name, containing_spec.name
                 ),
                 reference_source,
             ));
             return None;
         }
 
-        let (resolved_segments, target_spec_arc) = self.resolve_path_segments(
+        let (resolved_segments, target_spec) = self.resolve_path_segments(
             &reference.segments,
             reference_source,
             containing_data_map,
             containing_segments,
-            Arc::clone(containing_spec_arc),
+            containing_spec,
             effective,
         )?;
 
-        let target_data_names: HashSet<&str> = target_spec_arc
+        let target_data_names: HashSet<&str> = target_spec
             .data
             .iter()
             .filter(|d| d.reference.is_local())
             .map(|d| d.reference.name.as_str())
             .collect();
-        let target_rule_names: HashSet<&str> = target_spec_arc
-            .rules
-            .iter()
-            .map(|r| r.name.as_str())
-            .collect();
+        let target_rule_names: HashSet<&str> =
+            target_spec.rules.iter().map(|r| r.name.as_str()).collect();
         let is_data = target_data_names.contains(reference.name.as_str());
         let is_rule = target_rule_names.contains(reference.name.as_str());
 
@@ -1714,7 +1750,7 @@ impl<'a> GraphBuilder<'a> {
             self.errors.push(self.engine_error(
                 format!(
                     "Reference target '{}' is ambiguous: both a data and a rule in spec '{}'",
-                    reference.name, target_spec_arc.name
+                    reference.name, target_spec.name
                 ),
                 reference_source,
             ));
@@ -1736,7 +1772,7 @@ impl<'a> GraphBuilder<'a> {
         self.errors.push(self.engine_error(
             format!(
                 "Reference target '{}' not found in spec '{}'",
-                reference.name, target_spec_arc.name
+                reference.name, target_spec.name
             ),
             reference_source,
         ));
@@ -1750,9 +1786,8 @@ impl<'a> GraphBuilder<'a> {
     /// duplicate bindings targeting the same path.
     fn build_data_bindings(
         &mut self,
-        spec: &LemmaSpec,
+        spec: &'a LemmaSpec,
         current_segment_names: &[String],
-        spec_arc: &Arc<LemmaSpec>,
         effective: &EffectiveDate,
     ) -> Result<DataBindings, Vec<Error>> {
         let mut bindings: DataBindings = HashMap::new();
@@ -1792,7 +1827,7 @@ impl<'a> GraphBuilder<'a> {
             }
 
             if let Some((binding_key, binding_value, source)) =
-                self.resolve_data_binding(data, current_segment_names, spec_arc, effective)
+                self.resolve_data_binding(data, current_segment_names, spec, effective)
             {
                 if let Some((_, existing_source)) = bindings.get(&binding_key) {
                     errors.push(self.engine_error(
@@ -1828,7 +1863,7 @@ impl<'a> GraphBuilder<'a> {
         data: &LemmaData,
         current_segments: &[PathSegment],
         data_bindings: &DataBindings,
-        current_spec_arc: &Arc<LemmaSpec>,
+        current_spec: &LemmaSpec,
         used_binding_keys: &mut HashSet<Vec<String>>,
         effective: &EffectiveDate,
     ) {
@@ -1854,7 +1889,7 @@ impl<'a> GraphBuilder<'a> {
                 message,
                 Some(data.source_location.clone()),
                 suggestion,
-                Some(Arc::clone(&self.main_spec)),
+                Some(self.main_spec),
                 None,
             ));
             return;
@@ -1876,7 +1911,7 @@ impl<'a> GraphBuilder<'a> {
                 (v.clone(), s.clone())
             });
 
-        let (original_schema_type, original_declared_default) = if matches!(
+        let (original_schema_type, original_declared_suggestion) = if matches!(
             &data.value,
             ParsedDataValue::Definition { .. }
         ) && data
@@ -1886,7 +1921,7 @@ impl<'a> GraphBuilder<'a> {
             let resolved = self
                 .local_types
                 .iter()
-                .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
                 .map(|(_, _, t)| t)
                 .expect("BUG: no resolved types for spec during add_local_data");
             let lemma_type = Arc::clone(
@@ -1898,7 +1933,7 @@ impl<'a> GraphBuilder<'a> {
                     ),
             );
             let declared = resolved
-                .declared_defaults
+                .declared_suggestions
                 .get(&data.reference.name)
                 .cloned();
             (Some(lemma_type), declared)
@@ -1912,7 +1947,7 @@ impl<'a> GraphBuilder<'a> {
                 binding_value,
                 binding_source,
                 original_schema_type,
-                current_spec_arc,
+                current_spec,
             );
             return;
         }
@@ -1932,7 +1967,7 @@ impl<'a> GraphBuilder<'a> {
                     value,
                     original_schema_type,
                     effective_source,
-                    current_spec_arc,
+                    current_spec,
                 );
             }
             ParsedDataValue::Definition { .. } => {
@@ -1941,7 +1976,7 @@ impl<'a> GraphBuilder<'a> {
                         "BUG: Definition without schema — TypeResolver should have registered it"
                     )
                 });
-                let mut declared_default = original_declared_default;
+                let mut declared_suggestion = original_declared_suggestion;
 
                 let is_generic_measure_range = matches!(
                     &resolved_type.specifications,
@@ -1951,14 +1986,9 @@ impl<'a> GraphBuilder<'a> {
                         ..
                     } if units.0.is_empty() && decomposition.is_none()
                 );
-                let is_calendar_measure = matches!(
-                    &resolved_type.specifications,
-                    TypeSpecification::Measure { traits, .. }
-                        if traits.contains(&semantics::MeasureTrait::Calendar)
-                );
 
-                if is_generic_measure_range || is_calendar_measure {
-                    if let Some(ValueKind::Range(left, right)) = &declared_default {
+                if is_generic_measure_range {
+                    if let Some(ValueKind::Range(left, right)) = &declared_suggestion {
                         if let (ValueKind::Measure(_, left_sig), ValueKind::Measure(_, right_sig)) =
                             (&left.value, &right.value)
                         {
@@ -1968,7 +1998,7 @@ impl<'a> GraphBuilder<'a> {
                             let resolved = self
                                 .local_types
                                 .iter()
-                                .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                                .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
                                 .map(|(_, _, t)| t)
                                 .expect("BUG: no resolved types for spec during add_local_data");
 
@@ -1983,11 +2013,11 @@ impl<'a> GraphBuilder<'a> {
                                 {
                                     let specialized_range_type =
                                         infer_range_type_from_endpoint_types(
-                                            left_measure_type.as_ref(),
-                                            right_measure_type.as_ref(),
+                                            left_measure_type,
+                                            right_measure_type,
                                         );
                                     let coerced_left = Graph::coerce_literal_to_schema_type(
-                                        left.as_ref(),
+                                        left,
                                         left_measure_type,
                                     )
                                     .unwrap_or_else(|message| {
@@ -1997,7 +2027,7 @@ impl<'a> GraphBuilder<'a> {
                                         )
                                     });
                                     let coerced_right = Graph::coerce_literal_to_schema_type(
-                                        right.as_ref(),
+                                        right,
                                         right_measure_type,
                                     )
                                     .unwrap_or_else(|message| {
@@ -2006,7 +2036,7 @@ impl<'a> GraphBuilder<'a> {
                                             message
                                         )
                                     });
-                                    let specialized_default = Graph::coerce_literal_to_schema_type(
+                                    let specialized_suggestion = Graph::coerce_literal_to_schema_type(
                                         &LiteralValue {
                                             value: ValueKind::Range(
                                                 Box::new(coerced_left),
@@ -2023,7 +2053,7 @@ impl<'a> GraphBuilder<'a> {
                                         )
                                     });
                                     resolved_type = specialized_range_type;
-                                    declared_default = Some(specialized_default.value);
+                                    declared_suggestion = Some(specialized_suggestion.value);
                                 }
                                 _ => {
                                     self.errors.push(self.engine_error(
@@ -2044,19 +2074,19 @@ impl<'a> GraphBuilder<'a> {
                     data_path,
                     DataDefinition::TypeDeclaration {
                         resolved_type,
-                        declared_default,
+                        declared_suggestion,
                         source: effective_source,
                     },
                 );
             }
             ParsedDataValue::Import(spec_ref) => {
                 let consumer_repository =
-                    discovery::lookup_owning_repository(self.context, current_spec_arc)
+                    discovery::lookup_owning_repository(self.context, current_spec)
                         .unwrap_or_else(|| Arc::clone(&self.main_repository));
-                let effective_spec_arc = match self.resolve_spec_ref(
+                let effective_spec = match self.resolve_spec_ref(
                     spec_ref,
                     effective,
-                    current_spec_arc,
+                    current_spec,
                     &consumer_repository,
                 ) {
                     Ok((_, arc)) => arc,
@@ -2069,7 +2099,7 @@ impl<'a> GraphBuilder<'a> {
                 self.data.insert(
                     data_path,
                     DataDefinition::Import {
-                        spec: Arc::clone(&effective_spec_arc),
+                        target_name: effective_spec.name.clone(),
                         source: effective_source,
                     },
                 );
@@ -2091,7 +2121,7 @@ impl<'a> GraphBuilder<'a> {
         value: &ast::Value,
         declared_schema_type: Option<Arc<LemmaType>>,
         effective_source: Source,
-        current_spec_arc: &Arc<LemmaSpec>,
+        current_spec: &LemmaSpec,
     ) {
         let semantic_value = if let Some(ref schema) = declared_schema_type {
             match parser_value_to_value_kind(value, &schema.specifications) {
@@ -2107,7 +2137,7 @@ impl<'a> GraphBuilder<'a> {
                     let Some(lt) = self
                         .local_types
                         .iter()
-                        .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                        .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
                         .map(|(_, _, t)| t)
                         .and_then(|dt| dt.unit_index.get(unit))
                         .map(Arc::as_ref)
@@ -2134,7 +2164,7 @@ impl<'a> GraphBuilder<'a> {
                         let Some(lt) = self
                             .local_types
                             .iter()
-                            .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                            .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
                             .map(|(_, _, t)| t)
                             .and_then(|dt| dt.unit_index.get(unit))
                             .map(Arc::clone)
@@ -2196,7 +2226,7 @@ impl<'a> GraphBuilder<'a> {
                 match self
                     .local_types
                     .iter()
-                    .find(|(_, s, _)| Arc::ptr_eq(s, current_spec_arc))
+                    .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
                     .map(|(_, _, t)| t)
                     .and_then(|dt| dt.unit_index.get(unit))
                 {
@@ -2244,7 +2274,7 @@ impl<'a> GraphBuilder<'a> {
         binding_value: BindingValue,
         binding_source: Source,
         declared_schema_type: Option<Arc<LemmaType>>,
-        current_spec_arc: &Arc<LemmaSpec>,
+        current_spec: &LemmaSpec,
     ) {
         match binding_value {
             BindingValue::Literal(value) => {
@@ -2253,7 +2283,7 @@ impl<'a> GraphBuilder<'a> {
                     &value,
                     declared_schema_type,
                     binding_source,
-                    current_spec_arc,
+                    current_spec,
                 );
             }
             BindingValue::Reference {
@@ -2268,7 +2298,7 @@ impl<'a> GraphBuilder<'a> {
                         target,
                         resolved_type: provisional_type,
                         local_constraints: constraints,
-                        local_default: None,
+                        local_suggestion: None,
                         source: binding_source,
                     },
                 );
@@ -2276,17 +2306,17 @@ impl<'a> GraphBuilder<'a> {
         }
     }
 
-    /// Returns (path_segments, last_resolved_spec_arc) on success.
+    /// Returns (path_segments, last_resolved_spec) on success.
     fn resolve_path_segments(
         &mut self,
         segments: &[String],
         reference_source: &Source,
         mut current_data_map: HashMap<String, LemmaData>,
         mut path_segments: Vec<PathSegment>,
-        mut spec_context: Arc<LemmaSpec>,
+        mut spec_context: &'a LemmaSpec,
         effective: &EffectiveDate,
-    ) -> Option<(Vec<PathSegment>, Arc<LemmaSpec>)> {
-        let mut last_arc: Option<Arc<LemmaSpec>> = None;
+    ) -> Option<(Vec<PathSegment>, &'a LemmaSpec)> {
+        let mut last_arc: Option<&LemmaSpec> = None;
 
         for segment in segments.iter() {
             let data_ref =
@@ -2303,12 +2333,12 @@ impl<'a> GraphBuilder<'a> {
 
             if let ParsedDataValue::Import(original_spec_ref) = &data_ref.value {
                 let context_repository =
-                    discovery::lookup_owning_repository(self.context, &spec_context)
+                    discovery::lookup_owning_repository(self.context, spec_context)
                         .unwrap_or_else(|| Arc::clone(&self.main_repository));
                 let arc = match self.resolve_spec_ref(
                     original_spec_ref,
                     effective,
-                    &spec_context,
+                    spec_context,
                     &context_repository,
                 ) {
                     Ok((_, a)) => a,
@@ -2317,7 +2347,7 @@ impl<'a> GraphBuilder<'a> {
                         return None;
                     }
                 };
-                spec_context = Arc::clone(&arc);
+                spec_context = arc;
 
                 path_segments.push(PathSegment {
                     data: segment.clone(),
@@ -2350,7 +2380,7 @@ impl<'a> GraphBuilder<'a> {
     /// [`Self::local_types`] before the consumer reads cross-spec parent types.
     fn ensure_spec_types_resolved(
         &mut self,
-        spec_arc: &Arc<LemmaSpec>,
+        spec: &'a LemmaSpec,
         spec_repository: &Arc<LemmaRepository>,
         effective: &EffectiveDate,
         type_resolver: &TypeResolver<'a>,
@@ -2358,34 +2388,30 @@ impl<'a> GraphBuilder<'a> {
         if self
             .local_types
             .iter()
-            .any(|(_, spec, _)| Arc::ptr_eq(spec, spec_arc))
+            .any(|(_, s, _)| discovery::same_loaded_spec(s, spec))
         {
             return true;
         }
-        if !type_resolver.is_registered(spec_arc) {
+        if !type_resolver.is_registered(spec) {
             panic!(
                 "BUG: spec '{}' reachable from spec '{}' was not registered during dependency discovery",
-                spec_arc.name, self.main_spec.name
+                spec.name, self.main_spec.name
             );
         }
-        if type_resolver.registration_failed(spec_arc) {
+        if type_resolver.registration_failed(spec) {
             // The registration errors were already collected by
             // `register_all`; the spec cannot be built without its types.
             return false;
         }
-        for data in &spec_arc.data {
+        for data in &spec.data {
             match &data.value {
                 ParsedDataValue::Import(spec_ref) => {
                     let import_effective = spec_ref.at(effective);
-                    match self.resolve_spec_ref(
-                        spec_ref,
-                        &import_effective,
-                        spec_arc,
-                        spec_repository,
-                    ) {
+                    match self.resolve_spec_ref(spec_ref, &import_effective, spec, spec_repository)
+                    {
                         Ok((source_repo, source_arc)) => {
                             self.ensure_spec_types_resolved(
-                                &source_arc,
+                                source_arc,
                                 &source_repo,
                                 &import_effective,
                                 type_resolver,
@@ -2401,12 +2427,12 @@ impl<'a> GraphBuilder<'a> {
                     match self.resolve_spec_ref(
                         &ast::SpecRef::same_repository(spec_alias.clone()),
                         effective,
-                        spec_arc,
+                        spec,
                         spec_repository,
                     ) {
                         Ok((source_repo, source_arc)) => {
                             self.ensure_spec_types_resolved(
-                                &source_arc,
+                                source_arc,
                                 &source_repo,
                                 effective,
                                 type_resolver,
@@ -2418,13 +2444,10 @@ impl<'a> GraphBuilder<'a> {
                 _ => {}
             }
         }
-        match type_resolver.resolve_and_validate(spec_arc, effective, &self.local_types) {
+        match type_resolver.resolve_and_validate(spec, effective, &self.local_types) {
             Ok(resolved_types) => {
-                self.local_types.push((
-                    Arc::clone(spec_repository),
-                    Arc::clone(spec_arc),
-                    resolved_types,
-                ));
+                self.local_types
+                    .push((Arc::clone(spec_repository), spec, resolved_types));
                 true
             }
             Err(errors) => {
@@ -2436,15 +2459,13 @@ impl<'a> GraphBuilder<'a> {
 
     fn build_spec(
         &mut self,
-        spec_arc: &Arc<LemmaSpec>,
+        spec: &'a LemmaSpec,
         spec_repository: &Arc<LemmaRepository>,
         current_segments: Vec<PathSegment>,
         data_bindings: DataBindings,
         effective: &EffectiveDate,
         type_resolver: &TypeResolver<'a>,
     ) -> Result<(), Vec<Error>> {
-        let spec = spec_arc.as_ref();
-
         if current_segments.len() > self.limits.max_spec_dependency_depth {
             return Err(vec![Error::resource_limit_exceeded(
                 "max_spec_dependency_depth",
@@ -2455,7 +2476,7 @@ impl<'a> GraphBuilder<'a> {
                     spec.name
                 ),
                 None,
-                Some(Arc::clone(spec_arc)),
+                Some(spec),
                 None,
             )]);
         }
@@ -2469,7 +2490,7 @@ impl<'a> GraphBuilder<'a> {
 
         // Step 2: Build data bindings declared in this spec (for passing to referenced specs)
         let this_spec_bindings =
-            match self.build_data_bindings(spec, &current_segment_names, spec_arc, effective) {
+            match self.build_data_bindings(spec, &current_segment_names, effective) {
                 Ok(bindings) => bindings,
                 Err(errors) => {
                     self.errors.extend(errors);
@@ -2487,8 +2508,8 @@ impl<'a> GraphBuilder<'a> {
         if !self
             .local_types
             .iter()
-            .any(|(_, s, _)| Arc::ptr_eq(s, spec_arc))
-            && !self.ensure_spec_types_resolved(spec_arc, spec_repository, effective, type_resolver)
+            .any(|(_, s, _)| discovery::same_loaded_spec(s, spec))
+            && !self.ensure_spec_types_resolved(spec, spec_repository, effective, type_resolver)
         {
             return Ok(());
         }
@@ -2512,7 +2533,7 @@ impl<'a> GraphBuilder<'a> {
                 data,
                 &current_segments,
                 &effective_bindings,
-                spec_arc,
+                spec,
                 &mut used_binding_keys,
                 effective,
             );
@@ -2525,7 +2546,7 @@ impl<'a> GraphBuilder<'a> {
             if let ParsedDataValue::Import(spec_ref) = &data.value {
                 let nested_effective = spec_ref.at(effective);
                 let (nested_repo, nested_arc) =
-                    match self.resolve_spec_ref(spec_ref, effective, spec_arc, spec_repository) {
+                    match self.resolve_spec_ref(spec_ref, effective, spec, spec_repository) {
                         Ok(pair) => pair,
                         Err(e) => {
                             self.errors.push(e);
@@ -2536,7 +2557,7 @@ impl<'a> GraphBuilder<'a> {
                     data,
                     &current_segments,
                     &effective_bindings,
-                    spec_arc,
+                    spec,
                     &mut used_binding_keys,
                     effective,
                 );
@@ -2559,7 +2580,7 @@ impl<'a> GraphBuilder<'a> {
                 }
 
                 if let Err(errs) = self.build_spec(
-                    &nested_arc,
+                    nested_arc,
                     &nested_repo,
                     nested_segments,
                     combined_bindings,
@@ -2602,7 +2623,7 @@ impl<'a> GraphBuilder<'a> {
         for rule in &spec.rules {
             self.add_rule(
                 rule,
-                spec_arc,
+                spec,
                 &data_map,
                 &current_segments,
                 &rule_names,
@@ -2616,7 +2637,7 @@ impl<'a> GraphBuilder<'a> {
     fn add_rule(
         &mut self,
         rule: &LemmaRule,
-        current_spec_arc: &Arc<LemmaSpec>,
+        current_spec: &'a LemmaSpec,
         data_map: &HashMap<String, &LemmaData>,
         current_segments: &[PathSegment],
         rule_names: &HashSet<&str>,
@@ -2638,7 +2659,7 @@ impl<'a> GraphBuilder<'a> {
         let mut branches = Vec::new();
         let mut depends_on_rules = BTreeSet::new();
         let mut convert_ctx = RuleExpressionConversion {
-            spec: current_spec_arc,
+            spec: current_spec,
             data_map,
             segments: current_segments,
             rule_names,
@@ -2677,7 +2698,7 @@ impl<'a> GraphBuilder<'a> {
             source: rule.source_location.clone(),
             depends_on_rules,
             rule_type: Arc::new(LemmaType::veto_type()),
-            spec_arc: Arc::clone(current_spec_arc),
+            spec: current_spec,
         };
 
         self.rules.insert(rule_path, rule_node);
@@ -2688,7 +2709,7 @@ impl<'a> GraphBuilder<'a> {
         &mut self,
         left: &ast::Expression,
         right: &ast::Expression,
-        ctx: &mut RuleExpressionConversion<'_>,
+        ctx: &mut RuleExpressionConversion<'a, '_>,
     ) -> Option<(Expression, Expression)> {
         let converted_left = self.convert_expression_and_extract_dependencies(left, ctx);
         let converted_right = self.convert_expression_and_extract_dependencies(right, ctx);
@@ -2702,7 +2723,7 @@ impl<'a> GraphBuilder<'a> {
     fn convert_expression_and_extract_dependencies(
         &mut self,
         expr: &ast::Expression,
-        ctx: &mut RuleExpressionConversion<'_>,
+        ctx: &mut RuleExpressionConversion<'a, '_>,
     ) -> Option<Expression> {
         let expr_src = expr
             .source_location
@@ -2724,7 +2745,7 @@ impl<'a> GraphBuilder<'a> {
                         expr_source,
                         data_map_owned,
                         ctx.segments.to_vec(),
-                        Arc::clone(ctx.spec),
+                        ctx.spec,
                         ctx.effective,
                     )?;
                     (segs, Some(arc))
@@ -2737,7 +2758,7 @@ impl<'a> GraphBuilder<'a> {
                         (is_data, is_rule, None)
                     }
                     Some(target_arc) => {
-                        let target_spec = target_arc.as_ref();
+                        let target_spec = target_arc;
                         let target_data_names: HashSet<&str> = target_spec
                             .data
                             .iter()
@@ -2764,10 +2785,10 @@ impl<'a> GraphBuilder<'a> {
                         segments,
                         data: r.name.clone(),
                     };
-                    return Some(Expression {
-                        kind: ExpressionKind::DataPath(data_path),
-                        source_location: expr.source_location.clone(),
-                    });
+                    return Some(Expression::with_source(
+                        ExpressionKind::DataPath(data_path),
+                        expr.source_location.clone(),
+                    ));
                 }
                 if is_rule {
                     let rule_path = RulePath {
@@ -2775,10 +2796,10 @@ impl<'a> GraphBuilder<'a> {
                         rule: r.name.clone(),
                     };
                     ctx.depends_on_rules.insert(rule_path.clone());
-                    return Some(Expression {
-                        kind: ExpressionKind::RulePath(rule_path),
-                        source_location: expr.source_location.clone(),
-                    });
+                    return Some(Expression::with_source(
+                        ExpressionKind::RulePath(rule_path),
+                        expr.source_location.clone(),
+                    ));
                 }
                 let msg = match target_spec_name_opt {
                     Some(s) => format!("Reference '{}' not found in spec '{}'", r.name, s),
@@ -2790,26 +2811,26 @@ impl<'a> GraphBuilder<'a> {
 
             ast::ExpressionKind::LogicalAnd(left, right) => {
                 let (l, r) = self.convert_binary_operands(left, right, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::LogicalAnd(Arc::new(l), Arc::new(r)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::Arithmetic(left, op, right) => {
                 let (l, r) = self.convert_binary_operands(left, right, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::Arithmetic(Arc::new(l), op.clone(), Arc::new(r)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::Comparison(left, op, right) => {
                 let (l, r) = self.convert_binary_operands(left, right, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::Comparison(Arc::new(l), op.clone(), Arc::new(r)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::UnitConversion(value, target) => {
@@ -2819,7 +2840,7 @@ impl<'a> GraphBuilder<'a> {
                 let resolved_spec_types = self
                     .local_types
                     .iter()
-                    .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
+                    .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
                     .map(|(_, _, t)| t);
                 let unit_index = resolved_spec_types.map(|dt| &dt.unit_index);
                 let semantic_target = match conversion_target_to_semantic(target, unit_index) {
@@ -2837,44 +2858,38 @@ impl<'a> GraphBuilder<'a> {
                             full_msg,
                             expr.source_location.clone(),
                             None::<String>,
-                            Some(Arc::clone(&self.main_spec)),
+                            Some(self.main_spec),
                             None,
                         ));
                         return None;
                     }
                 };
 
-                Some(Expression {
-                    kind: ExpressionKind::UnitConversion(
-                        Arc::new(converted_value),
-                        semantic_target,
-                    ),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::UnitConversion(Arc::new(converted_value), semantic_target),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::LogicalNegation(operand, neg_type) => {
                 let converted_operand =
                     self.convert_expression_and_extract_dependencies(operand, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::LogicalNegation(
-                        Arc::new(converted_operand),
-                        neg_type.clone(),
-                    ),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::LogicalNegation(Arc::new(converted_operand), neg_type.clone()),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::MathematicalComputation(op, operand) => {
                 let converted_operand =
                     self.convert_expression_and_extract_dependencies(operand, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::MathematicalComputation(
+                Some(Expression::with_source(
+                    ExpressionKind::MathematicalComputation(
                         op.clone(),
                         Arc::new(converted_operand),
                     ),
-                    source_location: expr.source_location.clone(),
-                })
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::Literal(value) => {
@@ -2883,7 +2898,7 @@ impl<'a> GraphBuilder<'a> {
                         let Some(lt) = self
                             .local_types
                             .iter()
-                            .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
+                            .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
                             .map(|(_, _, t)| t)
                             .and_then(|dt| dt.unit_index.get(unit))
                             .map(Arc::as_ref)
@@ -2910,7 +2925,7 @@ impl<'a> GraphBuilder<'a> {
                             let Some(lt) = self
                                 .local_types
                                 .iter()
-                                .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
+                                .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
                                 .map(|(_, _, t)| t)
                                 .and_then(|dt| dt.unit_index.get(unit))
                                 .map(Arc::clone)
@@ -2975,7 +2990,7 @@ impl<'a> GraphBuilder<'a> {
                         match self
                             .local_types
                             .iter()
-                            .find(|(_, s, _)| Arc::ptr_eq(s, ctx.spec))
+                            .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
                             .map(|(_, _, t)| t)
                             .and_then(|dt| dt.unit_index.get(unit))
                         {
@@ -3006,75 +3021,75 @@ impl<'a> GraphBuilder<'a> {
                     value: semantic_value,
                     lemma_type,
                 };
-                Some(Expression {
-                    kind: ExpressionKind::Literal(Box::new(literal_value)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::Literal(Box::new(literal_value)),
+                    expr.source_location.clone(),
+                ))
             }
 
-            ast::ExpressionKind::Veto(veto_expression) => Some(Expression {
-                kind: ExpressionKind::Veto(veto_expression.clone()),
-                source_location: expr.source_location.clone(),
-            }),
+            ast::ExpressionKind::Veto(veto_expression) => Some(Expression::with_source(
+                ExpressionKind::Veto(veto_expression.clone()),
+                expr.source_location.clone(),
+            )),
 
             ast::ExpressionKind::ResultIsVeto(operand) => {
                 let converted = self.convert_expression_and_extract_dependencies(operand, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::ResultIsVeto(Arc::new(converted)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::ResultIsVeto(Arc::new(converted)),
+                    expr.source_location.clone(),
+                ))
             }
 
-            ast::ExpressionKind::Now => Some(Expression {
-                kind: ExpressionKind::Now,
-                source_location: expr.source_location.clone(),
-            }),
+            ast::ExpressionKind::Now => Some(Expression::with_source(
+                ExpressionKind::Now,
+                expr.source_location.clone(),
+            )),
 
             ast::ExpressionKind::DateRelative(kind, date_expr) => {
                 let converted_date =
                     self.convert_expression_and_extract_dependencies(date_expr, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::DateRelative(*kind, Arc::new(converted_date)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::DateRelative(*kind, Arc::new(converted_date)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::DateCalendar(kind, unit, date_expr) => {
                 let converted_date =
                     self.convert_expression_and_extract_dependencies(date_expr, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::DateCalendar(*kind, *unit, Arc::new(converted_date)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::DateCalendar(*kind, *unit, Arc::new(converted_date)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::RangeLiteral(left, right) => {
                 let (l, r) = self.convert_binary_operands(left, right, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::RangeLiteral(Arc::new(l), Arc::new(r)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::RangeLiteral(Arc::new(l), Arc::new(r)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::PastFutureRange(kind, offset_expr) => {
                 let converted_offset =
                     self.convert_expression_and_extract_dependencies(offset_expr, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::PastFutureRange(*kind, Arc::new(converted_offset)),
-                    source_location: expr.source_location.clone(),
-                })
+                Some(Expression::with_source(
+                    ExpressionKind::PastFutureRange(*kind, Arc::new(converted_offset)),
+                    expr.source_location.clone(),
+                ))
             }
 
             ast::ExpressionKind::RangeContainment(value, range) => {
                 let (converted_value, converted_range) =
                     self.convert_binary_operands(value, range, ctx)?;
-                Some(Expression {
-                    kind: ExpressionKind::RangeContainment(
+                Some(Expression::with_source(
+                    ExpressionKind::RangeContainment(
                         Arc::new(converted_value),
                         Arc::new(converted_range),
                     ),
-                    source_location: expr.source_location.clone(),
-                })
+                    expr.source_location.clone(),
+                ))
             }
         }
     }
@@ -3084,11 +3099,11 @@ impl<'a> GraphBuilder<'a> {
 /// at most one version per spec name, this is a simple name match.
 fn find_types_by_spec<'b>(
     types: &'b ResolvedTypesMap,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
 ) -> Option<&'b ResolvedSpecTypes> {
     types
         .iter()
-        .find(|(_, s, _)| Arc::ptr_eq(s, spec_arc))
+        .find(|(_, s, _)| discovery::same_loaded_spec(s, spec))
         .map(|(_, _, t)| t)
 }
 
@@ -3113,12 +3128,12 @@ pub enum DecompositionMatch {
 /// `resolved` are ignored. Imports are already merged into `unit_index` during resolution.
 pub fn find_unique_measure_type_by_decomposition(
     resolved_types: &ResolvedTypesMap,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
     decomposition: &BaseMeasureVector,
 ) -> DecompositionMatch {
     let mut seen: HashMap<String, Arc<LemmaType>> = HashMap::new();
 
-    let Some(spec_types) = find_types_by_spec(resolved_types, spec_arc) else {
+    let Some(spec_types) = find_types_by_spec(resolved_types, spec) else {
         return DecompositionMatch::None;
     };
 
@@ -3171,14 +3186,14 @@ fn anonymous_rule_boundary_requires_rejection() -> bool {
 /// names them as a hint to `as <type>` cast the result.
 fn anonymous_rule_boundary_error(
     rule_path: &RulePath,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
     resolved_types: &ResolvedTypesMap,
     decomposition: &BaseMeasureVector,
     branch_index: Option<usize>,
 ) -> String {
     let candidates_hint = match find_unique_measure_type_by_decomposition(
         resolved_types,
-        spec_arc,
+        spec,
         decomposition,
     ) {
         DecompositionMatch::Multiple(family_names) => format!(
@@ -3192,13 +3207,13 @@ fn anonymous_rule_boundary_error(
             "Unless clause {} in rule '{}' (spec '{}') returns an anonymous intermediate with \
              unresolved dimensions {:?}. Give the rule a named measure or ratio type with \
              declared units, or rewrite the expression so dimensions resolve to a named type in scope.{}",
-            index, rule_path.rule, spec_arc.name, decomposition, candidates_hint
+            index, rule_path.rule, spec.name, decomposition, candidates_hint
         ),
         None => format!(
             "Rule '{}' in spec '{}' returns an anonymous intermediate with unresolved \
              dimensions {:?}. Give the rule a named measure or ratio type with declared units, \
              or rewrite the expression so dimensions resolve to a named type in scope.{}",
-            rule_path.rule, spec_arc.name, decomposition, candidates_hint
+            rule_path.rule, spec.name, decomposition, candidates_hint
         ),
     }
 }
@@ -3555,21 +3570,8 @@ fn measure_range_matches_measure(range_type: &LemmaType, measure_type: &LemmaTyp
     if !measure_type.is_measure() {
         return false;
     }
-    if let Some(TypeSpecification::Measure {
-        units,
-        decomposition,
-        ..
-    }) = range_type.specifications.element_from_range()
-    {
-        let endpoint_type = LemmaType::primitive(TypeSpecification::Measure {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units,
-            traits: Vec::new(),
-            decomposition,
-            help: String::new(),
-        });
+    if let Some(element_spec) = range_type.specifications.element_from_range() {
+        let endpoint_type = LemmaType::primitive(element_spec);
         if endpoint_type.same_measure_family(measure_type)
             || endpoint_type.compatible_with_anonymous_measure(measure_type)
             || measure_type.compatible_with_anonymous_measure(&endpoint_type)
@@ -3613,7 +3615,7 @@ fn infer_expression_type(
     graph: &Graph,
     computed_rule_types: &HashMap<RulePath, Arc<LemmaType>>,
     resolved_types: &ResolvedTypesMap,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
 ) -> Arc<LemmaType> {
     match &expression.kind {
         ExpressionKind::Literal(literal_value) => Arc::clone(&literal_value.lemma_type),
@@ -3629,9 +3631,9 @@ fn infer_expression_type(
 
         ExpressionKind::LogicalAnd(left, right) => {
             let left_type =
-                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec);
             if left_type.vetoed() || right_type.vetoed() {
                 return Arc::new(LemmaType::veto_type());
             }
@@ -3648,34 +3650,9 @@ fn infer_expression_type(
             }
         }
 
-        ExpressionKind::LogicalOr(left, right) => {
-            let left_type =
-                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
-            let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
-            if left_type.vetoed() || right_type.vetoed() {
-                return Arc::new(LemmaType::veto_type());
-            }
-            if left_type.is_undetermined() || right_type.is_undetermined() {
-                return Arc::new(LemmaType::undetermined_type());
-            }
-            if left_type.is_boolean() && right_type.is_boolean() {
-                return primitive_boolean_arc().clone();
-            }
-            if *left_type == *right_type {
-                return left_type;
-            }
-            Arc::new(LemmaType::undetermined_type())
-        }
-
         ExpressionKind::LogicalNegation(operand, _) => {
-            let operand_type = infer_expression_type(
-                operand,
-                graph,
-                computed_rule_types,
-                resolved_types,
-                spec_arc,
-            );
+            let operand_type =
+                infer_expression_type(operand, graph, computed_rule_types, resolved_types, spec);
             if operand_type.vetoed() {
                 return Arc::new(LemmaType::veto_type());
             }
@@ -3687,9 +3664,9 @@ fn infer_expression_type(
 
         ExpressionKind::Comparison(left, _op, right) => {
             let left_type =
-                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec);
             if left_type.vetoed() || right_type.vetoed() {
                 return Arc::new(LemmaType::veto_type());
             }
@@ -3701,9 +3678,9 @@ fn infer_expression_type(
 
         ExpressionKind::Arithmetic(left, operator, right) => {
             let left_type =
-                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec);
             let mut result = compute_arithmetic_result_type(
                 Arc::clone(&left_type),
                 operator,
@@ -3713,11 +3690,7 @@ fn infer_expression_type(
                 if let Some(decomp) = result.measure_type_decomposition() {
                     if !decomp.is_empty() {
                         if let DecompositionMatch::Unique(lemma_type) =
-                            find_unique_measure_type_by_decomposition(
-                                resolved_types,
-                                spec_arc,
-                                decomp,
-                            )
+                            find_unique_measure_type_by_decomposition(resolved_types, spec, decomp)
                         {
                             result = lemma_type;
                         }
@@ -3740,7 +3713,7 @@ fn infer_expression_type(
                 graph,
                 computed_rule_types,
                 resolved_types,
-                spec_arc,
+                spec,
             );
             match target {
                 SemanticConversionTarget::Type(PrimitiveKind::Number) => {
@@ -3761,13 +3734,8 @@ fn infer_expression_type(
         }
 
         ExpressionKind::MathematicalComputation(op, operand) => {
-            let operand_type = infer_expression_type(
-                operand,
-                graph,
-                computed_rule_types,
-                resolved_types,
-                spec_arc,
-            );
+            let operand_type =
+                infer_expression_type(operand, graph, computed_rule_types, resolved_types, spec);
             if operand_type.vetoed() {
                 return Arc::new(LemmaType::veto_type());
             }
@@ -3785,13 +3753,8 @@ fn infer_expression_type(
         ExpressionKind::Veto(_) => Arc::new(LemmaType::veto_type()),
 
         ExpressionKind::ResultIsVeto(operand) => {
-            let _ = infer_expression_type(
-                operand,
-                graph,
-                computed_rule_types,
-                resolved_types,
-                spec_arc,
-            );
+            let _ =
+                infer_expression_type(operand, graph, computed_rule_types, resolved_types, spec);
             primitive_boolean_arc().clone()
         }
 
@@ -3803,9 +3766,9 @@ fn infer_expression_type(
 
         ExpressionKind::RangeLiteral(left, right) => {
             let left_type =
-                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, computed_rule_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, computed_rule_types, resolved_types, spec);
             if left_type.vetoed() || right_type.vetoed() {
                 return Arc::new(LemmaType::veto_type());
             }
@@ -3825,18 +3788,13 @@ fn infer_expression_type(
                     graph,
                     computed_rule_types,
                     resolved_types,
-                    spec_arc,
+                    spec,
                 );
                 if !condition_type.is_boolean() && !condition_type.is_undetermined() {
                     return Arc::new(LemmaType::undetermined_type());
                 }
-                let arm_result_type = infer_expression_type(
-                    result,
-                    graph,
-                    computed_rule_types,
-                    resolved_types,
-                    spec_arc,
-                );
+                let arm_result_type =
+                    infer_expression_type(result, graph, computed_rule_types, resolved_types, spec);
                 match &result_type {
                     None => result_type = Some(arm_result_type),
                     Some(existing) if *existing == arm_result_type => {}
@@ -3922,74 +3880,9 @@ fn engine_error_at_graph(graph: &Graph, source: &Source, message: impl Into<Stri
         message.into(),
         Some(source.clone()),
         None::<String>,
-        Some(Arc::clone(&graph.main_spec)),
+        Some(graph.main_spec),
         None,
     )
-}
-
-fn check_logical_operands(
-    graph: &Graph,
-    left_type: &LemmaType,
-    right_type: &LemmaType,
-    source: &Source,
-) -> Result<(), Vec<Error>> {
-    if left_type.vetoed() || right_type.vetoed() {
-        return Ok(());
-    }
-    let mut errors = Vec::new();
-    if !left_type.is_boolean() {
-        errors.push(engine_error_at_graph(
-            graph,
-            source,
-            format!(
-                "Logical operation requires boolean operands, got {} for left operand",
-                left_type
-            ),
-        ));
-    }
-    if !right_type.is_boolean() {
-        errors.push(engine_error_at_graph(
-            graph,
-            source,
-            format!(
-                "Logical operation requires boolean operands, got {} for right operand",
-                right_type
-            ),
-        ));
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
-}
-
-fn check_logical_or_operands(
-    graph: &Graph,
-    left_type: &LemmaType,
-    right_type: &LemmaType,
-    source: &Source,
-) -> Result<(), Vec<Error>> {
-    if left_type.vetoed() || right_type.vetoed() {
-        return Ok(());
-    }
-    if left_type.is_undetermined() || right_type.is_undetermined() {
-        return Ok(());
-    }
-    if left_type.is_boolean() && right_type.is_boolean() {
-        return check_logical_operands(graph, left_type, right_type, source);
-    }
-    if left_type == right_type {
-        return Ok(());
-    }
-    Err(vec![engine_error_at_graph(
-        graph,
-        source,
-        format!(
-            "Logical OR requires matching types (unless-chain / De Morgan), got {} and {}",
-            left_type, right_type
-        ),
-    )])
 }
 
 fn check_logical_and_operands(
@@ -4299,14 +4192,14 @@ fn check_arithmetic_types(
                 return Err(vec![engine_error_at_graph(
                     graph,
                     source,
-                    "Cannot subtract dates. Use a date range instead: `start...end as days` or `start...end as year`.".to_string(),
+                    "Cannot subtract dates. Use a date range instead: `start...end as day` or `start...end as year`.".to_string(),
                 )]);
             }
             if left_type.is_time() && right_type.is_time() {
                 return Err(vec![engine_error_at_graph(
                     graph,
                     source,
-                    "Cannot subtract times. Use a datetime range instead: `start...end as hours` or `start...end as seconds`.".to_string(),
+                    "Cannot subtract times. Use a datetime range instead: `start...end as hour` or `start...end as second`.".to_string(),
                 )]);
             }
         }
@@ -4635,7 +4528,7 @@ fn expression_suggestion_label(expression: &Expression) -> String {
             format!("{} as {}", expression_suggestion_label(inner), target)
         }
         ExpressionKind::Literal(lit) => match &lit.value {
-            ValueKind::Number(n) => crate::computation::rational::rational_to_display_str(n),
+            ValueKind::Number(n) => n.display_str(),
             _ => "<value>".to_string(),
         },
         _ => "<expr>".to_string(),
@@ -4651,10 +4544,10 @@ fn first_unit_suggestion(source_type: &LemmaType) -> String {
 
 fn lookup_unit_type(
     resolved_types: &ResolvedTypesMap,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
     unit_name: &str,
 ) -> Option<Arc<LemmaType>> {
-    find_types_by_spec(resolved_types, spec_arc)
+    find_types_by_spec(resolved_types, spec)
         .and_then(|dt| dt.unit_index.get(unit_name))
         .map(Arc::clone)
 }
@@ -4705,12 +4598,12 @@ fn check_unit_conversion_types(
     target: &SemanticConversionTarget,
     resolved_types: &ResolvedTypesMap,
     source_loc: &Source,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
 ) -> Result<(), Vec<Error>> {
     if source_type.vetoed() {
         return Ok(());
     }
-    let unit_index = find_types_by_spec(resolved_types, spec_arc)
+    let unit_index = find_types_by_spec(resolved_types, spec)
         .map(|dt| &dt.unit_index)
         .expect("BUG: spec types missing during unit conversion check");
 
@@ -4732,16 +4625,14 @@ fn check_unit_conversion_types(
             owning_type,
         } => {
             if source_type.is_number() {
-                if crate::computation::units::owning_type_declares_unit_name(
-                    owning_type.as_ref(),
-                    unit_name,
-                ) {
+                if crate::computation::units::owning_type_declares_unit_name(owning_type, unit_name)
+                {
                     return Ok(());
                 }
                 return Err(vec![engine_error_at_graph(
                     graph,
                     source_loc,
-                    format!("Unknown unit '{unit_name}' in spec '{}'.", spec_arc.name),
+                    format!("Unknown unit '{unit_name}' in spec '{}'.", spec.name),
                 )]);
             }
             if source_type.is_measure() {
@@ -4785,10 +4676,8 @@ fn check_unit_conversion_types(
                 )]);
             }
             if source_type.is_calendar_like() {
-                if crate::computation::units::owning_type_declares_unit_name(
-                    owning_type.as_ref(),
-                    unit_name,
-                ) {
+                if crate::computation::units::owning_type_declares_unit_name(owning_type, unit_name)
+                {
                     return Ok(());
                 }
                 return Err(vec![engine_error_at_graph(
@@ -5033,7 +4922,7 @@ fn check_expression(
     graph: &Graph,
     inferred_types: &HashMap<RulePath, Arc<LemmaType>>,
     resolved_types: &ResolvedTypesMap,
-    spec_arc: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
 ) -> Result<(), Vec<Error>> {
     let mut errors = Vec::new();
 
@@ -5061,18 +4950,18 @@ fn check_expression(
 
         ExpressionKind::LogicalAnd(left, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(left, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
             collect(
-                check_expression(right, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(right, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let left_type =
-                infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -5083,38 +4972,14 @@ fn check_expression(
             );
         }
 
-        ExpressionKind::LogicalOr(left, right) => {
-            collect(
-                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
-                &mut errors,
-            );
-            collect(
-                check_expression(right, graph, inferred_types, resolved_types, spec_arc),
-                &mut errors,
-            );
-
-            let left_type =
-                infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
-            let right_type =
-                infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
-            let expr_source = expression
-                .source_location
-                .as_ref()
-                .expect("BUG: expression missing source in check_expression");
-            collect(
-                check_logical_or_operands(graph, &left_type, &right_type, expr_source),
-                &mut errors,
-            );
-        }
-
         ExpressionKind::LogicalNegation(operand, _) => {
             collect(
-                check_expression(operand, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(operand, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let operand_type =
-                infer_expression_type(operand, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(operand, graph, inferred_types, resolved_types, spec);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -5127,18 +4992,18 @@ fn check_expression(
 
         ExpressionKind::Comparison(left, op, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(left, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
             collect(
-                check_expression(right, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(right, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let left_type =
-                infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -5151,7 +5016,7 @@ fn check_expression(
 
         ExpressionKind::Arithmetic(left, operator, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(left, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
@@ -5190,13 +5055,7 @@ fn check_expression(
                 {
                     // Always recurse into the inner source to catch errors in sub-expressions.
                     collect(
-                        check_expression(
-                            inner_source,
-                            graph,
-                            inferred_types,
-                            resolved_types,
-                            spec_arc,
-                        ),
+                        check_expression(inner_source, graph, inferred_types, resolved_types, spec),
                         &mut errors,
                     );
 
@@ -5205,14 +5064,14 @@ fn check_expression(
                         graph,
                         inferred_types,
                         resolved_types,
-                        spec_arc,
+                        spec,
                     );
                     let expr_source = expression
                         .source_location
                         .as_ref()
                         .expect("BUG: expression missing source in check_expression");
 
-                    let target_type_opt = lookup_unit_type(resolved_types, spec_arc, unit_name);
+                    let target_type_opt = lookup_unit_type(resolved_types, spec, unit_name);
 
                     if let Some(target_type) = &target_type_opt {
                         let inner_is_valid_conversion_source = inner_type.is_measure()
@@ -5232,7 +5091,7 @@ fn check_expression(
                                     conversion_target,
                                     resolved_types,
                                     expr_source,
-                                    spec_arc,
+                                    spec,
                                 ),
                                 &mut errors,
                             );
@@ -5245,7 +5104,7 @@ fn check_expression(
                                 graph,
                                 inferred_types,
                                 resolved_types,
-                                spec_arc,
+                                spec,
                             );
                             let combined_type = compute_arithmetic_result_type(
                                 Arc::clone(&left_type),
@@ -5283,7 +5142,7 @@ fn check_expression(
                                         conversion_target,
                                         resolved_types,
                                         expr_source,
-                                        spec_arc,
+                                        spec,
                                     ),
                                     &mut errors,
                                 );
@@ -5309,7 +5168,7 @@ fn check_expression(
             match right_outcome {
                 InlineConversionOutcome::NotHandledInline => {
                     collect(
-                        check_expression(right, graph, inferred_types, resolved_types, spec_arc),
+                        check_expression(right, graph, inferred_types, resolved_types, spec),
                         &mut errors,
                     );
                 }
@@ -5327,9 +5186,9 @@ fn check_expression(
 
             if run_arithmetic_checks {
                 let left_type =
-                    infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
+                    infer_expression_type(left, graph, inferred_types, resolved_types, spec);
                 let right_type =
-                    infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
+                    infer_expression_type(right, graph, inferred_types, resolved_types, spec);
                 let expr_source = expression
                     .source_location
                     .as_ref()
@@ -5360,7 +5219,7 @@ fn check_expression(
                     graph,
                     inferred_types,
                     resolved_types,
-                    spec_arc,
+                    spec,
                 ),
                 &mut errors,
             );
@@ -5370,7 +5229,7 @@ fn check_expression(
                 graph,
                 inferred_types,
                 resolved_types,
-                spec_arc,
+                spec,
             );
             let expr_source = expression
                 .source_location
@@ -5384,7 +5243,7 @@ fn check_expression(
                     target,
                     resolved_types,
                     expr_source,
-                    spec_arc,
+                    spec,
                 ),
                 &mut errors,
             );
@@ -5392,12 +5251,12 @@ fn check_expression(
 
         ExpressionKind::MathematicalComputation(op, operand) => {
             collect(
-                check_expression(operand, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(operand, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let operand_type =
-                infer_expression_type(operand, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(operand, graph, inferred_types, resolved_types, spec);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -5412,7 +5271,7 @@ fn check_expression(
 
         ExpressionKind::ResultIsVeto(operand) => {
             collect(
-                check_expression(operand, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(operand, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
         }
@@ -5421,12 +5280,12 @@ fn check_expression(
 
         ExpressionKind::DateRelative(_, date_expr) => {
             collect(
-                check_expression(date_expr, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(date_expr, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let date_type =
-                infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec);
             if !date_type.is_date() {
                 let expr_source = expression
                     .source_location
@@ -5445,12 +5304,12 @@ fn check_expression(
 
         ExpressionKind::DateCalendar(_, _, date_expr) => {
             collect(
-                check_expression(date_expr, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(date_expr, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let date_type =
-                infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec);
             if !date_type.is_date() {
                 let expr_source = expression
                     .source_location
@@ -5469,18 +5328,18 @@ fn check_expression(
 
         ExpressionKind::RangeLiteral(left, right) => {
             collect(
-                check_expression(left, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(left, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
             collect(
-                check_expression(right, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(right, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let left_type =
-                infer_expression_type(left, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(left, graph, inferred_types, resolved_types, spec);
             let right_type =
-                infer_expression_type(right, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(right, graph, inferred_types, resolved_types, spec);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -5518,12 +5377,12 @@ fn check_expression(
 
         ExpressionKind::PastFutureRange(_, offset_expr) => {
             collect(
-                check_expression(offset_expr, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(offset_expr, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let offset_type =
-                infer_expression_type(offset_expr, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(offset_expr, graph, inferred_types, resolved_types, spec);
             if !offset_type.is_duration_like() && !offset_type.is_calendar_like() {
                 let expr_source = expression
                     .source_location
@@ -5542,18 +5401,18 @@ fn check_expression(
 
         ExpressionKind::RangeContainment(value, range) => {
             collect(
-                check_expression(value, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(value, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
             collect(
-                check_expression(range, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(range, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
 
             let value_type =
-                infer_expression_type(value, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(value, graph, inferred_types, resolved_types, spec);
             let range_type =
-                infer_expression_type(range, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(range, graph, inferred_types, resolved_types, spec);
             let expr_source = expression
                 .source_location
                 .as_ref()
@@ -5594,20 +5453,15 @@ fn check_expression(
         ExpressionKind::Piecewise(arms) => {
             for (condition, result) in arms {
                 collect(
-                    check_expression(condition, graph, inferred_types, resolved_types, spec_arc),
+                    check_expression(condition, graph, inferred_types, resolved_types, spec),
                     &mut errors,
                 );
                 collect(
-                    check_expression(result, graph, inferred_types, resolved_types, spec_arc),
+                    check_expression(result, graph, inferred_types, resolved_types, spec),
                     &mut errors,
                 );
-                let condition_type = infer_expression_type(
-                    condition,
-                    graph,
-                    inferred_types,
-                    resolved_types,
-                    spec_arc,
-                );
+                let condition_type =
+                    infer_expression_type(condition, graph, inferred_types, resolved_types, spec);
                 if !condition_type.is_boolean() {
                     let expr_source = condition
                         .source_location
@@ -5640,7 +5494,7 @@ fn check_expression(
 /// - All sub-expressions via `check_expression`
 fn check_rule_types(
     graph: &Graph,
-    execution_order: &[RulePath],
+    rule_order: &[RulePath],
     inferred_types: &HashMap<RulePath, Arc<LemmaType>>,
     resolved_types: &ResolvedTypesMap,
 ) -> Result<(), Vec<Error>> {
@@ -5652,13 +5506,13 @@ fn check_rule_types(
         }
     };
 
-    for rule_path in execution_order {
+    for rule_path in rule_order {
         let rule_node = graph
             .rules()
             .get(rule_path)
             .expect("BUG: rule from topological sort not in graph");
         let branches = &rule_node.branches;
-        let spec_arc = &rule_node.spec_arc;
+        let spec = &rule_node.spec;
 
         if branches.is_empty() {
             continue;
@@ -5666,22 +5520,11 @@ fn check_rule_types(
 
         let (_, default_result) = &branches[0];
         collect(
-            check_expression(
-                default_result,
-                graph,
-                inferred_types,
-                resolved_types,
-                spec_arc,
-            ),
+            check_expression(default_result, graph, inferred_types, resolved_types, spec),
             &mut errors,
         );
-        let default_type = infer_expression_type(
-            default_result,
-            graph,
-            inferred_types,
-            resolved_types,
-            spec_arc,
-        );
+        let default_type =
+            infer_expression_type(default_result, graph, inferred_types, resolved_types, spec);
 
         if default_type.is_anonymous_measure() {
             if let Some(decomp) = default_type.measure_type_decomposition() {
@@ -5695,7 +5538,7 @@ fn check_rule_types(
                         default_source,
                         anonymous_rule_boundary_error(
                             rule_path,
-                            spec_arc,
+                            spec,
                             resolved_types,
                             decomp,
                             None,
@@ -5718,7 +5561,7 @@ fn check_rule_types(
                         graph,
                         inferred_types,
                         resolved_types,
-                        spec_arc,
+                        spec,
                     ),
                     &mut errors,
                 );
@@ -5727,7 +5570,7 @@ fn check_rule_types(
                     graph,
                     inferred_types,
                     resolved_types,
-                    spec_arc,
+                    spec,
                 );
                 if !condition_type.is_boolean() && !condition_type.is_undetermined() {
                     let condition_source = condition_expression
@@ -5746,11 +5589,11 @@ fn check_rule_types(
             }
 
             collect(
-                check_expression(result, graph, inferred_types, resolved_types, spec_arc),
+                check_expression(result, graph, inferred_types, resolved_types, spec),
                 &mut errors,
             );
             let result_type =
-                infer_expression_type(result, graph, inferred_types, resolved_types, spec_arc);
+                infer_expression_type(result, graph, inferred_types, resolved_types, spec);
 
             if result_type.is_anonymous_measure() {
                 if let Some(decomp) = result_type.measure_type_decomposition() {
@@ -5764,7 +5607,7 @@ fn check_rule_types(
                             branch_source,
                             anonymous_rule_boundary_error(
                                 rule_path,
-                                spec_arc,
+                                spec,
                                 resolved_types,
                                 decomp,
                                 Some(branch_index),
@@ -5809,14 +5652,14 @@ fn check_rule_types(
                         errors.push(Error::validation_with_context(
                             format!("Type mismatch in rule '{}' in spec '{}' ({}): default branch returns {}, but unless clause {} returns {}. All branches must return the same primitive type.",
                             rule_path.rule,
-                            spec_arc.name,
+                            spec.name,
                             location_parts.join(", "),
                             existing_type.name(),
                             branch_index,
                             result_type.name()),
                             Some(rule_source.clone()),
                             None::<String>,
-                            Some(Arc::clone(&graph.main_spec)),
+                            Some(graph.main_spec),
                             None,
                         ));
                     }
@@ -5852,31 +5695,26 @@ fn apply_inferred_types(graph: &mut Graph, inferred_types: HashMap<RulePath, Arc
 /// This function is pure: it takes `&Graph` and returns data with no side effects.
 fn infer_rule_types(
     graph: &Graph,
-    execution_order: &[RulePath],
+    rule_order: &[RulePath],
     resolved_types: &ResolvedTypesMap,
 ) -> HashMap<RulePath, Arc<LemmaType>> {
     let mut computed_types: HashMap<RulePath, Arc<LemmaType>> = HashMap::new();
 
-    for rule_path in execution_order {
+    for rule_path in rule_order {
         let rule_node = graph
             .rules()
             .get(rule_path)
             .expect("BUG: rule from topological sort not in graph");
         let branches = &rule_node.branches;
-        let spec_arc = &rule_node.spec_arc;
+        let spec = &rule_node.spec;
 
         if branches.is_empty() {
             continue;
         }
 
         let (_, default_result) = &branches[0];
-        let default_type = infer_expression_type(
-            default_result,
-            graph,
-            &computed_types,
-            resolved_types,
-            spec_arc,
-        );
+        let default_type =
+            infer_expression_type(default_result, graph, &computed_types, resolved_types, spec);
 
         let mut non_veto_type: Option<Arc<LemmaType>> = None;
         if !default_type.vetoed() && !default_type.is_undetermined() {
@@ -5885,7 +5723,7 @@ fn infer_rule_types(
 
         for (_branch_index, (_condition, result)) in branches.iter().enumerate().skip(1) {
             let result_type =
-                infer_expression_type(result, graph, &computed_types, resolved_types, spec_arc);
+                infer_expression_type(result, graph, &computed_types, resolved_types, spec);
             if !result_type.vetoed() && !result_type.is_undetermined() && non_veto_type.is_none() {
                 non_veto_type = Some(result_type);
             }
@@ -6249,19 +6087,22 @@ pub(crate) fn build_signature_index(
 /// Rebuild [`MeasureRange`] (and other range) specs for `ParentType::Ranged` declarations
 /// after the decomposition pass has populated parent measure types.
 fn refresh_named_range_specs(
-    spec: &Arc<LemmaSpec>,
+    resolver: &TypeResolver<'_>,
+    spec: &LemmaSpec,
     data_defs: &HashMap<String, DataTypeDef>,
     resolved: &mut TypeMap,
-    declared_defaults: &mut HashMap<String, ValueKind>,
+    declared_suggestions: &mut HashMap<String, ValueKind>,
+    already_resolved: &ResolvedTypesMap<'_>,
+    at: &EffectiveDate,
 ) -> Vec<Error> {
     let mut errors = Vec::new();
     for (type_name, def) in data_defs {
-        let ParentType::Ranged { inner } = &def.parent else {
+        let ParentType::Ranged { .. } = &def.parent else {
             continue;
         };
         let element = element_parent_type(&def.parent);
         let element_type = match element {
-            ParentType::Custom { name } => resolved.get(name.as_str()),
+            ParentType::Custom { name } => resolved.get(name.as_str()).cloned(),
             ParentType::Qualified {
                 spec_alias,
                 inner: qualified_inner,
@@ -6270,19 +6111,31 @@ fn refresh_named_range_specs(
                     continue;
                 };
                 let import_name = format!("{spec_alias}.{name}");
-                resolved
+                if let Some(local) = resolved
                     .get(name.as_str())
                     .or_else(|| resolved.get(import_name.as_str()))
+                    .cloned()
+                {
+                    Some(local)
+                } else {
+                    let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
+                    match resolver.resolve_spec_for_import(spec, &spec_ref, &def.source, at) {
+                        Ok((_, target_spec)) => already_resolved
+                            .iter()
+                            .find(|(_, imported, _)| {
+                                discovery::same_loaded_spec(imported, target_spec)
+                            })
+                            .and_then(|(_, _, rts)| rts.resolved.get(name.as_str()).cloned()),
+                        Err(_) => None,
+                    }
+                }
             }
-            ParentType::Primitive { primitive } => {
-                let _ = primitive;
-                continue;
-            }
+            ParentType::Primitive { .. } => continue,
             ParentType::Ranged { .. } => {
                 unreachable!("BUG: element_parent_type must unwrap Ranged")
             }
         };
-        let Some(element_type) = element_type else {
+        let Some(endpoint_type) = element_type else {
             let missing_name = match element {
                 ParentType::Custom { name } => name.clone(),
                 ParentType::Qualified {
@@ -6303,12 +6156,11 @@ fn refresh_named_range_specs(
                 ),
                 Some(def.source.clone()),
                 None::<String>,
-                Some(Arc::clone(spec)),
+                Some(spec),
                 None,
             ));
             continue;
         };
-        let endpoint_type = Arc::clone(element_type);
         let Some(range_spec) = endpoint_type.specifications.range_from_element() else {
             continue;
         };
@@ -6319,7 +6171,9 @@ fn refresh_named_range_specs(
         updated.specifications = range_spec;
         *lemma_type = Arc::new(updated);
 
-        if let Some(ValueKind::Range(left, right)) = declared_defaults.get_mut(type_name.as_str()) {
+        if let Some(ValueKind::Range(left, right)) =
+            declared_suggestions.get_mut(type_name.as_str())
+        {
             let coerced_left = Graph::coerce_literal_to_schema_type(left.as_ref(), &endpoint_type)
                 .unwrap_or_else(|message| {
                     panic!(
@@ -6335,14 +6189,75 @@ fn refresh_named_range_specs(
                             type_name, message
                         )
                     });
-            *declared_defaults
+            *declared_suggestions
                 .get_mut(type_name.as_str())
                 .expect("BUG: named range default removed while refreshing endpoints") =
                 ValueKind::Range(Box::new(coerced_left), Box::new(coerced_right));
         }
+    }
+    errors
+}
 
-        let _ = inner;
-        let _ = spec;
+/// Apply range-local constraints after [`refresh_named_range_specs`] for named ranged types.
+fn apply_deferred_named_range_constraints(
+    spec: &LemmaSpec,
+    data_defs: &HashMap<String, DataTypeDef>,
+    resolved: &mut TypeMap,
+    declared_suggestions: &mut HashMap<String, ValueKind>,
+    type_sources: &HashMap<String, Source>,
+) -> Vec<Error> {
+    let mut errors = Vec::new();
+    for (type_name, def) in data_defs {
+        if !should_defer_ranged_constraints(&def.parent) {
+            continue;
+        }
+        let Some(constraints) = &def.constraints else {
+            continue;
+        };
+        let Some(lemma_type) = resolved.get(type_name.as_str()).cloned() else {
+            continue;
+        };
+        let mut declared_suggestion: Option<RawSuggestion> = None;
+        match apply_constraints_to_spec(
+            spec,
+            &constraint_application_type_name(&def.parent, type_name),
+            lemma_type.specifications.clone(),
+            constraints,
+            &def.source,
+            &mut declared_suggestion,
+        ) {
+            Ok(updated_specs) => {
+                let mut updated = lemma_type.as_ref().clone();
+                updated.specifications = updated_specs;
+                let updated_arc = Arc::new(updated);
+                if let Some(raw) = declared_suggestion {
+                    match materialize_raw_suggestion(
+                        raw,
+                        &updated_arc.specifications,
+                        type_name.as_str(),
+                    ) {
+                        Ok(value_kind) => {
+                            declared_suggestions.insert(type_name.clone(), value_kind);
+                        }
+                        Err(message) => {
+                            let source = type_sources
+                                .get(type_name.as_str())
+                                .cloned()
+                                .unwrap_or_else(|| def.source.clone());
+                            errors.push(Error::validation_with_context(
+                                message,
+                                Some(source),
+                                None::<String>,
+                                Some(spec),
+                                None,
+                            ));
+                        }
+                    }
+                }
+                resolved.insert(type_name.clone(), updated_arc);
+            }
+            Err(constraint_errors) => errors.extend(constraint_errors),
+        }
     }
     errors
 }
@@ -6628,7 +6543,7 @@ fn resolve_measure_decompositions(
 /// or an error message (the type is dropped on failure).
 fn finalize_lemma_measure_magnitudes(
     lemma_type: LemmaType,
-    declared_default: Option<&ValueKind>,
+    declared_suggestion: Option<&ValueKind>,
     type_name: &str,
 ) -> Result<LemmaType, String> {
     let LemmaType {
@@ -6638,7 +6553,7 @@ fn finalize_lemma_measure_magnitudes(
     } = lemma_type;
     semantics::finalize_measure_unit_constraint_magnitudes(
         &mut specifications,
-        declared_default,
+        declared_suggestion,
         type_name,
     )?;
     Ok(LemmaType {
@@ -6650,10 +6565,10 @@ fn finalize_lemma_measure_magnitudes(
 
 fn finalize_measure_magnitudes_in_resolved(
     resolved: HashMap<String, Arc<LemmaType>>,
-    declared_defaults: &HashMap<String, ValueKind>,
+    declared_suggestions: &HashMap<String, ValueKind>,
     type_sources: &HashMap<String, Source>,
     spec_name: &str,
-    spec: &Arc<LemmaSpec>,
+    spec: &LemmaSpec,
 ) -> (HashMap<String, Arc<LemmaType>>, Vec<Error>) {
     resolved.into_iter().fold(
         (HashMap::new(), Vec::new()),
@@ -6667,7 +6582,7 @@ fn finalize_measure_magnitudes_in_resolved(
             let fallback = (*arc).clone();
             let lemma_type = match finalize_lemma_measure_magnitudes(
                 arc_unwrap(arc),
-                declared_defaults.get(&type_name),
+                declared_suggestions.get(&type_name),
                 &type_name,
             ) {
                 Ok(lt) => lt,
@@ -6679,7 +6594,7 @@ fn finalize_measure_magnitudes_in_resolved(
                         ),
                         Some(source),
                         None::<String>,
-                        Some(Arc::clone(spec)),
+                        Some(spec),
                         None,
                     ));
                     fallback
@@ -6693,10 +6608,10 @@ fn finalize_measure_magnitudes_in_resolved(
 
 fn finalize_measure_magnitudes_in_unit_index(
     unit_index: HashMap<String, Arc<LemmaType>>,
-    declared_defaults: &HashMap<String, ValueKind>,
+    declared_suggestions: &HashMap<String, ValueKind>,
     type_sources: &HashMap<String, Source>,
-    all_data_types: &[(Arc<LemmaSpec>, HashMap<String, DataTypeDef>)],
-    spec: &Arc<LemmaSpec>,
+    all_data_types: &[(&LemmaSpec, HashMap<String, DataTypeDef>)],
+    spec: &LemmaSpec,
 ) -> (HashMap<String, Arc<LemmaType>>, Vec<Error>) {
     unit_index.into_iter().fold(
         (HashMap::new(), Vec::new()),
@@ -6717,7 +6632,7 @@ fn finalize_measure_magnitudes_in_unit_index(
             let fallback = (*arc).clone();
             let lemma_type = match finalize_lemma_measure_magnitudes(
                 arc_unwrap(arc),
-                declared_defaults.get(type_name.as_str()),
+                declared_suggestions.get(type_name.as_str()),
                 type_name.as_str(),
             ) {
                 Ok(lt) => lt,
@@ -6743,7 +6658,7 @@ fn finalize_measure_magnitudes_in_unit_index(
                         ),
                         Some(source),
                         None::<String>,
-                        Some(Arc::clone(spec)),
+                        Some(spec),
                         None,
                     ));
                     fallback
@@ -6932,28 +6847,44 @@ mod tests {
         )
     }
 
-    fn build_graph(main_spec: &LemmaSpec, all_specs: &[LemmaSpec]) -> Result<Graph, Vec<Error>> {
+    fn build_graph(
+        main_spec: &LemmaSpec,
+        all_specs: &[LemmaSpec],
+    ) -> Result<Graph<'static>, Vec<Error>> {
         use crate::engine::Context;
         use crate::planning::discovery;
 
         let mut ctx = Context::new();
         let repository = ctx.workspace();
         for s in all_specs {
-            if let Err(e) = ctx.insert_spec(Arc::clone(&repository), Arc::new(s.clone())) {
+            if let Err(e) = ctx.insert_spec(Arc::clone(&repository), s.clone()) {
                 return Err(vec![e]);
             }
         }
         let effective = EffectiveDate::from_option(main_spec.effective_from().cloned());
-        let main_spec_arc = ctx
+        let ctx = Box::leak(Box::new(ctx));
+        let repository = ctx.workspace();
+        let main_spec_ref = ctx
             .spec_set(&repository, main_spec.name.as_str())
-            .and_then(|ss| ss.get_exact(main_spec.effective_from()).cloned())
+            .and_then(|ss| ss.get_exact(main_spec.effective_from()))
             .expect("main_spec must be in all_specs");
-        let limits = crate::ResourceLimits::default();
-        let dag = discovery::build_dag_for_spec(&ctx, &main_spec_arc, &effective, &limits)
-            .map_err(|e| match e {
-                discovery::DagError::Cycle(es) | discovery::DagError::Other(es) => es,
-            })?;
-        match Graph::build(&ctx, &repository, &main_spec_arc, &dag, &effective, &limits) {
+        let limits = Box::leak(Box::new(crate::ResourceLimits::default()));
+        let ordered_dependencies =
+            discovery::discover_dependency_order(ctx, main_spec_ref, &effective, limits).map_err(
+                |e| match e {
+                    discovery::DependencyDiscoveryError::Cycle(es)
+                    | discovery::DependencyDiscoveryError::Other(es) => es,
+                },
+            )?;
+        let ordered_dependencies = Box::leak(Box::new(ordered_dependencies));
+        match Graph::build(
+            ctx,
+            &repository,
+            main_spec_ref,
+            ordered_dependencies,
+            &effective,
+            limits,
+        ) {
             Ok((graph, _types)) => Ok(graph),
             Err(errors) => Err(errors),
         }
@@ -7598,7 +7529,7 @@ rule result: m.x"#;
     fn import_alias_registered_in_graph() {
         let code = r#"
 spec inner
-data x: number -> default 1
+data x: number -> suggest 1
 
 spec outer
 uses i: inner
@@ -7619,8 +7550,8 @@ rule r: i.x
             data: "i".to_string(),
         };
         match graph.data().get(&alias_path) {
-            Some(DataDefinition::Import { spec, .. }) => {
-                assert_eq!(spec.name, "inner");
+            Some(DataDefinition::Import { target_name, .. }) => {
+                assert_eq!(target_name, "inner");
             }
             other => panic!(
                 "alias path 'i' must be DataDefinition::Import, got {:?}",
@@ -7679,18 +7610,18 @@ pub struct ResolvedSpecTypes {
     /// Planning-only: includes measure units and post-`resolve_measure_decompositions` decomposition.
     pub resolved: HashMap<String, Arc<LemmaType>>,
 
-    /// Declared default per named type (e.g. `type rate: ratio -> default 50%`).
-    /// Only present for types that declared a `-> default ...` constraint anywhere
-    /// in their extension chain; the inner-most `-> default` wins. Defaults live
+    /// Declared default per named type (e.g. `type rate: ratio -> suggest 50%`).
+    /// Only present for types that declared a `-> suggest ...` constraint anywhere
+    /// in their extension chain; the inner-most `-> suggest` wins. Defaults live
     /// outside [`TypeSpecification`] so the type itself stays free of binding data.
-    /// Populated after [`RawDefault`] materialization (post-decomposition).
-    pub declared_defaults: HashMap<String, ValueKind>,
+    /// Populated after [`RawSuggestion`] materialization (post-decomposition).
+    pub declared_suggestions: HashMap<String, ValueKind>,
 
     /// Defaults captured during type resolution, before measure unit factors are final.
-    pub(crate) raw_defaults: Vec<(String, RawDefault)>,
+    pub(crate) raw_suggestions: Vec<(String, RawSuggestion)>,
 
     /// Raw defaults retained after materialization for cross-spec parent lookup during later specs.
-    pub(crate) source_defaults: HashMap<String, RawDefault>,
+    pub(crate) source_defaults: HashMap<String, RawSuggestion>,
 
     /// Unit index: unit_name -> family-root measure type for that unit's family.
     /// Binding aliases never appear; cross-family duplicate unit names fail at resolution.
@@ -7709,18 +7640,18 @@ pub(crate) struct DataTypeDef {
 }
 
 ///
-/// Named types are extracted from [`DataValue::Definition`] data and keyed by pointer
-/// identity (`Arc::ptr_eq`) — no `Hash`/`Eq` on `LemmaSpec` required.
+/// Named types are extracted from [`DataValue::Definition`] data and stored in
+/// DAG-parallel maps keyed by Context-owned `&LemmaSpec` identity.
 #[derive(Debug, Clone)]
 pub(crate) struct TypeResolver<'a> {
-    data_types: Vec<(Arc<LemmaSpec>, HashMap<String, DataTypeDef>)>,
+    data_types: Vec<(&'a LemmaSpec, HashMap<String, DataTypeDef>)>,
     context: &'a Context,
-    all_registered_specs: Vec<(Arc<LemmaRepository>, Arc<LemmaSpec>)>,
+    all_registered_specs: Vec<(Arc<LemmaRepository>, &'a LemmaSpec)>,
     /// Specs for which [`TypeResolver::register_all`] could not register every
     /// type-declaring data row. Planning must skip building these specs:
     /// downstream code (`add_data`) relies on every type-resolving data row
     /// being present in the resolved type map.
-    specs_with_failed_registration: Vec<Arc<LemmaSpec>>,
+    specs_with_failed_registration: Vec<&'a LemmaSpec>,
 }
 
 /// Parent type used for measure-family lookup, unwrapping [`ParentType::Ranged`].
@@ -7824,20 +7755,20 @@ impl<'a> TypeResolver<'a> {
         }
     }
 
-    pub fn is_registered(&self, spec: &Arc<LemmaSpec>) -> bool {
+    pub fn is_registered(&self, spec: &LemmaSpec) -> bool {
         self.all_registered_specs
             .iter()
-            .any(|(_, s)| Arc::ptr_eq(s, spec))
+            .any(|(_, s)| discovery::same_loaded_spec(s, spec))
     }
 
     /// Record that a type-declaring data row of `spec` could not be registered.
-    fn mark_registration_failure(&mut self, spec: &Arc<LemmaSpec>) {
+    fn mark_registration_failure(&mut self, spec: &'a LemmaSpec) {
         if !self
             .specs_with_failed_registration
             .iter()
-            .any(|s| Arc::ptr_eq(s, spec))
+            .any(|s| discovery::same_loaded_spec(s, spec))
         {
-            self.specs_with_failed_registration.push(Arc::clone(spec));
+            self.specs_with_failed_registration.push(spec);
         }
     }
 
@@ -7845,25 +7776,25 @@ impl<'a> TypeResolver<'a> {
     /// type-declaring data row of `spec`. The corresponding errors were
     /// returned by `register_all`; specs with failed registrations must not
     /// be built.
-    pub fn registration_failed(&self, spec: &Arc<LemmaSpec>) -> bool {
+    pub fn registration_failed(&self, spec: &LemmaSpec) -> bool {
         self.specs_with_failed_registration
             .iter()
-            .any(|s| Arc::ptr_eq(s, spec))
+            .any(|s| discovery::same_loaded_spec(s, spec))
     }
 
     /// Register all type-declaring data from a spec.
     pub fn register_all(
         &mut self,
         repository: &Arc<LemmaRepository>,
-        spec: &Arc<LemmaSpec>,
+        spec: &'a LemmaSpec,
     ) -> Vec<Error> {
         if !self
             .all_registered_specs
             .iter()
-            .any(|(_, s)| Arc::ptr_eq(s, spec))
+            .any(|(_, s)| discovery::same_loaded_spec(s, spec))
         {
             self.all_registered_specs
-                .push((Arc::clone(repository), Arc::clone(spec)));
+                .push((Arc::clone(repository), spec));
         }
 
         let mut errors = Vec::new();
@@ -7890,7 +7821,7 @@ impl<'a> TypeResolver<'a> {
                                     message,
                                     Some(data.source_location.clone()),
                                     None::<String>,
-                                    Some(Arc::clone(spec)),
+                                    Some(spec),
                                     None,
                                 ));
                                 self.mark_registration_failure(spec);
@@ -7905,7 +7836,7 @@ impl<'a> TypeResolver<'a> {
                                 ),
                                 Some(data.source_location.clone()),
                                 None::<String>,
-                                Some(Arc::clone(spec)),
+                                Some(spec),
                                 None,
                             ));
                             self.mark_registration_failure(spec);
@@ -7930,15 +7861,15 @@ impl<'a> TypeResolver<'a> {
     }
 
     /// Register a type from a data declaration.
-    pub fn register_type(&mut self, spec: &Arc<LemmaSpec>, def: DataTypeDef) -> Result<(), Error> {
+    pub fn register_type(&mut self, spec: &'a LemmaSpec, def: DataTypeDef) -> Result<(), Error> {
         let spec_types = if let Some(pos) = self
             .data_types
             .iter()
-            .position(|(s, _)| Arc::ptr_eq(s, spec))
+            .position(|(s, _)| discovery::same_loaded_spec(s, spec))
         {
             &mut self.data_types[pos].1
         } else {
-            self.data_types.push((Arc::clone(spec), HashMap::new()));
+            self.data_types.push((spec, HashMap::new()));
             let last = self.data_types.len() - 1;
             &mut self.data_types[last].1
         };
@@ -7950,7 +7881,7 @@ impl<'a> TypeResolver<'a> {
                 ),
                 Some(def.source.clone()),
                 None::<String>,
-                Some(Arc::clone(spec)),
+                Some(spec),
                 None,
             ));
         }
@@ -7962,13 +7893,13 @@ impl<'a> TypeResolver<'a> {
     /// `at` is the planning instant for this spec (nested qualified refs use their pin).
     pub fn resolve_and_validate(
         &self,
-        spec: &Arc<LemmaSpec>,
+        spec: &LemmaSpec,
         at: &EffectiveDate,
         already_resolved: &ResolvedTypesMap,
     ) -> Result<ResolvedSpecTypes, Vec<Error>> {
         let mut resolved_types = self.resolve_types_internal(spec, at, already_resolved)?;
         resolved_types.source_defaults = resolved_types
-            .raw_defaults
+            .raw_suggestions
             .iter()
             .map(|(name, raw)| (name.clone(), raw.clone()))
             .collect();
@@ -7981,7 +7912,7 @@ impl<'a> TypeResolver<'a> {
             .filter_map(|type_name| {
                 self.data_types
                     .iter()
-                    .find(|(s, _)| Arc::ptr_eq(s, spec))
+                    .find(|(s, _)| discovery::same_loaded_spec(s, spec))
                     .and_then(|(_, defs)| defs.get(type_name.as_str()))
                     .map(|ftd| (type_name.clone(), ftd.source.clone()))
             })
@@ -7999,15 +7930,15 @@ impl<'a> TypeResolver<'a> {
         resolved_types.unit_index = new_unit_index;
         errors.extend(decomp_errors);
 
-        for (type_name, raw) in std::mem::take(&mut resolved_types.raw_defaults) {
+        for (type_name, raw) in std::mem::take(&mut resolved_types.raw_suggestions) {
             let lemma_type = resolved_types
                 .resolved
                 .get(&type_name)
                 .expect("BUG: raw default for type not in resolved");
-            match materialize_raw_default(raw, &lemma_type.specifications, &type_name) {
+            match materialize_raw_suggestion(raw, &lemma_type.specifications, &type_name) {
                 Ok(value_kind) => {
                     resolved_types
-                        .declared_defaults
+                        .declared_suggestions
                         .insert(type_name, value_kind);
                 }
                 Err(message) => {
@@ -8019,19 +7950,33 @@ impl<'a> TypeResolver<'a> {
                         message,
                         Some(source),
                         None::<String>,
-                        Some(Arc::clone(spec)),
+                        Some(spec),
                         None,
                     ));
                 }
             }
         }
 
-        if let Some((_, data_defs)) = self.data_types.iter().find(|(s, _)| Arc::ptr_eq(s, spec)) {
+        if let Some((_, data_defs)) = self
+            .data_types
+            .iter()
+            .find(|(s, _)| discovery::same_loaded_spec(s, spec))
+        {
             errors.extend(refresh_named_range_specs(
+                self,
                 spec,
                 data_defs,
                 &mut resolved_types.resolved,
-                &mut resolved_types.declared_defaults,
+                &mut resolved_types.declared_suggestions,
+                already_resolved,
+                at,
+            ));
+            errors.extend(apply_deferred_named_range_constraints(
+                spec,
+                data_defs,
+                &mut resolved_types.resolved,
+                &mut resolved_types.declared_suggestions,
+                &type_sources,
             ));
         }
 
@@ -8041,7 +7986,7 @@ impl<'a> TypeResolver<'a> {
 
         let (new_resolved, resolved_errors) = finalize_measure_magnitudes_in_resolved(
             std::mem::take(&mut resolved_types.resolved),
-            &resolved_types.declared_defaults,
+            &resolved_types.declared_suggestions,
             &type_sources,
             &spec.name,
             spec,
@@ -8055,7 +8000,7 @@ impl<'a> TypeResolver<'a> {
 
         let (new_unit_index, unit_index_errors) = finalize_measure_magnitudes_in_unit_index(
             std::mem::take(&mut resolved_types.unit_index),
-            &resolved_types.declared_defaults,
+            &resolved_types.declared_suggestions,
             &type_sources,
             &self.data_types,
             spec,
@@ -8099,10 +8044,11 @@ impl<'a> TypeResolver<'a> {
                 });
             errors.extend(validate_type_specifications(
                 &lemma_type.specifications,
-                resolved_types.declared_defaults.get(type_name),
+                resolved_types.declared_suggestions.get(type_name),
                 type_name,
                 &source,
-                Some(Arc::clone(spec)),
+                Some(spec),
+                &resolved_types.unit_index,
             ));
         }
 
@@ -8115,12 +8061,54 @@ impl<'a> TypeResolver<'a> {
             });
             let mut spec_errors = validate_type_specifications(
                 &lemma_type.specifications,
-                resolved_types.declared_defaults.get(type_name),
+                resolved_types.declared_suggestions.get(type_name),
                 type_name,
                 &source,
-                Some(Arc::clone(spec)),
+                Some(spec),
+                &resolved_types.unit_index,
             );
             errors.append(&mut spec_errors);
+        }
+
+        for (type_name, lemma_type) in &resolved_types.resolved {
+            let is_range = matches!(
+                &lemma_type.specifications,
+                TypeSpecification::NumberRange { .. }
+                    | TypeSpecification::DateRange { .. }
+                    | TypeSpecification::TimeRange { .. }
+                    | TypeSpecification::MeasureRange { .. }
+                    | TypeSpecification::RatioRange { .. }
+            );
+            if !is_range {
+                continue;
+            }
+            let Some(default_kind) = resolved_types.declared_suggestions.get(type_name.as_str())
+            else {
+                continue;
+            };
+            let lit = LiteralValue {
+                value: default_kind.clone(),
+                lemma_type: Arc::clone(lemma_type),
+            };
+            if let Err(message) = crate::planning::execution_plan::validate_value_against_type(
+                lemma_type.as_ref(),
+                &lit,
+                &resolved_types.unit_index,
+            ) {
+                let source = type_sources.get(type_name).cloned().unwrap_or_else(|| {
+                    unreachable!(
+                        "BUG: resolved type '{}' has no corresponding DataTypeDef in spec '{}'",
+                        type_name, spec.name
+                    )
+                });
+                errors.push(Error::validation_with_context(
+                    format!("Type '{}' suggestion is invalid: {}", type_name, message),
+                    Some(source),
+                    None::<String>,
+                    Some(spec),
+                    None,
+                ));
+            }
         }
 
         if errors.is_empty() {
@@ -8136,14 +8124,14 @@ impl<'a> TypeResolver<'a> {
 
     fn resolve_types_internal(
         &self,
-        spec: &Arc<LemmaSpec>,
+        spec: &LemmaSpec,
         at: &EffectiveDate,
         already_resolved: &ResolvedTypesMap,
     ) -> Result<ResolvedSpecTypes, Vec<Error>> {
         let data_defs = self
             .data_types
             .iter()
-            .find(|(s, _)| Arc::ptr_eq(s, spec))
+            .find(|(s, _)| discovery::same_loaded_spec(s, spec))
             .map(|(_, defs)| defs)
             .cloned()
             .unwrap_or_default();
@@ -8207,24 +8195,25 @@ impl<'a> TypeResolver<'a> {
                     ),
                     Some(data_defs[cycle_type_name].source.clone()),
                     None::<String>,
-                    Some(Arc::clone(spec)),
+                    Some(spec),
                     None,
                 )]);
             }
             sorted
         };
 
-        let mut resolved: HashMap<String, (Arc<LemmaType>, Option<RawDefault>)> = HashMap::new();
+        let mut resolved: HashMap<String, (Arc<LemmaType>, Option<RawSuggestion>)> = HashMap::new();
 
         fn lookup_parent_type(
             resolver: &TypeResolver<'_>,
-            spec: &Arc<LemmaSpec>,
+            spec: &LemmaSpec,
             parent: &ParentType,
             source: &Source,
             at: &EffectiveDate,
             already_resolved: &ResolvedTypesMap,
-            resolved: &HashMap<String, (Arc<LemmaType>, Option<RawDefault>)>,
-        ) -> Result<(TypeSpecification, Option<RawDefault>, Arc<LemmaType>), Vec<Error>> {
+            resolved: &HashMap<String, (Arc<LemmaType>, Option<RawSuggestion>)>,
+        ) -> Result<(TypeSpecification, Option<RawSuggestion>, Arc<LemmaType>), Vec<Error>>
+        {
             match parent {
                 ParentType::Ranged { inner } => {
                     let (element_specs, element_default, element_type) = lookup_parent_type(
@@ -8243,7 +8232,7 @@ impl<'a> TypeResolver<'a> {
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            Some(Arc::clone(spec)),
+                            Some(spec),
                             None,
                         )]
                     })?;
@@ -8256,17 +8245,17 @@ impl<'a> TypeResolver<'a> {
                     Ok((lemma_type.as_ref().specifications.clone(), None, lemma_type))
                 }
                 ParentType::Custom { name } => {
-                    if let Some((parent_type, parent_default)) = resolved.get(name.as_str()) {
+                    if let Some((parent_type, parent_suggestion)) = resolved.get(name.as_str()) {
                         return Ok((
                             parent_type.as_ref().specifications.clone(),
-                            parent_default.clone(),
+                            parent_suggestion.clone(),
                             Arc::clone(parent_type),
                         ));
                     }
                     let type_exists = resolver
                         .data_types
                         .iter()
-                        .find(|(s, _)| Arc::ptr_eq(s, spec))
+                        .find(|(s, _)| discovery::same_loaded_spec(s, spec))
                         .map(|(_, type_map)| type_map.contains_key(name.as_str()))
                         .unwrap_or(false);
                     if !type_exists {
@@ -8281,7 +8270,7 @@ impl<'a> TypeResolver<'a> {
                                 ),
                                 Some(source.clone()),
                                 None::<String>,
-                                Some(Arc::clone(spec)),
+                                Some(spec),
                                 None,
                             )]);
                         }
@@ -8291,7 +8280,7 @@ impl<'a> TypeResolver<'a> {
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            Some(Arc::clone(spec)),
+                            Some(spec),
                             None,
                         )]);
                     }
@@ -8302,7 +8291,7 @@ impl<'a> TypeResolver<'a> {
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        Some(Arc::clone(spec)),
+                        Some(spec),
                         None,
                     )])
                 }
@@ -8323,7 +8312,9 @@ impl<'a> TypeResolver<'a> {
                         ParentType::Custom { name } => {
                             let Some(resolved_spec_types) = already_resolved
                                 .iter()
-                                .find(|(_, imported, _)| Arc::ptr_eq(imported, &target_spec))
+                                .find(|(_, imported, _)| {
+                                    discovery::same_loaded_spec(imported, target_spec)
+                                })
                                 .map(|(_, _, resolved_spec_types)| resolved_spec_types)
                             else {
                                 // The import target exists but failed its own type
@@ -8336,7 +8327,7 @@ impl<'a> TypeResolver<'a> {
                                     ),
                                     Some(source.clone()),
                                     None::<String>,
-                                    Some(Arc::clone(spec)),
+                                    Some(spec),
                                     None,
                                 )]);
                             };
@@ -8345,7 +8336,7 @@ impl<'a> TypeResolver<'a> {
                                 let type_exists = resolver
                                     .data_types
                                     .iter()
-                                    .find(|(s, _)| Arc::ptr_eq(s, &target_spec))
+                                    .find(|(s, _)| discovery::same_loaded_spec(s, target_spec))
                                     .map(|(_, type_map)| type_map.contains_key(name.as_str()))
                                     .unwrap_or(false);
                                 if !type_exists {
@@ -8356,7 +8347,7 @@ impl<'a> TypeResolver<'a> {
                                         ),
                                         Some(source.clone()),
                                         None::<String>,
-                                        Some(Arc::clone(spec)),
+                                        Some(spec),
                                         None,
                                     )]);
                                 }
@@ -8367,7 +8358,7 @@ impl<'a> TypeResolver<'a> {
                                     ),
                                     Some(source.clone()),
                                     None::<String>,
-                                    Some(Arc::clone(spec)),
+                                    Some(spec),
                                     None,
                                 )]);
                             };
@@ -8384,14 +8375,14 @@ impl<'a> TypeResolver<'a> {
                             "Nested qualified parent types are invalid",
                             Some(source.clone()),
                             None::<String>,
-                            Some(Arc::clone(spec)),
+                            Some(spec),
                             None,
                         )]),
                         ParentType::Ranged { .. } => Err(vec![Error::validation_with_context(
                             "Nested ranged parent types are invalid",
                             Some(source.clone()),
                             None::<String>,
-                            Some(Arc::clone(spec)),
+                            Some(spec),
                             None,
                         )]),
                     }
@@ -8406,7 +8397,7 @@ impl<'a> TypeResolver<'a> {
             let parent = ftd.parent.clone();
             let constraints = ftd.constraints.clone();
 
-            let (parent_specs, parent_default, parent_type) = lookup_parent_type(
+            let (parent_specs, parent_suggestion, parent_type) = lookup_parent_type(
                 self,
                 spec,
                 &parent,
@@ -8416,30 +8407,30 @@ impl<'a> TypeResolver<'a> {
                 &resolved,
             )?;
 
-            let mut declared_default = parent_default;
-            let final_specs = if let Some(constraints) = &constraints {
+            let mut declared_suggestion = parent_suggestion;
+            let final_specs = if should_defer_ranged_constraints(&parent) {
+                parent_specs
+            } else if let Some(constraints) = &constraints {
                 apply_constraints_to_spec(
                     spec,
                     &constraint_application_type_name(&parent, type_name),
                     parent_specs,
                     constraints,
                     &ftd.source,
-                    &mut declared_default,
+                    &mut declared_suggestion,
                 )?
             } else {
                 parent_specs
             };
 
-            let import_target =
+            let is_import =
                 if let ParentType::Qualified { spec_alias, .. } = element_parent_type(&parent) {
                     let spec_ref = ast::SpecRef::same_repository(spec_alias.clone());
-                    Some(
-                        self.resolve_spec_for_import(spec, &spec_ref, &ftd.source, at)
-                            .map_err(|error| vec![error])?
-                            .1,
-                    )
+                    self.resolve_spec_for_import(spec, &spec_ref, &ftd.source, at)
+                        .map_err(|error| vec![error])?;
+                    true
                 } else {
-                    None
+                    false
                 };
 
             let family = match element_parent_type(&parent) {
@@ -8453,28 +8444,28 @@ impl<'a> TypeResolver<'a> {
             let extends = TypeExtends::Custom {
                 parent: parent.to_string(),
                 family,
-                defining_spec: if let Some(import_spec) = import_target {
-                    TypeDefiningSpec::Import { spec: import_spec }
+                defining_spec: if is_import {
+                    TypeDefiningSpec::Import
                 } else {
                     TypeDefiningSpec::Local
                 },
             };
 
-            let declared_default = match &ftd.bound_literal {
+            let declared_suggestion = match &ftd.bound_literal {
                 Some(literal) => match semantics::parser_value_to_value_kind(literal, &final_specs)
                 {
-                    Ok(value_kind) => Some(RawDefault::Value(value_kind)),
+                    Ok(value_kind) => Some(RawSuggestion::Value(value_kind)),
                     Err(message) => {
                         return Err(vec![Error::validation_with_context(
                             message,
                             Some(ftd.source.clone()),
                             None::<String>,
-                            Some(Arc::clone(spec)),
+                            Some(spec),
                             None,
                         )]);
                     }
                 },
-                None => declared_default,
+                None => declared_suggestion,
             };
 
             let lemma_type = Arc::new(LemmaType {
@@ -8482,7 +8473,7 @@ impl<'a> TypeResolver<'a> {
                 specifications: final_specs,
                 extends,
             });
-            resolved.insert(type_name.clone(), (lemma_type, declared_default));
+            resolved.insert(type_name.clone(), (lemma_type, declared_suggestion));
         }
 
         let mut unit_index_tmp: HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)> =
@@ -8532,7 +8523,7 @@ impl<'a> TypeResolver<'a> {
                 };
             let Some(imported_resolved) = already_resolved
                 .iter()
-                .find(|(_, imported, _)| Arc::ptr_eq(imported, &imported_spec))
+                .find(|(_, imported, _)| discovery::same_loaded_spec(imported, imported_spec))
                 .map(|(_, _, resolved_spec_types)| resolved_spec_types)
             else {
                 continue;
@@ -8540,7 +8531,7 @@ impl<'a> TypeResolver<'a> {
             let Some(imported_defs) = self
                 .data_types
                 .iter()
-                .find(|(s, _)| Arc::ptr_eq(s, &imported_spec))
+                .find(|(s, _)| discovery::same_loaded_spec(s, imported_spec))
                 .map(|(_, defs)| defs)
             else {
                 continue;
@@ -8589,19 +8580,19 @@ impl<'a> TypeResolver<'a> {
             .map(|(unit_name, (lemma_type, _))| (unit_name, lemma_type))
             .collect();
 
-        let mut raw_defaults = Vec::new();
+        let mut raw_suggestions = Vec::new();
         let mut resolved_types = HashMap::new();
         for (type_name, (lemma_type, default)) in resolved {
-            if let Some(raw_default) = default {
-                raw_defaults.push((type_name.clone(), raw_default));
+            if let Some(raw_suggestion) = default {
+                raw_suggestions.push((type_name.clone(), raw_suggestion));
             }
             resolved_types.insert(type_name, lemma_type);
         }
 
         Ok(ResolvedSpecTypes {
             resolved: resolved_types,
-            declared_defaults: HashMap::new(),
-            raw_defaults,
+            declared_suggestions: HashMap::new(),
+            raw_suggestions,
             source_defaults: HashMap::new(),
             unit_index,
         })
@@ -8609,15 +8600,15 @@ impl<'a> TypeResolver<'a> {
 
     fn resolve_spec_for_import(
         &self,
-        spec: &Arc<LemmaSpec>,
+        spec: &LemmaSpec,
         from: &crate::parsing::ast::SpecRef,
         import_site: &crate::parsing::source::Source,
         at: &EffectiveDate,
-    ) -> Result<(Arc<LemmaRepository>, Arc<LemmaSpec>), Error> {
+    ) -> Result<(Arc<LemmaRepository>, &'a LemmaSpec), Error> {
         let consumer_repository = self
             .all_registered_specs
             .iter()
-            .find(|(_, s)| Arc::ptr_eq(s, spec))
+            .find(|(_, s)| discovery::same_loaded_spec(s, spec))
             .map(|(r, _)| Arc::clone(r))
             .unwrap_or_else(|| self.context.workspace());
         discovery::resolve_spec_ref(
@@ -8635,7 +8626,7 @@ impl<'a> TypeResolver<'a> {
     // =========================================================================
 
     fn add_measure_units_to_index(
-        spec: &Arc<LemmaSpec>,
+        spec: &LemmaSpec,
         unit_index: &mut HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)>,
         resolved_type: &Arc<LemmaType>,
         defined_by: &DataTypeDef,
@@ -8709,7 +8700,7 @@ impl<'a> TypeResolver<'a> {
                             ),
                             Some(defined_by.source.clone()),
                             None::<String>,
-                            Some(Arc::clone(spec)),
+                            Some(spec),
                             None,
                         ));
                     }
@@ -8722,7 +8713,7 @@ impl<'a> TypeResolver<'a> {
                     ),
                     Some(defined_by.source.clone()),
                     None::<String>,
-                    Some(Arc::clone(spec)),
+                    Some(spec),
                     None,
                 ));
             }
@@ -8732,7 +8723,7 @@ impl<'a> TypeResolver<'a> {
     }
 
     fn add_ratio_units_to_index(
-        spec: &Arc<LemmaSpec>,
+        spec: &LemmaSpec,
         unit_index: &mut HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)>,
         resolved_type: &Arc<LemmaType>,
         defined_by: &DataTypeDef,
@@ -8782,7 +8773,7 @@ impl<'a> TypeResolver<'a> {
                         ),
                         Some(defined_by.source.clone()),
                         None::<String>,
-                        Some(Arc::clone(spec)),
+                        Some(spec),
                         None,
                     ));
                 }
@@ -8797,7 +8788,7 @@ impl<'a> TypeResolver<'a> {
                     ),
                     Some(defined_by.source.clone()),
                     None::<String>,
-                    Some(Arc::clone(spec)),
+                    Some(spec),
                     None,
                 ));
             }
@@ -8823,22 +8814,22 @@ impl<'a> TypeResolver<'a> {
 mod type_resolution_tests {
     use super::*;
     use crate::computation::rational::rational_new;
-    use crate::parse;
     use crate::parsing::ast::{
         CommandArg, LemmaSpec, ParentType, PrimitiveKind, TypeConstraintCommand,
     };
+    use crate::parsing::parse;
     use crate::ResourceLimits;
     use rust_decimal::Decimal;
     use std::sync::Arc;
 
     fn test_context_and_effective(
-        specs: &[Arc<LemmaSpec>],
+        specs: &[&LemmaSpec],
     ) -> (&'static Context, &'static EffectiveDate) {
         use crate::engine::Context;
         let mut ctx = Context::new();
         let repository = ctx.workspace();
         for s in specs {
-            ctx.insert_spec(Arc::clone(&repository), Arc::clone(s))
+            ctx.insert_spec(Arc::clone(&repository), (*s).clone())
                 .unwrap();
         }
         let ctx = Box::leak(Box::new(ctx));
@@ -8846,35 +8837,61 @@ mod type_resolution_tests {
         (ctx, eff)
     }
 
-    fn dag_and_spec() -> (Vec<Arc<LemmaSpec>>, Arc<LemmaSpec>) {
+    fn ordered_dependencies_and_spec() -> (
+        &'static [discovery::DependencySpec<'static>],
+        &'static LemmaSpec,
+    ) {
+        use crate::engine::Context;
+        let mut ctx = Context::new();
+        let repository = ctx.workspace();
         let spec = LemmaSpec::new("test_spec".to_string());
-        let arc = Arc::new(spec);
-        let dag = vec![Arc::clone(&arc)];
-        (dag, arc)
+        ctx.insert_spec(Arc::clone(&repository), spec).unwrap();
+        let ctx = Box::leak(Box::new(ctx));
+        let repository = ctx.workspace();
+        let spec = ctx
+            .spec_set(&repository, "test_spec")
+            .and_then(|ss| ss.get_exact(None))
+            .expect("inserted");
+        let ordered_dependencies = Box::leak(Box::new(vec![discovery::DependencySpec {
+            repository: Arc::clone(&repository),
+            spec,
+        }]));
+        (ordered_dependencies.as_slice(), spec)
     }
 
-    fn resolver_for_code(code: &str) -> (TypeResolver<'static>, Vec<Arc<LemmaSpec>>) {
-        let specs = parse(
+    fn resolver_for_code(code: &str) -> (TypeResolver<'static>, Vec<&'static LemmaSpec>) {
+        use crate::engine::Context;
+        let owned = parse(
             code,
             crate::parsing::source::SourceType::Volatile,
             &ResourceLimits::default(),
         )
         .unwrap()
         .into_flattened_specs();
-        let spec_arcs: Vec<Arc<LemmaSpec>> = specs.iter().map(|s| Arc::new(s.clone())).collect();
-        let (ctx, _) = test_context_and_effective(&spec_arcs);
+        let mut ctx = Context::new();
         let repository = ctx.workspace();
-        let mut resolver = TypeResolver::new(ctx);
-        for spec_arc in &spec_arcs {
-            resolver.register_all(&repository, spec_arc);
+        for s in owned {
+            ctx.insert_spec(Arc::clone(&repository), s).unwrap();
         }
-        (resolver, spec_arcs)
+        let ctx = Box::leak(Box::new(ctx));
+        let repository = ctx.workspace();
+        let mut spec_refs: Vec<&'static LemmaSpec> = Vec::new();
+        for ss in ctx.spec_sets_for(&repository) {
+            for s in ss.iter_specs() {
+                spec_refs.push(s);
+            }
+        }
+        let mut resolver = TypeResolver::new(ctx);
+        for spec in &spec_refs {
+            resolver.register_all(&repository, spec);
+        }
+        (resolver, spec_refs)
     }
 
-    fn resolver_single_spec(code: &str) -> (TypeResolver<'static>, Arc<LemmaSpec>) {
+    fn resolver_single_spec(code: &str) -> (TypeResolver<'static>, &LemmaSpec) {
         let (resolver, spec_arcs) = resolver_for_code(code);
-        let spec_arc = spec_arcs.into_iter().next().expect("at least one spec");
-        (resolver, spec_arc)
+        let spec = spec_arcs.into_iter().next().expect("at least one spec");
+        (resolver, spec)
     }
 
     #[test]
@@ -8910,8 +8927,8 @@ mod type_resolution_tests {
 
     #[test]
     fn test_register_data_type_def() {
-        let (dag, spec_arc) = dag_and_spec();
-        let (ctx, _) = test_context_and_effective(&dag);
+        let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
+        let (ctx, _) = test_context_and_effective(&[spec]);
         let mut resolver = TypeResolver::new(ctx);
         let ftd = DataTypeDef {
             parent: ParentType::Primitive {
@@ -8944,18 +8961,18 @@ mod type_resolution_tests {
             bound_literal: None,
         };
 
-        let result = resolver.register_type(&spec_arc, ftd);
+        let result = resolver.register_type(spec, ftd);
         assert!(result.is_ok());
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         assert!(resolved.resolved.contains_key("age"));
     }
 
     #[test]
     fn test_register_duplicate_type_fails() {
-        let (dag, spec_arc) = dag_and_spec();
-        let (ctx, _) = test_context_and_effective(&dag);
+        let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
+        let (ctx, _) = test_context_and_effective(&[spec]);
         let mut resolver = TypeResolver::new(ctx);
         let ftd = DataTypeDef {
             parent: ParentType::Primitive {
@@ -8974,15 +8991,15 @@ mod type_resolution_tests {
             name: "money".to_string(),
             bound_literal: None,
         };
-        resolver.register_type(&spec_arc, ftd.clone()).unwrap();
-        let result = resolver.register_type(&spec_arc, ftd);
+        resolver.register_type(spec, ftd.clone()).unwrap();
+        let result = resolver.register_type(spec, ftd);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_resolve_custom_type_from_primitive() {
-        let (dag, spec_arc) = dag_and_spec();
-        let (ctx, _) = test_context_and_effective(&dag);
+        let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
+        let (ctx, _) = test_context_and_effective(&[spec]);
         let mut resolver = TypeResolver::new(ctx);
         let ftd = DataTypeDef {
             parent: ParentType::Primitive {
@@ -9002,9 +9019,9 @@ mod type_resolution_tests {
             bound_literal: None,
         };
 
-        resolver.register_type(&spec_arc, ftd).unwrap();
+        resolver.register_type(spec, ftd).unwrap();
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
 
         assert!(resolved.resolved.contains_key("money"));
@@ -9014,7 +9031,7 @@ mod type_resolution_tests {
 
     #[test]
     fn test_child_measure_type_keeps_declared_name_and_child_units() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data length: measure
   -> unit meter 1
@@ -9023,7 +9040,7 @@ data road_length: length
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
 
         let road_length_type = resolved_types.resolved.get("road_length").unwrap();
@@ -9042,13 +9059,13 @@ data road_length: length
 
     #[test]
     fn test_type_definition_resolution() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data dice: number -> minimum 0 -> maximum 6"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let dice_type = resolved_types.resolved.get("dice").unwrap();
 
@@ -9065,13 +9082,13 @@ data dice: number -> minimum 0 -> maximum 6"#,
 
     #[test]
     fn test_type_definition_with_multiple_commands() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let money_type = resolved_types.resolved.get("money").unwrap();
 
@@ -9090,13 +9107,13 @@ data money: measure -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
 
     #[test]
     fn test_number_type_with_decimals() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data price: number -> decimals 2 -> minimum 0"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let price_type = resolved_types.resolved.get("price").unwrap();
 
@@ -9113,13 +9130,13 @@ data price: number -> decimals 2 -> minimum 0"#,
 
     #[test]
     fn test_number_type_decimals_only() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data precise_number: number -> decimals 4"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let precise_type = resolved_types.resolved.get("precise_number").unwrap();
 
@@ -9133,13 +9150,13 @@ data precise_number: number -> decimals 4"#,
 
     #[test]
     fn test_measure_type_decimals_only() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data weight: measure -> unit kg 1 -> decimals 3"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let weight_type = resolved_types.resolved.get("weight").unwrap();
 
@@ -9153,13 +9170,13 @@ data weight: measure -> unit kg 1 -> decimals 3"#,
 
     #[test]
     fn test_ratio_type_accepts_optional_decimals_command() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data ratio_type: ratio -> decimals 2"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let ratio_type = resolved_types.resolved.get("ratio_type").unwrap();
 
@@ -9177,36 +9194,36 @@ data ratio_type: ratio -> decimals 2"#,
 
     #[test]
     fn typedef_default_inherits_through_extension_chain() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
-data money: measure -> unit eur 1 -> default 4 eur
+data money: measure -> unit eur 1 -> suggest 4 eur
 data price: money
 data final_price: price"#,
         );
 
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("extension chain must resolve");
 
         assert!(
-            resolved.declared_defaults.contains_key("money"),
+            resolved.declared_suggestions.contains_key("money"),
             "base typedef default must materialize"
         );
         assert!(
-            resolved.declared_defaults.contains_key("final_price"),
-            "default must inherit through extension chain (money → price → final_price)"
+            resolved.declared_suggestions.contains_key("final_price"),
+            "suggestion must inherit through extension chain (money → price → final_price)"
         );
     }
 
     #[test]
     fn test_ratio_type_with_default_command() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
-data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
+data percentage: ratio -> minimum 0% -> maximum 100% -> suggest 50%"#,
         );
 
         let resolved_types = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let percentage_type = resolved_types.resolved.get("percentage").unwrap();
 
@@ -9229,7 +9246,7 @@ data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
         }
 
         let declared = resolved_types
-            .declared_defaults
+            .declared_suggestions
             .get("percentage")
             .expect("declared default must be tracked for percentage");
         match declared {
@@ -9243,13 +9260,13 @@ data percentage: ratio -> minimum 0% -> maximum 100% -> default 50%"#,
 
     #[test]
     fn test_measure_extension_chain_same_family_units_allowed() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure -> unit eur 1
 data money2: money -> unit usd 1.24"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_ok(),
             "Measure extension chain should resolve: {:?}",
@@ -9281,12 +9298,12 @@ data money2: money -> unit usd 1.24"#,
 
     #[test]
     fn test_invalid_parent_type_in_named_type_should_error() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data invalid: nonexistent_type -> minimum 0"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "Should reject invalid parent type");
 
         let errs = result.unwrap_err();
@@ -9301,12 +9318,12 @@ data invalid: nonexistent_type -> minimum 0"#,
 
     #[test]
     fn test_invalid_primitive_type_name_should_error() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data invalid: choice -> option "a""#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "Should reject invalid type base 'choice'");
 
         let errs = result.unwrap_err();
@@ -9321,7 +9338,7 @@ data invalid: choice -> option "a""#,
 
     #[test]
     fn extension_unit_factor_override_errors() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure
   -> unit eur 1
@@ -9329,7 +9346,7 @@ data money2: money
   -> unit eur 1.10"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "extension child must not override inherited unit factor"
@@ -9352,7 +9369,7 @@ data money2: money
 
     #[test]
     fn inherited_unit_idempotent_redeclare_ok() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure
   -> unit eur 1
@@ -9361,14 +9378,14 @@ data money2: money
         );
 
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("idempotent inherited unit redeclare must resolve");
         let money2 = resolved.resolved.get("money2").expect("money2");
         match &money2.specifications {
             TypeSpecification::Measure { units, .. } => {
                 let eur = units.iter().find(|u| u.name == "eur").expect("eur");
                 assert_eq!(
-                    crate::computation::rational::commit_rational_to_decimal(&eur.factor).unwrap(),
+                    eur.factor.try_to_decimal().unwrap(),
                     Decimal::ONE,
                     "eur factor must remain 1"
                 );
@@ -9379,7 +9396,7 @@ data money2: money
 
     #[test]
     fn extension_additive_unit_registers_in_unit_index() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure
   -> unit eur 1
@@ -9388,7 +9405,7 @@ data money2: money
         );
 
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("additive extension unit must resolve");
         let money2 = resolved
             .resolved
@@ -9441,7 +9458,7 @@ data price_usd_per_kg: measure
         let (context, _) = test_context_and_effective(&spec_arcs);
         let repository = context.workspace();
         let resolved = resolver
-            .resolve_and_validate(&units_arc, &EffectiveDate::Origin, &ResolvedTypesMap::new())
+            .resolve_and_validate(units_arc, &EffectiveDate::Origin, &ResolvedTypesMap::new())
             .expect("units resolves");
         let eur_decomp = resolved
             .unit_index
@@ -9450,9 +9467,9 @@ data price_usd_per_kg: measure
             .measure_type_decomposition()
             .expect("eur_per_kg decomposition")
             .clone();
-        let map = vec![(repository, units_arc.clone(), resolved)];
+        let map = vec![(repository, units_arc, resolved)];
 
-        let unique = find_unique_measure_type_by_decomposition(&map, &units_arc, &eur_decomp);
+        let unique = find_unique_measure_type_by_decomposition(&map, units_arc, &eur_decomp);
         match unique {
             DecompositionMatch::Multiple(families) => {
                 assert_eq!(families.len(), 2);
@@ -9476,9 +9493,9 @@ data price_per_weight: measure
 spec consumer
 uses u: units
 data starch_levy_per_kg: u.price_per_weight
-  -> default 0.1 eur_per_kg
+  -> suggest 0.1 eur_per_kg
 data amortization_per_kg: u.price_per_weight
-  -> default 0.2 eur_per_kg
+  -> suggest 0.2 eur_per_kg
 "#;
         let (resolver, spec_arcs) = resolver_for_code(code);
         let units_arc = spec_arcs
@@ -9496,7 +9513,7 @@ data amortization_per_kg: u.price_per_weight
 
         let mut already_resolved = ResolvedTypesMap::new();
         let units_types = resolver
-            .resolve_and_validate(&units_arc, &EffectiveDate::Origin, &already_resolved)
+            .resolve_and_validate(units_arc, &EffectiveDate::Origin, &already_resolved)
             .expect("units spec resolves");
         let units_price_per_weight = units_types
             .resolved
@@ -9506,7 +9523,7 @@ data amortization_per_kg: u.price_per_weight
         already_resolved.push((Arc::clone(&repository), units_arc, units_types));
 
         let consumer_types = resolver
-            .resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved)
+            .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
             .expect("consumer spec resolves");
 
         let eur_per_kg_owner = consumer_types
@@ -9529,7 +9546,7 @@ data amortization_per_kg: u.price_per_weight
             .get("starch_levy_per_kg")
             .expect("alias row in resolved");
         assert!(
-            !Arc::ptr_eq(eur_per_kg_owner, starch_alias),
+            !std::ptr::eq(eur_per_kg_owner.as_ref(), starch_alias.as_ref()),
             "unit_index must not store binding alias arc"
         );
     }
@@ -9565,12 +9582,12 @@ rule smoke: true
 
         let mut already_resolved = ResolvedTypesMap::new();
         let std_units_types = resolver
-            .resolve_and_validate(&std_units_arc, &EffectiveDate::Origin, &already_resolved)
+            .resolve_and_validate(std_units_arc, &EffectiveDate::Origin, &already_resolved)
             .expect("std_units resolves");
         already_resolved.push((Arc::clone(&repository), std_units_arc, std_units_types));
 
         let consumer_types = resolver
-            .resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved)
+            .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
             .expect("consumer resolves");
 
         let local_mass = consumer_types
@@ -9633,12 +9650,12 @@ rule smoke: true
 
         let mut already_resolved = ResolvedTypesMap::new();
         let units_a_types = resolver
-            .resolve_and_validate(&units_a_arc, &EffectiveDate::Origin, &already_resolved)
+            .resolve_and_validate(units_a_arc, &EffectiveDate::Origin, &already_resolved)
             .expect("units_a resolves");
         already_resolved.push((Arc::clone(&repository), units_a_arc, units_a_types));
 
         let consumer_types = resolver
-            .resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved)
+            .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
             .expect("double import of same duration must be idempotent");
 
         assert!(
@@ -9684,13 +9701,13 @@ rule smoke: true
         let mut already_resolved = ResolvedTypesMap::new();
         for units_arc in [units_a_arc, units_b_arc] {
             let units_types = resolver
-                .resolve_and_validate(&units_arc, &EffectiveDate::Origin, &already_resolved)
+                .resolve_and_validate(units_arc, &EffectiveDate::Origin, &already_resolved)
                 .expect("units spec resolves");
             already_resolved.push((Arc::clone(&repository), units_arc, units_types));
         }
 
         let result =
-            resolver.resolve_and_validate(&consumer_arc, &EffectiveDate::Origin, &already_resolved);
+            resolver.resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved);
         assert!(
             result.is_err(),
             "conflicting hour factors in same family must error"
@@ -9709,7 +9726,7 @@ rule smoke: true
 
     #[test]
     fn test_spec_level_unit_ambiguity_errors_are_reported() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money_a: measure
   -> unit eur 1.00
@@ -9726,7 +9743,7 @@ data length_b: measure
   -> unit meter 1.0"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "Expected ambiguous unit definitions to error"
@@ -9748,7 +9765,7 @@ data length_b: measure
 
     #[test]
     fn test_ratio_unit_cross_family_collision_errors() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data q: measure
   -> unit foo 1
@@ -9757,7 +9774,7 @@ data r: ratio
   -> unit foo 100"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "measure and ratio must not share a unit name"
@@ -9777,7 +9794,7 @@ data r: ratio
 
     #[test]
     fn test_same_ratio_unit_same_factor_across_types_allowed() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data spread_a: ratio
   -> unit basis_points 10000
@@ -9787,13 +9804,13 @@ data spread_b: ratio
         );
 
         resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("same unit name and factor across ratio types must be allowed");
     }
 
     #[test]
     fn test_different_ratio_unit_factor_across_types_errors() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data spread_a: ratio
   -> unit basis_points 10000
@@ -9802,7 +9819,7 @@ data spread_b: ratio
   -> unit basis_points 5000"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "unrelated ratio types with different factors for the same unit must error"
@@ -9822,46 +9839,46 @@ data spread_b: ratio
 
     #[test]
     fn test_multiple_builtin_ratio_types_share_percent_in_unit_index() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec targets
 data standard_margin_pct: ratio
   -> minimum 0%
-  -> default 15%
+  -> suggest 15%
 
 data default_credit_insurance_pct: ratio
-  -> default 1.5%"#,
+  -> suggest 1.5%"#,
         );
 
         resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("multiple ratio types with built-in percent must not conflict");
     }
 
     #[test]
     fn test_three_ratio_types_share_builtin_and_custom_unit() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
-data margin: ratio -> default 10%
+data margin: ratio -> suggest 10%
 data fee: ratio
   -> unit tenths 10
-data tax: ratio -> default 1%"#,
+data tax: ratio -> suggest 1%"#,
         );
 
         resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("builtin percent/permille plus custom tenths on second type must load");
     }
 
     #[test]
     fn test_ratio_unit_index_allows_builtin_after_two_named_types() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
-data first_ratio: ratio -> default 5%
-data second_ratio: ratio -> default 10%"#,
+data first_ratio: ratio -> suggest 5%
+data second_ratio: ratio -> suggest 10%"#,
         );
 
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .expect("two ratio types with only builtin units");
 
         assert!(
@@ -9876,13 +9893,13 @@ data second_ratio: ratio -> default 10%"#,
 
     #[test]
     fn test_number_type_cannot_have_units() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data price: number
   -> unit eur 1.00"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "Number types must reject unit commands");
 
         let errs = result.unwrap_err();
@@ -9897,7 +9914,7 @@ data price: number
 
     #[test]
     fn test_extending_type_inherits_units() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure
   -> unit eur 1.00
@@ -9908,7 +9925,7 @@ data my_money: money
         );
 
         let resolved = resolver
-            .resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new())
+            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
             .unwrap();
         let my_money_type = resolved.resolved.get("my_money").unwrap();
 
@@ -9925,7 +9942,7 @@ data my_money: money
 
     #[test]
     fn binding_unit_factor_override_errors() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data source_measure: measure
   -> unit usd 1.00
@@ -9933,7 +9950,7 @@ data z: source_measure
   -> unit usd 0.84"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "binding row must not override inherited unit factor"
@@ -9952,7 +9969,7 @@ data z: source_measure
 
     #[test]
     fn ratio_extension_unit_factor_override_errors() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data parent: ratio
   -> unit basis 1
@@ -9960,7 +9977,7 @@ data child: parent
   -> unit basis 100"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "ratio extension must not override inherited unit factor"
@@ -9979,14 +9996,14 @@ data child: parent
 
     #[test]
     fn test_duplicate_unit_name_in_same_type_is_error() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data money: measure
   -> unit eur 1.00
   -> unit eur 1.19"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(result.is_err(), "duplicate unit name must be rejected");
         let errs = result.unwrap_err();
         assert!(!errs.is_empty());
@@ -9999,7 +10016,7 @@ data money: measure
 
     #[test]
     fn test_duplicate_unit_name_compound_is_error() {
-        let (resolver, spec_arc) = resolver_single_spec(
+        let (resolver, spec) = resolver_single_spec(
             r#"spec test
 data currency: measure
   -> unit usd 1.00
@@ -10013,7 +10030,7 @@ data run_rate: measure
   -> unit arr eur/year"#,
         );
 
-        let result = resolver.resolve_and_validate(&spec_arc, &EffectiveDate::Origin, &Vec::new());
+        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
         assert!(
             result.is_err(),
             "duplicate compound unit name must be rejected"
@@ -10032,32 +10049,10 @@ data run_rate: measure
 // Validation (formerly validation.rs)
 // ============================================================================
 
-fn push_uncommittable_bound_error(
-    errors: &mut Vec<Error>,
-    type_name: &str,
-    bound: &crate::computation::rational::RationalInteger,
-    label: &str,
-    source: &Source,
-    spec_context: Option<Arc<LemmaSpec>>,
-) {
-    if crate::computation::rational::commit_rational_to_decimal(bound).is_err() {
-        errors.push(Error::validation_with_context(
-            format!(
-                "Type '{}' has {} bound {} that cannot be represented as a decimal",
-                type_name, label, bound
-            ),
-            Some(source.clone()),
-            None::<String>,
-            spec_context,
-            None,
-        ));
-    }
-}
-
 /// Validate that TypeSpecification constraints are internally consistent.
 ///
 /// Checks range, decimals, length, unit, and option constraints, and
-/// validates the `declared_default` (when present) against those constraints.
+/// validates the `declared_suggestion` (when present) against those constraints.
 /// The default lives outside the type specification (on the data binding or
 /// typedef entry); callers thread it in explicitly so this function can verify
 /// consistency without owning the value.
@@ -10065,10 +10060,11 @@ fn push_uncommittable_bound_error(
 /// Returns a vector of errors (empty if valid).
 pub fn validate_type_specifications(
     specs: &TypeSpecification,
-    declared_default: Option<&ValueKind>,
+    declared_suggestion: Option<&ValueKind>,
     type_name: &str,
     source: &Source,
-    spec_context: Option<Arc<LemmaSpec>>,
+    spec_context: Option<&LemmaSpec>,
+    unit_index: &HashMap<String, Arc<LemmaType>>,
 ) -> Vec<Error> {
     let mut errors = Vec::new();
 
@@ -10083,8 +10079,20 @@ pub fn validate_type_specifications(
             // Validate range consistency
             if let (Some(min), Some(max)) = (minimum, maximum) {
                 match (
-                    semantics::measure_declared_bound_canonical(min, units, type_name, "minimum"),
-                    semantics::measure_declared_bound_canonical(max, units, type_name, "maximum"),
+                    semantics::measure_declared_bound_to_canonical(
+                        &min.0,
+                        &min.1,
+                        units,
+                        type_name,
+                        "minimum",
+                    ),
+                    semantics::measure_declared_bound_to_canonical(
+                        &max.0,
+                        &max.1,
+                        units,
+                        type_name,
+                        "maximum",
+                    ),
                 ) {
                     (Ok(min_canonical), Ok(max_canonical)) => {
                         if min_canonical > max_canonical {
@@ -10099,7 +10107,7 @@ pub fn validate_type_specifications(
                                 ),
                                 Some(source.clone()),
                                 None::<String>,
-                                spec_context.clone(),
+                                spec_context,
                                 None,
                             ));
                         }
@@ -10112,63 +10120,10 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
-                }
-            }
-
-            if let Some((bound, unit_name)) = minimum {
-                push_uncommittable_bound_error(
-                    &mut errors,
-                    type_name,
-                    bound,
-                    &format!("minimum {unit_name}"),
-                    source,
-                    spec_context.clone(),
-                );
-            }
-            if let Some((bound, unit_name)) = maximum {
-                push_uncommittable_bound_error(
-                    &mut errors,
-                    type_name,
-                    bound,
-                    &format!("maximum {unit_name}"),
-                    source,
-                    spec_context.clone(),
-                );
-            }
-            for unit in units.iter() {
-                if let Some(bound) = &unit.minimum {
-                    push_uncommittable_bound_error(
-                        &mut errors,
-                        type_name,
-                        bound,
-                        &format!("unit '{}' minimum", unit.name),
-                        source,
-                        spec_context.clone(),
-                    );
-                }
-                if let Some(bound) = &unit.maximum {
-                    push_uncommittable_bound_error(
-                        &mut errors,
-                        type_name,
-                        bound,
-                        &format!("unit '{}' maximum", unit.name),
-                        source,
-                        spec_context.clone(),
-                    );
-                }
-                if let Some(bound) = &unit.default_magnitude {
-                    push_uncommittable_bound_error(
-                        &mut errors,
-                        type_name,
-                        bound,
-                        &format!("unit '{}' default", unit.name),
-                        source,
-                        spec_context.clone(),
-                    );
                 }
             }
 
@@ -10182,13 +10137,13 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
             }
 
-            if let Some(ValueKind::Measure(_def_value, def_signature)) = declared_default {
+            if let Some(ValueKind::Measure(_def_value, def_signature)) = declared_suggestion {
                 let def_unit = def_signature
                     .first()
                     .map(|(n, _)| n.as_str())
@@ -10207,7 +10162,7 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
@@ -10222,7 +10177,7 @@ pub fn validate_type_specifications(
                     ),
                     Some(source.clone()),
                     None::<String>,
-                    spec_context.clone(),
+                    spec_context,
                     None,
                 ));
             }
@@ -10240,7 +10195,7 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10251,7 +10206,7 @@ pub fn validate_type_specifications(
                             format!("Type '{}' has duplicate unit name '{}'. Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     } else {
@@ -10263,7 +10218,7 @@ pub fn validate_type_specifications(
                             format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.factor.numer(), unit.factor.denom()),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10286,31 +10241,10 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
-            }
-
-            if let Some(bound) = minimum {
-                push_uncommittable_bound_error(
-                    &mut errors,
-                    type_name,
-                    bound,
-                    "minimum",
-                    source,
-                    spec_context.clone(),
-                );
-            }
-            if let Some(bound) = maximum {
-                push_uncommittable_bound_error(
-                    &mut errors,
-                    type_name,
-                    bound,
-                    "maximum",
-                    source,
-                    spec_context.clone(),
-                );
             }
 
             // Validate decimals range (0-28 is rust_decimal limit)
@@ -10323,23 +10257,23 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
             }
 
-            if let Some(ValueKind::Number(def)) = declared_default {
+            if let Some(ValueKind::Number(def)) = declared_suggestion {
                 if let Some(min) = minimum {
                     if *def < *min {
                         errors.push(Error::validation_with_context(
                             format!(
-                                "Type '{}' default value {} is less than minimum {}",
+                                "Type '{}' suggestion value {} is less than minimum {}",
                                 type_name, def, min
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10348,12 +10282,12 @@ pub fn validate_type_specifications(
                     if *def > *max {
                         errors.push(Error::validation_with_context(
                             format!(
-                                "Type '{}' default value {} is greater than maximum {}",
+                                "Type '{}' suggestion value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10379,7 +10313,7 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
@@ -10395,76 +10329,23 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
             }
 
-            if let Some(bound) = minimum {
-                push_uncommittable_bound_error(
-                    &mut errors,
-                    type_name,
-                    bound,
-                    "minimum",
-                    source,
-                    spec_context.clone(),
-                );
-            }
-            if let Some(bound) = maximum {
-                push_uncommittable_bound_error(
-                    &mut errors,
-                    type_name,
-                    bound,
-                    "maximum",
-                    source,
-                    spec_context.clone(),
-                );
-            }
-            for unit in units.iter() {
-                if let Some(bound) = &unit.minimum {
-                    push_uncommittable_bound_error(
-                        &mut errors,
-                        type_name,
-                        bound,
-                        &format!("unit '{}' minimum", unit.name),
-                        source,
-                        spec_context.clone(),
-                    );
-                }
-                if let Some(bound) = &unit.maximum {
-                    push_uncommittable_bound_error(
-                        &mut errors,
-                        type_name,
-                        bound,
-                        &format!("unit '{}' maximum", unit.name),
-                        source,
-                        spec_context.clone(),
-                    );
-                }
-                if let Some(bound) = &unit.default_magnitude {
-                    push_uncommittable_bound_error(
-                        &mut errors,
-                        type_name,
-                        bound,
-                        &format!("unit '{}' default", unit.name),
-                        source,
-                        spec_context.clone(),
-                    );
-                }
-            }
-
-            if let Some(ValueKind::Ratio(def, _)) = declared_default {
+            if let Some(ValueKind::Ratio(def, _)) = declared_suggestion {
                 if let Some(min) = minimum {
                     if *def < *min {
                         errors.push(Error::validation_with_context(
                             format!(
-                                "Type '{}' default value {} is less than minimum {}",
+                                "Type '{}' suggestion value {} is less than minimum {}",
                                 type_name, def, min
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10473,12 +10354,12 @@ pub fn validate_type_specifications(
                     if *def > *max {
                         errors.push(Error::validation_with_context(
                             format!(
-                                "Type '{}' default value {} is greater than maximum {}",
+                                "Type '{}' suggestion value {} is greater than maximum {}",
                                 type_name, def, max
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10500,7 +10381,7 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10511,7 +10392,7 @@ pub fn validate_type_specifications(
                             format!("Type '{}' has duplicate unit name '{}'. Unit names must be unique within a type.", type_name, unit.name),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     } else {
@@ -10523,7 +10404,7 @@ pub fn validate_type_specifications(
                             format!("Type '{}' has unit '{}' with invalid value {}/{}. Unit values must be positive (conversion factor relative to type base).", type_name, unit.name, unit.value.numer(), unit.value.denom()),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10534,16 +10415,16 @@ pub fn validate_type_specifications(
         TypeSpecification::Text {
             length, options, ..
         } => {
-            if let Some(ValueKind::Text(def)) = declared_default {
+            if let Some(ValueKind::Text(def)) = declared_suggestion {
                 let def_len = def.len();
 
                 if let Some(len) = length {
                     if def_len != *len {
                         errors.push(Error::validation_with_context(
-                            format!("Type '{}' default value length {} does not match required length {}", type_name, def_len, len),
+                            format!("Type '{}' suggestion value length {} does not match required length {}", type_name, def_len, len),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10551,12 +10432,12 @@ pub fn validate_type_specifications(
                 if !options.is_empty() && !options.contains(def) {
                     errors.push(Error::validation_with_context(
                         format!(
-                            "Type '{}' default value '{}' is not in allowed options: {:?}",
+                            "Type '{}' suggestion value '{}' is not in allowed options: {:?}",
                             type_name, def, options
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
@@ -10580,13 +10461,13 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
             }
 
-            if let Some(ValueKind::Date(def)) = declared_default {
+            if let Some(ValueKind::Date(def)) = declared_suggestion {
                 if let Some(min) = minimum {
                     let min_sem = semantics::date_time_to_semantic(min);
                     if semantics::compare_semantic_dates(def, &min_sem) == Ordering::Less {
@@ -10597,7 +10478,7 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10612,7 +10493,7 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10637,13 +10518,13 @@ pub fn validate_type_specifications(
                         ),
                         Some(source.clone()),
                         None::<String>,
-                        spec_context.clone(),
+                        spec_context,
                         None,
                     ));
                 }
             }
 
-            if let Some(ValueKind::Time(def)) = declared_default {
+            if let Some(ValueKind::Time(def)) = declared_suggestion {
                 if let Some(min) = minimum {
                     let min_sem = semantics::time_to_semantic(min);
                     if semantics::compare_semantic_times(def, &min_sem) == Ordering::Less {
@@ -10654,7 +10535,7 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10669,7 +10550,7 @@ pub fn validate_type_specifications(
                             ),
                             Some(source.clone()),
                             None::<String>,
-                            spec_context.clone(),
+                            spec_context,
                             None,
                         ));
                     }
@@ -10681,8 +10562,18 @@ pub fn validate_type_specifications(
         | TypeSpecification::DateRange { .. }
         | TypeSpecification::TimeRange { .. }
         | TypeSpecification::MeasureRange { .. }
-        | TypeSpecification::RatioRange { .. }
-        | TypeSpecification::Boolean { .. } => {
+        | TypeSpecification::RatioRange { .. } => {
+            if let Err(message) = semantics::check_range_bound_consistency(specs, unit_index) {
+                errors.push(Error::validation_with_context(
+                    format!("Type '{}' has {message}", type_name),
+                    Some(source.clone()),
+                    None::<String>,
+                    spec_context,
+                    None,
+                ));
+            }
+        }
+        TypeSpecification::Boolean { .. } => {
             // No constraint validation needed for these types
         }
         TypeSpecification::Veto { .. } => {
@@ -10718,14 +10609,15 @@ mod validation_tests {
     }
 
     fn apply(
-        specs: TypeSpecification,
+        mut specs: TypeSpecification,
         command: TypeConstraintCommand,
         args: &[CommandArg],
     ) -> TypeSpecification {
-        let mut default: Option<RawDefault> = None;
+        let mut suggestion: Option<RawSuggestion> = None;
         specs
-            .apply_constraint("test", command, args, &mut default)
-            .unwrap()
+            .apply_constraint("test", command, args, &mut suggestion)
+            .unwrap();
+        specs
     }
 
     fn number_arg(n: i64) -> CommandArg {
@@ -10749,7 +10641,8 @@ mod validation_tests {
         specs = apply(specs, TypeConstraintCommand::Maximum, &[number_arg(50)]);
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, None, "test", &src, None);
+        let errors =
+            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -10767,11 +10660,18 @@ mod validation_tests {
         let default = ValueKind::Number(rational_new(5, 1));
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
+        let errors = validate_type_specifications(
+            &specs,
+            Some(&default),
+            "test",
+            &src,
+            None,
+            &HashMap::new(),
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
-            .contains("default value 5 is less than minimum 10"));
+            .contains("suggestion value 5 is less than minimum 10"));
     }
 
     #[test]
@@ -10785,11 +10685,18 @@ mod validation_tests {
         let default = ValueKind::Number(rational_new(150, 1));
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
+        let errors = validate_type_specifications(
+            &specs,
+            Some(&default),
+            "test",
+            &src,
+            None,
+            &HashMap::new(),
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
-            .contains("default value 150 is greater than maximum 100"));
+            .contains("suggestion value 150 is greater than maximum 100"));
     }
 
     #[test]
@@ -10803,13 +10710,20 @@ mod validation_tests {
         let default = ValueKind::Number(rational_new(50, 1));
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
+        let errors = validate_type_specifications(
+            &specs,
+            Some(&default),
+            "test",
+            &src,
+            None,
+            &HashMap::new(),
+        );
         assert!(errors.is_empty());
     }
 
     #[test]
     fn text_minimum_command_is_rejected() {
-        let specs = TypeSpecification::text();
+        let mut specs = TypeSpecification::text();
         let res = specs.apply_constraint(
             "test",
             TypeConstraintCommand::Minimum,
@@ -10824,7 +10738,7 @@ mod validation_tests {
 
     #[test]
     fn text_maximum_command_is_rejected() {
-        let specs = TypeSpecification::text();
+        let mut specs = TypeSpecification::text();
         let res = specs.apply_constraint(
             "test",
             TypeConstraintCommand::Maximum,
@@ -10847,11 +10761,18 @@ mod validation_tests {
         let default = ValueKind::Text("green".to_string());
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, Some(&default), "test", &src, None);
+        let errors = validate_type_specifications(
+            &specs,
+            Some(&default),
+            "test",
+            &src,
+            None,
+            &HashMap::new(),
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
-            .contains("default value 'green' is not in allowed options"));
+            .contains("suggestion value 'green' is not in allowed options"));
     }
 
     #[test]
@@ -10865,7 +10786,8 @@ mod validation_tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, None, "test", &src, None);
+        let errors =
+            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
         assert_eq!(errors.len(), 1);
         assert!(errors[0]
             .to_string()
@@ -10887,7 +10809,8 @@ mod validation_tests {
         );
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, None, "test", &src, None);
+        let errors =
+            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -10910,7 +10833,8 @@ mod validation_tests {
         );
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, None, "test", &src, None);
+        let errors =
+            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
         assert!(errors.is_empty());
     }
 
@@ -10929,7 +10853,8 @@ mod validation_tests {
         );
 
         let src = test_source();
-        let errors = validate_type_specifications(&specs, None, "test", &src, None);
+        let errors =
+            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
         assert_eq!(errors.len(), 1);
         assert!(
             errors[0].to_string().contains("minimum")
@@ -10938,15 +10863,15 @@ mod validation_tests {
     }
 
     #[test]
-    fn uncommittable_minimum_rejected_at_planning() {
-        use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
+    fn large_magnitude_minimum_does_not_fail_type_validation() {
+        use crate::computation::rational::{try_rational_new, BigInt};
         use crate::literals::MeasureUnits;
         use crate::planning::semantics::TypeSpecification;
 
-        let too_large = uncommittable_out_of_decimal_commit_range();
-        assert!(
-            commit_rational_to_decimal(&too_large).is_err(),
-            "test setup: bound must be valid in Q but not committable to decimal"
+        let too_large = magnitude_beyond_decimal_max();
+        assert_eq!(
+            too_large.try_to_decimal().unwrap_err(),
+            crate::computation::rational::NumericFailure::Overflow,
         );
 
         let spec = TypeSpecification::Measure {
@@ -10960,45 +10885,34 @@ mod validation_tests {
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: None,
+                suggestion_magnitude: None,
             }]),
             traits: vec![],
             decomposition: None,
             help: String::new(),
         };
 
-        let TypeSpecification::Measure { minimum, .. } = &spec else {
-            panic!("BUG: test constructs Measure spec");
-        };
-        assert!(
-            minimum.is_some(),
-            "internal spec retains declared minimum in Q"
-        );
         let src = test_source();
-        let errors = validate_type_specifications(&spec, None, "money", &src, None);
-        assert_eq!(
-            errors.len(),
-            1,
-            "got: {:?}",
-            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
-        );
+        let errors =
+            validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
         assert!(
-            errors[0]
-                .to_string()
-                .contains("cannot be represented as a decimal"),
-            "got: {}",
-            errors[0]
+            errors.is_empty(),
+            "internal Q bounds must not fail type validation; output materialization rounds: {:?}",
+            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
         );
     }
 
     #[test]
-    fn uncommittable_maximum_rejected_at_planning() {
-        use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
+    fn large_magnitude_maximum_does_not_fail_type_validation() {
+        use crate::computation::rational::{try_rational_new, BigInt};
         use crate::literals::MeasureUnits;
         use crate::planning::semantics::TypeSpecification;
 
-        let too_large = uncommittable_out_of_decimal_commit_range();
-        assert!(commit_rational_to_decimal(&too_large).is_err());
+        let too_large = magnitude_beyond_decimal_max();
+        assert_eq!(
+            too_large.try_to_decimal().unwrap_err(),
+            crate::computation::rational::NumericFailure::Overflow,
+        );
 
         let spec = TypeSpecification::Measure {
             minimum: None,
@@ -11011,7 +10925,7 @@ mod validation_tests {
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: None,
+                suggestion_magnitude: None,
             }]),
             traits: vec![],
             decomposition: None,
@@ -11019,30 +10933,22 @@ mod validation_tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&spec, None, "money", &src, None);
-        assert_eq!(
-            errors.len(),
-            1,
-            "got: {:?}",
-            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
-        );
-        assert!(
-            errors[0]
-                .to_string()
-                .contains("cannot be represented as a decimal"),
-            "got: {}",
-            errors[0]
-        );
+        let errors =
+            validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+        assert!(errors.is_empty(), "got: {:?}", errors);
     }
 
     #[test]
-    fn uncommittable_default_magnitude_rejected_at_planning() {
-        use crate::computation::rational::{commit_rational_to_decimal, try_rational_new, BigInt};
+    fn large_magnitude_default_does_not_fail_type_validation() {
+        use crate::computation::rational::{try_rational_new, BigInt};
         use crate::literals::MeasureUnits;
         use crate::planning::semantics::TypeSpecification;
 
-        let too_large = uncommittable_out_of_decimal_commit_range();
-        assert!(commit_rational_to_decimal(&too_large).is_err());
+        let too_large = magnitude_beyond_decimal_max();
+        assert_eq!(
+            too_large.try_to_decimal().unwrap_err(),
+            crate::computation::rational::NumericFailure::Overflow,
+        );
 
         let spec = TypeSpecification::Measure {
             minimum: None,
@@ -11055,7 +10961,7 @@ mod validation_tests {
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: Some(too_large),
+                suggestion_magnitude: Some(too_large),
             }]),
             traits: vec![],
             decomposition: None,
@@ -11063,31 +10969,18 @@ mod validation_tests {
         };
 
         let src = test_source();
-        let errors = validate_type_specifications(&spec, None, "money", &src, None);
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0]
-                .to_string()
-                .contains("cannot be represented as a decimal"),
-            "got: {}",
-            errors[0]
-        );
-        assert!(
-            errors[0].to_string().contains("unit 'eur' default"),
-            "got: {}",
-            errors[0]
-        );
+        let errors =
+            validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+        assert!(errors.is_empty(), "got: {:?}", errors);
     }
 
-    /// Rational in Q that exceeds `rust_decimal` commit range (OUT boundary), e.g. per-unit sync product.
-    fn uncommittable_out_of_decimal_commit_range() -> crate::computation::rational::RationalInteger
-    {
-        use crate::computation::rational::{try_rational_new, BigInt};
-        try_rational_new(
-            BigInt::try_from_str_radix("10000000000000000000000000000000", 10).unwrap(),
-            BigInt::one(),
-        )
-        .expect("BUG: test rational must construct")
+    fn magnitude_beyond_decimal_max() -> crate::computation::rational::RationalInteger {
+        use crate::computation::rational::{decimal_to_rational, rational_new, try_mul};
+        use rust_decimal::Decimal;
+        let max = Decimal::MAX.normalize();
+        let max_rational = decimal_to_rational(max).expect("BUG: Decimal::MAX must lift to Q");
+        try_mul(&max_rational, &rational_new(2, 1))
+            .expect("BUG: test rational multiply must succeed")
     }
 
     #[test]
@@ -11110,7 +11003,7 @@ mod validation_tests {
                     decomposition: Default::default(),
                     minimum: None,
                     maximum: None,
-                    default_magnitude: None,
+                    suggestion_magnitude: None,
                 }]),
                 traits: vec![],
                 decomposition: Default::default(),
@@ -11139,11 +11032,14 @@ mod validation_tests {
 
     #[test]
     fn refresh_named_range_specs_missing_element_must_not_leave_unconverted_measure() {
+        use crate::engine::Context;
         use crate::parsing::ast::{LemmaSpec, ParentType, Span};
         use crate::parsing::source::{Source, SourceType};
         use crate::planning::semantics::primitive_measure_arc;
 
-        let spec = Arc::new(LemmaSpec::new("t".to_string()));
+        let ctx = Box::leak(Box::new(Context::new()));
+        let resolver = TypeResolver::new(ctx);
+        let spec = LemmaSpec::new("t".to_string());
         let source = Source::new(
             SourceType::Volatile,
             Span {
@@ -11171,8 +11067,17 @@ mod validation_tests {
         let mut resolved = HashMap::new();
         resolved.insert("band".to_string(), primitive_measure_arc().clone());
         let mut defaults = HashMap::new();
+        let already_resolved = ResolvedTypesMap::new();
 
-        let errors = refresh_named_range_specs(&spec, &data_defs, &mut resolved, &mut defaults);
+        let errors = refresh_named_range_specs(
+            &resolver,
+            &spec,
+            &data_defs,
+            &mut resolved,
+            &mut defaults,
+            &already_resolved,
+            &EffectiveDate::Origin,
+        );
 
         assert!(
             !errors.is_empty(),
@@ -11186,33 +11091,99 @@ mod validation_tests {
             errors[0]
         );
     }
+
+    fn apply_n_text_options_counting_clones(option_count: usize) -> (TypeSpecification, u64) {
+        let spec = LemmaSpec::new("wide_options".to_string());
+        let source = test_source();
+        let constraints: Vec<Constraint> = (0..option_count)
+            .map(|i| {
+                (
+                    TypeConstraintCommand::Option,
+                    vec![CommandArg::Literal(crate::literals::Value::Text(
+                        i.to_string(),
+                    ))],
+                )
+            })
+            .collect();
+
+        TEXT_OPTION_CLONE_BYTES.with(|count| count.set(0));
+        TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(true));
+        let mut suggestion = None;
+        let result = apply_constraints_to_spec(
+            &spec,
+            "code",
+            TypeSpecification::text(),
+            &constraints,
+            &source,
+            &mut suggestion,
+        );
+        let copies = TEXT_OPTION_CLONE_BYTES.with(|count| count.get());
+        TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(false));
+        let specs = result.expect("options must apply");
+        (specs, copies)
+    }
+
+    #[test]
+    fn apply_constraints_option_string_copies_scale_near_linear() {
+        let (specs_16, copies_16) = apply_n_text_options_counting_clones(16);
+        let (specs_64, copies_64) = apply_n_text_options_counting_clones(64);
+
+        match &specs_16 {
+            TypeSpecification::Text { options, .. } => {
+                assert_eq!(options.len(), 16);
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+        match &specs_64 {
+            TypeSpecification::Text { options, .. } => {
+                assert_eq!(options.len(), 64);
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+
+        // In-place apply: success path must not clone Text options (0 bytes).
+        // Quadratic success-path clones yield copies(64)/copies(16) ≈ 16.
+        if copies_16 == 0 && copies_64 == 0 {
+            TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(true));
+            TEXT_OPTION_CLONE_BYTES.with(|count| count.set(0));
+            record_text_option_clone_bytes(&specs_64);
+            TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(false));
+            let probe = TEXT_OPTION_CLONE_BYTES.with(|count| count.get());
+            assert!(
+                probe > 0,
+                "instrumentation must still observe Text option bytes when recording"
+            );
+            return;
+        }
+        let ratio = copies_64 as f64 / copies_16 as f64;
+        assert!(
+            ratio < 8.0,
+            "option constraint apply must scale near-linear; copies(16)={copies_16} copies(64)={copies_64} ratio={ratio} (quadratic ≈ 16)"
+        );
+    }
 }
 
 #[cfg(test)]
 mod decomposition_promotion_tests {
     use super::*;
     use crate::engine::Context;
-    use crate::parse;
+    use crate::parsing::parse;
     use crate::ResourceLimits;
     use std::sync::Arc;
 
-    fn insert_parsed_repos(ctx: &mut Context, code: &str) -> Vec<Arc<LemmaSpec>> {
+    fn insert_parsed_repos(ctx: &mut Context, code: &str) {
         let result = parse(
             code,
             crate::parsing::source::SourceType::Volatile,
             &ResourceLimits::default(),
         )
         .expect("parse");
-        let mut spec_arcs = Vec::new();
-        for (repo_arc, specs) in &result.repositories {
+        for (repo_arc, specs) in result.repositories {
             for spec in specs {
-                let arc = Arc::new(spec.clone());
-                ctx.insert_spec(Arc::clone(repo_arc), Arc::clone(&arc))
+                ctx.insert_spec(Arc::clone(&repo_arc), spec)
                     .expect("insert spec");
-                spec_arcs.push(arc);
             }
         }
-        spec_arcs
     }
 
     fn repo_by_name(ctx: &Context, name: &str) -> Arc<LemmaRepository> {
@@ -11223,23 +11194,23 @@ mod decomposition_promotion_tests {
             .expect("repository must exist after insert")
     }
 
-    fn resolve_specs_in_order(
-        resolver: &TypeResolver<'_>,
+    fn resolve_specs_in_order<'a>(
+        resolver: &TypeResolver<'a>,
         repo: &Arc<LemmaRepository>,
-        spec_arcs: &[Arc<LemmaSpec>],
-        local_types: &mut ResolvedTypesMap,
+        specs: &[&'a LemmaSpec],
+        local_types: &mut ResolvedTypesMap<'a>,
     ) {
-        for spec_arc in spec_arcs {
+        for spec in specs {
             let types = resolver
-                .resolve_and_validate(spec_arc, &EffectiveDate::Origin, local_types)
-                .unwrap_or_else(|e| panic!("resolve {} failed: {:?}", spec_arc.name, e));
-            local_types.push((Arc::clone(repo), Arc::clone(spec_arc), types));
+                .resolve_and_validate(spec, &EffectiveDate::Origin, local_types)
+                .unwrap_or_else(|e| panic!("resolve {} failed: {:?}", spec.name, e));
+            local_types.push((Arc::clone(repo), *spec, types));
         }
     }
 
     fn worker_torque_fixture() -> (
-        ResolvedTypesMap,
-        Arc<LemmaSpec>,
+        ResolvedTypesMap<'static>,
+        &'static LemmaSpec,
         BaseMeasureVector,
         Arc<LemmaType>,
     ) {
@@ -11250,45 +11221,43 @@ spec units
 data force: measure
   -> unit newton 1
 data length: measure
-  -> unit metre 1
+  -> unit meter 1
 data torque: measure
-  -> unit nm newton*metre
+  -> unit nm newton*meter
 
 spec worker
 uses u: alpha units
 data f: 3 newton
-data d: 4 metre
+data d: 4 meter
 rule t: f * d
 "#;
-        let alpha_specs = insert_parsed_repos(&mut ctx, alpha_code);
-        let alpha_repo = repo_by_name(&ctx, "alpha");
-        let worker_arc = alpha_specs
-            .iter()
-            .find(|s| s.name == "worker")
-            .expect("worker spec")
-            .clone();
-        let units_arc = alpha_specs
-            .iter()
-            .find(|s| s.name == "units")
-            .expect("alpha units spec")
-            .clone();
-        let lemma_repo = repo_by_name(&ctx, crate::engine::EMBEDDED_STDLIB_REPOSITORY);
+        insert_parsed_repos(&mut ctx, alpha_code);
+        let ctx = Box::leak(Box::new(ctx));
+        let alpha_repo = repo_by_name(ctx, "alpha");
+        let worker = ctx
+            .spec_set(&alpha_repo, "worker")
+            .and_then(|ss| ss.get_exact(None))
+            .expect("worker spec");
+        let units = ctx
+            .spec_set(&alpha_repo, "units")
+            .and_then(|ss| ss.get_exact(None))
+            .expect("alpha units spec");
+        let lemma_repo = repo_by_name(ctx, crate::engine::EMBEDDED_STDLIB_REPOSITORY);
         let lemma_units = ctx
             .spec_set(&lemma_repo, "units")
             .expect("lemma repo")
             .get_exact(None)
-            .expect("lemma units spec")
-            .clone();
+            .expect("lemma units spec");
 
-        let mut resolver = TypeResolver::new(&ctx);
-        for spec in &alpha_specs {
+        let mut resolver = TypeResolver::new(ctx);
+        for spec in [units, worker] {
             resolver
                 .register_all(&alpha_repo, spec)
                 .into_iter()
                 .for_each(|e| panic!("register alpha: {e:?}"));
         }
         resolver
-            .register_all(&lemma_repo, &lemma_units)
+            .register_all(&lemma_repo, lemma_units)
             .into_iter()
             .for_each(|e| panic!("register lemma units: {e:?}"));
 
@@ -11302,19 +11271,19 @@ rule t: f * d
         resolve_specs_in_order(
             &resolver,
             &alpha_repo,
-            std::slice::from_ref(&units_arc),
+            std::slice::from_ref(&units),
             &mut local_types,
         );
         resolve_specs_in_order(
             &resolver,
             &alpha_repo,
-            std::slice::from_ref(&worker_arc),
+            std::slice::from_ref(&worker),
             &mut local_types,
         );
 
         let alpha_torque = local_types
             .iter()
-            .find(|(_, s, _)| Arc::ptr_eq(s, &units_arc))
+            .find(|(_, s, _)| discovery::same_loaded_spec(s, units))
             .and_then(|(_, _, t)| t.resolved.get("torque"))
             .expect("alpha torque type")
             .clone();
@@ -11323,13 +11292,13 @@ rule t: f * d
             .expect("torque decomposition")
             .clone();
 
-        (local_types, worker_arc, decomp, alpha_torque)
+        (local_types, worker, decomp, alpha_torque)
     }
 
     #[test]
     fn unique_decomposition_carries_matching_arc() {
         let (map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
-        let unique = find_unique_measure_type_by_decomposition(&map, &worker_spec, &decomp);
+        let unique = find_unique_measure_type_by_decomposition(&map, worker_spec, &decomp);
         match unique {
             DecompositionMatch::Unique(arc) => {
                 assert_eq!(*arc, *alpha_torque);
@@ -11343,12 +11312,12 @@ rule t: f * d
     fn find_unique_ignores_polluted_resolved_map() {
         let (mut map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
         map.iter_mut()
-            .find(|(_, s, _)| Arc::ptr_eq(s, &worker_spec))
+            .find(|(_, s, _)| discovery::same_loaded_spec(s, worker_spec))
             .expect("worker must be in resolved map")
             .2
             .resolved = HashMap::new();
 
-        let unique = find_unique_measure_type_by_decomposition(&map, &worker_spec, &decomp);
+        let unique = find_unique_measure_type_by_decomposition(&map, worker_spec, &decomp);
         match unique {
             DecompositionMatch::Unique(arc) => {
                 assert_eq!(*arc, *alpha_torque);
@@ -11375,7 +11344,7 @@ rule t: f * d
                         decomposition: Default::default(),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                     MeasureUnit {
                         name: "kilogram".to_string(),
@@ -11385,7 +11354,7 @@ rule t: f * d
                         decomposition: Default::default(),
                         minimum: None,
                         maximum: None,
-                        default_magnitude: None,
+                        suggestion_magnitude: None,
                     },
                 ]),
                 traits: Vec::new(),
@@ -11430,7 +11399,7 @@ rule t: f * d
                     decomposition: calendar_decomposition(),
                     minimum: None,
                     maximum: None,
-                    default_magnitude: None,
+                    suggestion_magnitude: None,
                 }]),
                 traits: vec![MeasureTrait::Calendar],
                 decomposition: Some(calendar_decomposition()),
@@ -11488,7 +11457,7 @@ rule t: f * d
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: None,
+                suggestion_magnitude: None,
             },
             MeasureUnit {
                 name: "kilogram".to_string(),
@@ -11498,11 +11467,15 @@ rule t: f * d
                 decomposition: Default::default(),
                 minimum: None,
                 maximum: None,
-                default_magnitude: None,
+                suggestion_magnitude: None,
             },
         ]);
         let measure_range = Arc::new(LemmaType::without_name(
             TypeSpecification::MeasureRange {
+                lower: None,
+                upper: None,
+                minimum: None,
+                maximum: None,
                 units: units.clone(),
                 decomposition: None,
                 help: String::new(),

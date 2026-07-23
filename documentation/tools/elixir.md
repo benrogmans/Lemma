@@ -15,7 +15,7 @@ Add to `mix.exs`:
 
 ```elixir
 def deps do
-  [{:lemma_engine, "~> 0.8"}]
+  [{:lemma_engine, "~> 0.9"}]
 end
 ```
 
@@ -40,14 +40,16 @@ rule discount: 0
   unless quantity >= 50 then 15
 """)
 
-{:ok, response} = Lemma.run(engine, "pricing", data: %{"quantity" => "25"})
+{:ok, response} = Lemma.run(engine, %{spec: "pricing"}, %{data: %{"quantity" => "25"}})
 ```
 
 Introspect loaded Specs:
 
 ```elixir
 {:ok, groups} = Lemma.list(engine)
-{:ok, schema} = Lemma.schema(engine, "pricing")
+{:ok, show} = Lemma.show(engine, nil, "pricing")
+{:ok, workspace_source} = Lemma.source(engine, nil, nil, nil)
+{:ok, stdlib} = Lemma.source(engine, "lemma", nil, nil)
 ```
 
 Format source code (no engine needed):
@@ -61,14 +63,15 @@ Format source code (no engine needed):
 | Function | Description |
 |----------|-------------|
 | `Lemma.new/1` | Create engine (optional limits map) |
-| `Lemma.load/3` | Load Spec from string |
-| `Lemma.load_from_paths/2` | Load Specs from file paths |
+| `Lemma.load/2` | Load sources: binary (volatile) or map / `[{label, code}, ...]` (labeled) |
 | `Lemma.list/1` | List loaded Specs (includes embedded `lemma` / `spec units`) |
-| `Lemma.format_repository/2` | Formatted Lemma source for a repository |
-| `Lemma.schema/3` | Get Spec schema (Data, Rules, types) |
-| `Lemma.run/3` | Evaluate a Spec with Data |
-| `Lemma.remove_spec/3` | Remove a Spec from the engine |
+| `Lemma.source/4` | Formatted Lemma source (`repository`, `spec`, `effective`; omit `spec` for repo-wide) |
+| `Lemma.show/4` | Spec interface + temporal window (`repository`, `spec`, `effective`) |
+| `Lemma.run/3` | Evaluate: `target` map (`repo`, `spec`, `effective`), `options` map (`data`, `rules`, `explain`). Each rule result may include `missing_data` (unbound input keys). With `explain: true`, `explanation` matches [explanation.v1.json](../schemas/explanation.v1.json). Types and suggestions are on `Lemma.show/4` only. |
+| `Lemma.remove/4` | Remove temporal slice: `repository`, `spec`, `effective` |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
+
+`Lemma.OpenAPI` is a separate module (HTTP OpenAPI document helpers via `lemma_openapi`). It is not part of the core `Lemma` engine table above.
 
 ## Engine lifecycle
 

@@ -6,9 +6,18 @@ use std::fmt::Write;
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
 mod common;
+#[path = "common/eval.rs"]
+mod eval;
 
-const WARMUP_ITERATIONS: usize = 1_000;
-const MEASURED_ITERATIONS: usize = 10_000;
+const WARMUP_ITERATIONS: usize = 100;
+const MEASURED_ITERATIONS: usize = 1_000;
+
+struct IterationStats {
+    allocations: usize,
+    bytes_allocated: usize,
+    reallocations: usize,
+    net_bytes_retained: i128,
+}
 
 fn main() {
     let mut table = String::new();
@@ -24,54 +33,42 @@ fn main() {
     .expect("BUG: writing to String never fails");
 
     for fixture in common::fixtures() {
-        let engine = common::build_engine(&fixture);
-        let plan = engine
-            .get_plan(None, fixture.spec_name, Some(&fixture.effective))
-            .expect("BUG: bench fixture must produce execution plan");
-        let data_template = &fixture.data;
-        let target_rule = common::terminal_rule(fixture.spec_name).to_string();
+        let engine = eval::load_engine(&fixture);
+        let terminal = eval::terminal_rule(fixture.spec_name).to_string();
 
         for _ in 0..WARMUP_ITERATIONS {
-            let data = data_template.clone();
-            let response = engine
-                .run_plan(
-                    plan,
-                    Some(&fixture.effective),
-                    data,
-                    false,
-                    Some(std::slice::from_ref(&target_rule)),
-                )
-                .expect("BUG: warmup must evaluate");
+            let response = eval::evaluate_loaded(&engine, &fixture, &terminal, false);
             std::hint::black_box(response);
         }
 
-        let region = Region::new(GLOBAL);
+        let mut totals = IterationStats {
+            allocations: 0,
+            bytes_allocated: 0,
+            reallocations: 0,
+            net_bytes_retained: 0,
+        };
         for _ in 0..MEASURED_ITERATIONS {
-            let data = data_template.clone();
-            let response = engine
-                .run_plan(
-                    plan,
-                    Some(&fixture.effective),
-                    data,
-                    false,
-                    Some(std::slice::from_ref(&target_rule)),
-                )
-                .expect("BUG: memory iteration must evaluate");
+            let region = Region::new(GLOBAL);
+            let response = eval::evaluate_loaded(&engine, &fixture, &terminal, false);
             std::hint::black_box(response);
+            let stats = region.change();
+            totals.allocations += stats.allocations;
+            totals.bytes_allocated += stats.bytes_allocated;
+            totals.reallocations += stats.reallocations;
+            totals.net_bytes_retained +=
+                stats.bytes_allocated as i128 - stats.bytes_deallocated as i128;
         }
-        let stats = region.change();
 
         let n = MEASURED_ITERATIONS as f64;
-        let net_bytes_retained = stats.bytes_allocated as i128 - stats.bytes_deallocated as i128;
         writeln!(
             &mut table,
             "| {} | {} | {:.2} | {:.0} | {:.2} | {:.2} |",
             fixture.spec_name,
             MEASURED_ITERATIONS,
-            stats.allocations as f64 / n,
-            stats.bytes_allocated as f64 / n,
-            stats.reallocations as f64 / n,
-            net_bytes_retained as f64 / n,
+            totals.allocations as f64 / n,
+            totals.bytes_allocated as f64 / n,
+            totals.reallocations as f64 / n,
+            totals.net_bytes_retained as f64 / n,
         )
         .expect("BUG: writing to String never fails");
     }

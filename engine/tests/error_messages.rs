@@ -13,14 +13,15 @@ use std::collections::HashMap;
 fn test_duplicate_data_definition_error() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         data salary: 50000
         data salary: 60000
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -42,24 +43,26 @@ fn test_uses_and_data_same_name_error() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("age.lemma"))),
             r#"
 spec age
 data age: number
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("age.lemma"))),
-        )
+"#
+            .to_string(),
+        )])
         .expect("age spec");
 
     let errs = engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
 spec test
 uses age
 data age: age.age
-"#,
-            lemma::SourceType::Volatile,
-        )
+"#
+            .to_string(),
+        )])
         .unwrap_err();
 
     let details = errs
@@ -91,15 +94,16 @@ data age: age.age
 fn test_duplicate_rule_definition_error() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         data x: 10
         rule total: x * 2
         rule total: x * 3
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -124,15 +128,16 @@ fn test_duplicate_rule_definition_error() {
 fn test_duplicate_data_shows_name() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         data name: "Alice"
         data age: 30
         data name: "Bob"
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -162,20 +167,21 @@ fn test_runtime_error_division_by_zero() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
         spec test
         data numerator: 100
         data denominator: 0
         rule result: numerator / denominator
-    "#,
-            lemma::SourceType::Volatile,
-        )
+    "#
+            .to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false, None)
+        .run(None, "test", Some(&now), HashMap::new(), None, false)
         .expect("Division by zero should return Veto, not Error");
 
     let result_rule = response
@@ -209,13 +215,14 @@ fn test_transpile_error_self_referencing_rule() {
     let mut engine = Engine::new();
 
     // Self-referencing rules are caught during transpilation
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         rule x: x + 1
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -238,16 +245,17 @@ fn test_transpile_error_self_referencing_rule() {
 fn test_duplicate_error_contains_data_name() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "my_file.lemma",
+        ))),
         r#"
         spec my_spec
         data price: 100
         data price: 200
-    "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "my_file.lemma",
-        ))),
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -265,14 +273,15 @@ fn test_duplicate_error_contains_data_name() {
 fn test_duplicate_error_is_reported() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         data x: 10
         data x: 20
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -290,7 +299,8 @@ fn test_duplicate_error_is_reported() {
 fn test_duplicate_in_second_spec_is_caught() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("multi.lemma"))),
         r#"
         spec first_spec
         data a: 1
@@ -298,9 +308,9 @@ fn test_duplicate_in_second_spec_is_caught() {
         spec second_spec
         data b: 2
         data b: 3
-    "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("multi.lemma"))),
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -322,14 +332,15 @@ fn test_duplicate_in_second_spec_is_caught() {
 fn test_error_display_contains_duplicate_info() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         data value: 100
         data value: 200
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -352,20 +363,21 @@ fn test_division_by_zero_returns_veto_with_message() {
     let mut engine = Engine::new();
 
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Volatile,
             r#"
         spec test
         data x: 100
         data y: 0
         rule result: x / y
-    "#,
-            lemma::SourceType::Volatile,
-        )
+    "#
+            .to_string(),
+        )])
         .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "test", Some(&now), HashMap::new(), false, None)
+        .run(None, "test", Some(&now), HashMap::new(), None, false)
         .expect("Should return Veto, not Error");
 
     let result_rule = response
@@ -391,14 +403,15 @@ fn test_division_by_zero_returns_veto_with_message() {
 fn test_circular_dependency_has_helpful_suggestion() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Volatile,
         r#"
         spec test
         rule x: y
         rule y: x
-    "#,
-        lemma::SourceType::Volatile,
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -427,7 +440,7 @@ data line3: 2
 data line4: 3
 data line4: 4"#;
 
-    let result = engine.load(lemma_code, lemma::SourceType::Volatile);
+    let result = engine.load([(lemma::SourceType::Volatile, lemma_code.to_string())]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -449,16 +462,17 @@ data line4: 4"#;
 fn test_duplicate_detected_from_database_source() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "db://contracts/123",
+        ))),
         r#"
         spec contract
         data amount: 1000
         data amount: 2000
-    "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "db://contracts/123",
-        ))),
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let details = errs
@@ -484,7 +498,10 @@ fn test_duplicate_detected_from_database_source() {
 fn test_multiple_error_phases_reported_together() {
     let mut engine = Engine::new();
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "pricing.lemma",
+        ))),
         r#"
         spec pricing
 
@@ -503,11 +520,9 @@ fn test_multiple_error_phases_reported_together() {
 
         rule total: price * quantity - non_existent_rule
           unless price > 100 usd then veto "This price is too high."
-    "#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "pricing.lemma",
-        ))),
-    );
+    "#
+        .to_string(),
+    )]);
 
     let errs = result.unwrap_err();
     let messages: Vec<String> = errs.iter().map(|e| e.to_string()).collect();
@@ -534,14 +549,15 @@ fn test_multiple_error_phases_reported_together() {
 #[test]
 fn unversioned_spec_missing_dep_message_names_specs() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
         r#"
 spec app
 uses z: no_such_dep
 rule r: 1
-"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("t.lemma"))),
-    );
+"#
+        .to_string(),
+    )]);
     let errs = result.expect_err("missing dep");
     let joined = errs
         .iter()
@@ -561,7 +577,8 @@ rule r: 1
 #[test]
 fn unversioned_consumer_temporal_coverage_gap_names_consumer_and_dep() {
     let mut engine = Engine::new();
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("gap.lemma"))),
         r#"
 spec app
 uses d: dep
@@ -569,9 +586,9 @@ rule r: d.x
 
 spec dep 2025-12-01
 data x: 1
-"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("gap.lemma"))),
-    );
+"#
+        .to_string(),
+    )]);
     let errs = result.expect_err("coverage gap");
     let joined = errs
         .iter()
@@ -615,7 +632,7 @@ fn assert_lowercase_type_in_errors(joined: &str, expected_lower: &[&str], banned
 fn load_and_join_errors(code: &str) -> String {
     let mut engine = Engine::new();
     let errs = engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect_err("expected planning to fail");
     errs.iter()
         .map(|e| e.to_string())

@@ -48,7 +48,7 @@ cargo deny check --config .cargo/deny.toml
    cargo precommit
    ```
 
-   Same pipeline as CI: versions-verify, fmt, clippy, nextest (including ignored benches), WASM npm build+test, cargo-deny, `cargo coverage all --check`. Requires `cargo-nextest`, `cargo-deny`, Node.js, and `wasm-pack`. Regenerate coverage with `cargo coverage all` when engine/cli sources change (`cargo-llvm-cov` required).
+   Same pipeline as CI: versions-verify, fmt, clippy (`--all-features`), `cargo check -p lemma-engine --no-default-features`, nextest (including ignored benches), WASM npm build+test, cargo-deny, `cargo coverage all --check`. Requires `cargo-nextest`, `cargo-deny`, Node.js, and `wasm-pack`. Regenerate coverage with `cargo coverage all` when engine/cli sources change (`cargo-llvm-cov` required).
 
 ### Release version (maintainers)
 

@@ -1,5 +1,5 @@
 /**
- * LSP client for the Lemma WASM playground. Talks JSON-RPC over streams to the WASM LSP server.
+ * LSP client for the Lemma playground. Talks JSON-RPC over streams to the in-process LSP server.
  */
 
 export interface LspDiagnostic {
@@ -11,7 +11,7 @@ export interface LspDiagnostic {
 export class LspClient {
   constructor(monacoInstance: unknown);
 
-  /** Launch the WASM LSP server. Optional serve/ServerConfig override for testing. */
+  /** Launch the LSP server. Optional serve/ServerConfig override for testing. */
   start(serveFn?: (config: unknown) => Promise<void>, ServerConfigCls?: new (into: AsyncIterable<Uint8Array>, from: WritableStream<Uint8Array>) => unknown): Promise<void>;
 
   initialize(): Promise<void>;

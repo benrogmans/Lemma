@@ -1,9 +1,9 @@
-use lemma::DateTimeValue;
 /// Comprehensive tests for data binding validation at runtime.
 ///
 /// After planning succeeds, invalid overrides complete evaluation with Veto on
-/// affected rules — not `Err(Error)` from `DataOverlay::resolve`. Unknown data keys
-/// remain planning/request errors.
+/// affected rules — not `Err(Error)` from caller-data binding. Unknown data keys
+/// are ignored.
+use lemma::DateTimeValue;
 use lemma::Engine;
 use std::collections::HashMap;
 
@@ -42,13 +42,15 @@ rule doubled: age * 2
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let mut data = HashMap::new();
     data.insert("age".to_string(), "twenty".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, true, None);
+    let result = engine.run(None, "test", Some(&now), data, None, true);
 
     assert_run_completes_with_veto_on_rule(result, "doubled", "number");
 }
@@ -65,7 +67,9 @@ rule flagged: active
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "expensive".to_string());
@@ -74,7 +78,7 @@ rule flagged: active
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true, None),
+        engine.run(None, "test", Some(&now), data, None, true),
         "total",
         "number",
     );
@@ -85,7 +89,7 @@ rule flagged: active
     data.insert("active".to_string(), "true".to_string());
 
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true, None),
+        engine.run(None, "test", Some(&now), data, None, true),
         "total",
         "number",
     );
@@ -96,7 +100,7 @@ rule flagged: active
     data.insert("active".to_string(), "maybe".to_string());
 
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true, None),
+        engine.run(None, "test", Some(&now), data, None, true),
         "flagged",
         "boolean",
     );
@@ -106,7 +110,7 @@ rule flagged: active
     data.insert("quantity".to_string(), "5".to_string());
     data.insert("active".to_string(), "true".to_string());
     let response = engine
-        .run(None, "test", Some(&now), data, true, None)
+        .run(None, "test", Some(&now), data, None, true)
         .expect("valid data must evaluate");
     let total = response.results.get("total").expect("total rule");
     assert_eq!(total.display.as_deref(), Some("500"));
@@ -121,14 +125,16 @@ rule total: base_price * 1.2
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let mut data = HashMap::new();
     data.insert("base_price".to_string(), "sixty".to_string());
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "test", Some(&now), data, true, None),
+        engine.run(None, "test", Some(&now), data, None, true),
         "total",
         "number",
     );
@@ -136,7 +142,7 @@ rule total: base_price * 1.2
     let mut data = HashMap::new();
     data.insert("base_price".to_string(), "60".to_string());
     let response = engine
-        .run(None, "test", Some(&now), data, true, None)
+        .run(None, "test", Some(&now), data, None, true)
         .expect("valid base_price must evaluate");
     let total = response.results.get("total").expect("total rule");
     let display = total.display.as_deref().expect("display");
@@ -144,7 +150,7 @@ rule total: base_price * 1.2
 }
 
 #[test]
-fn test_unknown_data_binding_rejected() {
+fn test_unknown_data_binding_ignored() {
     let code = r#"
 spec test
 data price: number
@@ -152,16 +158,20 @@ rule total: price * 1.1
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let mut data = HashMap::new();
     data.insert("price".to_string(), "100".to_string());
     data.insert("unknown_data".to_string(), "42".to_string());
 
     let now = DateTimeValue::now();
-    let result = engine.run(None, "test", Some(&now), data, true, None);
-    assert!(result.is_err(), "Expected error for unknown data binding");
-    assert!(result.unwrap_err().to_string().contains("unknown_data"));
+    let response = engine
+        .run(None, "test", Some(&now), data, None, true)
+        .expect("unknown keys must not abort evaluation");
+    let total = response.results.get("total").expect("total rule");
+    assert_eq!(total.display.as_deref(), Some("110"));
 }
 
 /// Matrix: primitive × applicable constraint × violating user value.
@@ -181,10 +191,10 @@ rule r: p
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -192,7 +202,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, true, None),
+        engine.run(None, "s", Some(&now), data, None, true),
         "r",
         "minimum",
     );
@@ -217,10 +227,10 @@ rule r: p
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -228,7 +238,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true, None)
+        .run(None, "s", Some(&now), data, None, true)
         .expect("'5%' must parse on a percent type without constraints");
     let rr = resp.results.get("r").expect("rule 'r' not found");
     assert!(!rr.vetoed, "unexpected veto: {:?}", rr.veto_reason);
@@ -262,10 +272,10 @@ rule r: p
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -273,7 +283,7 @@ rule r: p
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, true, None),
+        engine.run(None, "s", Some(&now), data, None, true),
         "r",
         "maximum",
     );
@@ -288,10 +298,10 @@ data d: units.duration -> minimum 1 day
 rule r: d
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(
-        code,
+    let load_result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-    );
+        code.to_string(),
+    )]);
     if let Err(errors) = &load_result {
         // If `minimum` with duration literal RHS is not supported, that
         // itself is a landmine — durations can definitely have minimums.
@@ -306,11 +316,11 @@ rule r: d
     }
 
     let mut data = HashMap::new();
-    data.insert("d".to_string(), "12 hours".to_string());
+    data.insert("d".to_string(), "12 hour".to_string());
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, true, None),
+        engine.run(None, "s", Some(&now), data, None, true),
         "r",
         "minimum",
     );
@@ -324,10 +334,10 @@ data when: date -> minimum 2024-01-01
 rule r: when
 "#;
     let mut engine = Engine::new();
-    let load_result = engine.load(
-        code,
+    let load_result = engine.load([(
         lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-    );
+        code.to_string(),
+    )]);
     if let Err(errors) = &load_result {
         panic!(
             "date minimum must be supported; load failed with: {}",
@@ -344,7 +354,7 @@ rule r: when
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, true, None),
+        engine.run(None, "s", Some(&now), data, None, true),
         "r",
         "minimum",
     );
@@ -362,17 +372,17 @@ rule r: n
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
     data.insert("n".to_string(), "3.14159".to_string());
 
     let now = DateTimeValue::now();
-    match engine.run(None, "s", Some(&now), data, true, None) {
+    match engine.run(None, "s", Some(&now), data, None, true) {
         Ok(resp) => {
             let rr = resp.results.get("r").expect("rule 'r'");
             if rr.vetoed {
@@ -402,10 +412,10 @@ rule r: msg
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -413,7 +423,7 @@ rule r: msg
 
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), data, true, None)
+        .run(None, "s", Some(&now), data, None, true)
         .expect("5-char string must be accepted");
     let rr = resp.results.get("r").expect("rule 'r'");
     assert!(!rr.vetoed, "expected value, got veto: {:?}", rr.veto_reason);
@@ -424,31 +434,33 @@ rule r: msg
 fn import_binding_unit_factor_override_errors() {
     let mut engine = Engine::new();
     engine
-        .load(
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "finance.lemma",
+            ))),
             r#"
 spec finance
 data money: measure
   -> unit eur 1.00
   -> unit usd 0.91
-"#,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-                "finance.lemma",
-            ))),
-        )
+"#
+            .to_string(),
+        )])
         .expect("finance spec must load");
 
-    let result = engine.load(
+    let result = engine.load([(
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "pricing.lemma",
+        ))),
         r#"
 spec pricing
 uses fin: finance
 data currency: fin.money
   -> unit usd 0.84
 rule r: currency
-"#,
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "pricing.lemma",
-        ))),
-    );
+"#
+        .to_string(),
+    )]);
     assert!(
         result.is_err(),
         "import binding must not override inherited unit factor"
@@ -470,10 +482,10 @@ rule r: price
 "#;
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("m.lemma"))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -482,7 +494,7 @@ rule r: price
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "s", Some(&now), data, true, None),
+        engine.run(None, "s", Some(&now), data, None, true),
         "r",
         "unit",
     );
@@ -498,12 +510,12 @@ rule span: bridge_height
 
     let mut engine = Engine::new();
     engine
-        .load(
-            code,
+        .load([(
             lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
                 "workspace.lemma",
             ))),
-        )
+            code.to_string(),
+        )])
         .unwrap();
 
     let mut data = HashMap::new();
@@ -511,7 +523,7 @@ rule span: bridge_height
 
     let now = DateTimeValue::now();
     assert_run_completes_with_veto_on_rule(
-        engine.run(None, "bridge", Some(&now), data, true, None),
+        engine.run(None, "bridge", Some(&now), data, None, true),
         "span",
         "Unknown unit",
     );

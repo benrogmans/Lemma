@@ -4,11 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, DataPath, LemmaType, LiteralValue,
-    LogicalComputation, MathematicalComputation, SemanticConversionTarget, SemanticDateTime,
-    SemanticTime, TypeSpecification,
+    DataPath, LemmaType, LiteralValue, SemanticDateTime, SemanticTime, TypeSpecification,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Why an operation yielded no value (domain veto).
 ///
@@ -17,17 +15,27 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq)]
 pub enum VetoType {
     /// Evaluation needed a data that was not provided
-    MissingData { data: DataPath },
+    MissingData {
+        data: DataPath,
+        suggestion: Option<String>,
+    },
     /// Explicit `veto "reason"` in Lemma source
     UserDefined { message: Option<String> },
-    /// Runtime domain failure (division by zero, date overflow, etc.)
+    /// Runtime domain failure (division by zero, date overflow, bad Data override, etc.)
     Computation { message: String },
 }
 
 impl fmt::Display for VetoType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VetoType::MissingData { data } => write!(f, "Missing data: {}", data),
+            VetoType::MissingData {
+                data,
+                suggestion: Some(suggestion),
+            } => write!(f, "Missing data: {data} (did you mean '{suggestion}'?)"),
+            VetoType::MissingData {
+                data,
+                suggestion: None,
+            } => write!(f, "Missing data: {data}"),
             VetoType::UserDefined { message: Some(msg) } => write!(f, "{msg}"),
             VetoType::UserDefined { message: None } => write!(f, "Vetoed"),
             VetoType::Computation { message } => write!(f, "{message}"),
@@ -42,6 +50,11 @@ impl VetoType {
             message: message.into(),
         }
     }
+
+    #[must_use]
+    pub fn missing_data(data: DataPath, suggestion: Option<String>) -> Self {
+        VetoType::MissingData { data, suggestion }
+    }
 }
 
 impl Serialize for VetoType {
@@ -54,6 +67,7 @@ impl Serialize for VetoType {
 }
 
 /// Result of an operation (evaluating a rule or expression)
+/// TODO: Rename. This can also represent a data value.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationResult {
@@ -155,72 +169,14 @@ impl OperationResult {
     }
 }
 
-/// The kind of computation performed
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "computation", rename_all = "snake_case")]
-pub enum ComputationKind {
-    Arithmetic(ArithmeticComputation),
-    Comparison(ComparisonComputation),
-    Mathematical(MathematicalComputation),
-    Logical(LogicalComputation),
-    UnitConversion {
-        target: SemanticConversionTarget,
-    },
-    /// Operand result was tested for veto (`is veto` syntax).
-    ResultIsVeto,
-}
-
 #[cfg(test)]
-mod computation_kind_serde_tests {
-    use super::ComputationKind;
-    use crate::parsing::ast::{
-        ArithmeticComputation, ComparisonComputation, MathematicalComputation,
-    };
-
-    #[test]
-    fn computation_kind_arithmetic_round_trip() {
-        let k = ComputationKind::Arithmetic(ArithmeticComputation::Add);
-        let json = serde_json::to_string(&k).expect("serialize");
-        assert!(json.contains("\"type\"") && json.contains("\"computation\""));
-        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, k);
-    }
-
-    #[test]
-    fn computation_kind_comparison_round_trip() {
-        let k = ComputationKind::Comparison(ComparisonComputation::GreaterThan);
-        let json = serde_json::to_string(&k).expect("serialize");
-        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, k);
-    }
-
-    #[test]
-    fn computation_kind_mathematical_round_trip() {
-        let k = ComputationKind::Mathematical(MathematicalComputation::Sqrt);
-        let json = serde_json::to_string(&k).expect("serialize");
-        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, k);
-    }
-
-    #[test]
-    fn computation_kind_unit_conversion_round_trip() {
-        use crate::parsing::ast::PrimitiveKind;
-        use crate::planning::semantics::SemanticConversionTarget;
-        let k = ComputationKind::UnitConversion {
-            target: SemanticConversionTarget::Type(PrimitiveKind::Number),
-        };
-        let json = serde_json::to_string(&k).expect("serialize");
-        let back: ComputationKind = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, k);
-    }
+mod tests {
+    use super::VetoType;
+    use crate::planning::semantics::DataPath;
 
     #[test]
     fn veto_type_serializes_as_display_string() {
-        use super::VetoType;
-        use crate::planning::semantics::DataPath;
-        let v = VetoType::MissingData {
-            data: DataPath::new(vec![], "product".to_string()),
-        };
+        let v = VetoType::missing_data(DataPath::new(vec![], "product".to_string()), None);
         let json = serde_json::to_string(&v).expect("serialize");
         assert_eq!(json, "\"Missing data: product\"");
     }

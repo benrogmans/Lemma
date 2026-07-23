@@ -1,5 +1,5 @@
 //! Integration smoke for transitive normalization (authoritative eval path).
-//! Plan-shape assertions live in `engine/src/planning/transitive_normalization.rs`.
+//! Plan-shape assertions live in `engine/src/tests/transitive_normalization_plan_shape.rs`.
 
 use lemma::DateTimeValue;
 use lemma::Engine;
@@ -9,11 +9,11 @@ use std::collections::HashMap;
 fn run_decimal(code: &str, spec: &str, rule: &str) -> Decimal {
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, spec, Some(&now), HashMap::new(), false, None)
+        .run(None, spec, Some(&now), HashMap::new(), None, false)
         .expect("run");
     let rule_result = resp.get(rule).unwrap_or_else(|_| {
         panic!(

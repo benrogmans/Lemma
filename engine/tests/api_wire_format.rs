@@ -1,13 +1,15 @@
 //! API wire format contract tests (sections A–J).
 //!
-//! API serialize path: [`SpecSchema`] JSON and [`Response`] JSON — same paths
-//! [`engine::wasm`] and schema export use (`serde_json` on those types).
-//! Plan persistence uses [`ExecutionPlanSerialized`] separately (section I).
+//! API serialize path: [`Show`] JSON and [`Response`] JSON — same paths
+//! [`engine::wasm`] and show export use (`serde_json` on those types).
+//! Plan persistence tests live in `execution_plan` unit tests (section I).
+//!
+//! Section F additionally requires that every show-default per-unit magnitude from
+//! section E (`magnitude_in_unit`, API wire `measure` / `ratio` maps) is submittable
+//! as convenience input through [`Engine::run`] without computation veto — same path
+//! as the CLI interactive trial. See `documentation/learn/precision.md`.
 
-use lemma::{
-    BindingDataValue, DataOverlay, DataPath, DataValueInput, DateTimeValue, Engine, ExecutionPlan,
-    ExecutionPlanSerialized, LiteralValue, ResourceLimits, SpecSchema, ValueKind,
-};
+use lemma::{DateTimeValue, Engine, LiteralValue, Show, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -25,7 +27,7 @@ fn path_source(file: &str) -> lemma::SourceType {
 fn load_engine(code: &str, file: &str) -> Engine {
     let mut engine = Engine::new();
     engine
-        .load(code, path_source(file))
+        .load([(path_source(file), code.to_string())])
         .expect("spec must load");
     engine
 }
@@ -42,28 +44,30 @@ data money: measure
 data labor_cost: measure
   -> unit eur_per_hour eur/hour
   -> unit inr_per_hour inr/hour
-  -> default 25 eur_per_hour
+  -> suggest 25 eur_per_hour
 
 data product_cost: measure
   -> unit eur_per_kg eur/kilogram
   -> unit inr_per_kg inr/kilogram
-  -> default 4 eur_per_kg
+  -> suggest 4 eur_per_kg
 
 data throughput: measure
   -> unit kg_per_hour kilogram/hour
-  -> default 12 kg_per_hour
+  -> suggest 12 kg_per_hour
 
 rule cost_price: product_cost + labor_cost / throughput
 "#;
 
 const POLICY_RATIO_SPEC: &str = r#"
 spec policy
-data margin: ratio -> default 15%
+data margin: ratio -> suggest 15%
 data bps: ratio
   -> unit basis_points 10000
-  -> default 500 basis_points
-data permille_rate: ratio -> default 150 permille
+  -> suggest 500 basis_points
+data permille_rate: ratio -> suggest 150 permille
 rule m: margin
+rule bps_val: bps
+rule permille_val: permille_rate
 "#;
 
 fn cost_price_engine() -> Engine {
@@ -74,25 +78,22 @@ fn policy_engine() -> Engine {
     load_engine(POLICY_RATIO_SPEC, "policy.lemma")
 }
 
-fn plan_interface_schema(engine: &Engine, spec: &str) -> SpecSchema {
+fn plan_interface_show(engine: &Engine, spec: &str) -> Show {
     let now = DateTimeValue::now();
-    engine
-        .get_plan(None, spec, Some(&now))
-        .expect("plan")
-        .interface_schema(&DataOverlay::default())
+    engine.show(None, spec, Some(&now)).expect("show")
 }
 
-fn schema_default_literal(engine: &Engine, spec: &str, data_name: &str) -> LiteralValue {
-    plan_interface_schema(engine, spec)
+fn show_default_literal(engine: &Engine, spec: &str, data_name: &str) -> LiteralValue {
+    plan_interface_show(engine, spec)
         .data
         .get(data_name)
-        .unwrap_or_else(|| panic!("{data_name} missing from schema"))
-        .default
+        .unwrap_or_else(|| panic!("{data_name} missing from show"))
+        .suggestion
         .clone()
-        .unwrap_or_else(|| panic!("{data_name} has no schema default"))
+        .unwrap_or_else(|| panic!("{data_name} has no show suggestion"))
 }
 
-/// API wire: embed `literal` in a [`SpecSchema`] `default` field and serialize (wasm schema path).
+/// API wire: embed `literal` in a [`Show`] `suggestion` field and serialize (wasm show path).
 fn api_wire_json_for_literal(name: &str, literal: &LiteralValue) -> serde_json::Value {
     let mut data = indexmap::IndexMap::new();
     data.insert(
@@ -100,26 +101,28 @@ fn api_wire_json_for_literal(name: &str, literal: &LiteralValue) -> serde_json::
         lemma::DataEntry {
             lemma_type: literal.lemma_type.as_ref().clone(),
             prefilled: None,
-            supplied: None,
-            default: Some(literal.clone()),
+            suggestion: Some(literal.clone()),
+            needed_by_rules: Vec::new(),
         },
     );
-    let schema = SpecSchema {
+    let show = Show {
         spec: "wire_test".to_string(),
         commentary: None,
-        effective: None,
+        effective_from: None,
+        effective_to: None,
         versions: Vec::new(),
+        start_line: 1,
+        source_type: None,
         data,
         rules: indexmap::IndexMap::new(),
         meta: HashMap::new(),
     };
-    serde_json::to_value(&schema).expect("SpecSchema API JSON must serialize")["data"][name]
-        ["default"]
+    serde_json::to_value(&show).expect("Show API JSON must serialize")["data"][name]["suggestion"]
         .clone()
 }
 
-fn api_schema_default_json(engine: &Engine, spec: &str, data_name: &str) -> serde_json::Value {
-    let lit = schema_default_literal(engine, spec, data_name);
+fn api_show_default_json(engine: &Engine, spec: &str, data_name: &str) -> serde_json::Value {
+    let lit = show_default_literal(engine, spec, data_name);
     api_wire_json_for_literal(data_name, &lit)
 }
 
@@ -164,67 +167,50 @@ fn assert_ratio_exact(
     }
 }
 
-fn response_data_api_json(response: &lemma::Response, data_name: &str) -> serde_json::Value {
-    for group in &response.data {
-        for data in &group.data {
-            if data.path.input_key() == data_name {
-                let BindingDataValue::Definition { value, .. } = &data.value;
-                let lit = value
-                    .as_ref()
-                    .unwrap_or_else(|| panic!("{data_name} has no value in response.data"));
-                return api_wire_json_for_literal(data_name, lit);
-            }
-        }
-    }
-    panic!("{data_name} not found in response.data");
+fn show_literal_api_json(engine: &Engine, spec: &str, data_name: &str) -> serde_json::Value {
+    let show = plan_interface_show(engine, spec);
+    let entry = show
+        .data
+        .get(data_name)
+        .unwrap_or_else(|| panic!("{data_name} missing from show.data"));
+    let lit = entry
+        .prefilled
+        .clone()
+        .or_else(|| entry.suggestion.clone())
+        .unwrap_or_else(|| panic!("{data_name} has no prefilled or suggestion in show.data"));
+    api_wire_json_for_literal(data_name, &lit)
 }
 
 fn deserialize_api_wire_literal(json: serde_json::Value) -> LiteralValue {
     let lemma_type = json["lemma_type"].clone();
     let entry: lemma::DataEntry = serde_json::from_value(serde_json::json!({
         "type": lemma_type,
-        "default": json,
+        "suggestion": json,
+        "needed_by_rules": [],
     }))
     .expect("API wire literal must deserialize via DataEntry");
     entry
-        .default
+        .suggestion
         .expect("default literal present in API wire JSON")
-}
-
-fn first_measure_constant_json(plan: &ExecutionPlan) -> serde_json::Value {
-    let plan_json =
-        serde_json::to_value(ExecutionPlanSerialized::from(plan)).expect("serialize plan");
-    let rules = plan_json["rules"].as_array().expect("plan rules array");
-    for rule in rules {
-        let constants = rule["instructions"]["constants"]
-            .as_array()
-            .expect("rule constants array");
-        for constant in constants {
-            if constant["value"].get("measure").is_some() {
-                return constant.clone();
-            }
-        }
-    }
-    panic!("no measure constant in plan instructions");
 }
 
 // --- A: In-memory unchanged ---
 
 #[test]
 fn in_memory_ratio_percent_default_is_canonical() {
-    let default = schema_default_literal(&policy_engine(), "policy", "margin");
+    let default = show_default_literal(&policy_engine(), "policy", "margin");
     assert_ratio_exact(&default, "margin default", "0.15", Some("percent"));
 }
 
 #[test]
 fn in_memory_ratio_basis_points_default_is_canonical() {
-    let default = schema_default_literal(&policy_engine(), "policy", "bps");
+    let default = show_default_literal(&policy_engine(), "policy", "bps");
     assert_ratio_exact(&default, "bps default", "0.05", Some("basis_points"));
 }
 
 #[test]
 fn in_memory_measure_eur_per_hour_default_is_canonical() {
-    let default = schema_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
     match &default.value {
         ValueKind::Measure(r, sig) => {
             assert_eq!(sig, &vec![("eur_per_hour".to_string(), 1)]);
@@ -266,7 +252,7 @@ fn ratio_api_wire_bare_0_15() {
 
 #[test]
 fn ratio_api_wire_percent_15() {
-    let json = api_schema_default_json(&policy_engine(), "policy", "margin");
+    let json = api_show_default_json(&policy_engine(), "policy", "margin");
     let (value, unit) = json_ratio_wire(&json);
     assert_eq!(value, "15");
     assert_eq!(unit.as_deref(), Some("percent"));
@@ -274,7 +260,7 @@ fn ratio_api_wire_percent_15() {
 
 #[test]
 fn ratio_api_wire_permille_150() {
-    let json = api_schema_default_json(&policy_engine(), "policy", "permille_rate");
+    let json = api_show_default_json(&policy_engine(), "policy", "permille_rate");
     let (value, unit) = json_ratio_wire(&json);
     assert_eq!(value, "150");
     assert_eq!(unit.as_deref(), Some("permille"));
@@ -282,7 +268,7 @@ fn ratio_api_wire_permille_150() {
 
 #[test]
 fn ratio_api_wire_basis_points_500() {
-    let json = api_schema_default_json(&policy_engine(), "policy", "bps");
+    let json = api_show_default_json(&policy_engine(), "policy", "bps");
     let (value, unit) = json_ratio_wire(&json);
     assert_eq!(value, "500");
     assert_eq!(unit.as_deref(), Some("basis_points"));
@@ -308,7 +294,7 @@ fn ratio_api_wire_bare_0_5_roundtrip() {
 
 #[test]
 fn ratio_api_wire_percent_roundtrip() {
-    let original = schema_default_literal(&policy_engine(), "policy", "margin");
+    let original = show_default_literal(&policy_engine(), "policy", "margin");
     let json = api_wire_json_for_literal("margin", &original);
     let roundtrip: LiteralValue = deserialize_api_wire_literal(json);
     assert_ratio_exact(&roundtrip, "percent roundtrip", "0.15", Some("percent"));
@@ -316,7 +302,7 @@ fn ratio_api_wire_percent_roundtrip() {
 
 #[test]
 fn ratio_api_wire_basis_points_roundtrip() {
-    let original = schema_default_literal(&policy_engine(), "policy", "bps");
+    let original = show_default_literal(&policy_engine(), "policy", "bps");
     let json = api_wire_json_for_literal("bps", &original);
     let roundtrip: LiteralValue = deserialize_api_wire_literal(json);
     assert_ratio_exact(&roundtrip, "bps roundtrip", "0.05", Some("basis_points"));
@@ -341,34 +327,34 @@ fn ratio_api_wire_unit_tag_controls_scaling() {
 fn ratio_prompt_bare_0_5() {
     let bare = LiteralValue::ratio_from_decimal(decimal_lit("0.5"), None);
     assert_eq!(
-        bare.magnitude_default_for_decimal_prompt().as_deref(),
+        bare.magnitude_suggestion_for_decimal_prompt().as_deref(),
         Some("0.5")
     );
 }
 
 #[test]
 fn ratio_prompt_percent_15() {
-    let default = schema_default_literal(&policy_engine(), "policy", "margin");
+    let default = show_default_literal(&policy_engine(), "policy", "margin");
     assert_eq!(
-        default.magnitude_default_for_decimal_prompt().as_deref(),
+        default.magnitude_suggestion_for_decimal_prompt().as_deref(),
         Some("15")
     );
 }
 
 #[test]
 fn ratio_prompt_basis_points_500() {
-    let default = schema_default_literal(&policy_engine(), "policy", "bps");
+    let default = show_default_literal(&policy_engine(), "policy", "bps");
     assert_eq!(
-        default.magnitude_default_for_decimal_prompt().as_deref(),
+        default.magnitude_suggestion_for_decimal_prompt().as_deref(),
         Some("500")
     );
 }
 
 #[test]
 fn measure_prompt_eur_per_hour_25() {
-    let default = schema_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
     assert_eq!(
-        default.magnitude_default_for_decimal_prompt().as_deref(),
+        default.magnitude_suggestion_for_decimal_prompt().as_deref(),
         Some("25")
     );
 }
@@ -377,19 +363,61 @@ fn measure_prompt_eur_per_hour_25() {
 
 #[test]
 fn measure_api_wire_eur_per_hour_25() {
-    let json = api_schema_default_json(&cost_price_engine(), "cost_price", "labor_cost");
+    let json = api_show_default_json(&cost_price_engine(), "cost_price", "labor_cost");
     assert_eq!(json_measure_wire(&json), "25");
 }
 
 #[test]
 fn measure_api_wire_kg_per_hour_12() {
-    let json = api_schema_default_json(&cost_price_engine(), "cost_price", "throughput");
+    let json = api_show_default_json(&cost_price_engine(), "cost_price", "throughput");
     assert_eq!(json_measure_wire(&json), "12");
 }
 
 #[test]
+fn measure_show_default_includes_all_declared_units() {
+    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let json = api_wire_json_for_literal("labor_cost", &default);
+    let measure = json["measure"]
+        .as_object()
+        .expect("labor_cost default must include measure unit map");
+    assert_eq!(
+        measure["eur_per_hour"].as_str(),
+        Some("25"),
+        "eur_per_hour magnitude"
+    );
+    let inr = measure["inr_per_hour"]
+        .as_str()
+        .expect("inr_per_hour must be materialized");
+    assert_ne!(inr, "25", "inr_per_hour must differ from eur magnitude");
+    assert_eq!(
+        default.magnitude_in_unit("inr_per_hour").as_deref(),
+        Some(inr),
+        "magnitude_in_unit must match wire map"
+    );
+}
+
+#[test]
+fn ratio_show_default_includes_all_declared_units() {
+    let default = show_default_literal(&policy_engine(), "policy", "bps");
+    let json = api_wire_json_for_literal("bps", &default);
+    let ratio = json["ratio"]
+        .as_object()
+        .expect("bps default must include ratio unit map");
+    assert_eq!(
+        ratio["basis_points"].as_str(),
+        Some("500"),
+        "basis_points magnitude"
+    );
+    assert_eq!(
+        default.magnitude_in_unit("basis_points").as_deref(),
+        Some("500"),
+        "magnitude_in_unit must match wire map"
+    );
+}
+
+#[test]
 fn measure_api_wire_roundtrip_canonical() {
-    let original = schema_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let original = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
     let json = api_wire_json_for_literal("labor_cost", &original);
     let roundtrip: LiteralValue = deserialize_api_wire_literal(json);
     assert_eq!(roundtrip.value, original.value);
@@ -397,21 +425,21 @@ fn measure_api_wire_roundtrip_canonical() {
 
 #[test]
 fn measure_prompt_matches_api_wire() {
-    let schema = plan_interface_schema(&cost_price_engine(), "cost_price");
+    let show = plan_interface_show(&cost_price_engine(), "cost_price");
     for (name, wire) in [
         ("labor_cost", "25"),
         ("throughput", "12"),
         ("product_cost", "4"),
     ] {
-        let default = schema
+        let default = show
             .data
             .get(name)
             .unwrap_or_else(|| panic!("{name}"))
-            .default
+            .suggestion
             .as_ref()
             .unwrap_or_else(|| panic!("{name} default"));
         assert_eq!(
-            default.magnitude_default_for_decimal_prompt().as_deref(),
+            default.magnitude_suggestion_for_decimal_prompt().as_deref(),
             Some(wire),
             "{name} prompt must match API wire"
         );
@@ -425,51 +453,187 @@ fn measure_prompt_matches_api_wire() {
 
 // --- F: End-to-end consumer ---
 
-fn cost_price_inputs() -> HashMap<String, DataValueInput> {
-    let mut data = HashMap::new();
-    data.insert(
-        "product_cost".into(),
-        DataValueInput::convenience("4 eur_per_kg"),
-    );
-    data.insert(
-        "labor_cost".into(),
-        DataValueInput::convenience("25 eur_per_hour"),
-    );
-    data.insert(
-        "throughput".into(),
-        DataValueInput::convenience("12 kg_per_hour"),
-    );
-    data
+fn cost_price_run_inputs() -> HashMap<String, String> {
+    HashMap::from([
+        ("product_cost".into(), "4 eur_per_kg".into()),
+        ("labor_cost".into(), "25 eur_per_hour".into()),
+        ("throughput".into(), "12 kg_per_hour".into()),
+    ])
+}
+
+fn run_cost_price(engine: &Engine, now: &DateTimeValue) -> lemma::Response {
+    engine
+        .run(
+            None,
+            "cost_price",
+            Some(now),
+            cost_price_run_inputs(),
+            None,
+            true,
+        )
+        .expect("evaluation")
 }
 
 #[test]
 fn measure_eval_per_unit_inputs_ok() {
     let engine = cost_price_engine();
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "cost_price", Some(&now))
-        .expect("plan");
+    run_cost_price(&engine, &now);
+}
+
+fn run_cost_price_with_single_override(
+    engine: &Engine,
+    now: &DateTimeValue,
+    data_name: &str,
+    convenience: &str,
+    rule_names: Option<&[&str]>,
+    explain: bool,
+) -> lemma::Response {
+    let mut data = cost_price_run_inputs();
+    data.insert(data_name.to_string(), convenience.to_string());
+    let rules: Option<Vec<String>> =
+        rule_names.map(|names| names.iter().map(|name| (*name).to_string()).collect());
     engine
-        .run_plan(plan, Some(&now), cost_price_inputs(), true, None)
-        .expect("evaluation");
+        .run(
+            None,
+            "cost_price",
+            Some(now),
+            data,
+            rules.as_deref(),
+            explain,
+        )
+        .expect("evaluation must complete")
+}
+
+fn assert_cost_price_rule_not_vetoed(response: &lemma::Response, context: &str) {
+    let rule = response
+        .results
+        .get("cost_price")
+        .unwrap_or_else(|| panic!("{context}: cost_price rule must be present"));
+    assert!(
+        !rule.vetoed,
+        "{context}: cost_price must not veto, got {:?}",
+        rule.veto_reason
+    );
+    assert_ne!(
+        rule.veto_reason.as_deref(),
+        Some("Calculated result exceeds decimal value limit"),
+        "{context}: must not veto for decimal limit"
+    );
+    assert!(
+        rule.display.is_some(),
+        "{context}: cost_price must produce a committable display value"
+    );
 }
 
 #[test]
-fn measure_response_data_api_wire() {
+fn measure_show_default_inr_per_hour_convenience_input_evaluates() {
     let engine = cost_price_engine();
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "cost_price", Some(&now))
-        .expect("plan");
+    let default = show_default_literal(&engine, "cost_price", "labor_cost");
+    let magnitude = default
+        .magnitude_in_unit("inr_per_hour")
+        .expect("section E guarantees inr_per_hour materialization");
+    let input = format!("{magnitude} inr_per_hour");
+    let response = run_cost_price_with_single_override(
+        &engine,
+        &now,
+        "labor_cost",
+        &input,
+        Some(&["cost_price"]),
+        false,
+    );
+    assert_cost_price_rule_not_vetoed(
+        &response,
+        "show default inr_per_hour magnitude as convenience input",
+    );
+}
+
+#[test]
+fn measure_show_default_each_declared_unit_convenience_input_evaluates() {
+    let engine = cost_price_engine();
+    let now = DateTimeValue::now();
+    let cases = [
+        ("labor_cost", "eur_per_hour"),
+        ("labor_cost", "inr_per_hour"),
+        ("product_cost", "eur_per_kg"),
+        ("product_cost", "inr_per_kg"),
+        ("throughput", "kg_per_hour"),
+    ];
+    for (data_name, unit) in cases {
+        let default = show_default_literal(&engine, "cost_price", data_name);
+        let magnitude = default
+            .magnitude_in_unit(unit)
+            .unwrap_or_else(|| panic!("{data_name} must materialize for unit {unit}"));
+        let input = format!("{magnitude} {unit}");
+        let response = run_cost_price_with_single_override(
+            &engine,
+            &now,
+            data_name,
+            &input,
+            Some(&["cost_price"]),
+            false,
+        );
+        assert_cost_price_rule_not_vetoed(
+            &response,
+            &format!("{data_name} show default in {unit} as convenience input"),
+        );
+    }
+}
+
+#[test]
+fn measure_show_default_inr_per_hour_not_overprecision_string() {
+    let default = show_default_literal(&cost_price_engine(), "cost_price", "labor_cost");
+    let materialized = default
+        .magnitude_in_unit("inr_per_hour")
+        .expect("inr_per_hour must be materialized");
+    let overprecision = "2717.3913043478260869565217391";
+    assert_ne!(
+        materialized, overprecision,
+        "show default must not emit unbounded output precision as convenience input"
+    );
+}
+
+#[test]
+fn ratio_show_default_basis_points_convenience_input_evaluates() {
+    let engine = policy_engine();
+    let now = DateTimeValue::now();
+    let default = show_default_literal(&engine, "policy", "bps");
+    let magnitude = default
+        .magnitude_in_unit("basis_points")
+        .expect("section E guarantees basis_points materialization");
+    assert_eq!(magnitude, "500");
+    let mut data = HashMap::new();
+    data.insert("bps".into(), format!("{magnitude} basis_points"));
     let response = engine
-        .run_plan(plan, Some(&now), cost_price_inputs(), true, None)
-        .expect("evaluation");
+        .run(
+            None,
+            "policy",
+            Some(&now),
+            data,
+            Some(&["bps_val".to_string()]),
+            false,
+        )
+        .expect("evaluation must complete");
+    let rule = response.results.get("bps_val").expect("bps_val rule");
+    assert!(
+        !rule.vetoed,
+        "bps_val must not veto, got {:?}",
+        rule.veto_reason
+    );
+}
+
+#[test]
+fn measure_show_literal_api_wire_after_run() {
+    let engine = cost_price_engine();
+    let now = DateTimeValue::now();
+    run_cost_price(&engine, &now);
     assert_eq!(
-        json_measure_wire(&response_data_api_json(&response, "labor_cost")),
+        json_measure_wire(&show_literal_api_json(&engine, "cost_price", "labor_cost")),
         "25"
     );
     assert_eq!(
-        json_measure_wire(&response_data_api_json(&response, "throughput")),
+        json_measure_wire(&show_literal_api_json(&engine, "cost_price", "throughput")),
         "12"
     );
 }
@@ -478,12 +642,7 @@ fn measure_response_data_api_wire() {
 fn measure_response_json_serializes() {
     let engine = cost_price_engine();
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "cost_price", Some(&now))
-        .expect("plan");
-    let response = engine
-        .run_plan(plan, Some(&now), cost_price_inputs(), true, None)
-        .expect("evaluation");
+    let response = run_cost_price(&engine, &now);
     serde_json::to_string(&response).expect("response API JSON must serialize");
 }
 
@@ -491,11 +650,10 @@ fn measure_response_json_serializes() {
 fn ratio_eval_15_percent_ok() {
     let engine = policy_engine();
     let now = DateTimeValue::now();
-    let plan = engine.get_plan(None, "policy", Some(&now)).expect("plan");
     let mut data = HashMap::new();
-    data.insert("margin".into(), DataValueInput::convenience("15%"));
+    data.insert("margin".into(), "15%".to_string());
     let response = engine
-        .run_plan(plan, Some(&now), data, true, None)
+        .run(None, "policy", Some(&now), data, None, true)
         .expect("evaluation");
     let rr = response.results.get("m").expect("rule m");
     assert!(!rr.vetoed, "rule must not veto");
@@ -510,16 +668,9 @@ fn ratio_eval_15_percent_ok() {
 }
 
 #[test]
-fn ratio_response_data_api_wire_percent() {
+fn ratio_show_suggestion_api_wire_percent() {
     let engine = policy_engine();
-    let now = DateTimeValue::now();
-    let plan = engine.get_plan(None, "policy", Some(&now)).expect("plan");
-    let mut data = HashMap::new();
-    data.insert("margin".into(), DataValueInput::convenience("15%"));
-    let response = engine
-        .run_plan(plan, Some(&now), data, true, None)
-        .expect("evaluation");
-    let (value, _) = json_ratio_wire(&response_data_api_json(&response, "margin"));
+    let (value, _) = json_ratio_wire(&show_literal_api_json(&engine, "policy", "margin"));
     assert_eq!(value, "15");
 }
 
@@ -534,74 +685,11 @@ fn ratio_rule_result_bare_0_5_api_wire() {
     assert_ratio_exact(&roundtrip, "bare API roundtrip", "0.5", None);
 }
 
-// --- G: Overlay ---
-
-#[test]
-fn overlay_rejects_double_canonical_measure() {
-    let engine = cost_price_engine();
-    let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "cost_price", Some(&now))
-        .expect("plan");
-    let mut data = HashMap::new();
-    data.insert(
-        "product_cost".into(),
-        DataValueInput::convenience("4 eur_per_kg"),
-    );
-    data.insert(
-        "labor_cost".into(),
-        DataValueInput::convenience("0.0069444444444444444444444444 eur_per_hour"),
-    );
-    data.insert(
-        "throughput".into(),
-        DataValueInput::convenience("0.0033333333333333333333333333 kg_per_hour"),
-    );
-    let overlay = DataOverlay::resolve(plan, data, &ResourceLimits::default()).expect("overlay");
-    assert!(overlay
-        .violated
-        .contains_key(&DataPath::local("labor_cost".into())));
-    assert!(overlay
-        .violated
-        .contains_key(&DataPath::local("throughput".into())));
-}
-
-#[test]
-fn overlay_accepts_per_unit_measure() {
-    let engine = cost_price_engine();
-    let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "cost_price", Some(&now))
-        .expect("plan");
-    let overlay = DataOverlay::resolve(plan, cost_price_inputs(), &ResourceLimits::default())
-        .expect("overlay");
-    assert!(overlay.violated.is_empty());
-}
-
-#[test]
-fn overlay_rejects_uncommittable_canonical() {
-    let engine = cost_price_engine();
-    let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "cost_price", Some(&now))
-        .expect("plan");
-    let mut data = cost_price_inputs();
-    data.insert(
-        "labor_cost".into(),
-        DataValueInput::convenience(
-            "1000000000000000000000000000000000000000000000000000000000000 eur_per_hour",
-        ),
-    );
-    let overlay = DataOverlay::resolve(plan, data, &ResourceLimits::default()).expect("overlay");
-    assert!(overlay
-        .violated
-        .contains_key(&DataPath::local("labor_cost".into())));
-}
-
 // --- H: Range API wire ---
 
 const RATIO_RANGE_PERCENT_SPEC: &str = r#"
 spec policy
-data allowed_band: ratio range -> default 10%...50%
+data allowed_band: ratio range -> suggest 10%...50%
 rule band: allowed_band
 "#;
 
@@ -609,7 +697,7 @@ const RATIO_RANGE_BPS_SPEC: &str = r#"
 spec policy
 data allowed_band: ratio range
   -> unit basis_points 10000
-  -> default 200 basis_points...3500 basis_points
+  -> suggest 200 basis_points...3500 basis_points
 rule band: allowed_band
 "#;
 
@@ -620,7 +708,7 @@ fn range_endpoint_ratio_wire(json: &serde_json::Value, side: &str) -> (String, O
 #[test]
 fn ratio_range_api_wire_percent_endpoints() {
     let engine = load_engine(RATIO_RANGE_PERCENT_SPEC, "ratio_range_pct.lemma");
-    let default = schema_default_literal(&engine, "policy", "allowed_band");
+    let default = show_default_literal(&engine, "policy", "allowed_band");
     let json = api_wire_json_for_literal("allowed_band", &default);
     let (left, left_unit) = range_endpoint_ratio_wire(&json, "from");
     let (right, right_unit) = range_endpoint_ratio_wire(&json, "to");
@@ -633,7 +721,7 @@ fn ratio_range_api_wire_percent_endpoints() {
 #[test]
 fn ratio_range_api_wire_basis_points_endpoints() {
     let engine = load_engine(RATIO_RANGE_BPS_SPEC, "ratio_range_bps.lemma");
-    let default = schema_default_literal(&engine, "policy", "allowed_band");
+    let default = show_default_literal(&engine, "policy", "allowed_band");
     let json = api_wire_json_for_literal("allowed_band", &default);
     let (left, _) = range_endpoint_ratio_wire(&json, "from");
     let (right, _) = range_endpoint_ratio_wire(&json, "to");
@@ -644,7 +732,7 @@ fn ratio_range_api_wire_basis_points_endpoints() {
 #[test]
 fn ratio_range_api_wire_roundtrip_canonical() {
     let engine = load_engine(RATIO_RANGE_PERCENT_SPEC, "ratio_range_pct.lemma");
-    let original = schema_default_literal(&engine, "policy", "allowed_band");
+    let original = show_default_literal(&engine, "policy", "allowed_band");
     let json = api_wire_json_for_literal("allowed_band", &original);
     let roundtrip: LiteralValue = deserialize_api_wire_literal(json);
     match (&original.value, &roundtrip.value) {
@@ -654,54 +742,4 @@ fn ratio_range_api_wire_roundtrip_canonical() {
         }
         _ => panic!("expected range values"),
     }
-}
-
-// --- I: Plan persistence ---
-
-const INLINE_MEASURE_CONSTANT_SPEC: &str = r#"
-spec t
-uses lemma units
-data money: measure
-  -> unit eur 1
-  -> decimals 2
-data labor: measure
-  -> unit eur_per_hour eur/hour
-rule r: 25 eur_per_hour
-"#;
-
-#[test]
-fn execution_plan_constants_serialize_canonical_not_api_wire() {
-    let engine = load_engine(INLINE_MEASURE_CONSTANT_SPEC, "inline_measure.lemma");
-    let now = DateTimeValue::now();
-    let plan = engine.get_plan(None, "t", Some(&now)).expect("plan");
-    let constant_json = first_measure_constant_json(plan);
-    let wire = constant_json["value"]["measure"]["value"]
-        .as_str()
-        .expect("measure constant value");
-    assert_ne!(
-        wire, "25",
-        "plan persistence must not use API per-unit wire; got {wire}"
-    );
-    assert!(
-        wire.starts_with("0.006944") || wire.contains("944"),
-        "plan constant must stay canonical, got {wire}"
-    );
-}
-
-#[test]
-fn execution_plan_constants_roundtrip_preserves_canonical() {
-    let engine = load_engine(INLINE_MEASURE_CONSTANT_SPEC, "inline_measure.lemma");
-    let now = DateTimeValue::now();
-    let plan = engine.get_plan(None, "t", Some(&now)).expect("plan");
-    let json = serde_json::to_value(ExecutionPlanSerialized::from(plan)).expect("serialize plan");
-    let serialized: ExecutionPlanSerialized =
-        serde_json::from_value(json).expect("deserialize plan");
-    let reconstructed = ExecutionPlan::try_from(serialized).expect("reconstruct plan");
-    let response = engine
-        .run_plan(&reconstructed, Some(&now), HashMap::new(), false, None)
-        .expect("evaluate reconstructed plan");
-    assert!(
-        response.results.contains_key("r"),
-        "rule r must produce a result"
-    );
 }

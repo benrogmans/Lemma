@@ -7,7 +7,7 @@ nav_order: 60
 
 Once a Spec can reference its own Data and Rules, it can import another Spec with Uses and reference its members through an alias. This chapter covers composition, temporal versions, planning checks, and (last) repositories and registry imports for advanced usage.
 
-For syntax details see [Spec references (`uses`)](../reference/readme.md#spec-references-uses).
+For syntax details see [Using other Specs](../reference/readme.md#using-other-specs).
 
 ## Importing another Spec
 
@@ -68,7 +68,7 @@ Uses registers an import; it does not set runtime values on the dependency. Use 
 spec inner
 
 data x: number
-  -> default 1
+  -> suggest 1
 
 
 spec outer
@@ -282,9 +282,7 @@ lemma fetch --all           # fetch all @... dependencies into lemma_deps/
 lemma fetch @iso/countries -f   # force re-fetch if content changed
 ```
 
-External packages use `@org/path` qualifiers. The engine does not fetch the network; load sources with `lemma fetch` (or your embedder), then `uses iso: @iso/countries alpha2` resolves like any other repo-qualified import.
-
-See [Registry](../reference/registry.md).
+Importing from a registry uses `@owner/name` on the `uses` line (for example `uses iso: @iso/countries alpha2`). The engine does not fetch the network; load sources with `lemma fetch` (or your embedder) first. See [Registry](../reference/registry.md).
 
 ## Evaluating a composed Spec
 
@@ -298,18 +296,19 @@ lemma run membership_benefits --effective 2025-03-01
 - Unpinned imports: paths such as `p.discount` use dependency bodies resolved for that slice.
 - Pinned imports: the dependency body stays at the pinned instant.
 
-To see required inputs for that slice:
+To inspect the static interface for that temporal slice (types, constraints, rules after normalize):
 
 ```bash
-lemma schema membership_benefits --effective 2025-03-01
+lemma show membership_benefits --effective 2025-03-01
 ```
 
+Overlay-aware discovery of what a concrete `run` still needs comes from each rule's `missing_data`, not from `show`.
 ## Quick decision guide
 
 | Goal | Pattern |
 |------|---------|
 | Track compatible dependency rows across the consumer's lifetime | `uses dep` (unpinned) |
-| Lock a regulation / tariff / schema at a known date | `uses dep 2025-06-01` |
+| Lock a regulation / tariff / spec version at a known date | `uses dep 2025-06-01` |
 | Import an earlier row of the same Spec name | `uses prev: finance 2026-01-01` |
 | Reuse a Data shape from a library | `uses iso: @iso/countries alpha2` and `data x: iso.code` |
 | Set Data on an imported Spec | `with alias.field: value` |

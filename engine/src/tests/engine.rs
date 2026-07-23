@@ -11,10 +11,10 @@ data value: invalid
 rule result: value
 "#;
 
-    let result = engine.load(
-        code,
+    let result = engine.load([(
         SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+        code.to_string(),
+    )]);
     assert!(result.is_err(), "Engine should reject invalid parent types");
 
     let load_err = result.unwrap_err();
@@ -36,10 +36,10 @@ data value: invalid_parent_type
 rule result: value
 "#;
 
-    let result = engine.load(
-        code,
+    let result = engine.load([(
         SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+        code.to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Engine should reject unknown types used in type declarations"
@@ -66,10 +66,10 @@ spec test
 data x: 2
 "#;
 
-    let result = engine.load(
-        code,
+    let result = engine.load([(
         SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-    );
+        code.to_string(),
+    )]);
     assert!(
         result.is_err(),
         "Duplicate spec rows for same identity should be rejected (no silent overwrites)"

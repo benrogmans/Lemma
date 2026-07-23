@@ -6,10 +6,6 @@ Defines the benefits for premium members.
 This spec can be referenced by other specs.
 """
 
-data discount_ratio: ratio
-  -> minimum 0 percent
-  -> maximum 100 percent
-
 rule discount_rate: 10%
 
 rule free_shipping_threshold: 50
@@ -31,7 +27,7 @@ uses membership: premium_membership
 
 data monthly_spend: number
   -> minimum 0
-  -> default 150
+  -> suggest 150
 
 rule discount: monthly_spend * membership.discount_rate
 

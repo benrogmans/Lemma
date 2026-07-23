@@ -17,15 +17,12 @@ rule test_expr: {}
 "#,
             s
         );
-        let loaded = engine.load(
-            &code,
-            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_expr"))),
-        );
+        let loaded = engine.load([(lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("fuzz_expr"))), &code.to_string())]);
 
         // Property: load Ok => evaluation must not panic.
         if loaded.is_ok() {
             let now = DateTimeValue::now();
-            let _ = engine.run(None, "fuzz_test", Some(&now), HashMap::new(), false, None);
+            let _ = engine.run(None, "fuzz_test", Some(&now), HashMap::new(), None, false);
         }
     }
 });

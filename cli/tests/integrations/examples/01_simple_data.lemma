@@ -21,7 +21,7 @@ data is_manager:           false
 data max_file_size:        10
 data name:                 "Alice van der Berg"
 data percentage_complete:  87.500%
-data processing_time:      2.5 hours
+data processing_time:      2.5 hour
 data review_date:          2024-07-15
 data start_date:           2024-01-15
 data tax_rate:             22%

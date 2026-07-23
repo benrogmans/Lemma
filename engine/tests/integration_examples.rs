@@ -33,10 +33,10 @@ fn load_examples() -> Engine {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
         engine
-            .load(
-                &content,
+            .load([(
                 lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(path))),
-            )
+                &content.to_string(),
+            )])
             .unwrap_or_else(|errs| {
                 panic!(
                     "Failed to parse {}: {}",
@@ -63,7 +63,7 @@ fn test_02_rules_and_unless() {
     data.insert("is_premium".to_string(), "true".to_string());
     data.insert("customer_age".to_string(), "17".to_string());
     let response = engine
-        .run(None, "rules_and_unless", Some(&now), data, true, None)
+        .run(None, "rules_and_unless", Some(&now), data, None, true)
         .expect("Evaluation failed");
 
     assert_eq!(response.spec_name, "rules_and_unless");
@@ -107,8 +107,8 @@ fn test_03_spec_references() {
             "specific_employee",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("Evaluation failed");
 
@@ -148,8 +148,8 @@ fn test_04_unit_conversions() {
             "unit_conversions",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("Evaluation failed");
 
@@ -161,7 +161,7 @@ fn test_04_unit_conversions() {
         duration_hours
             .measure
             .as_ref()
-            .and_then(|m| m.get("hours"))
+            .and_then(|m| m.get("hour"))
             .map(String::as_str),
         Some("1.5")
     );
@@ -172,7 +172,7 @@ fn test_04_unit_conversions() {
         duration_seconds
             .measure
             .as_ref()
-            .and_then(|m| m.get("seconds"))
+            .and_then(|m| m.get("second"))
             .map(String::as_str),
         Some("5400")
     );
@@ -192,7 +192,7 @@ fn test_05_date_handling() {
     let mut data = std::collections::HashMap::new();
     data.insert("current_date".to_string(), "2024-06-15".to_string());
     let response = engine
-        .run(None, "date_handling", Some(&now), data, true, None)
+        .run(None, "date_handling", Some(&now), data, None, true)
         .expect("Evaluation failed");
 
     // Spec evaluates successfully
@@ -223,8 +223,8 @@ fn test_08_rule_references() {
             "rule_references",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("Evaluation failed");
 
@@ -244,8 +244,8 @@ fn test_08_rule_references() {
             "eligibility_check",
             Some(&now),
             HashMap::new(),
-            true,
             None,
+            true,
         )
         .expect("Evaluation failed");
 

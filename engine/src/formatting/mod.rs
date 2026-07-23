@@ -8,7 +8,8 @@ use crate::parsing::ast::{
     expression_precedence, AsLemmaSource, Constraint, DataValue, Expression, ExpressionKind,
     LemmaData, LemmaRule, LemmaSpec,
 };
-use crate::{parse, Error, ParseResult, ResourceLimits};
+use crate::parsing::{parse, ParseResult};
+use crate::{Error, ResourceLimits};
 
 /// Soft line length limit. Longer lines may be wrapped (unless clauses, expressions).
 /// Data and other constructs are not broken if they exceed this.
@@ -29,7 +30,7 @@ pub fn format_specs(specs: &[LemmaSpec]) -> String {
     format_spec_refs(&refs)
 }
 
-/// Like [`format_specs`] for borrowed specs (e.g. from [`Arc<LemmaSpec>`](crate::parsing::ast::LemmaSpec)).
+/// Like [`format_specs`] for borrowed specs (e.g. from Context storage).
 #[must_use]
 pub fn format_spec_refs(specs: &[&LemmaSpec]) -> String {
     let mut out = String::new();
@@ -542,9 +543,9 @@ fn format_expr_wrapped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::literals::DateGranularity;
     use crate::parsing::ast::{
-        AsLemmaSource, BooleanValue, DateGranularity, DateTimeValue, TimeValue, TimezoneValue,
-        Value,
+        AsLemmaSource, BooleanValue, DateTimeValue, TimeValue, TimezoneValue, Value,
     };
     use rust_decimal::prelude::FromStr;
     use rust_decimal::Decimal;
@@ -583,8 +584,6 @@ mod tests {
         assert_eq!(fmt_value(&Value::Boolean(BooleanValue::True)), "true");
         assert_eq!(fmt_value(&Value::Boolean(BooleanValue::Yes)), "yes");
         assert_eq!(fmt_value(&Value::Boolean(BooleanValue::No)), "no");
-        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::Accept)), "accept");
-        assert_eq!(fmt_value(&Value::Boolean(BooleanValue::Reject)), "reject");
     }
 
     #[test]
@@ -595,8 +594,8 @@ mod tests {
 
     #[test]
     fn test_format_value_duration_as_measure() {
-        let v = Value::NumberWithUnit(Decimal::from(40), "hours".to_string());
-        assert_eq!(fmt_value(&v), "40 hours");
+        let v = Value::NumberWithUnit(Decimal::from(40), "hour".to_string());
+        assert_eq!(fmt_value(&v), "40 hour");
     }
 
     #[test]
@@ -730,7 +729,7 @@ mod tests {
     #[test]
     fn test_format_source_lowercases_logical_identifiers() {
         let source = r#"spec Test
-data Price: number -> default 1
+data Price: number -> suggest 1
 rule Total: price
 "#;
         let formatted =
@@ -778,7 +777,7 @@ rule tax: rate * 21%
         let source = r#"spec test
 
 data income: number -> minimum 0
-data filing_status: filing_status_type -> default "single"
+data filing_status: filing_status_type -> suggest "single"
 data country: "NL"
 data deductions: number -> minimum 0
 data name: text
@@ -799,7 +798,7 @@ rule total: income
         assert_eq!(lines[0], "data income: number");
         assert_eq!(lines[1], "  -> minimum 0");
         assert_eq!(lines[2], "data filing_status: filing_status_type");
-        assert_eq!(lines[3], "  -> default \"single\"");
+        assert_eq!(lines[3], "  -> suggest \"single\"");
         assert_eq!(lines[4], "data country: \"NL\"");
         assert_eq!(lines[5], "data deductions: number");
         assert_eq!(lines[6], "  -> minimum 0");
@@ -985,6 +984,30 @@ rule r: a + 2.00 * 3
         assert_eq!(
             formatted, again,
             "AST Display-based format must be idempotent under parse/format"
+        );
+    }
+
+    #[test]
+    fn test_format_past_future_range_no_duplicate_in() {
+        let source = r#"spec test
+data start: date
+data length: duration
+rule valid: start in past length
+rule window: past length
+"#;
+        let formatted =
+            format_source(source, crate::parsing::source::SourceType::Volatile).unwrap();
+        assert!(
+            formatted.contains("rule valid: start in past length"),
+            "RangeContainment+PastFutureRange must not emit duplicate 'in', got:\n{formatted}"
+        );
+        assert!(
+            formatted.contains("rule window: past length"),
+            "bare PastFutureRange must print 'past' not 'in past', got:\n{formatted}"
+        );
+        assert!(
+            !formatted.contains("in in past"),
+            "must not contain duplicate 'in', got:\n{formatted}"
         );
     }
 

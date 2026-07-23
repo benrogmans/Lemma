@@ -11,27 +11,14 @@ data temperature: measure
   -> minimum -70 celsius
   -> maximum 70 celsius
 
-data clothing_style: text
-  -> option "none"
-  -> option "light"
-  -> option "warm"
-  -> option "very_warm"
-
-data comfort: text
-  -> option "comfortable"
-  -> option "cold"
-  -> option "hot"
-  -> option "uncomfortable"
-
 data wind_speed: number
   -> minimum 0
 
 data is_raining: boolean
-data is_snowing: boolean
 
 rule clothing_layer: "light"
-  unless temperature < 5 celsius  then "very_warm"
   unless temperature < 10 celsius then "warm"
+  unless temperature < 5 celsius  then "very_warm"
   unless temperature > 25 celsius then "none"
 
 rule needs_jacket: no

@@ -19,15 +19,17 @@ spec age_check
 uses lemma units
 data age: 15
 rule is_adult: age >= 18
-    unless age < 18 then veto "Must be at least 18 years old"
+    unless age < 18 then veto "Must be at least 18 year old"
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "age_check", Some(&now), HashMap::new(), false, None)
+        .run(None, "age_check", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let rule_result = response
         .results
@@ -38,7 +40,7 @@ rule is_adult: age >= 18
     assert!(rule_result.vetoed);
     assert_eq!(
         rule_result.veto_reason.as_deref(),
-        Some("Must be at least 18 years old")
+        Some("Must be at least 18 year old")
     );
 }
 
@@ -52,11 +54,13 @@ rule is_valid: value > 0
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "validation", Some(&now), HashMap::new(), false, None)
+        .run(None, "validation", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let rule_result = response
         .results
@@ -75,15 +79,17 @@ spec age_check
 uses lemma units
 data age: 25
 rule is_adult: age >= 18
-    unless age < 18 then veto "Must be at least 18 years old"
+    unless age < 18 then veto "Must be at least 18 year old"
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "age_check", Some(&now), HashMap::new(), false, None)
+        .run(None, "age_check", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let rule_result = response
         .results
@@ -107,11 +113,13 @@ rule eligible: age >= 18 and score >= 80
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "validation", Some(&now), HashMap::new(), false, None)
+        .run(None, "validation", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let rule_result = response
         .results
@@ -138,11 +146,13 @@ rule eligible: age >= 18 and score >= 80
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "validation", Some(&now), HashMap::new(), false, None)
+        .run(None, "validation", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let rule_result = response
         .results
@@ -168,7 +178,9 @@ rule valid_compensation: salary >= 40000
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -177,8 +189,8 @@ rule valid_compensation: salary >= 40000
             "salary_check",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -208,7 +220,9 @@ rule can_drive: age >= 16
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -217,8 +231,8 @@ rule can_drive: age >= 16
             "mixed_validation",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -241,7 +255,9 @@ rule can_ship: package_weight <= 50
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -250,8 +266,8 @@ rule can_ship: package_weight <= 50
             "weight_check",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -277,7 +293,9 @@ rule is_affordable: price <= 1000
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -286,8 +304,8 @@ rule is_affordable: price <= 1000
             "pricing_check",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -314,7 +332,9 @@ rule is_valid_date: event_date >= min_date
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -323,8 +343,8 @@ rule is_valid_date: event_date >= min_date
             "date_validation",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -350,7 +370,9 @@ rule is_complete: completion >= 95%
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -359,8 +381,8 @@ rule is_complete: completion >= 95%
             "completion_check",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -388,11 +410,13 @@ rule eligible: has_permission
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "eligibility", Some(&now), HashMap::new(), false, None)
+        .run(None, "eligibility", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let eligible_result = response
         .results
@@ -418,7 +442,9 @@ rule within_budget: expenses < income
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -427,8 +453,8 @@ rule within_budget: expenses < income
             "budget_check",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -454,7 +480,9 @@ rule is_active: status is "active"
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -463,8 +491,8 @@ rule is_active: status is "active"
             "status_check",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -492,11 +520,13 @@ rule double_value: value * 2
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
-        .run(None, "multi_rule", Some(&now), HashMap::new(), false, None)
+        .run(None, "multi_rule", Some(&now), HashMap::new(), None, false)
         .unwrap();
 
     let check_positive = response
@@ -539,7 +569,9 @@ rule valid: age >= 18
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -548,8 +580,8 @@ rule valid: age >= 18
             "special_chars",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -580,7 +612,9 @@ rule valid: value > 0
     );
 
     let mut engine = Engine::new();
-    engine.load(&code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, &code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -589,8 +623,8 @@ rule valid: value > 0
             "long_message",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -614,7 +648,9 @@ rule check: value > 10
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -623,8 +659,8 @@ rule check: value > 10
             "priority_test",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -649,7 +685,9 @@ rule eligible: age >= 18
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -658,8 +696,8 @@ rule eligible: age >= 18
             "multi_unless",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response
@@ -685,7 +723,9 @@ rule can_proceed: true
 "#;
 
     let mut engine = Engine::new();
-    engine.load(code, lemma::SourceType::Volatile).unwrap();
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .unwrap();
 
     let now = DateTimeValue::now();
     let response = engine
@@ -694,8 +734,8 @@ rule can_proceed: true
             "negation_test",
             Some(&now),
             HashMap::new(),
-            false,
             None,
+            false,
         )
         .unwrap();
     let rule_result = response

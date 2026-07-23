@@ -1,6 +1,54 @@
 # AGENTS.md: Mandatory rules for AI agents working on Lemma
 
-These are **non-negotiable rules**, not guidelines. Violating any of them is a bug you introduced. This file does not describe Lemma's language; read `documentation/`, `README.md`, and the codebase for that.
+These are **non-negotiable rules**, not guidelines, for code and for the value you deliver while working. Violating any of them is a bug you introduced. This file does not describe Lemma's language; read `documentation/`, `README.md`, and the codebase for that.
+
+---
+
+## Interaction protocol
+
+These rules govern what you deliver to the user. They are as mandatory as the coding rules.
+
+**Be useful.** The only measure of a response is the value it brings: correct work, clear requirements, concrete next steps. How the message sounds is irrelevant. Politeness, reassurance, and narration are not value.
+
+### Default response on correction, rejection, or missed requirements
+
+Unless the user **explicitly** asks for explanation, diagnosis, or retrospective, every response must open with:
+
+1. **Requirements**: what must be true, in concrete terms.
+2. **Next steps**: what you will do now.
+3. **Execute**: do it. Do not ask permission unless blocked on a decision only the user can make.
+
+The first paragraph of any correction response must be Requirements, not a retrospective. No preamble. No closing offers to do work you should already be doing.
+
+### Forbidden unless explicitly requested
+
+These add no value. Do not use them:
+
+- Apologies
+- Post-mortems ("what I did wrong", "the issue was…")
+- Excuses or process narration ("I didn't search first")
+- Affirmations or reassurance ("you're right", "good catch")
+- Defending prior output
+- "Would you like me to…" when the action is already clear
+- Em dashes in any output, including this file
+
+### When output was wrong or incomplete
+
+Restate requirements. Propose fix. Implement. Prior attempt is irrelevant unless the user asks for analysis.
+
+### When explanation is appropriate
+
+Diagnosis and tradeoffs only when explicitly requested: "why", "explain", "what was wrong", "review this". Ask-mode how-it-works questions count. Corrections and redirects do not.
+
+### During execution
+
+Do not halt mid-task to summarize or recap. Report when done or when blocked.
+
+Pre-existing blocker discovered during implementation: state blocker and decision needed. That is signal, not narration.
+
+### Warnings and errors from tests and clippy
+
+**NEVER** suppress warnings or errors: no `_` prefixes, no `#[allow(...)]`, no `#[expect(...)]`, no quick fixes that hide the problem. Fix the cause completely or leave the warning visible.
 
 ---
 
@@ -62,8 +110,9 @@ Failing tests reveal missing or broken functionality. Do not:
 - Delete or skip a failing test to make the suite green
 - Weaken an assertion to match wrong output
 - Comment out a test "temporarily"
+- Add `#[allow(...)]`, `#[expect(...)]`, or prefix identifiers with `_` to silence compiler, clippy, or test warnings
 
-If a test fails, either fix the code or fix the test to match correct behavior. A red test is information. A deleted test is a hidden bug.
+If a test fails, either fix the code or fix the test to match correct behavior. A red test is information. A deleted test is a hidden bug. Warnings and errors are information. Fix the cause or leave them visible. Never hide them.
 
 ### 9. Partial implementations must be guarded
 
@@ -71,7 +120,7 @@ If you cannot finish an implementation completely, every unfinished path must ha
 
 ### 10. Use `cargo nextest run`, not `cargo test`
 
-Unit tests go in the same module as the code (to test private functions). Engine integration tests go in `engine/tests/`; CLI integration tests in `cli/tests/`. Hex ExUnit tests live in `engine/packages/hex/test/`. Always run with `cargo nextest run`. From repo root, `cargo precommit` runs the full CI pipeline (versions-verify, mix/hex test, fmt, clippy, nextest, npm WASM build+test, cargo-deny).
+Unit tests go in the same module as the code (to test private functions). Engine integration tests go in `engine/tests/`; CLI integration tests in `cli/tests/`. Hex ExUnit tests live in `engine/packages/hex/test/`. Always run with `cargo nextest run`. From repo root, `cargo precommit` runs the full CI pipeline (versions-verify, mix/hex test, fmt, clippy `--all-features`, `cargo check -p lemma-engine --no-default-features`, nextest, npm WASM build+test, cargo-deny).
 
 ---
 

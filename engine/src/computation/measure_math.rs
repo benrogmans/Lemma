@@ -50,15 +50,17 @@ pub fn measure_magnitude_math(
             }
         };
 
-    let magnitude_decimal =
-        match crate::computation::rational::commit_rational_to_decimal(&magnitude_in_unit) {
-            Ok(decimal) => decimal,
-            Err(_) => {
-                return OperationResult::Veto(VetoType::computation(
-                    "Mathematical operation requires a decimal-representable input",
-                ));
-            }
-        };
+    let magnitude_decimal = match magnitude_in_unit.try_to_decimal() {
+        Ok(decimal) => decimal,
+        Err(crate::computation::rational::NumericFailure::Overflow) => {
+            return OperationResult::Veto(VetoType::computation(
+                "Calculated result exceeds decimal value limit",
+            ));
+        }
+        Err(failure) => {
+            return OperationResult::Veto(VetoType::computation(failure.to_string()));
+        }
+    };
 
     let rounded_decimal = apply_decimal_magnitude_op(op, magnitude_decimal);
 

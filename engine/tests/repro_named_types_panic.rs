@@ -2,7 +2,6 @@
 //! Observed in WASM (browser). Mirrors the exact load sequence from the playground.
 
 use lemma::{DateTimeValue, Engine, SourceType};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 fn path_source(path: &str) -> SourceType {
@@ -20,10 +19,10 @@ fn wasm_repro_dep_then_workspace_with_dangling_uses() {
 data pi: 3.14
 "#;
     engine
-        .load_batch(
-            HashMap::from([(path_source("deps/test.lemma"), dep_source.to_string())]),
-            Some("@benrogmans/test"),
-        )
+        .load([(
+            SourceType::Dependency("@benrogmans/test".to_string()),
+            dep_source.to_string(),
+        )])
         .expect("dependency batch loads");
 
     let workspace_source = r#"spec x
@@ -42,17 +41,15 @@ uses b: @benrogmans/test constants
 uses f
 "#;
 
-    let result = engine.load(workspace_source, path_source("workspace.lemma"));
+    let result = engine.load([(path_source("workspace.lemma"), workspace_source.to_string())]);
     // `uses f` is a dangling import — should produce a planning error, not a panic.
     match result {
         Ok(()) => {
-            // If it loads, try planning both specs
             let now = DateTimeValue::now();
-            let _ = engine.get_plan(None, "x", Some(&now));
-            let _ = engine.get_plan(None, "d23d23", Some(&now));
+            let _ = engine.show(None, "x", Some(&now));
+            let _ = engine.show(None, "d23d23", Some(&now));
         }
         Err(e) => {
-            // Error is acceptable (dangling `uses f`), panic is not.
             eprintln!("Expected error (not panic): {:?}", e);
         }
     }
@@ -68,10 +65,10 @@ fn wasm_repro_dep_then_workspace_without_dangling_uses() {
 data pi: 3.14
 "#;
     engine
-        .load_batch(
-            HashMap::from([(path_source("deps/test.lemma"), dep_source.to_string())]),
-            Some("@benrogmans/test"),
-        )
+        .load([(
+            SourceType::Dependency("@benrogmans/test".to_string()),
+            dep_source.to_string(),
+        )])
         .expect("dependency batch loads");
 
     let workspace_source = r#"spec x
@@ -89,11 +86,11 @@ uses b: @benrogmans/test constants
 "#;
 
     engine
-        .load(workspace_source, path_source("workspace.lemma"))
+        .load([(path_source("workspace.lemma"), workspace_source.to_string())])
         .expect("workspace without dangling uses should load");
 
     let now = DateTimeValue::now();
     engine
-        .get_plan(None, "d23d23", Some(&now))
+        .show(None, "d23d23", Some(&now))
         .expect("d23d23 should plan");
 }

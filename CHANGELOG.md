@@ -4,6 +4,72 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-25
+
+0.9.0 cleans the public consumer API and replaces the compiled instruction VM with a shared **normalized graph** (NormalForm DAG). The evaluator walks that graph to evaluate rules, build explanations, and compute per-rule unbound inputs — one representation, several walks. Migration highlights: **`schema` → `show`**, **`get` → `list`**, repo text via **`Engine::source`**, unified **`load`**, **`-> suggest`** (was `-> default`), and **`accept`/`reject`** demoted from boolean literals. Overlay-aware unbound inputs live on each **`RuleResult.missing_data`** (`string[]` input keys); types, prefilled literals, and suggestions live on **`Engine::show`** (`Show.data`) only.
+
+### Removed
+
+- **`lemma units` plural and British spellings**: stdlib unit names are singular only (`8 hour`, not `8 hours`) and length uses American `meter` (not `metre`). Migration: rename plurals → singular; `metre*` → `meter*`.
+- **`Engine::schema`**, **`Engine::inspect`**, **`Engine::inspect_repo`**: use **`Engine::show`** (interface + temporal window) and **`Engine::source`** (Lemma text).
+- **JS `Engine.schema`**, **`Engine.inspect`**, **`Engine.inspectRepo`**: use **`Engine.show`** and **`Engine.source`**.
+- **Hex `Lemma.schema/4`**, **`Lemma.inspect_repo/1`**, **`Lemma.inspect_repo/2`**: use **`Lemma.show/4`** and **`Lemma.source/4`**.
+- **MCP `get_schema`**: use **`show`** (dropped dead `rule` param).
+- **CLI `lemma schema`**: use **`lemma show`**.
+- **`-> default` / `DataEntry.default`**: use **`-> suggest`** and **`DataEntry.suggestion`** (UI hint only; never commits). Same rename on Show data entries and measure/ratio unit magnitude fields (`suggestion` instead of `default`).
+- **`accept` / `reject` boolean literals**: use `true`/`yes` or `false`/`no`; `accept` and `reject` are ordinary identifiers.
+- **`Engine::get`**, **`Engine::get_repository`**: use **`Engine::list()`**.
+- **`SourceType::Registry`**: use **`SourceType::Dependency(String)`** for dependency provenance.
+- **`Engine::format_repository`**, **`Lemma.format_repository/2`**, JS **`format_repository`**: use **`Engine::source(...)`**.
+- **`Engine::get`**, **`Lemma.get/2`**, **`lemma_get`**: use **`Engine::list()`** / **`Lemma.list/1`**.
+- **`RunRequest`**, **`SchemaRequest`**: use flat positional args on **`Engine::run`**, **`Engine::show`**, **`Engine::remove`**.
+- **`Lemma.execution_plan/3`**: serialized execution plans had no run path in any binding.
+- **`collect_lemma_sources`**, **`Engine::load_from_paths`**, JS **`load(code, attribute)`**: host reads files and calls unified **`load`** (see Added).
+- **`Lemma.load_from_paths/2`**, **`lemma_load_from_paths`**: use **`Lemma.load/2`**.
+- **JS `Engine.loadBatch`**, **Hex `Lemma.load_batch/2`**, **`lemma_load_batch`**: use unified **`load`** (string/binary → volatile; object/map or `[label, code][]` → labeled). `null`/`undefined` rejected on JS (no silent empty load).
+- **`DataEntry::supplied`**, **`SpecSchema`**, **`scope_to_rules`**, **`ExecutionPlan::schema_for_rules`**: static interface is **`show`**; overlay-aware unbound keys are per-rule **`missing_data`** on **`run`**.
+- **`Response.data`**, **`DataGroup`**, **`Response::required_data_ordered()`**: overlay-aware input discovery is per-rule only via **`RuleResult.missing_data`**. Types, prefilled literals, and suggestions live on **`Engine::show`** only.
+- **Compiled instruction VM**: register-based instruction streams, dual optimized/source streams, and recorded-execution explanation from VM traces are gone. Evaluation walks drift-free NormalForm cells by id.
+- Explanation wire keys **`rule`** (identity), **`data_input`**, **`unbound_data_input`**, and identity field **`data`**: use **`name`**, **`data`**, **`data_unused`**.
+
+### Added
+
+- **Java Maven package** `com.lemmabase:lemma-engine`: JNI bridge (`lemma_jni`), `BigDecimal`-first API, `RunRequest`, AutoCloseable `Engine`, prebuilt natives in the JAR, Maven Central publish from release workflow. Docs: `documentation/tools/maven.md`.
+- **Range endpoint and width constraints**: `* range` data accept `-> lower` / `-> upper` (endpoint envelope) and `-> minimum` / `-> maximum` (span width). Measure/ratio bounds use the same mixed declaring-unit model as scalar measure. Date range width is duration or calendar (not both on one type); time range width is duration only. Named element min/max inherit as range lower/upper.
+- **`lemma units` catalog expansion**: SI scales (`nanosecond`, `nanometer`, …), derived compounds (`newton`, `pascal`, `joule`, `watt`, `hertz`, electrical), `area`/`volume`, imperial (`inch`, `pound`, `gallon`, …), and `information` (`bit`/`byte`/…); still no affine Celsius/Fahrenheit.
+- **`Engine::show(repository?, spec, effective?)`**: returns **`Show`** — interface + temporal window (no Lemma text).
+- **`Engine::source(repository?, spec?, effective?)`**: returns formatted Lemma **`String`** (repo-wide when `spec` omitted).
+- **`Engine::list()`**: all loaded repositories with listed spec rows (replaces **`get`** / **`get_repository`**).
+- **JS `Engine.show`**, **`Engine.source`**, **`Engine.list`**, **`Engine.remove`**, **`Engine.limits`**.
+- **Hex `Lemma.show/4`**, **`Lemma.source/4`**, **`Lemma.list/1`**, **`Lemma.run/3`**, **`Lemma.remove/4`**.
+- **`RuleResult.missing_data`**: overlay-aware unbound input keys for that rule (`string[]`; omitted when empty). Same keys as **`Show.data`**.
+- **`SourceType::from_binding_label`**: decode JS/Hex batch labels (`path`, `@org/pkg`).
+- **`Engine::load(sources)`**: single load verb; `(SourceType, text)` pairs; duplicate key rejection.
+- JS **`Engine.load`**: string → volatile; object or `[label, code][]` → labeled batch. NIF / Hex **`Lemma.load/2`** same shapes (binary → volatile; map or `[{label, code}, ...]` → labeled).
+- **`explain`** required on **`Engine::run`**; convention **`false`** (WASM/Hex default **`false`**; was **`true`** in bindings).
+- **`lemma::resolve_effective`**: free function (lifted from `Engine::resolve_effective`).
+- **`RegistryBundle { repository, source }`**: fetch result without duplicate provenance fields.
+- Public re-exports: **`Explanation`**, **`Cause`**, **`ExplanationNode`**, **`DataPath`**, **`TimezoneValue`**. Rational helpers are not a supported consumer API (in-tree tests use a hidden module).
+- Show `DataEntry` wire field **`lemma_type`** (was `schema_type` on older schema shapes).
+- Registry feature also exports **`LemmaRepository`**, **`LemmaSpec`**, **`LemmaSpecSet`** for typed `Context` use.
+
+### Changed
+
+- **Evaluation architecture**: `ExecutionPlan` ships a dense shared NormalForm table; rules name roots; Rule references lower as Kind-sharing overlays (not closed per-rule Expression inlines). Runtime walks that DAG for evaluation (value memo by cell id; Rule embeds evaluate the named rule once), explanation (fill planning-time static trees when `explain` is set), and per-rule unbound-input discovery — no second instruction stream.
+- **Resource limits**: `max_normalized_expression_nodes` counts **unique reachable NormalForm cells** per rule root (not tree-expanded size). `max_normal_form_depth` bounds DAG nesting for recursive eval. Self-doubling rule chains stay linear under sharing and are not rejected solely for that pattern; non-sharing blowups still hit the cell budget.
+- **Show vs run data**: **`show`** lists statically reachable data after normalize (all remaining unless arms; no caller overlay) with types, prefilled literals, and suggestions. Overlay-aware unbound keys for a concrete run are per-rule **`missing_data`** only — evaluate JSON has no top-level `data` array.
+- **Evaluate JSON** (CLI `--json`, HTTP POST, WASM/Hex/JS `run`): each rule result may include **`missing_data`**. Human `lemma run` prints a **Missing data** section when any requested rule lists unbound keys.
+- **Explanation wire**: every node uses language-facing `type` + `name`. Root `results.<rule>.explanation` is the same shape as nested rule nodes (`"type":"rule"`, `"name"`, …). Bound data is `"type":"data"`; cause paths never looked up are `"type":"data_unused"`. Schema [`documentation/schemas/explanation.v1.json`](documentation/schemas/explanation.v1.json) matches (root `$ref` RuleNode; `DataUnusedNode` added). No legacy aliases.
+- **MCP:** `list_specs` → **`list`**, `get_spec_source` → **`source`**; **`add_spec`** returns structured JSON `{ message, specs: Show[] }`.
+- **HTTP GET `/`:** returns **`Engine.list()`** JSON (`ResolvedRepository[]`); no per-spec show payloads or `?effective=` on the list route.
+- **Static interface**: **`Engine::show`** lists only data used by the spec's rules (plus local rule result types). Rule-scoped unbound keys on a partial run come from each result's **`missing_data`**.
+- **Evaluation**: `run` no longer aborts with `Err` for unknown input keys or per-field bind failures (size limits, import overrides); evaluation completes with computation vetoes on affected rules.
+- **Overlay bindings**: bad Data overrides (parse, constraints, options, decimals, oversize) bind as `OperationResult::Veto` on that Data — no separate `violated` map. Import aliases are ignored like unknown keys. Duplicate canonical keys (`Age` + `age`) → request `Error`. `MissingData` may suggest a near match from ignored keys.
+- **Provenance**: `SourceType` is the sole load-time provenance input. `Path` / `Volatile` = workspace; `Dependency(id)` tags repositories (including embedded stdlib bootstrap as `Dependency("lemma")` internally).
+- **JS/Hex load API**: unified **`load`** / **`Lemma.load/2`** (string/binary → volatile; object/map or list → labeled). Empty-string volatile labels removed — use inline string/binary volatile load.
+- **Hex/JS bindings**: batch load via `Dependency(id)` source labels (`@org/pkg` keys).
+- **Calendar range slots**: declare `units.calendar range` (named-type `range` suffix). A range-shaped `-> suggest` on scalar `units.calendar` no longer promotes the slot to a measure range.
+
 ## [0.8.22] - 2026-07-09
 
 0.8.22 adds Windows ARM64 release artifacts and published coverage reports, defines API wire format for ratio and measure literals (canonical in the VM, per-unit on schema and response JSON), sharpens schema/data overlay semantics for interactive and API prompts, defers decimal commit vetoes to response materialization, speeds up evaluation with shared VM values, and fixes range-containment parsing plus last-match-wins unless schema pruning.
@@ -17,7 +83,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ### Changed
 
-- **API wire format for literals**: schema defaults and `response.data` emit per-unit magnitudes for measure and named-unit ratios (for example `"25"` for `eur_per_hour`, `"15"` for percent, `"500"` for basis_points); bare ratios stay canonical (`"0.5"`). Evaluation and VM plan constants keep canonical rationals in memory.
+- **API wire format for literals**: schema defaults and `response.data` emit per-unit magnitudes in `value` for measure and named-unit ratios (for example `"25"` for `eur_per_hour`, `"15"` for percent, `"500"` for basis_points); optional top-level `measure` / `ratio` unit maps mirror rule results when the type declares multiple units. Bare ratios stay canonical (`"0.5"`). Evaluation and VM plan constants keep canonical rationals in memory.
 - **Wire serde boundary**: canonical `LiteralValue` serde restored for execution-plan constants; API-only wire adapters on `DataEntry` and response data values (`api_wire_literal`).
 - **Decimal commit veto deferred to materialization**: evaluation keeps exact rationals in the VM; decimal-scale overflow vetoes happen when building the response, not mid-evaluation.
 - **Shared VM operand values**: rule and intermediate results use `Arc<LiteralValue>` with borrow-based operand reads, cutting allocation churn on large specs (order_pipeline benchmark allocs roughly halved).
@@ -25,7 +91,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 ### Fixed
 
 - **Ratio and measure JSON serialization**: global wire patching on `LiteralValue` leaked per-unit magnitudes into execution-plan constants and mis-serialized percent and basis_points; WASM `JSON.stringify(response)` no longer crashes or double-scales measure values.
-- **Decimal prompt defaults**: `magnitude_default_for_decimal_prompt` uses the same per-unit materialization as API wire (basis_points prompts show `"500"`, not `"0.05"`).
+- **Decimal prompt defaults**: `magnitude_suggestion_for_decimal_prompt` uses the same per-unit materialization as API wire (basis_points prompts show `"500"`, not `"0.05"`).
 - **Measure overlay rejects double-canonical input**: per-unit API magnitudes supplied as full-precision canonical values are rejected at overlay resolution instead of silently evaluating wrong results.
 - **Range endpoint parsing**: `start...start + length` binds `+ length` inside the range literal (matches expression precedence); parenthesized span-add with `in` is rejected at planning time.
 - **Unless schema pruning respects last-match-wins**: `collect_needed_data_paths` walks unless arms in reverse source order, so a decided later unless arm no longer pulls in data only needed by earlier arms (fixes interactive over-prompting for imported spec fields).
@@ -61,7 +127,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ### Fixed
 
-- **ISO-week boundary rollover**: `calendar_boundaries` now uses `NaiveDate::from_isoywd_opt` with shifted weeks, handling year rollover (week 1 → prior year week 52/53) and 53-week years.
+- **ISO-week boundary rollover**: `calendar_boundaries` now uses `NaiveDate::from_isoywd_opt` with shifted week, handling year rollover (week 1 → prior year week 52/53) and 53-week year.
 - **Deterministic planning order**: `sort_derived_measure_types_for_resolution` sorts type-name vecs; `TypeResolver::resolve_types_internal` sorts `data_defs.keys()` before Kahn queue; `HashSet` dependency sets replaced with `BTreeSet`.
 - **Invariant enforcement**: soft-skip `continue` → `expect("BUG: ...")` in `check_rule_types` and `infer_rule_types`; dead `cast_ratio_to_unit` measure-family branch removed; AST `source_location` validated at `Graph::build` entry.
 - **BigInt allocation**: removed `unsafe` block; uses safe fallible allocation.
@@ -159,7 +225,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - **Consistent explanations**: a result exceeding the decimal output limit now vetoes identically in downstream references, `is veto` checks, explanations, and the response — previously these could disagree. Explanations of vetoed unless conditions now name the vetoing condition and carry its veto instead of describing a branch that never ran. Callers and auditors can no longer receive contradictory accounts of the same evaluation.
 - **Range error messages**: mixed-type range literals (`data x: 1 ... yes`), text range literals, type references into a spec that failed its own type resolution, and temporal slices that change a type mid-history now fail planning with a descriptive error where they previously crashed the engine.
 - **LSP integration**: extensions call `lemma lsp`; requires a globally installed `lemma` CLI. Release the CLI before publishing the extension update. `cargo lsp` (`xtask`) release-builds `lemma` accordingly.
-- **Honest cross-language benchmarks**: the Lemma-vs-Python comparison now measures equivalent work — typed inputs on both sides, JSON parsed once before the timed loop, one terminal rule per fixture, and Python ports using exact `fractions.Fraction` arithmetic matching Lemma's rational model.
+- **Honest cross-language benchmarks**: the Lemma-vs-Python latency ratio compares per-request evaluation on identical inline inputs — compile/import once, then timed eval on both sides (like C vs Python). Lemma compile (parse + plan) is reported separately. Python ports use exact `fractions.Fraction` arithmetic matching Lemma's rational model.
 
 ### Removed
 
@@ -169,7 +235,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.8.16] - 2026-06-03
 
-0.8.16 makes unit math smarter and the API simpler. Measure arithmetic now flows across types — `rule wage: rate * hours` resolves to a money amount on its own — and every measure or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (years, months) are now ordinary measure units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
+0.8.16 makes unit math smarter and the API simpler. Measure arithmetic now flows across types — `rule wage: rate * hour` resolves to a money amount on its own — and every measure or ratio result reports all of its declared units, so callers read the unit they want instead of passing display-conversion flags. Calendar periods (year, month) are now ordinary measure units from the standard library, and spec authors set values on imported specs with the clearer `with` keyword.
 
 ```lemma
 spec employment_contract
@@ -190,7 +256,7 @@ rule net_salary: contract.net
 
 ### Added
 
-- **Cross-type measure arithmetic**: multiplying or dividing quantities of different types now produces the right unit automatically and promotes the result to a matching named type when one exists in scope (e.g. `rate * hours` → money). Ambiguous results are rejected at planning rather than guessed.
+- **Cross-type measure arithmetic**: multiplying or dividing quantities of different types now produces the right unit automatically and promotes the result to a matching named type when one exists in scope (e.g. `rate * hour` → money). Ambiguous results are rejected at planning rather than guessed.
 - **Cross-type measure comparison**: dimensionally equal quantities (e.g. a per-hour rate vs a per-minute rate) compare correctly in rule conditions and inversion.
 - **Named type ranges**: declare a range over any rangeable named type, e.g. `data estimate: money range`. Unsupported bases (`text range`, …) are rejected at planning.
 - **`time range`**: half-open time-of-day intervals such as `09:00...17:00`, with `in` containment and span in duration units. Endpoints must share a timezone; reversed literals do not wrap past midnight.
@@ -201,7 +267,7 @@ rule net_salary: contract.net
 
 - **Binding keyword `fill` → `with`**: set values on an imported spec with `with alias.field: …`. Local `with name: …` is rejected — use `data` for slots in the current spec.
 - **In-spec unit conversion only**: display-time conversion flags (`lemma run --as`, HTTP `as_units`, WASM `rule_result_units`) are removed. Convert with `as <unit>` in the spec; measure and ratio rule results now return every declared unit as a map.
-- **Calendar periods are units**: years and months are measure units in the standard library via `uses lemma units` (`units.calendar`). The standalone `calendar` and `calendar range` types are removed; a calendar range comes from `units.calendar -> default 18 year...67 year` or inline literals like `18 year...67 year`. The names `month`, `year`, `week`, and `day` are reserved for calendar/duration units.
+- **Calendar periods are units**: year and month are measure units in the standard library via `uses lemma units` (`units.calendar`). The standalone `calendar` and `calendar range` types are removed; a calendar range comes from `units.calendar -> default 18 year...67 year` or inline literals like `18 year...67 year`. The names `month`, `year`, `week`, and `day` are reserved for calendar/duration units.
 - **No canonical unit required**: a `measure` type no longer needs a factor-1 unit; magnitudes stay anchored to the units you declare.
 - **Compound unit display**: results whose unit is a combination render in operator style (e.g. `26.66… eur·hour/minute`); single-unit values stay `<magnitude> <unit>`.
 

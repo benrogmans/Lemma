@@ -15,9 +15,8 @@
 //! For Scalar multi-source rendering, [`temporal_api_sources`] returns the list of
 //! temporal version boundaries so the Scalar UI can offer a source selector.
 
-use lemma::{DateTimeValue, EffectiveDate, Engine, LemmaSpec, LemmaType, TypeSpecification};
+use lemma::{DateTimeValue, Engine, LemmaType, ListedSpec, TypeSpecification};
 use serde_json::{json, Map, Value};
-use std::sync::Arc;
 
 /// Query slug for the default temporal view (request-time instant). OpenAPI URLs use no `?effective=`.
 pub const NOW_SLUG: &str = "now";
@@ -47,11 +46,9 @@ pub fn temporal_api_sources(engine: &Engine) -> Vec<ApiSource> {
         std::collections::BTreeSet::new();
 
     for repo in engine.list() {
-        for ss in &repo.specs {
-            for (spec, _, _) in ss.iter_with_ranges() {
-                if let Some(af) = spec.effective_from() {
-                    all_boundaries.insert(af.clone());
-                }
+        for ls in &repo.specs {
+            if let Some(af) = &ls.effective_from {
+                all_boundaries.insert(af.clone());
             }
         }
     }
@@ -96,9 +93,9 @@ pub fn generate_openapi(engine: &Engine, explanations_enabled: bool) -> Value {
 ///
 /// The specification includes:
 /// - `GET /` — list loaded specs (name, data/rule counts)
-/// - `/{spec_set_id}` GET (schema: `spec_set_id`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
+/// - `/{spec_set_id}` GET (show: `spec_set_id`, `effective_from`, `data`, `rules`, `meta`, `versions`) and
 ///   POST (evaluate: envelope `spec`, `effective`, `result`) with optional `Accept-Datetime` header
-/// - `?rules=` on both methods to scope outputs
+/// - `?rules=` on POST only, to limit evaluated rules
 /// - `x-effective-from` / `x-effective-to` vendor extensions on each PathItem
 ///   exposing the half-open `[effective_from, effective_to)` range of the version
 ///   resolved at the document's effective instant (both `null` when unbounded)
@@ -121,39 +118,40 @@ pub fn generate_openapi_effective(
         build_rule_result_schema(explanations_enabled),
     );
 
-    let workspace = engine.get_workspace();
-    let effective_instant = EffectiveDate::DateTimeValue(effective.clone());
-
-    let active_specs: Vec<(Arc<LemmaSpec>, Option<DateTimeValue>, Option<DateTimeValue>)> =
-        workspace
-            .specs
-            .iter()
-            .filter_map(|ss| {
-                ss.spec_at(&effective_instant).map(|spec| {
-                    let (from, to) = ss.effective_range(&spec);
-                    (spec, from, to)
-                })
-            })
-            .collect();
-
-    let unique_spec_names: Vec<String> = active_specs
+    let repositories = engine.list();
+    let workspace = repositories
         .iter()
-        .map(|(s, _, _)| s.name.clone())
-        .collect();
+        .find(|r| r.repository.is_none())
+        .map(|r| r.specs.as_slice())
+        .expect("BUG: workspace repository must exist in list()");
 
-    paths.insert(
-        "/".to_string(),
-        index_path_item(&unique_spec_names, engine, effective),
-    );
+    let is_active = |ls: &ListedSpec| -> bool {
+        let after_start = match &ls.effective_from {
+            None => true,
+            Some(from) => effective >= from,
+        };
+        let before_end = match &ls.effective_to {
+            None => true,
+            Some(to) => effective < to,
+        };
+        after_start && before_end
+    };
 
-    for (spec_arc, spec_effective_from, spec_effective_to) in &active_specs {
-        let spec_name = &spec_arc.name;
-        if let Ok(plan) = engine.get_plan(None, spec_name, Some(effective)) {
-            let schema = plan.schema(&lemma::DataOverlay::default());
+    let active_specs: Vec<&ListedSpec> = workspace.iter().filter(|ls| is_active(ls)).collect();
+
+    let unique_spec_names: std::collections::BTreeSet<&str> =
+        active_specs.iter().map(|ls| ls.name.as_str()).collect();
+    let unique_spec_names: Vec<String> = unique_spec_names.into_iter().map(String::from).collect();
+
+    paths.insert("/".to_string(), index_path_item(engine));
+
+    for ls in &active_specs {
+        let spec_name = &ls.name;
+        if let Ok(show) = engine.show(None, spec_name, Some(effective)) {
             let artifacts = build_spec_openapi_artifacts(
                 spec_name,
-                &schema,
-                (spec_effective_from.as_ref(), spec_effective_to.as_ref()),
+                &show,
+                (ls.effective_from.as_ref(), ls.effective_to.as_ref()),
                 explanations_enabled,
             );
             paths.insert(format!("/{spec_name}"), artifacts.path_item);
@@ -172,7 +170,7 @@ pub fn generate_openapi_effective(
         tags.push(json!({
             "name": safe_tag,
             "x-displayName": spec_name,
-            "description": format!("GET schema or POST evaluate for spec '{}'. Use ?rules= to scope.", spec_name)
+            "description": format!("GET show or POST evaluate for spec '{}'. Use ?rules= on POST to limit evaluated rules.", spec_name)
         }));
     }
 
@@ -212,27 +210,23 @@ struct InputData {
     lemma_type: LemmaType,
     /// Spec literal or literal `with` binding.
     prefilled: Option<lemma::LiteralValue>,
-    /// Caller overlay when schema was built with supplied values.
-    supplied: Option<lemma::LiteralValue>,
-    /// Suggestion from `-> default ...` (evaluator applies it when no overlay value is provided).
-    suggestion_default: Option<lemma::LiteralValue>,
+    /// Suggestion from `-> suggest ...` (UI hint only; never commits at evaluation).
+    suggestion: Option<lemma::LiteralValue>,
 }
 
 /// Collect all local input data from a pre-built schema.
 ///
 /// Only includes data local to the spec (no dot-separated cross-spec
-/// paths like `calc.price`). Already sorted alphabetically by `schema()`.
-fn collect_input_data_from_schema(schema: &lemma::SpecSchema) -> Vec<InputData> {
-    schema
-        .data
+/// paths like `calc.price`). Already sorted alphabetically by `show()`.
+fn collect_input_data_from_show(show: &lemma::Show) -> Vec<InputData> {
+    show.data
         .iter()
         .filter(|(name, _)| !name.contains('.'))
         .map(|(name, entry)| InputData {
             name: name.clone(),
             lemma_type: entry.lemma_type.clone(),
             prefilled: entry.prefilled.clone(),
-            supplied: entry.supplied.clone(),
-            suggestion_default: entry.default.clone(),
+            suggestion: entry.suggestion.clone(),
         })
         .collect()
 }
@@ -241,35 +235,18 @@ fn collect_input_data_from_schema(schema: &lemma::SpecSchema) -> Vec<InputData> 
 // Index path (list specs)
 // ---------------------------------------------------------------------------
 
-fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeValue) -> Value {
-    let spec_items: Vec<Value> = spec_names
-        .iter()
-        .map(|name| match engine.schema(None, name, Some(effective)) {
-            Ok(s) => {
-                let data_count = s.data.keys().filter(|n| !n.contains('.')).count();
-                let rules_count = s.rules.len();
-                json!({
-                    "name": name,
-                    "data": data_count,
-                    "rules": rules_count
-                })
-            }
-            Err(e) => json!({
-                "name": name,
-                "schema_error": true,
-                "message": e.to_string()
-            }),
-        })
-        .collect();
+fn index_path_item(engine: &Engine) -> Value {
+    let list = engine.list();
+    let example = serde_json::to_value(&list).expect("BUG: Engine::list must serialize");
 
     json!({
         "get": {
             "operationId": "list",
-            "summary": "List all available specs",
+            "summary": "List loaded repositories and specs",
             "tags": ["Specs"],
             "responses": {
                 "200": {
-                    "description": "List of loaded Lemma specs",
+                    "description": "Same JSON as Engine.list() (metadata only: name, effective_from, effective_to per spec row)",
                     "content": {
                         "application/json": {
                             "schema": {
@@ -277,16 +254,24 @@ fn index_path_item(spec_names: &[String], engine: &Engine, effective: &DateTimeV
                                 "items": {
                                     "type": "object",
                                     "properties": {
-                                        "name": { "type": "string" },
-                                        "data": { "type": "integer" },
-                                        "rules": { "type": "integer" },
-                                        "schema_error": { "type": "boolean" },
-                                        "message": { "type": "string" }
+                                        "repository": { "type": ["string", "null"] },
+                                        "specs": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "name": { "type": "string" },
+                                                    "effective_from": { "type": ["object", "null"] },
+                                                    "effective_to": { "type": ["object", "null"] }
+                                                },
+                                                "required": ["name"]
+                                            }
+                                        }
                                     },
-                                    "required": ["name"]
+                                    "required": ["specs"]
                                 }
                             },
-                            "example": spec_items
+                            "example": example
                         }
                     }
                 }
@@ -347,27 +332,44 @@ fn memento_spec_response_headers() -> Value {
 }
 
 /// GET `/{spec}` body: matches [cli::server::GetSpecResponse].
-fn build_get_schema_response() -> Value {
+fn build_get_show_response() -> Value {
     json!({
         "type": "object",
-        "required": ["spec_set_id", "data", "rules", "meta", "versions"],
+        "required": ["spec_set_id", "spec", "data", "rules", "meta", "start_line"],
         "properties": {
             "spec_set_id": {
                 "type": "string",
                 "description": "Spec set identifier (path segments, e.g. org/product/pricing)"
             },
-            "effective_from": {
+            "spec": {
+                "type": "string",
+                "description": "Resolved spec name"
+            },
+            "commentary": {
                 "type": ["string", "null"],
+                "description": "Optional commentary from the spec source"
+            },
+            "effective_from": {
                 "description": "Effective-from of the resolved temporal version, if any"
+            },
+            "effective_to": {
+                "description": "Exclusive effective-to of the resolved temporal version, if any"
+            },
+            "start_line": {
+                "type": "integer",
+                "description": "1-based line number of the spec declaration in source"
+            },
+            "source_type": {
+                "description": "How this spec was loaded (path, inline, registry, etc.)"
             },
             "data": {
                 "type": "object",
-                "description": "Input data names mapped to type metadata and optional defaults",
+                "description": "Data used by the spec's rules, mapped to type metadata, optional prefilled, and optional suggestion",
                 "additionalProperties": true
             },
             "rules": {
                 "type": "object",
-                "description": "Rule names mapped to result types (scoped by ?rules= when provided)",
+                "description": "Local rule names mapped to result types (full planning-time interface)",
                 "additionalProperties": true
             },
             "meta": {
@@ -447,16 +449,21 @@ fn build_rule_result_schema(explanations_enabled: bool) -> Value {
                 }
             },
             "range": { "type": "object" },
+            "missing_data": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Input keys still unbound for this rule after overlay-aware pruning (same keys as Show.data)"
+            },
             "explanation": explanation
         }
     })
 }
 
 /// POST evaluate body: matches engine [`lemma::Response`] JSON shape.
-fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[String]) -> Value {
+fn build_evaluate_response_schema(show: &lemma::Show, rule_names: &[String]) -> Value {
     let mut result_props = Map::new();
     for rule_name in rule_names {
-        if schema.rules.contains_key(rule_name) {
+        if show.rules.contains_key(rule_name) {
             result_props.insert(
                 rule_name.clone(),
                 json!({
@@ -482,10 +489,6 @@ fn build_evaluate_response_schema(schema: &lemma::SpecSchema, rule_names: &[Stri
                 "type": "object",
                 "description": "Rule names to evaluation results (definition order in response; keys match ?rules= filter when set)",
                 "properties": Value::Object(result_props)
-            },
-            "data": {
-                "type": "array",
-                "description": "Data entries in effect for the evaluated rules when explanations are enabled"
             }
         }
     })
@@ -500,10 +503,10 @@ struct SpecOpenApiArtifacts {
     component_schemas: Map<String, Value>,
 }
 
-fn spec_component_schema_names(spec_name: &str) -> (String, String, String, String) {
+fn spec_component_show_names(spec_name: &str) -> (String, String, String, String) {
     let safe_name = spec_name.replace('.', "_");
     (
-        format!("{safe_name}_get_response"),
+        format!("{safe_name}_get_show"),
         format!("{safe_name}_evaluate_response"),
         format!("{safe_name}_request"),
         format!("{safe_name}_form_request"),
@@ -521,27 +524,24 @@ fn spec_component_schema_names(spec_name: &str) -> (String, String, String, Stri
 /// unbounded end for the latest row) is serialised as JSON `null`.
 fn build_spec_openapi_artifacts(
     spec_name: &str,
-    schema: &lemma::SpecSchema,
+    show: &lemma::Show,
     effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
     explanations_enabled: bool,
 ) -> SpecOpenApiArtifacts {
-    let data = collect_input_data_from_schema(schema);
-    let rule_names: Vec<String> = schema.rules.keys().cloned().collect();
+    let data = collect_input_data_from_show(show);
+    let rule_names: Vec<String> = show.rules.keys().cloned().collect();
     let (
-        get_response_schema_name,
+        get_show_component_name,
         evaluate_response_schema_name,
         post_body_schema_name,
         post_form_body_schema_name,
-    ) = spec_component_schema_names(spec_name);
+    ) = spec_component_show_names(spec_name);
 
     let mut component_schemas = Map::new();
-    component_schemas.insert(
-        get_response_schema_name.clone(),
-        build_get_schema_response(),
-    );
+    component_schemas.insert(get_show_component_name.clone(), build_get_show_response());
     component_schemas.insert(
         evaluate_response_schema_name.clone(),
-        build_evaluate_response_schema(schema, &rule_names),
+        build_evaluate_response_schema(show, &rule_names),
     );
     component_schemas.insert(
         post_body_schema_name.clone(),
@@ -552,10 +552,10 @@ fn build_spec_openapi_artifacts(
         build_post_form_request_schema(&data),
     );
 
-    let path_item = build_spec_path_item_with_schema_refs(
+    let path_item = build_spec_path_item_with_show_refs(
         spec_name,
         (
-            &get_response_schema_name,
+            &get_show_component_name,
             &evaluate_response_schema_name,
             &post_body_schema_name,
             &post_form_body_schema_name,
@@ -592,24 +592,24 @@ fn accept_datetime_header_parameter() -> Value {
     })
 }
 
-/// Build the PathItem for `/{spec_name}` (GET schema + POST evaluate).
-fn build_spec_path_item_with_schema_refs(
+/// Build the PathItem for `/{spec_name}` (GET show + POST evaluate).
+fn build_spec_path_item_with_show_refs(
     spec_name: &str,
-    schema_names: (&str, &str, &str, &str),
+    component_names: (&str, &str, &str, &str),
     rule_names: &[String],
     explanations_enabled: bool,
     effective_range: (Option<&DateTimeValue>, Option<&DateTimeValue>),
 ) -> Value {
     let (
-        get_response_schema_name,
+        get_show_component_name,
         evaluate_response_schema_name,
         post_body_schema_name,
         post_form_body_schema_name,
-    ) = schema_names;
+    ) = component_names;
     let (effective_from, effective_to) = effective_range;
 
-    let get_schema_ref = json!({
-        "$ref": format!("#/components/schemas/{}", get_response_schema_name)
+    let get_show_ref = json!({
+        "$ref": format!("#/components/schemas/{}", get_show_component_name)
     });
     let evaluate_schema_ref = json!({
         "$ref": format!("#/components/schemas/{}", evaluate_response_schema_name)
@@ -633,18 +633,18 @@ fn build_spec_path_item_with_schema_refs(
         "name": "rules",
         "in": "query",
         "required": false,
-        "description": "Comma-separated list of rule names (GET: scope schema; POST: evaluate only these). Omit for all.",
+        "description": "Comma-separated list of rule names to evaluate; omit for all.",
         "schema": { "type": "string" },
         "example": rules_example
     });
 
-    let mut get_parameters: Vec<Value> = vec![rules_param.clone()];
+    let mut get_parameters: Vec<Value> = Vec::new();
     get_parameters.push(accept_datetime_header_parameter());
     if explanations_enabled {
         get_parameters.push(x_explanations_header_parameter());
     }
 
-    let get_summary = "Schema of resolved version (spec, data, rules, meta, versions)".to_string();
+    let get_summary = "Show of resolved version (spec, data, rules, meta, versions)".to_string();
     let post_summary = "Evaluate".to_string();
     let get_operation_id = format!("get_{}", spec_name);
     let post_operation_id = format!("post_{}", spec_name);
@@ -672,11 +672,11 @@ fn build_spec_path_item_with_schema_refs(
             "parameters": get_parameters,
             "responses": {
                 "200": {
-                    "description": "Schema of resolved version (spec_set_id, effective_from, data, rules, meta, versions).",
+                    "description": "Show of resolved version (spec_set_id, effective_from, data, rules, meta, versions).",
                     "headers": memento_spec_response_headers(),
                     "content": {
                         "application/json": {
-                            "schema": get_schema_ref
+                            "schema": get_show_ref
                         }
                     }
                 },
@@ -692,11 +692,12 @@ fn build_spec_path_item_with_schema_refs(
             "requestBody": {
                 "required": true,
                 "content": {
-                    "application/json": {
-                        "schema": body_ref
-                    },
+                    // First media type is Scalar's default body encoding.
                     "application/x-www-form-urlencoded": {
                         "schema": form_body_ref
+                    },
+                    "application/json": {
+                        "schema": body_ref
                     }
                 }
             },
@@ -752,17 +753,12 @@ fn build_post_request_schema(data: &[InputData]) -> Value {
     let mut required = Vec::new();
 
     for data in data {
-        let default_for_docs = data
-            .prefilled
-            .as_ref()
-            .or(data.supplied.as_ref())
-            .or(data.suggestion_default.as_ref());
+        let default_for_docs = data.prefilled.as_ref().or(data.suggestion.as_ref());
         properties.insert(
             data.name.clone(),
             build_post_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.prefilled.is_none() && data.supplied.is_none() && data.suggestion_default.is_none()
-        {
+        if data.prefilled.is_none() {
             required.push(Value::String(data.name.clone()));
         }
     }
@@ -817,17 +813,12 @@ fn build_post_form_request_schema(data: &[InputData]) -> Value {
     let mut required = Vec::new();
 
     for data in data {
-        let default_for_docs = data
-            .prefilled
-            .as_ref()
-            .or(data.supplied.as_ref())
-            .or(data.suggestion_default.as_ref());
+        let default_for_docs = data.prefilled.as_ref().or(data.suggestion.as_ref());
         properties.insert(
             data.name.clone(),
             build_post_form_property_schema(&data.lemma_type, default_for_docs),
         );
-        if data.prefilled.is_none() && data.supplied.is_none() && data.suggestion_default.is_none()
-        {
+        if data.prefilled.is_none() {
             required.push(Value::String(data.name.clone()));
         }
     }
@@ -889,10 +880,10 @@ mod tests {
     fn create_engine_with_code(code: &str) -> Engine {
         let mut engine = Engine::new();
         engine
-            .load(
-                code,
+            .load([(
                 SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("test.lemma"))),
-            )
+                code.to_string(),
+            )])
             .expect("failed to parse lemma code");
         engine
     }
@@ -901,10 +892,10 @@ mod tests {
         let mut engine = Engine::new();
         for (name, code) in files {
             engine
-                .load(
-                    code,
+                .load([(
                     SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(name))),
-                )
+                    code.to_string(),
+                )])
                 .expect("failed to parse lemma code");
         }
         engine
@@ -988,8 +979,19 @@ mod tests {
             .map(|p| p["name"].as_str().unwrap())
             .collect();
         assert!(
-            param_names.contains(&"rules"),
-            "GET must have rules query param"
+            !param_names.contains(&"rules"),
+            "GET must not have rules query param (show is full interface)"
+        );
+        let post_params = spec["paths"]["/pricing"]["post"]["parameters"]
+            .as_array()
+            .expect("post parameters array");
+        let post_param_names: Vec<&str> = post_params
+            .iter()
+            .map(|p| p["name"].as_str().unwrap())
+            .collect();
+        assert!(
+            post_param_names.contains(&"rules"),
+            "POST must have rules query param"
         );
         assert!(
             param_names.contains(&"Accept-Datetime"),
@@ -1004,17 +1006,42 @@ mod tests {
             ["application/json"]["schema"]["$ref"]
             .as_str()
             .unwrap();
-        assert_eq!(get_ref, "#/components/schemas/pricing_get_response");
+        assert_eq!(get_ref, "#/components/schemas/pricing_get_show");
         assert_eq!(post_ref, "#/components/schemas/pricing_evaluate_response");
         assert_ne!(get_ref, post_ref);
 
-        let get_schema = &spec["components"]["schemas"]["pricing_get_response"];
-        assert!(get_schema["properties"]["spec_set_id"]["type"] == "string");
-        assert!(get_schema["properties"]["versions"].is_object());
+        let get_show = &spec["components"]["schemas"]["pricing_get_show"];
+        assert!(get_show["properties"]["spec_set_id"]["type"] == "string");
+        assert!(get_show["properties"]["versions"].is_object());
+        assert!(get_show["properties"]["start_line"]["type"] == "integer");
 
         let h200 = &spec["paths"]["/pricing"]["get"]["responses"]["200"];
         assert!(h200["headers"]["Memento-Datetime"].is_object());
         assert!(h200["headers"]["Vary"].is_object());
+    }
+
+    #[test]
+    fn suggestion_only_field_is_required_with_json_schema_default() {
+        let engine = create_engine_with_code(
+            r#"
+spec age_check
+data age: number -> suggest 18
+rule adult: age >= 18
+"#,
+        );
+        let spec = generate_openapi(&engine, false);
+        let body = &spec["components"]["schemas"]["age_check_request"];
+        let required = body["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            required.contains(&"age"),
+            "suggest-only fields must stay required, got {required:?}"
+        );
+        assert_eq!(body["properties"]["age"]["default"], "18");
     }
 
     /// The generated OpenAPI document describes the public spec surface only.
@@ -1110,6 +1137,17 @@ mod tests {
 
         assert!(spec["paths"]["/bc"]["post"].is_object());
         let post_content = &spec["paths"]["/bc"]["post"]["requestBody"]["content"];
+        let content_keys: Vec<&str> = post_content
+            .as_object()
+            .expect("requestBody.content object")
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        assert_eq!(
+            content_keys.first().copied(),
+            Some("application/x-www-form-urlencoded"),
+            "form-urlencoded must be first so Scalar docs default to Form URL Encoded"
+        );
         let body_ref = post_content["application/json"]["schema"]["$ref"]
             .as_str()
             .unwrap();
@@ -1460,8 +1498,8 @@ rule discount: 20
     fn test_help_and_default_in_openapi() {
         let engine = create_engine_with_code(
             r#"spec test
-data quantity: number -> help "Number of items to order" -> default 10
-data active: boolean -> help "Whether the feature is enabled" -> default true
+data quantity: number -> help "Number of items to order" -> suggest 10
+data active: boolean -> help "Whether the feature is enabled" -> suggest true
 rule result:
   quantity
   unless active then 0
@@ -1490,5 +1528,13 @@ rule result:
                 .unwrap(),
             "true"
         );
+        let required = req_schema["required"]
+            .as_array()
+            .expect("required array")
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(required.contains(&"quantity"));
+        assert!(required.contains(&"active"));
     }
 }

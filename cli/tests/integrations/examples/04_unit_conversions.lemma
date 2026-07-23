@@ -12,29 +12,29 @@ This example demonstrates:
 uses lemma units
 
 data container_volume    : 5
-data contract_term       : 52 weeks
+data contract_term       : 52 week
 data data_size           : 500
 data distance            : 100
 data package_weight      : 25
-data processing_duration : 90 minutes
-data project_length      : 14 days
-data review_period       : 2 hours
+data processing_duration : 90 minute
+data project_length      : 14 day
+data review_period       : 2 hour
 data temperature         : 20
 
 rule duration_hours:
-  processing_duration as hours
+  processing_duration as hour
 
 rule duration_seconds:
-  processing_duration as seconds
+  processing_duration as second
 
 rule review_in_minutes:
-  review_period as minutes
+  review_period as minute
 
 rule project_in_hours:
-  project_length as hours
+  project_length as hour
 
 rule contract_in_days:
-  contract_term as days
+  contract_term as day
 
 rule weight_limit:
   50
@@ -58,13 +58,13 @@ rule needs_compression:
   data_size > 100
 
 rule is_quick_processing:
-  processing_duration < 2 hours
+  processing_duration < 2 hour
 
 rule is_short_project:
-  project_length < 30 days
+  project_length < 30 day
 
 rule combined_duration:
   processing_duration + review_period
 
 rule long_term:
-  combined_duration > 3 hours
+  combined_duration > 3 hour

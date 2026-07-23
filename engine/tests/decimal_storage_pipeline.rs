@@ -1,8 +1,7 @@
 //! Regression: stored rule results use Decimal in ValueKind and scalar JSON numbers.
 
 use lemma::DateTimeValue;
-use lemma::Engine;
-use lemma::{LiteralValue, ValueKind};
+use lemma::{Engine, LiteralValue, ValueKind};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 fn rule_number(resp: &lemma::Response, rule: &str) -> Decimal {
@@ -56,11 +55,11 @@ rule double: x * 2
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, true)
         .expect("run");
     assert_eq!(rule_number(&resp, "double"), Decimal::from(20));
     let lit = resp
@@ -85,21 +84,12 @@ rule doubled: number_data * 2
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
-    let plan = engine.get_plan(None, "s", Some(&now)).expect("plan");
+    let data = HashMap::from([("number_data".to_string(), "50".to_string())]);
     let resp = engine
-        .run_plan(
-            plan,
-            Some(&now),
-            HashMap::from([(
-                "number_data".to_string(),
-                lemma::DataValueInput::convenience("50".to_string()),
-            )]),
-            true,
-            None,
-        )
+        .run(None, "s", Some(&now), data, None, true)
         .expect("run");
     assert_eq!(rule_number(&resp, "doubled"), Decimal::from(100));
     let lit = resp
@@ -123,11 +113,11 @@ rule root: sqrt 9
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, true)
         .expect("run");
     assert_eq!(rule_number(&resp, "root"), Decimal::from(3));
 }
@@ -140,11 +130,11 @@ rule root: sqrt 2
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, true)
         .expect("run");
     let d = rule_number(&resp, "root");
     assert!(d > Decimal::from(1));
@@ -171,11 +161,11 @@ rule s: sin 1
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, true)
         .expect("run");
     let lit = resp
         .results
@@ -203,11 +193,11 @@ rule converted: amount as eur
 "#;
     let mut engine = Engine::new();
     engine
-        .load(code, lemma::SourceType::Volatile)
+        .load([(lemma::SourceType::Volatile, code.to_string())])
         .expect("load");
     let now = DateTimeValue::now();
     let resp = engine
-        .run(None, "s", Some(&now), HashMap::new(), true, None)
+        .run(None, "s", Some(&now), HashMap::new(), None, true)
         .expect("run");
     let rr = resp.results.get("converted").unwrap();
     if rr.vetoed {

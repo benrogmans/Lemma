@@ -1,7 +1,7 @@
 //! Cross-spec plans must execute dependency unit conversions without widening
 //! the consumer spec's expression-scope unit index.
 
-use lemma::{DateTimeValue, Engine, ExecutionPlan, SourceType};
+use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 const UNITS_SPEC: &str = r#"
@@ -19,35 +19,35 @@ uses si: lemma units
 
 data units_per_pallet: number
   -> minimum 1
-  -> default 1
+  -> suggest 1
 
 data storage_duration: si.duration
-  -> minimum 0 weeks
-  -> default 10 days
+  -> minimum 0 week
+  -> suggest 10 day
 
 data interbranch_transport_per_pallet: units.money
   -> minimum 0 eur
-  -> default 0 eur
+  -> suggest 0 eur
 
 data inbound_handling_per_pallet: units.money
   -> minimum 0 eur
-  -> default 0 eur
+  -> suggest 0 eur
 
 data storage_per_pallet_per_week: units.money
   -> minimum 0 eur
-  -> default 10 eur
+  -> suggest 10 eur
 
 data labeling_per_pallet: units.money
   -> minimum 0 eur
-  -> default 0 eur
+  -> suggest 0 eur
 
 data outbound_handling_per_pallet: units.money
   -> minimum 0 eur
-  -> default 0 eur
+  -> suggest 0 eur
 
 rule storage_cost_per_pallet:
   storage_per_pallet_per_week
-  * ceil storage_duration as weeks as Number
+  * ceil storage_duration as week as Number
 
 rule total_logistics_per_pallet:
   interbranch_transport_per_pallet
@@ -69,16 +69,35 @@ rule total: wh.total_logistics_per_ce
 const QUOTATION_BAD_SPEC: &str = r#"
 spec quotation_bad
 uses wh: warehousing
-rule bad: 5 minutes
+rule bad: 5 minute
 "#;
 
 fn load_specs(engine: &mut Engine) {
     engine
-        .load(UNITS_SPEC, SourceType::Volatile)
+        .load([(SourceType::Volatile, UNITS_SPEC.to_string())])
         .expect("units spec must load");
     engine
-        .load(WAREHOUSING_SPEC, SourceType::Volatile)
+        .load([(SourceType::Volatile, WAREHOUSING_SPEC.to_string())])
         .expect("warehousing spec must load");
+}
+
+fn warehousing_default_inputs(prefix: &str) -> HashMap<String, String> {
+    let key = |name: &str| {
+        if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}.{name}")
+        }
+    };
+    HashMap::from([
+        (key("units_per_pallet"), "1".into()),
+        (key("storage_duration"), "10 day".into()),
+        (key("interbranch_transport_per_pallet"), "0 eur".into()),
+        (key("inbound_handling_per_pallet"), "0 eur".into()),
+        (key("storage_per_pallet_per_week"), "10 eur".into()),
+        (key("labeling_per_pallet"), "0 eur".into()),
+        (key("outbound_handling_per_pallet"), "0 eur".into()),
+    ])
 }
 
 #[test]
@@ -87,10 +106,17 @@ fn warehousing_plans_alone() {
     load_specs(&mut engine);
     let now = DateTimeValue::now();
     engine
-        .get_plan(None, "warehousing", Some(&now))
+        .show(None, "warehousing", Some(&now))
         .expect("warehousing must plan alone");
     let response = engine
-        .run(None, "warehousing", Some(&now), HashMap::new(), false, None)
+        .run(
+            None,
+            "warehousing",
+            Some(&now),
+            warehousing_default_inputs(""),
+            None,
+            false,
+        )
         .expect("warehousing must evaluate");
     let display = response
         .results
@@ -101,39 +127,7 @@ fn warehousing_plans_alone() {
         .expect("storage_cost_per_pallet must have display");
     assert_eq!(
         display, "20.00 eur",
-        "10 eur/week * ceil(10 days as weeks) must be 20.00 eur, got: {display}"
-    );
-}
-
-#[test]
-fn quotation_plans_without_consumer_stdlib_units() {
-    let mut engine = Engine::new();
-    load_specs(&mut engine);
-    engine
-        .load(QUOTATION_SPEC, SourceType::Volatile)
-        .expect("quotation must plan without uses lemma units");
-    let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "quotation", Some(&now))
-        .expect("quotation must plan without Unknown unit minutes/weeks in unit index");
-
-    let expression_units = &plan.resolved_types.unit_index;
-    assert!(
-        !expression_units.contains_key("weeks"),
-        "consumer expression scope must not contain weeks: {:?}",
-        expression_units.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        !expression_units.contains_key("minutes"),
-        "consumer expression scope must not contain minutes: {:?}",
-        expression_units.keys().collect::<Vec<_>>()
-    );
-    let mut keys: Vec<_> = expression_units.keys().cloned().collect();
-    keys.sort();
-    assert_eq!(
-        keys,
-        ["percent", "permille"],
-        "consumer expression scope must only have builtin ratio units, not dependency units"
+        "10 eur/week * ceil(10 day as week) must be 20.00 eur, got: {display}"
     );
 }
 
@@ -142,31 +136,19 @@ fn quotation_evaluates_cross_spec_duration_conversion() {
     let mut engine = Engine::new();
     load_specs(&mut engine);
     engine
-        .load(QUOTATION_SPEC, SourceType::Volatile)
+        .load([(SourceType::Volatile, QUOTATION_SPEC.to_string())])
         .expect("quotation must load");
     let now = DateTimeValue::now();
-    let plan = engine
-        .get_plan(None, "quotation", Some(&now))
-        .expect("quotation must plan");
-    assert!(
-        !plan.resolved_types.unit_index.contains_key("weeks"),
-        "consumer unit_index must not contain weeks before serialize"
-    );
-
-    let mut json: serde_json::Value =
-        serde_json::to_value(lemma::ExecutionPlanSerialized::from(plan)).unwrap();
-    let unit_index = json["unit_index"]
-        .as_object_mut()
-        .expect("serialized plan must have unit_index");
-    unit_index.remove("weeks");
-    unit_index.remove("minutes");
-
-    let serialized: lemma::ExecutionPlanSerialized = serde_json::from_value(json).unwrap();
-    let reconstructed = ExecutionPlan::try_from(serialized)
-        .expect("inlined weeks conversion must validate via owning_type, not consumer unit_index");
     let response = engine
-        .run_plan(&reconstructed, Some(&now), HashMap::new(), false, None)
-        .expect("serialized quotation plan must evaluate");
+        .run(
+            None,
+            "quotation",
+            Some(&now),
+            warehousing_default_inputs("wh"),
+            None,
+            false,
+        )
+        .expect("quotation must evaluate");
     let display = response
         .results
         .get("total")
@@ -176,7 +158,7 @@ fn quotation_evaluates_cross_spec_duration_conversion() {
         .expect("total must have display");
     assert_eq!(
         display, "20.00 eur",
-        "10 eur/week * ceil(10 days as weeks) / 1 CE must be 20.00 eur, got: {display}"
+        "10 eur/week * ceil(10 day as week) / 1 CE must be 20.00 eur, got: {display}"
     );
 }
 
@@ -185,15 +167,15 @@ fn quotation_rejects_minutes_in_local_rule() {
     let mut engine = Engine::new();
     load_specs(&mut engine);
     let err = engine
-        .load(QUOTATION_BAD_SPEC, SourceType::Volatile)
-        .expect_err("5 minutes in consumer must fail at load");
+        .load([(SourceType::Volatile, QUOTATION_BAD_SPEC.to_string())])
+        .expect_err("5 minute in consumer must fail at load");
     let minutes_err = err
         .errors
         .iter()
-        .find(|error| error.message().contains("minutes"))
-        .expect("load must report minutes out of scope");
+        .find(|error| error.message().contains("minute"))
+        .expect("load must report minute out of scope");
     assert_eq!(
         minutes_err.message(),
-        "Unit 'minutes' is not in scope for this spec"
+        "Unit 'minute' is not in scope for this spec"
     );
 }
