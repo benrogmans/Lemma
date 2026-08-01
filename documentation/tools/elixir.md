@@ -63,7 +63,7 @@ Format source code (no engine needed):
 | Function | Description |
 |----------|-------------|
 | `Lemma.new/1` | Create engine (optional limits map) |
-| `Lemma.load/2` | Load sources: binary (volatile) or map / `[{label, code}, ...]` (labeled) |
+| `Lemma.load/2` | Load sources: binary (volatile); map (lexicographic label order) or `[{label, code}, ...]` (caller order) |
 | `Lemma.list/1` | List loaded Specs (includes embedded `lemma` / `spec units`) |
 | `Lemma.source/4` | Formatted Lemma source (`repository`, `spec`, `effective`; omit `spec` for repo-wide) |
 | `Lemma.show/4` | Spec interface + temporal window (`repository`, `spec`, `effective`). `Show.data` values are `Lemma.ShowData`. |

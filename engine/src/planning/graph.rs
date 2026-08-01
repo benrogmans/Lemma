@@ -17,6 +17,7 @@ use crate::planning::semantics::{
     LiteralValue, PathSegment, RawSuggestion, ReferenceTarget, RulePath, SemanticConversionTarget,
     TypeDefiningSpec, TypeExtends, TypeSpecification, ValueKind,
 };
+use crate::planning::unit_index::{UnitIndex, UnitMergeConflict, UnitOwner};
 use crate::Error;
 use ast::DataValue as ParsedDataValue;
 use indexmap::IndexMap;
@@ -1494,6 +1495,24 @@ impl<'a> GraphBuilder<'a> {
         )
     }
 
+    fn unit_index_for_spec(&self, current_spec: &LemmaSpec) -> Option<&UnitIndex> {
+        self.local_types
+            .iter()
+            .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
+            .map(|(_, _, t)| &t.unit_index)
+    }
+
+    fn resolve_unit_ref(
+        &self,
+        current_spec: &LemmaSpec,
+        unit_ref: &str,
+    ) -> Result<(String, Arc<LemmaType>), String> {
+        let index = self
+            .unit_index_for_spec(current_spec)
+            .ok_or_else(|| format!("Unknown unit '{unit_ref}' is not in scope for this spec"))?;
+        index.resolve(unit_ref)
+    }
+
     fn process_meta_fields(&mut self, spec: &LemmaSpec) {
         let mut seen = HashSet::new();
         for field in &spec.meta_fields {
@@ -1991,8 +2010,16 @@ impl<'a> GraphBuilder<'a> {
                                 .map(|(_, _, t)| t)
                                 .expect("BUG: no resolved types for spec during add_local_data");
 
-                            let left_measure_type = resolved.unit_index.get(left_unit).cloned();
-                            let right_measure_type = resolved.unit_index.get(right_unit).cloned();
+                            let left_measure_type = resolved
+                                .unit_index
+                                .resolve(left_unit)
+                                .ok()
+                                .map(|(_, owner)| owner);
+                            let right_measure_type = resolved
+                                .unit_index
+                                .resolve(right_unit)
+                                .ok()
+                                .map(|(_, owner)| owner);
 
                             match (&left_measure_type, &right_measure_type) {
                                 (Some(left_measure_type), Some(right_measure_type))
@@ -2123,21 +2150,15 @@ impl<'a> GraphBuilder<'a> {
         } else {
             match value {
                 Value::NumberWithUnit(magnitude, unit) => {
-                    let Some(lt) = self
-                        .local_types
-                        .iter()
-                        .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
-                        .map(|(_, _, t)| t)
-                        .and_then(|dt| dt.unit_index.get(unit))
-                        .map(Arc::as_ref)
-                    else {
-                        self.errors.push(self.engine_error(
-                            format!("Unit '{}' is not in scope for this spec", unit),
-                            &effective_source,
-                        ));
-                        return;
+                    let (bare, lt) = match self.resolve_unit_ref(current_spec, unit) {
+                        Ok(resolved) => resolved,
+                        Err(message) => {
+                            self.errors
+                                .push(self.engine_error(message, &effective_source));
+                            return;
+                        }
                     };
-                    match number_with_unit_to_value_kind(*magnitude, unit, lt) {
+                    match number_with_unit_to_value_kind(*magnitude, &bare, lt.as_ref()) {
                         Ok(s) => s,
                         Err(e) => {
                             self.errors.push(self.engine_error(e, &effective_source));
@@ -2150,22 +2171,16 @@ impl<'a> GraphBuilder<'a> {
                         Value::NumberWithUnit(left_mag, unit),
                         Value::NumberWithUnit(right_mag, right_unit),
                     ) if unit == right_unit => {
-                        let Some(lt) = self
-                            .local_types
-                            .iter()
-                            .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
-                            .map(|(_, _, t)| t)
-                            .and_then(|dt| dt.unit_index.get(unit))
-                            .map(Arc::clone)
-                        else {
-                            self.errors.push(self.engine_error(
-                                format!("Unit '{}' is not in scope for this spec", unit),
-                                &effective_source,
-                            ));
-                            return;
+                        let (bare, lt) = match self.resolve_unit_ref(current_spec, unit) {
+                            Ok(resolved) => resolved,
+                            Err(message) => {
+                                self.errors
+                                    .push(self.engine_error(message, &effective_source));
+                                return;
+                            }
                         };
                         let left_kind =
-                            match number_with_unit_to_value_kind(*left_mag, unit, lt.as_ref()) {
+                            match number_with_unit_to_value_kind(*left_mag, &bare, lt.as_ref()) {
                                 Ok(v) => v,
                                 Err(e) => {
                                     self.errors.push(self.engine_error(e, &effective_source));
@@ -2173,7 +2188,7 @@ impl<'a> GraphBuilder<'a> {
                                 }
                             };
                         let right_kind =
-                            match number_with_unit_to_value_kind(*right_mag, unit, lt.as_ref()) {
+                            match number_with_unit_to_value_kind(*right_mag, &bare, lt.as_ref()) {
                                 Ok(v) => v,
                                 Err(e) => {
                                     self.errors.push(self.engine_error(e, &effective_source));
@@ -2211,24 +2226,14 @@ impl<'a> GraphBuilder<'a> {
         let inferred_type: Arc<LemmaType> = match value {
             Value::Text(_) => primitive_text_arc().clone(),
             Value::Number(_) => primitive_number_arc().clone(),
-            Value::NumberWithUnit(_, unit) => {
-                match self
-                    .local_types
-                    .iter()
-                    .find(|(_, s, _)| discovery::same_loaded_spec(s, current_spec))
-                    .map(|(_, _, t)| t)
-                    .and_then(|dt| dt.unit_index.get(unit))
-                {
-                    Some(lt) => Arc::clone(lt),
-                    None => {
-                        self.errors.push(self.engine_error(
-                            format!("Unit '{}' is not in scope for this spec", unit),
-                            &effective_source,
-                        ));
-                        return;
-                    }
+            Value::NumberWithUnit(_, unit) => match self.resolve_unit_ref(current_spec, unit) {
+                Ok((_, lt)) => lt,
+                Err(message) => {
+                    self.errors
+                        .push(self.engine_error(message, &effective_source));
+                    return;
                 }
-            }
+            },
             Value::Boolean(_) => primitive_boolean_arc().clone(),
             Value::Date(_) => primitive_date_arc().clone(),
             Value::Time(_) => primitive_time_arc().clone(),
@@ -2839,7 +2844,8 @@ impl<'a> GraphBuilder<'a> {
                         // conversion error without a "valid units" list.
                         let full_msg = unit_index
                             .map(|idx| {
-                                let valid: Vec<&str> = idx.keys().map(String::as_str).collect();
+                                let mut valid: Vec<&str> = idx.keys().map(String::as_str).collect();
+                                valid.sort_unstable();
                                 format!("{} Valid units: {}", msg, valid.join(", "))
                             })
                             .unwrap_or(msg);
@@ -2884,21 +2890,14 @@ impl<'a> GraphBuilder<'a> {
             ast::ExpressionKind::Literal(value) => {
                 let semantic_value = match value {
                     Value::NumberWithUnit(magnitude, unit) => {
-                        let Some(lt) = self
-                            .local_types
-                            .iter()
-                            .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
-                            .map(|(_, _, t)| t)
-                            .and_then(|dt| dt.unit_index.get(unit))
-                            .map(Arc::as_ref)
-                        else {
-                            self.errors.push(self.engine_error(
-                                format!("Unit '{}' is not in scope for this spec", unit),
-                                expr_src,
-                            ));
-                            return None;
+                        let (bare, lt) = match self.resolve_unit_ref(ctx.spec, unit) {
+                            Ok(resolved) => resolved,
+                            Err(message) => {
+                                self.errors.push(self.engine_error(message, expr_src));
+                                return None;
+                            }
                         };
-                        match number_with_unit_to_value_kind(*magnitude, unit, lt) {
+                        match number_with_unit_to_value_kind(*magnitude, &bare, lt.as_ref()) {
                             Ok(v) => v,
                             Err(e) => {
                                 self.errors.push(self.engine_error(e, expr_src));
@@ -2911,23 +2910,25 @@ impl<'a> GraphBuilder<'a> {
                             Value::NumberWithUnit(left_mag, unit),
                             Value::NumberWithUnit(right_mag, right_unit),
                         ) if unit == right_unit => {
-                            let Some(lt) = self
-                                .local_types
-                                .iter()
-                                .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
-                                .map(|(_, _, t)| t)
-                                .and_then(|dt| dt.unit_index.get(unit))
-                                .map(Arc::clone)
-                            else {
-                                self.errors.push(self.engine_error(
-                                    format!("Unit '{}' is not in scope for this spec", unit),
-                                    expr_src,
-                                ));
-                                return None;
+                            let (bare, lt) = match self.resolve_unit_ref(ctx.spec, unit) {
+                                Ok(resolved) => resolved,
+                                Err(message) => {
+                                    self.errors.push(self.engine_error(message, expr_src));
+                                    return None;
+                                }
                             };
-                            let left_kind = match number_with_unit_to_value_kind(
-                                *left_mag,
-                                unit,
+                            let left_kind =
+                                match number_with_unit_to_value_kind(*left_mag, &bare, lt.as_ref())
+                                {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        self.errors.push(self.engine_error(e, expr_src));
+                                        return None;
+                                    }
+                                };
+                            let right_kind = match number_with_unit_to_value_kind(
+                                *right_mag,
+                                &bare,
                                 lt.as_ref(),
                             ) {
                                 Ok(v) => v,
@@ -2936,15 +2937,6 @@ impl<'a> GraphBuilder<'a> {
                                     return None;
                                 }
                             };
-                            let right_kind =
-                                match number_with_unit_to_value_kind(*right_mag, unit, lt.as_ref())
-                                {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        self.errors.push(self.engine_error(e, expr_src));
-                                        return None;
-                                    }
-                                };
                             ValueKind::Range(
                                 Box::new(LiteralValue {
                                     value: left_kind,
@@ -2975,24 +2967,13 @@ impl<'a> GraphBuilder<'a> {
                 let lemma_type: Arc<LemmaType> = match value {
                     Value::Text(_) => primitive_text_arc().clone(),
                     Value::Number(_) => primitive_number_arc().clone(),
-                    Value::NumberWithUnit(_, unit) => {
-                        match self
-                            .local_types
-                            .iter()
-                            .find(|(_, s, _)| discovery::same_loaded_spec(s, ctx.spec))
-                            .map(|(_, _, t)| t)
-                            .and_then(|dt| dt.unit_index.get(unit))
-                        {
-                            Some(lt) => Arc::clone(lt),
-                            None => {
-                                self.errors.push(self.engine_error(
-                                    format!("Unit '{}' is not in scope for this spec", unit),
-                                    expr_src,
-                                ));
-                                return None;
-                            }
+                    Value::NumberWithUnit(_, unit) => match self.resolve_unit_ref(ctx.spec, unit) {
+                        Ok((_, lt)) => lt,
+                        Err(message) => {
+                            self.errors.push(self.engine_error(message, expr_src));
+                            return None;
                         }
-                    }
+                    },
                     Value::Boolean(_) => primitive_boolean_arc().clone(),
                     Value::Date(_) => primitive_date_arc().clone(),
                     Value::Time(_) => primitive_time_arc().clone(),
@@ -4537,18 +4518,19 @@ fn lookup_unit_type(
     unit_name: &str,
 ) -> Option<Arc<LemmaType>> {
     find_types_by_spec(resolved_types, spec)
-        .and_then(|dt| dt.unit_index.get(unit_name))
-        .map(Arc::clone)
+        .and_then(|dt| dt.unit_index.resolve(unit_name).ok())
+        .map(|(_, owner)| owner)
 }
 
 fn is_valid_range_span_unit(
     source_type: &LemmaType,
     unit_name: &str,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &UnitIndex,
 ) -> bool {
-    let Some(target_type) = unit_index.get(unit_name) else {
+    let Ok((bare, target_type)) = unit_index.resolve(unit_name) else {
         return false;
     };
+    let unit_name = bare.as_str();
     if source_type.is_date_range() {
         return target_type.is_duration_like() || target_type.is_calendar_like();
     }
@@ -5775,63 +5757,63 @@ fn unit_index_arc_declares_unit(lemma_type: &LemmaType, unit_name: &str) -> bool
 
 fn sync_unit_index_from_resolved(
     resolved: &HashMap<String, Arc<LemmaType>>,
-    unit_index: HashMap<String, Arc<LemmaType>>,
-) -> HashMap<String, Arc<LemmaType>> {
-    let synced = unit_index
-        .into_iter()
-        .filter_map(|(unit_name, pre_decomp_type)| {
-            let lookup_name = pre_decomp_type
-                .name
-                .as_deref()
-                .or_else(|| pre_decomp_type.measure_family_name());
-            let post = if pre_decomp_type.is_measure() {
-                let type_name = lookup_name.expect(
-                    "BUG: measure arc in unit_index must carry name or family for sync",
-                );
-                if let Some(synced) = resolved
-                    .get(type_name)
-                    .or_else(|| {
+    unit_index: UnitIndex,
+) -> UnitIndex {
+    let mut synced = UnitIndex::new();
+    for (unit_name, owner) in unit_index.into_iter_owners() {
+        let pre_decomp_type = owner.owning_type;
+        let lookup_name = pre_decomp_type
+            .name
+            .as_deref()
+            .or_else(|| pre_decomp_type.measure_family_name());
+        let post = if pre_decomp_type.is_measure() {
+            let type_name = lookup_name
+                .expect("BUG: measure arc in unit_index must carry name or family for sync");
+            if let Some(synced_type) = resolved.get(type_name).or_else(|| {
+                pre_decomp_type
+                    .measure_family_name()
+                    .and_then(|family| resolved.get(family))
+            }) {
+                Arc::clone(synced_type)
+            } else if pre_decomp_type.measure_type_decomposition().is_some() {
+                pre_decomp_type
+            } else {
+                panic!(
+                    "BUG: measure unit_index unit '{}' type '{}' must exist in resolved or carry decomposition after import merge",
+                    unit_name, type_name
+                )
+            }
+        } else {
+            lookup_name
+                .and_then(|type_name| {
+                    resolved.get(type_name).or_else(|| {
                         pre_decomp_type
                             .measure_family_name()
                             .and_then(|family| resolved.get(family))
                     })
-                {
-                    Arc::clone(synced)
-                } else if pre_decomp_type.measure_type_decomposition().is_some() {
-                    pre_decomp_type
-                } else {
-                    panic!(
-                        "BUG: measure unit_index unit '{}' type '{}' must exist in resolved or carry decomposition after import merge",
-                        unit_name, type_name
-                    )
-                }
-            } else {
-                lookup_name
-                    .and_then(|type_name| {
-                        resolved.get(type_name).or_else(|| {
-                            pre_decomp_type
-                                .measure_family_name()
-                                .and_then(|family| resolved.get(family))
-                        })
-                    })
-                    .map(Arc::clone)
-                    .unwrap_or(pre_decomp_type)
-            };
-            if unit_index_arc_declares_unit(post.as_ref(), &unit_name) {
-                Some((unit_name, post))
-            } else {
-                None
-            }
-        })
-        .collect();
+                })
+                .map(Arc::clone)
+                .unwrap_or(pre_decomp_type)
+        };
+        if unit_index_arc_declares_unit(post.as_ref(), &unit_name) {
+            synced.insert_owner(
+                unit_name,
+                UnitOwner {
+                    owning_type: post,
+                    type_name: owner.type_name,
+                    import_alias: owner.import_alias,
+                },
+            );
+        }
+    }
     merge_family_root_measure_units_into_index(resolved, synced)
 }
 
 /// Ensure every unit declared on a family-root measure type in `resolved` has an index entry.
 fn merge_family_root_measure_units_into_index(
     resolved: &HashMap<String, Arc<LemmaType>>,
-    mut unit_index: HashMap<String, Arc<LemmaType>>,
-) -> HashMap<String, Arc<LemmaType>> {
+    mut unit_index: UnitIndex,
+) -> UnitIndex {
     for (type_name, lemma_type) in resolved {
         let TypeSpecification::Measure { units, .. } = &lemma_type.specifications else {
             continue;
@@ -5843,9 +5825,20 @@ fn merge_family_root_measure_units_into_index(
             continue;
         }
         for unit in units.iter() {
-            unit_index
-                .entry(unit.name.clone())
-                .or_insert_with(|| Arc::clone(lemma_type));
+            let already = unit_index.owners_for(&unit.name).iter().any(|owner| {
+                owner.type_name == *type_name
+                    || owner.owning_type.same_measure_family(lemma_type.as_ref())
+            });
+            if !already {
+                unit_index.insert_owner(
+                    unit.name.clone(),
+                    UnitOwner {
+                        owning_type: Arc::clone(lemma_type),
+                        type_name: type_name.clone(),
+                        import_alias: None,
+                    },
+                );
+            }
         }
     }
     unit_index
@@ -5854,18 +5847,21 @@ fn merge_family_root_measure_units_into_index(
 /// `uses`-merged measure rows in `unit_index` can still have empty `decomposition` until synced from
 /// `resolved`. Compound unit resolution consults `unit_index` first; fill simple base measures here
 /// before building [`UnitDecompLookup`].
-fn repair_empty_simple_measure_decomposition_in_unit_index(
-    unit_index: HashMap<String, Arc<LemmaType>>,
-) -> HashMap<String, Arc<LemmaType>> {
-    unit_index
-        .into_iter()
-        .map(|(unit_key, arc)| {
-            (
-                unit_key,
-                Arc::new(repair_simple_measure_decomposition(arc_unwrap(arc))),
-            )
-        })
-        .collect()
+fn repair_empty_simple_measure_decomposition_in_unit_index(unit_index: UnitIndex) -> UnitIndex {
+    let mut repaired = UnitIndex::new();
+    for (unit_key, owner) in unit_index.into_iter_owners() {
+        repaired.insert_owner(
+            unit_key,
+            UnitOwner {
+                owning_type: Arc::new(repair_simple_measure_decomposition(arc_unwrap(
+                    owner.owning_type,
+                ))),
+                type_name: owner.type_name,
+                import_alias: owner.import_alias,
+            },
+        );
+    }
+    repaired
 }
 
 fn repair_simple_measure_decomposition(lemma_type: LemmaType) -> LemmaType {
@@ -5904,17 +5900,20 @@ fn simple_measure_repair_decomposition(lemma_type: &LemmaType) -> Option<BaseMea
 fn owning_measure_type_name_for_unit(
     unit_name: &str,
     lookup: &UnitDecompLookup,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &UnitIndex,
 ) -> Option<String> {
     if let Some((owning_measure_name, _, _)) = lookup.get(unit_name) {
         return Some(owning_measure_name.clone());
     }
-    unit_index.get(unit_name).and_then(|lemma_type| {
-        lemma_type
-            .name
-            .clone()
-            .or_else(|| lemma_type.measure_family_name().map(str::to_string))
-    })
+    unit_index
+        .resolve(unit_name)
+        .ok()
+        .and_then(|(_, lemma_type)| {
+            lemma_type
+                .name
+                .clone()
+                .or_else(|| lemma_type.measure_family_name().map(str::to_string))
+        })
 }
 
 /// Order compound measure types so every referenced unit from another compound type is resolved first.
@@ -5923,7 +5922,7 @@ fn sort_derived_measure_types_for_resolution(
     derived_measure_type_names: Vec<String>,
     resolved: &HashMap<String, Arc<LemmaType>>,
     lookup: &UnitDecompLookup,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &UnitIndex,
     source_for: &dyn Fn(&str) -> Option<Source>,
 ) -> Result<Vec<String>, Error> {
     let derived_measure_type_count = derived_measure_type_names.len();
@@ -6018,17 +6017,18 @@ fn sort_derived_measure_types_for_resolution(
 /// its factor decomposition so it is unique.
 pub(crate) fn build_signature_index(
     spec_name: &str,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &UnitIndex,
 ) -> Result<crate::computation::arithmetic::SignatureIndex, Error> {
     use crate::computation::arithmetic::SignatureIndex;
     let mut signature_index: SignatureIndex = SignatureIndex::new();
-    let mut sorted_units: Vec<_> = unit_index.iter().collect();
-    sorted_units.sort_by_key(|(name, _)| (*name).clone());
+    let mut sorted_units: Vec<_> = unit_index.iter_entries().collect();
+    sorted_units.sort_by_key(|(name, _)| *name);
     for (unit_name, lemma_type) in sorted_units {
+        let unit_name = unit_name.to_string();
         let TypeSpecification::Measure { units, .. } = &lemma_type.specifications else {
             continue;
         };
-        let unit = units.get(unit_name).map_err(|_| {
+        let unit = units.get(unit_name.as_str()).map_err(|_| {
             Error::validation(
                 format!(
                     "In spec '{}': unit_index entry '{}' is not declared on measure type '{}'",
@@ -6040,7 +6040,10 @@ pub(crate) fn build_signature_index(
                 None::<String>,
             )
         })?;
-        if unit.derived_measure_factors.is_empty() {
+        // Identity signatures `[(name, 1)]` collide when the same bare name has
+        // multiple owners. Skip those; keep unique identities so expand can
+        // promote compounds that reduce to a single unique unit (e.g. eur).
+        if measure_unit_is_simple(unit) && unit_index.owners_for(&unit_name).len() != 1 {
             continue;
         }
         let owning_type_name = lemma_type.name.clone().unwrap_or_default();
@@ -6256,9 +6259,9 @@ type TypeMap = HashMap<String, Arc<LemmaType>>;
 fn resolve_measure_decompositions(
     spec_name: &str,
     mut resolved: TypeMap,
-    mut unit_index: TypeMap,
+    mut unit_index: UnitIndex,
     type_sources: &HashMap<String, Source>,
-) -> (TypeMap, TypeMap, Vec<Error>) {
+) -> (TypeMap, UnitIndex, Vec<Error>) {
     let mut errors: Vec<Error> = Vec::new();
 
     let source_for = |type_name: &str| -> Option<Source> { type_sources.get(type_name).cloned() };
@@ -6308,7 +6311,8 @@ fn resolve_measure_decompositions(
 
     let mut lookup = UnitDecompLookup::new();
 
-    for (unit_name, lemma_type) in unit_index.iter() {
+    for (unit_name, lemma_type) in unit_index.iter_entries() {
+        let unit_name = unit_name.to_string();
         if let TypeSpecification::Measure {
             decomposition: Some(decomposition),
             units,
@@ -6318,7 +6322,7 @@ fn resolve_measure_decompositions(
             let measure_name = lemma_type.name.clone().unwrap_or_default();
             let factor = units
                 .iter()
-                .find(|u| &u.name == unit_name)
+                .find(|u| u.name == unit_name)
                 .unwrap_or_else(|| {
                     panic!(
                         "BUG: unit_name '{}' from unit_index must be in its owning type's units",
@@ -6327,10 +6331,13 @@ fn resolve_measure_decompositions(
                 })
                 .factor
                 .clone();
-            lookup.insert(
-                unit_name.clone(),
-                (measure_name, decomposition.clone(), factor),
-            );
+            // Unique bare names only in decomp lookup; ambiguous factors resolve via UnitIndex.
+            if unit_index.has_unique_owner(unit_name.as_str()) {
+                lookup.insert(
+                    unit_name.clone(),
+                    (measure_name, decomposition.clone(), factor),
+                );
+            }
         }
     }
 
@@ -6442,10 +6449,9 @@ fn resolve_measure_decompositions(
             match resolve_compound_unit(
                 spec_name,
                 type_name,
-                &unit.name,
-                unit.factor.clone(),
-                &unit.derived_measure_factors,
+                unit,
                 &lookup,
+                &unit_index,
                 type_source.as_ref(),
             ) {
                 Ok((unit_decomp, derived_factor)) => {
@@ -6521,7 +6527,7 @@ fn resolve_measure_decompositions(
     let resolved = canonicalize_unit_signatures(resolved);
     let unit_index = sync_unit_index_from_resolved(&resolved, unit_index);
     let unit_index = repair_empty_simple_measure_decomposition_in_unit_index(unit_index);
-    let unit_index = canonicalize_unit_signatures(unit_index);
+    let unit_index = canonicalize_unit_index_signatures(unit_index);
 
     (resolved, unit_index, errors)
 }
@@ -6596,67 +6602,108 @@ fn finalize_measure_magnitudes_in_resolved(
 }
 
 fn finalize_measure_magnitudes_in_unit_index(
-    unit_index: HashMap<String, Arc<LemmaType>>,
+    unit_index: UnitIndex,
     declared_suggestions: &HashMap<String, ValueKind>,
     type_sources: &HashMap<String, Source>,
     all_data_types: &[(&LemmaSpec, HashMap<String, DataTypeDef>)],
     spec: &LemmaSpec,
-) -> (HashMap<String, Arc<LemmaType>>, Vec<Error>) {
-    unit_index.into_iter().fold(
-        (HashMap::new(), Vec::new()),
-        |(mut acc, mut errors), (unit_name, arc)| {
-            let type_name_opt = arc
-                .name
-                .as_deref()
-                .or_else(|| arc.measure_family_name())
-                .map(str::to_string);
-            let Some(type_name) = type_name_opt else {
-                acc.insert(unit_name, arc);
-                return (acc, errors);
-            };
-            if !arc.is_measure() {
-                acc.insert(unit_name, arc);
-                return (acc, errors);
-            }
-            let fallback = (*arc).clone();
-            let lemma_type = match finalize_lemma_measure_magnitudes(
-                arc_unwrap(arc),
-                declared_suggestions.get(type_name.as_str()),
-                type_name.as_str(),
-            ) {
-                Ok(lt) => lt,
-                Err(message) => {
-                    let source = type_sources
-                        .get(type_name.as_str())
-                        .cloned()
-                        .or_else(|| {
-                            all_data_types.iter().find_map(|(_, defs)| {
-                                defs.get(type_name.as_str()).map(|def| def.source.clone())
-                            })
+) -> (UnitIndex, Vec<Error>) {
+    let mut out = UnitIndex::new();
+    let mut errors = Vec::new();
+    let mut finalized_types: HashMap<(Option<String>, String), Arc<LemmaType>> = HashMap::new();
+
+    for (unit_name, owner) in unit_index.into_iter_owners() {
+        let cache_key = (owner.import_alias.clone(), owner.type_name.clone());
+        if let Some(existing) = finalized_types.get(&cache_key) {
+            out.insert_owner(
+                unit_name,
+                UnitOwner {
+                    owning_type: Arc::clone(existing),
+                    type_name: owner.type_name,
+                    import_alias: owner.import_alias,
+                },
+            );
+            continue;
+        }
+
+        let arc = owner.owning_type;
+        let type_name_opt = arc
+            .name
+            .as_deref()
+            .or_else(|| arc.measure_family_name())
+            .map(str::to_string);
+        let Some(type_name) = type_name_opt else {
+            let arc = Arc::clone(&arc);
+            finalized_types.insert(cache_key, Arc::clone(&arc));
+            out.insert_owner(
+                unit_name,
+                UnitOwner {
+                    owning_type: arc,
+                    type_name: owner.type_name,
+                    import_alias: owner.import_alias,
+                },
+            );
+            continue;
+        };
+        if !arc.is_measure() {
+            finalized_types.insert(cache_key, Arc::clone(&arc));
+            out.insert_owner(
+                unit_name,
+                UnitOwner {
+                    owning_type: arc,
+                    type_name: owner.type_name,
+                    import_alias: owner.import_alias,
+                },
+            );
+            continue;
+        }
+        let fallback = (*arc).clone();
+        let lemma_type = match finalize_lemma_measure_magnitudes(
+            arc_unwrap(arc),
+            declared_suggestions.get(type_name.as_str()),
+            type_name.as_str(),
+        ) {
+            Ok(lt) => lt,
+            Err(message) => {
+                let source = type_sources
+                    .get(type_name.as_str())
+                    .cloned()
+                    .or_else(|| {
+                        all_data_types.iter().find_map(|(_, defs)| {
+                            defs.get(type_name.as_str()).map(|def| def.source.clone())
                         })
-                        .unwrap_or_else(|| {
-                            unreachable!(
-                                "BUG: measure type '{}' in unit_index has no DataTypeDef source",
-                                type_name
-                            )
-                        });
-                    errors.push(Error::validation_with_context(
-                        format!(
-                            "Type '{}' has invalid measure unit constraints: {}",
-                            type_name, message
-                        ),
-                        Some(source),
-                        None::<String>,
-                        Some(spec),
-                        None,
-                    ));
-                    fallback
-                }
-            };
-            acc.insert(unit_name, Arc::new(lemma_type));
-            (acc, errors)
-        },
-    )
+                    })
+                    .unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: measure type '{}' in unit_index has no DataTypeDef source",
+                            type_name
+                        )
+                    });
+                errors.push(Error::validation_with_context(
+                    format!(
+                        "Type '{}' has invalid measure unit constraints: {}",
+                        type_name, message
+                    ),
+                    Some(source),
+                    None::<String>,
+                    Some(spec),
+                    None,
+                ));
+                fallback
+            }
+        };
+        let arc = Arc::new(lemma_type);
+        finalized_types.insert(cache_key, Arc::clone(&arc));
+        out.insert_owner(
+            unit_name,
+            UnitOwner {
+                owning_type: arc,
+                type_name: owner.type_name,
+                import_alias: owner.import_alias,
+            },
+        );
+    }
+    (out, errors)
 }
 
 /// Populate every unit's `derived_measure_factors` to its canonical symbolic signature.
@@ -6678,6 +6725,23 @@ fn canonicalize_unit_signatures(
             )
         })
         .collect()
+}
+
+fn canonicalize_unit_index_signatures(unit_index: UnitIndex) -> UnitIndex {
+    let mut out = UnitIndex::new();
+    for (bare, owner) in unit_index.into_iter_owners() {
+        out.insert_owner(
+            bare,
+            UnitOwner {
+                owning_type: Arc::new(canonicalize_lemma_unit_signatures(arc_unwrap(
+                    owner.owning_type,
+                ))),
+                type_name: owner.type_name,
+                import_alias: owner.import_alias,
+            },
+        );
+    }
+    out
 }
 
 fn canonicalize_lemma_unit_signatures(lemma_type: LemmaType) -> LemmaType {
@@ -6717,10 +6781,9 @@ fn canonicalize_unit_for_measure(unit: MeasureUnit) -> MeasureUnit {
 fn resolve_compound_unit(
     spec_name: &str,
     declaring_type_name: &str,
-    unit_name: &str,
-    prefix: crate::computation::rational::RationalInteger,
-    factors: &[(String, i32)],
+    unit: &MeasureUnit,
     lookup: &UnitDecompLookup,
+    unit_index: &UnitIndex,
     source: Option<&Source>,
 ) -> Result<
     (
@@ -6732,22 +6795,62 @@ fn resolve_compound_unit(
     use crate::computation::rational::{checked_mul, checked_pow_i32};
 
     let mut result: BaseMeasureVector = BaseMeasureVector::new();
-    let mut derived_factor = prefix;
+    let mut derived_factor = unit.factor.clone();
 
-    for (measure_ref, exponent) in factors {
-        let (owning_measure_name, owning_decomp, unit_factor) =
-            lookup.get(measure_ref.as_str()).ok_or_else(|| {
+    for (measure_ref, exponent) in &unit.derived_measure_factors {
+        let (owning_measure_name, owning_decomp, unit_factor) = if let Some(entry) =
+            lookup.get(measure_ref.as_str())
+        {
+            (entry.0.clone(), entry.1.clone(), entry.2.clone())
+        } else {
+            let (bare, owning_type) = unit_index.resolve(measure_ref).map_err(|err| {
                 Error::validation(
                     format!(
-                        "In spec '{}': unit '{}' in measure type '{}' references '{}' which is not a \
-                         known unit of any in-scope measure type. Add `uses <spec>` (or declare the \
-                         owning measure type in this spec) so its units are in scope.",
-                        spec_name, unit_name, declaring_type_name, measure_ref
+                        "In spec '{}': unit '{}' in measure type '{}' references '{}': {}. \
+                             Add `uses <spec>` (or declare the owning measure type in this spec) \
+                             so its units are in scope.",
+                        spec_name, unit.name, declaring_type_name, measure_ref, err
                     ),
                     source.cloned(),
                     None::<String>,
                 )
             })?;
+            let TypeSpecification::Measure {
+                decomposition: Some(decomposition),
+                units,
+                ..
+            } = &owning_type.specifications
+            else {
+                return Err(Error::validation(
+                        format!(
+                            "In spec '{}': unit '{}' in measure type '{}' references '{}' which did not resolve to a measure unit",
+                            spec_name, unit.name, declaring_type_name, measure_ref
+                        ),
+                        source.cloned(),
+                        None::<String>,
+                    ));
+            };
+            let factor = units
+                .iter()
+                .find(|u| u.name == bare)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "BUG: resolved unit '{}' must be declared on type '{}'",
+                        bare,
+                        owning_type.name()
+                    )
+                })
+                .factor
+                .clone();
+            (
+                owning_type.name.clone().unwrap_or_default(),
+                decomposition.clone(),
+                factor,
+            )
+        };
+        let owning_measure_name = owning_measure_name.as_str();
+        let owning_decomp = &owning_decomp;
+        let unit_factor = &unit_factor;
 
         if owning_measure_name == declaring_type_name {
             return Err(Error::validation(
@@ -6755,7 +6858,7 @@ fn resolve_compound_unit(
                     "In spec '{}': unit '{}' in measure type '{}' references unit '{}' which \
                      belongs to the same measure type. A measure cannot reference its own units \
                      in a compound expression.",
-                    spec_name, unit_name, declaring_type_name, measure_ref
+                    spec_name, unit.name, declaring_type_name, measure_ref
                 ),
                 source.cloned(),
                 None::<String>,
@@ -6769,7 +6872,7 @@ fn resolve_compound_unit(
         let component_contribution = checked_pow_i32(unit_factor, *exponent).map_err(|error| {
             overflow_to_validation_error(
                 spec_name,
-                unit_name,
+                &unit.name,
                 declaring_type_name,
                 measure_ref,
                 error,
@@ -6780,7 +6883,7 @@ fn resolve_compound_unit(
             checked_mul(&derived_factor, &component_contribution).map_err(|error| {
                 overflow_to_validation_error(
                     spec_name,
-                    unit_name,
+                    &unit.name,
                     declaring_type_name,
                     measure_ref,
                     error,
@@ -7828,7 +7931,7 @@ rule r: i.x
                 _ => panic!("Expected Measure type specifications"),
             }
 
-            let kilometer_owner = resolved_types.unit_index.get("kilometer").unwrap();
+            let kilometer_owner = resolved_types.unit_index.unique_owner("kilometer").unwrap();
             assert_eq!(kilometer_owner.name.as_deref(), Some("road_length"));
         }
 
@@ -8050,15 +8153,15 @@ rule r: i.x
 
             let resolved = result.unwrap();
             assert!(
-                resolved.unit_index.contains_key("eur"),
+                resolved.unit_index.has_unique_owner("eur"),
                 "eur should be in unit_index"
             );
             assert!(
-                resolved.unit_index.contains_key("usd"),
+                resolved.unit_index.has_unique_owner("usd"),
                 "usd should be in unit_index"
             );
-            let eur_type = resolved.unit_index.get("eur").unwrap();
-            let usd_type = resolved.unit_index.get("usd").unwrap();
+            let eur_type = resolved.unit_index.unique_owner("eur").unwrap();
+            let usd_type = resolved.unit_index.unique_owner("usd").unwrap();
             assert_eq!(
                 eur_type.name.as_deref(),
                 Some("money2"),
@@ -8188,15 +8291,15 @@ rule r: i.x
                 .expect("money2 resolved")
                 .clone();
             assert!(
-                resolved.unit_index.contains_key("eur"),
+                resolved.unit_index.has_unique_owner("eur"),
                 "eur must be in unit_index"
             );
             assert!(
-                resolved.unit_index.contains_key("usd"),
+                resolved.unit_index.has_unique_owner("usd"),
                 "usd must be in unit_index"
             );
-            let eur_owner = resolved.unit_index.get("eur").expect("eur owner");
-            let usd_owner = resolved.unit_index.get("usd").expect("usd owner");
+            let eur_owner = resolved.unit_index.unique_owner("eur").expect("eur owner");
+            let usd_owner = resolved.unit_index.unique_owner("usd").expect("usd owner");
             assert_eq!(
                 eur_owner.name.as_deref(),
                 Some("money2"),
@@ -8237,7 +8340,7 @@ rule r: i.x
                 .expect("units resolves");
             let eur_decomp = resolved
                 .unit_index
-                .get("eur_per_kg")
+                .unique_owner("eur_per_kg")
                 .expect("eur_per_kg")
                 .measure_type_decomposition()
                 .expect("eur_per_kg decomposition")
@@ -8303,7 +8406,7 @@ rule r: i.x
 
             let eur_per_kg_owner = consumer_types
                 .unit_index
-                .get("eur_per_kg")
+                .unique_owner("eur_per_kg")
                 .expect("eur_per_kg in unit_index");
             assert_eq!(
                 eur_per_kg_owner.name.as_deref(),
@@ -8372,28 +8475,34 @@ rule r: i.x
                 .clone();
 
             assert!(
-                consumer_types.unit_index.contains_key("kg"),
+                consumer_types.unit_index.has_unique_owner("kg"),
                 "local kg must be indexed"
             );
             assert!(
-                consumer_types.unit_index.contains_key("tonne"),
+                consumer_types.unit_index.has_unique_owner("tonne"),
                 "local tonne must be indexed"
             );
             assert!(
-                !consumer_types.unit_index.contains_key("kilogram"),
+                !consumer_types.unit_index.has_unique_owner("kilogram"),
                 "import kilogram must not leak after local shadow"
             );
             assert!(
-                !consumer_types.unit_index.contains_key("kilograms"),
+                !consumer_types.unit_index.has_unique_owner("kilograms"),
                 "import kilograms must not leak after local shadow"
             );
             assert!(
-                !consumer_types.unit_index.contains_key("gram"),
+                !consumer_types.unit_index.has_unique_owner("gram"),
                 "import gram must not leak after local shadow"
             );
 
-            let kg_owner = consumer_types.unit_index.get("kg").expect("kg owner");
-            let tonne_owner = consumer_types.unit_index.get("tonne").expect("tonne owner");
+            let kg_owner = consumer_types
+                .unit_index
+                .unique_owner("kg")
+                .expect("kg owner");
+            let tonne_owner = consumer_types
+                .unit_index
+                .unique_owner("tonne")
+                .expect("tonne owner");
             assert_eq!(kg_owner.as_ref(), local_mass.as_ref());
             assert_eq!(tonne_owner.as_ref(), local_mass.as_ref());
         }
@@ -8434,7 +8543,7 @@ rule r: i.x
                 .expect("double import of same duration must be idempotent");
 
             assert!(
-                consumer_types.unit_index.contains_key("hour"),
+                consumer_types.unit_index.has_unique_owner("hour"),
                 "hour must be indexed once"
             );
         }
@@ -8503,7 +8612,7 @@ rule r: i.x
         }
 
         #[test]
-        fn test_spec_level_unit_ambiguity_errors_are_reported() {
+        fn test_spec_level_duplicate_unit_names_allowed_at_index() {
             let (resolver, spec) = resolver_single_spec(
                 r#"spec test
     data money_a: measure
@@ -8521,26 +8630,19 @@ rule r: i.x
       -> unit meter 1.0"#,
             );
 
-            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-            assert!(
-                result.is_err(),
-                "Expected ambiguous unit definitions to error"
-            );
-
-            let errs = result.unwrap_err();
-            assert!(!errs.is_empty(), "expected at least one error");
-            let error_msg = errs
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join("; ");
-            assert!(
-                error_msg.contains("eur")
-                    || error_msg.contains("usd")
-                    || error_msg.contains("meter"),
-                "Error should mention at least one ambiguous unit. Got: {}",
-                error_msg
-            );
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("duplicate bare unit names across types must load");
+            assert!(resolved.unit_index.unique_owner("eur").is_none());
+            assert!(resolved.unit_index.unique_owner("meter").is_none());
+            resolved
+                .unit_index
+                .resolve("money_a.eur")
+                .expect("qualify money_a");
+            resolved
+                .unit_index
+                .resolve("money_b.eur")
+                .expect("qualify money_b");
         }
 
         #[test]
@@ -8662,11 +8764,11 @@ rule r: i.x
                 .expect("two ratio types with only builtin units");
 
             assert!(
-                resolved.unit_index.contains_key("percent"),
+                resolved.unit_index.has_unique_owner("percent"),
                 "percent must remain in unit index"
             );
             assert!(
-                resolved.unit_index.contains_key("permille"),
+                resolved.unit_index.has_unique_owner("permille"),
                 "permille must remain in unit index"
             );
         }
@@ -8878,7 +8980,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+                validate_type_specifications(&specs, None, "test", &src, None, &UnitIndex::new());
             assert_eq!(errors.len(), 1);
             assert!(errors[0]
                 .to_string()
@@ -8902,7 +9004,7 @@ rule r: i.x
                 "test",
                 &src,
                 None,
-                &HashMap::new(),
+                &UnitIndex::new(),
             );
             assert_eq!(errors.len(), 1);
             assert!(errors[0]
@@ -8927,7 +9029,7 @@ rule r: i.x
                 "test",
                 &src,
                 None,
-                &HashMap::new(),
+                &UnitIndex::new(),
             );
             assert_eq!(errors.len(), 1);
             assert!(errors[0]
@@ -8952,7 +9054,7 @@ rule r: i.x
                 "test",
                 &src,
                 None,
-                &HashMap::new(),
+                &UnitIndex::new(),
             );
             assert!(errors.is_empty());
         }
@@ -9003,7 +9105,7 @@ rule r: i.x
                 "test",
                 &src,
                 None,
-                &HashMap::new(),
+                &UnitIndex::new(),
             );
             assert_eq!(errors.len(), 1);
             assert!(errors[0]
@@ -9023,7 +9125,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+                validate_type_specifications(&specs, None, "test", &src, None, &UnitIndex::new());
             assert_eq!(errors.len(), 1);
             assert!(errors[0]
                 .to_string()
@@ -9046,7 +9148,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+                validate_type_specifications(&specs, None, "test", &src, None, &UnitIndex::new());
             assert_eq!(errors.len(), 1);
             assert!(
                 errors[0].to_string().contains("minimum")
@@ -9070,7 +9172,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+                validate_type_specifications(&specs, None, "test", &src, None, &UnitIndex::new());
             assert!(errors.is_empty());
         }
 
@@ -9090,7 +9192,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+                validate_type_specifications(&specs, None, "test", &src, None, &UnitIndex::new());
             assert_eq!(errors.len(), 1);
             assert!(
                 errors[0].to_string().contains("minimum")
@@ -9131,7 +9233,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+                validate_type_specifications(&spec, None, "money", &src, None, &UnitIndex::new());
             assert!(
                 errors.is_empty(),
                 "internal Q bounds must not fail type validation; API decimal rounding: {:?}",
@@ -9172,7 +9274,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+                validate_type_specifications(&spec, None, "money", &src, None, &UnitIndex::new());
             assert!(errors.is_empty(), "got: {:?}", errors);
         }
 
@@ -9209,7 +9311,7 @@ rule r: i.x
 
             let src = test_source();
             let errors =
-                validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+                validate_type_specifications(&spec, None, "money", &src, None, &UnitIndex::new());
             assert!(errors.is_empty(), "got: {:?}", errors);
         }
 
@@ -9790,9 +9892,9 @@ pub struct ResolvedSpecTypes {
     /// Raw defaults retained after [`value_kind_from_raw_suggestion`] for cross-spec parent lookup during later specs.
     pub(crate) source_defaults: HashMap<String, RawSuggestion>,
 
-    /// Unit index: unit_name -> family-root measure type for that unit's family.
-    /// Binding aliases never appear; cross-family duplicate unit names fail at resolution.
-    pub unit_index: HashMap<String, Arc<LemmaType>>,
+    /// Expression-scope units. Bare names may have multiple owners; qualify when ambiguous.
+    /// Binding aliases never appear as index keys.
+    pub unit_index: crate::planning::unit_index::UnitIndex,
 }
 
 /// Intermediate type definition extracted from [`DataValue::Definition`] data.
@@ -10643,12 +10745,18 @@ impl<'a> TypeResolver<'a> {
             resolved.insert(type_name.clone(), (lemma_type, declared_suggestion));
         }
 
-        let mut unit_index_tmp: HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)> =
-            HashMap::new();
+        let mut unit_index = UnitIndex::new();
         let mut errors = Vec::new();
         let prim_ratio = semantics::primitive_ratio_arc().clone();
         for unit in Self::extract_units_from_type(&prim_ratio.as_ref().specifications) {
-            unit_index_tmp.insert(unit, (Arc::clone(&prim_ratio), None));
+            unit_index.insert_owner(
+                unit,
+                UnitOwner {
+                    owning_type: Arc::clone(&prim_ratio),
+                    type_name: prim_ratio.name(),
+                    import_alias: None,
+                },
+            );
         }
 
         for (type_name, (type_arc, _)) in &resolved {
@@ -10661,13 +10769,14 @@ impl<'a> TypeResolver<'a> {
                 } else {
                     Self::add_measure_units_to_index(
                         spec,
-                        &mut unit_index_tmp,
+                        &mut unit_index,
                         type_arc,
                         data_type_def,
+                        None,
                     )
                 }
             } else if type_arc.is_ratio() {
-                Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, data_type_def)
+                Self::add_ratio_units_to_index(spec, &mut unit_index, type_arc, data_type_def, None)
             } else {
                 Ok(())
             };
@@ -10680,6 +10789,7 @@ impl<'a> TypeResolver<'a> {
             let ParsedDataValue::Import(spec_ref) = &data_row.value else {
                 continue;
             };
+            let import_alias = data_row.reference.name.clone();
             let (_, imported_spec) =
                 match self.resolve_spec_for_import(spec, spec_ref, &data_row.source_location, at) {
                     Ok(import_pair) => import_pair,
@@ -10725,10 +10835,22 @@ impl<'a> TypeResolver<'a> {
                     if consumer_owns_type_locally {
                         Ok(())
                     } else {
-                        Self::add_measure_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                        Self::add_measure_units_to_index(
+                            spec,
+                            &mut unit_index,
+                            type_arc,
+                            def,
+                            Some(import_alias.clone()),
+                        )
                     }
                 } else if type_arc.is_ratio() {
-                    Self::add_ratio_units_to_index(spec, &mut unit_index_tmp, type_arc, def)
+                    Self::add_ratio_units_to_index(
+                        spec,
+                        &mut unit_index,
+                        type_arc,
+                        def,
+                        Some(import_alias.clone()),
+                    )
                 } else {
                     Ok(())
                 };
@@ -10741,11 +10863,6 @@ impl<'a> TypeResolver<'a> {
         if !errors.is_empty() {
             return Err(errors);
         }
-
-        let unit_index: HashMap<String, Arc<LemmaType>> = unit_index_tmp
-            .into_iter()
-            .map(|(unit_name, (lemma_type, _))| (unit_name, lemma_type))
-            .collect();
 
         let mut raw_suggestions = Vec::new();
         let mut resolved_types = HashMap::new();
@@ -10794,174 +10911,91 @@ impl<'a> TypeResolver<'a> {
 
     fn add_measure_units_to_index(
         spec: &LemmaSpec,
-        unit_index: &mut HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)>,
+        unit_index: &mut UnitIndex,
         resolved_type: &Arc<LemmaType>,
         defined_by: &DataTypeDef,
+        import_alias: Option<String>,
     ) -> Result<(), Error> {
-        let resolved_ref = resolved_type.as_ref();
         if matches!(defined_by.parent, ParentType::Qualified { .. }) {
             unreachable!("BUG: qualified import alias rows must not register units");
         }
-        let measure_family = resolved_ref
+        let measure_family = resolved_type
             .measure_family_name()
             .expect("BUG: add_measure_units_to_index requires measure type with family");
-        let units = Self::extract_units_from_type(&resolved_ref.specifications);
-        for unit in units {
-            if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
-                if existing_def.as_ref() == Some(defined_by) {
-                    continue;
-                }
-
-                let existing_name: String = existing_def
-                    .as_ref()
-                    .map(|d| d.name.clone())
-                    .unwrap_or_else(|| existing_type.name());
-                let current_extends_existing = resolved_ref
-                    .extends
-                    .parent_name()
-                    .map(|p| p == existing_name.as_str())
-                    .unwrap_or(false);
-                let existing_extends_current = existing_type
-                    .extends
-                    .parent_name()
-                    .map(|p| p == defined_by.name.as_str())
-                    .unwrap_or(false);
-
-                // Defining-type extension chains only (family-root rows); binding aliases never
-                // reach this function.
-                if existing_type.is_measure()
-                    && (current_extends_existing || existing_extends_current)
-                {
-                    if current_extends_existing {
-                        unit_index
-                            .insert(unit, (Arc::clone(resolved_type), Some(defined_by.clone())));
-                    }
-                    continue;
-                }
-
-                if existing_type.is_measure() && existing_type.same_measure_family(resolved_ref) {
-                    if let (
-                        TypeSpecification::Measure {
-                            units: existing_units,
-                            ..
-                        },
-                        TypeSpecification::Measure {
-                            units: new_units, ..
-                        },
-                    ) = (&existing_type.specifications, &resolved_ref.specifications)
-                    {
-                        let same_factor = existing_units
-                            .iter()
-                            .find(|u| u.name == unit)
-                            .zip(new_units.iter().find(|u| u.name == unit))
-                            .is_some_and(|(existing_unit, new_unit)| {
-                                existing_unit.factor == new_unit.factor
-                            });
-                        if same_factor {
-                            continue;
-                        }
-                        return Err(Error::validation_with_context(
-                            format!(
-                                "Unit '{}' in measure family '{}' is defined with conflicting factors",
-                                unit, measure_family
-                            ),
-                            Some(defined_by.source.clone()),
-                            None::<String>,
-                            Some(spec),
-                            None,
-                        ));
-                    }
-                }
-
-                return Err(Error::validation_with_context(
-                    format!(
-                        "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
-                        unit, existing_name, defined_by.name
-                    ),
-                    Some(defined_by.source.clone()),
-                    None::<String>,
-                    Some(spec),
-                    None,
-                ));
-            }
-            unit_index.insert(unit, (Arc::clone(resolved_type), Some(defined_by.clone())));
+        for unit in Self::extract_units_from_type(&resolved_type.specifications) {
+            unit_index
+                .merge_measure_unit(
+                    unit,
+                    resolved_type,
+                    &defined_by.name,
+                    import_alias.clone(),
+                    measure_family,
+                )
+                .map_err(|conflict| {
+                    Self::unit_merge_conflict_to_error(conflict, defined_by, spec)
+                })?;
         }
         Ok(())
     }
 
     fn add_ratio_units_to_index(
         spec: &LemmaSpec,
-        unit_index: &mut HashMap<String, (Arc<LemmaType>, Option<DataTypeDef>)>,
+        unit_index: &mut UnitIndex,
         resolved_type: &Arc<LemmaType>,
         defined_by: &DataTypeDef,
+        import_alias: Option<String>,
     ) -> Result<(), Error> {
-        let resolved_ref = resolved_type.as_ref();
-        let units = Self::extract_units_from_type(&resolved_ref.specifications);
-        for unit in units {
-            if let Some((existing_type, existing_def)) = unit_index.get(&unit) {
-                if existing_type.is_ratio() {
-                    if existing_def.is_none() {
-                        unit_index.insert(
-                            unit.clone(),
-                            (Arc::clone(resolved_type), Some(defined_by.clone())),
-                        );
-                        continue;
-                    }
-                    if existing_type.name() == resolved_ref.name() {
-                        continue;
-                    }
-                    if let (
-                        TypeSpecification::Ratio {
-                            units: existing_units,
-                            ..
-                        },
-                        TypeSpecification::Ratio {
-                            units: new_units, ..
-                        },
-                    ) = (&existing_type.specifications, &resolved_ref.specifications)
-                    {
-                        let same_factor = existing_units
-                            .iter()
-                            .find(|u| u.name == unit)
-                            .zip(new_units.iter().find(|u| u.name == unit))
-                            .is_some_and(|(eu, nu)| eu.value == nu.value);
-                        if same_factor {
-                            continue;
-                        }
-                    }
-                    let existing_name: String = existing_def
-                        .as_ref()
-                        .map(|d| d.name.clone())
-                        .unwrap_or_else(|| existing_type.name());
-                    return Err(Error::validation_with_context(
-                        format!(
-                            "Ambiguous unit '{}'. Defined in multiple ratio types: '{}' and '{}'",
-                            unit, existing_name, defined_by.name
-                        ),
-                        Some(defined_by.source.clone()),
-                        None::<String>,
-                        Some(spec),
-                        None,
-                    ));
-                }
-                let existing_name: String = existing_def
-                    .as_ref()
-                    .map(|d| d.name.clone())
-                    .unwrap_or_else(|| existing_type.name());
-                return Err(Error::validation_with_context(
-                    format!(
-                        "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
-                        unit, existing_name, defined_by.name
-                    ),
-                    Some(defined_by.source.clone()),
-                    None::<String>,
-                    Some(spec),
-                    None,
-                ));
-            }
-            unit_index.insert(unit, (Arc::clone(resolved_type), Some(defined_by.clone())));
+        let primitive_ratio = semantics::primitive_ratio_arc();
+        for unit in Self::extract_units_from_type(&resolved_type.specifications) {
+            unit_index
+                .merge_ratio_unit(
+                    unit,
+                    resolved_type,
+                    &defined_by.name,
+                    import_alias.clone(),
+                    primitive_ratio,
+                )
+                .map_err(|conflict| {
+                    Self::unit_merge_conflict_to_error(conflict, defined_by, spec)
+                })?;
         }
         Ok(())
+    }
+
+    fn unit_merge_conflict_to_error(
+        conflict: UnitMergeConflict,
+        defined_by: &DataTypeDef,
+        spec: &LemmaSpec,
+    ) -> Error {
+        let message = match conflict {
+            UnitMergeConflict::Ambiguous {
+                unit,
+                existing_name,
+                new_name,
+            } => format!(
+                "Ambiguous unit '{}'. Defined in multiple types: '{}' and '{}'",
+                unit, existing_name, new_name
+            ),
+            UnitMergeConflict::ConflictingFactors { unit, family } => format!(
+                "Unit '{}' in measure family '{}' is defined with conflicting factors",
+                unit, family
+            ),
+            UnitMergeConflict::AmbiguousRatio {
+                unit,
+                existing_name,
+                new_name,
+            } => format!(
+                "Ambiguous unit '{}'. Defined in multiple ratio types: '{}' and '{}'",
+                unit, existing_name, new_name
+            ),
+        };
+        Error::validation_with_context(
+            message,
+            Some(defined_by.source.clone()),
+            None::<String>,
+            Some(spec),
+            None,
+        )
     }
 
     fn extract_units_from_type(specs: &TypeSpecification) -> Vec<String> {
@@ -10996,7 +11030,7 @@ pub fn validate_type_specifications(
     type_name: &str,
     source: &Source,
     spec_context: Option<&LemmaSpec>,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &UnitIndex,
 ) -> Vec<Error> {
     let mut errors = Vec::new();
 

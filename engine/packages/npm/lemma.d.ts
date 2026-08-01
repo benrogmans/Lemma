@@ -14,7 +14,7 @@ declare module './lemma.bindings.js' {
     /**
      * Load Lemma source(s).
      * - string → volatile workspace source
-     * - object or `[label, code][]` → labeled sources in one planning pass
+     * - object → labeled sources (key insertion order); `[label, code][]` → labeled sources (array order)
      * Throws `EngineError[]` on failure. `null`/`undefined` rejected.
      */
     load(code: string): void;

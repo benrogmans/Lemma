@@ -3,19 +3,75 @@
 mod error_json;
 
 use error_json::engine_errors_json;
-use jni::objects::{JClass, JObjectArray, JString, JThrowable, JValue};
+use jni::objects::{JClass, JObject, JObjectArray, JString, JThrowable, JValue};
 use jni::sys::{jboolean, jlong, jstring, JNI_FALSE};
-use jni::JNIEnv;
+use jni::{jni_sig, jni_str, Env, EnvUnowned};
 use lemma::{DateTimeValue, Engine, ResourceLimits, SourceType};
 use std::collections::HashMap;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Mutex;
 
 type EngineHandle = Mutex<Engine>;
 
-fn throw_lemma_exception(env: &mut JNIEnv, message: &str, errors_json: &str) {
+#[derive(Debug)]
+enum BridgeError {
+    Bug(String),
+    Jni(jni::errors::Error),
+}
+
+impl From<jni::errors::Error> for BridgeError {
+    fn from(error: jni::errors::Error) -> Self {
+        Self::Jni(error)
+    }
+}
+
+impl std::fmt::Display for BridgeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bug(message) => write!(f, "{message}"),
+            Self::Jni(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for BridgeError {}
+
+struct ThrowLemmaBugAndDefault;
+
+impl<T: Default> jni::errors::ErrorPolicy<T, BridgeError> for ThrowLemmaBugAndDefault {
+    type Captures<'unowned_env_local: 'native_method, 'native_method> = ();
+
+    fn on_error<'unowned_env_local: 'native_method, 'native_method>(
+        env: &mut Env<'unowned_env_local>,
+        _captures: &mut Self::Captures<'unowned_env_local, 'native_method>,
+        err: BridgeError,
+    ) -> jni::errors::Result<T> {
+        if env.exception_check() {
+            return Ok(T::default());
+        }
+        let message = match err {
+            BridgeError::Bug(message) => message,
+            BridgeError::Jni(error) => format!("BUG: JNI error: {error}"),
+        };
+        throw_bug(env, &message);
+        Ok(T::default())
+    }
+
+    fn on_panic<'unowned_env_local: 'native_method, 'native_method>(
+        env: &mut Env<'unowned_env_local>,
+        _captures: &mut Self::Captures<'unowned_env_local, 'native_method>,
+        _payload: Box<dyn std::any::Any + Send + 'static>,
+    ) -> jni::errors::Result<T> {
+        if env.exception_check() {
+            return Ok(T::default());
+        }
+        throw_bug(env, "BUG: Rust panic crossed JNI boundary");
+        Ok(T::default())
+    }
+}
+
+fn throw_lemma_exception(env: &mut Env, message: &str, errors_json: &str) {
     let exception = env
-        .find_class("com/lemmabase/lemma/LemmaException")
+        .find_class(jni_str!("com/lemmabase/lemma/LemmaException"))
         .expect("BUG: LemmaException class must exist");
     let msg = env
         .new_string(message)
@@ -26,43 +82,45 @@ fn throw_lemma_exception(env: &mut JNIEnv, message: &str, errors_json: &str) {
     let obj = env
         .new_object(
             exception,
-            "(Ljava/lang/String;Ljava/lang/String;)V",
+            jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
             &[JValue::Object(&msg), JValue::Object(&errors)],
         )
         .expect("BUG: failed to construct LemmaException");
-    env.throw(JThrowable::from(obj))
-        .expect("BUG: failed to throw LemmaException");
+    let throwable = env
+        .cast_local::<JThrowable>(obj)
+        .expect("BUG: LemmaException must be throwable");
+    // jni 0.22: throw returns Err(JavaException) after a successful throw.
+    let _ = env.throw(throwable);
 }
 
-fn throw_bug(env: &mut JNIEnv, message: &str) {
+fn throw_bug(env: &mut Env, message: &str) {
     let exception = env
-        .find_class("com/lemmabase/lemma/LemmaBugError")
+        .find_class(jni_str!("com/lemmabase/lemma/LemmaBugError"))
         .expect("BUG: LemmaBugError class must exist");
     let msg = env
         .new_string(message)
         .expect("BUG: failed to allocate bug message");
     let obj = env
-        .new_object(exception, "(Ljava/lang/String;)V", &[JValue::Object(&msg)])
+        .new_object(
+            exception,
+            jni_sig!("(Ljava/lang/String;)V"),
+            &[JValue::Object(&msg)],
+        )
         .expect("BUG: failed to construct LemmaBugError");
-    env.throw(JThrowable::from(obj))
-        .expect("BUG: failed to throw LemmaBugError");
+    let throwable = env
+        .cast_local::<JThrowable>(obj)
+        .expect("BUG: LemmaBugError must be throwable");
+    let _ = env.throw(throwable);
 }
 
-fn with_catch<R, F>(env: &mut JNIEnv, default: R, f: F) -> R
+fn with_catch<'local, R, F>(unowned: &mut EnvUnowned<'local>, f: F) -> R
 where
-    F: FnOnce(&mut JNIEnv) -> Result<R, String> + std::panic::UnwindSafe,
+    R: Default,
+    F: FnOnce(&mut Env<'local>) -> Result<R, String>,
 {
-    match catch_unwind(AssertUnwindSafe(|| f(env))) {
-        Ok(Ok(value)) => value,
-        Ok(Err(message)) => {
-            throw_bug(env, &message);
-            default
-        }
-        Err(_) => {
-            throw_bug(env, "BUG: Rust panic crossed JNI boundary");
-            default
-        }
-    }
+    unowned
+        .with_env(|env| f(env).map_err(BridgeError::Bug))
+        .resolve::<ThrowLemmaBugAndDefault>()
 }
 
 fn handle_from_jlong(handle: jlong) -> Result<&'static EngineHandle, String> {
@@ -72,13 +130,13 @@ fn handle_from_jlong(handle: jlong) -> Result<&'static EngineHandle, String> {
     Ok(unsafe { &*(handle as *const EngineHandle) })
 }
 
-fn jstring_required(env: &mut JNIEnv, value: &JString) -> Result<String, String> {
-    env.get_string(value)
-        .map(|s| s.into())
+fn jstring_required(env: &Env, value: &JString) -> Result<String, String> {
+    value
+        .try_to_string(env)
         .map_err(|e| format!("BUG: failed to read Java string: {e}"))
 }
 
-fn jstring_optional(env: &mut JNIEnv, value: &JString) -> Result<Option<String>, String> {
+fn jstring_optional(env: &Env, value: &JString) -> Result<Option<String>, String> {
     if value.is_null() {
         return Ok(None);
     }
@@ -90,30 +148,35 @@ fn jstring_optional(env: &mut JNIEnv, value: &JString) -> Result<Option<String>,
     }
 }
 
+fn jstring_from_object<'local>(env: &Env, obj: JObject<'local>) -> Result<JString<'local>, String> {
+    env.cast_local::<JString>(obj)
+        .map_err(|e| format!("BUG: expected java.lang.String: {e}"))
+}
+
 fn string_pairs_from_java(
-    env: &mut JNIEnv,
+    env: &mut Env,
     keys: &JObjectArray,
     values: &JObjectArray,
 ) -> Result<Vec<(String, String)>, String> {
-    let len = env
-        .get_array_length(keys)
+    let len = keys
+        .len(env)
         .map_err(|e| format!("BUG: get_array_length keys: {e}"))?;
-    let values_len = env
-        .get_array_length(values)
+    let values_len = values
+        .len(env)
         .map_err(|e| format!("BUG: get_array_length values: {e}"))?;
     if len != values_len {
         return Err("BUG: data key/value array length mismatch".to_string());
     }
-    let mut out = Vec::with_capacity(len as usize);
+    let mut out = Vec::with_capacity(len);
     for i in 0..len {
-        let key_obj = env
-            .get_object_array_element(keys, i)
+        let key_obj = keys
+            .get_element(env, i)
             .map_err(|e| format!("BUG: get key[{i}]: {e}"))?;
-        let val_obj = env
-            .get_object_array_element(values, i)
+        let val_obj = values
+            .get_element(env, i)
             .map_err(|e| format!("BUG: get value[{i}]: {e}"))?;
-        let key = jstring_required(env, &JString::from(key_obj))?;
-        let value = jstring_required(env, &JString::from(val_obj))?;
+        let key = jstring_required(env, &jstring_from_object(env, key_obj)?)?;
+        let value = jstring_required(env, &jstring_from_object(env, val_obj)?)?;
         out.push((key, value));
     }
     Ok(out)
@@ -155,7 +218,7 @@ fn limits_from_json(raw: &str) -> Result<ResourceLimits, lemma::Error> {
     Ok(limits)
 }
 
-fn parse_effective(env: &mut JNIEnv, effective: &JString) -> Result<Option<DateTimeValue>, ()> {
+fn parse_effective(env: &mut Env, effective: &JString) -> Result<Option<DateTimeValue>, ()> {
     let raw = match jstring_optional(env, effective) {
         Ok(v) => v,
         Err(message) => {
@@ -180,7 +243,7 @@ fn parse_effective(env: &mut JNIEnv, effective: &JString) -> Result<Option<DateT
     }
 }
 
-fn return_string(env: &mut JNIEnv, value: String) -> jstring {
+fn return_string(env: &mut Env, value: String) -> jstring {
     env.new_string(value)
         .expect("BUG: failed to allocate return string")
         .into_raw()
@@ -188,10 +251,10 @@ fn return_string(env: &mut JNIEnv, value: String) -> jstring {
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_create(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
 ) -> jlong {
-    with_catch(&mut env, 0, |_env| {
+    with_catch(&mut unowned, |_env| {
         let engine = Box::new(Mutex::new(Engine::new()));
         Ok(Box::into_raw(engine) as jlong)
     })
@@ -199,11 +262,11 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_create(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_createWithLimits(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     limits_json: JString,
 ) -> jlong {
-    with_catch(&mut env, 0, |env| {
+    with_catch(&mut unowned, |env| {
         let raw = jstring_required(env, &limits_json)?;
         let limits = match limits_from_json(&raw) {
             Ok(l) => l,
@@ -223,11 +286,11 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_createWithLimits(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_destroy(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
 ) {
-    with_catch(&mut env, (), |_env| {
+    with_catch(&mut unowned, |_env| {
         if handle != 0 {
             unsafe {
                 drop(Box::from_raw(handle as *mut EngineHandle));
@@ -239,12 +302,12 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_destroy(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_load(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
     code: JString,
 ) {
-    with_catch(&mut env, (), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let code = jstring_required(env, &code)?;
         let mut guard = engine
@@ -259,13 +322,13 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_load(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_loadLabeled(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
     labels: JObjectArray,
     codes: JObjectArray,
 ) {
-    with_catch(&mut env, (), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let pairs = string_pairs_from_java(env, &labels, &codes)?;
         let mut batch = Vec::with_capacity(pairs.len());
@@ -298,11 +361,11 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_loadLabeled(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_list(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
 ) -> jstring {
-    with_catch(&mut env, std::ptr::null_mut(), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let guard = engine
             .lock()
@@ -315,14 +378,14 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_list(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_show(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
     repository: JString,
     spec: JString,
     effective: JString,
 ) -> jstring {
-    with_catch(&mut env, std::ptr::null_mut(), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let repo = jstring_optional(env, &repository)?;
         let spec = jstring_required(env, &spec)?;
@@ -353,14 +416,14 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_show(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_source(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
     repository: JString,
     spec: JString,
     effective: JString,
 ) -> jstring {
-    with_catch(&mut env, std::ptr::null_mut(), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let repo = jstring_optional(env, &repository)?;
         let spec_name = jstring_optional(env, &spec)?;
@@ -388,7 +451,7 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_source(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
     repository: JString,
@@ -399,7 +462,7 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
     rules: JObjectArray,
     explain: jboolean,
 ) -> jstring {
-    with_catch(&mut env, std::ptr::null_mut(), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let repo = jstring_optional(env, &repository)?;
         let spec = jstring_required(env, &spec)?;
@@ -413,8 +476,8 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
         let rules = if rules.is_null() {
             None
         } else {
-            let len = env
-                .get_array_length(&rules)
+            let len = rules
+                .len(env)
                 .map_err(|e| format!("BUG: get_array_length rules: {e}"))?;
             if len == 0 {
                 let err =
@@ -426,12 +489,12 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
                 );
                 return Ok(std::ptr::null_mut());
             }
-            let mut names = Vec::with_capacity(len as usize);
+            let mut names = Vec::with_capacity(len);
             for i in 0..len {
-                let obj = env
-                    .get_object_array_element(&rules, i)
+                let obj = rules
+                    .get_element(env, i)
                     .map_err(|e| format!("BUG: get rules[{i}]: {e}"))?;
-                names.push(jstring_required(env, &JString::from(obj))?);
+                names.push(jstring_required(env, &jstring_from_object(env, obj)?)?);
             }
             Some(names)
         };
@@ -466,14 +529,14 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_remove(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
     repository: JString,
     spec: JString,
     effective: JString,
 ) {
-    with_catch(&mut env, (), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let repo = jstring_optional(env, &repository)?;
         let spec = jstring_required(env, &spec)?;
@@ -497,11 +560,11 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_remove(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_format(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     code: JString,
 ) -> jstring {
-    with_catch(&mut env, std::ptr::null_mut(), |env| {
+    with_catch(&mut unowned, |env| {
         let code = jstring_required(env, &code)?;
         match lemma::format_source(&code, SourceType::Volatile) {
             Ok(formatted) => Ok(return_string(env, formatted)),
@@ -519,11 +582,11 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_format(
 
 #[no_mangle]
 pub extern "system" fn Java_com_lemmabase_lemma_Native_limits(
-    mut env: JNIEnv,
+    mut unowned: EnvUnowned,
     _class: JClass,
     handle: jlong,
 ) -> jstring {
-    with_catch(&mut env, std::ptr::null_mut(), |env| {
+    with_catch(&mut unowned, |env| {
         let engine = handle_from_jlong(handle)?;
         let guard = engine
             .lock()

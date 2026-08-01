@@ -1362,8 +1362,7 @@ impl Parser {
             }
             operator_just_consumed = false;
 
-            let measure_ref_tok = self.next()?;
-            let measure_ref = measure_ref_tok.text.clone();
+            let (measure_ref, _end_span) = self.parse_unit_path()?;
 
             // Optional exponent: `^` followed by an optional `-` and an integer.
             let explicit_exp: Option<i32> = if self.at(&TokenKind::Caret)? {
@@ -1543,10 +1542,9 @@ impl Parser {
         if !is_negative {
             return Ok(value);
         }
-        match value {
-            Value::Number(d) => Ok(Value::Number(-d)),
-            Value::NumberWithUnit(d, unit) => Ok(Value::NumberWithUnit(-d, unit)),
-            other => Err(Error::parsing(
+        match try_negate_numeric_literal(value) {
+            Ok(negated) => Ok(negated),
+            Err(other) => Err(Error::parsing(
                 format!("Cannot negate this value: {}", other),
                 self.make_source(sign_span),
                 None::<String>,
@@ -1624,14 +1622,41 @@ impl Parser {
         }
 
         if can_be_label(&peeked.kind) {
-            let unit_tok = self.next()?;
+            let (unit_path, _end_span) = self.parse_unit_path()?;
             let decimal = parse_decimal_string(num_text, &num_span, self)?;
-            return Ok(Value::NumberWithUnit(decimal, unit_tok.text.clone()));
+            return Ok(Value::NumberWithUnit(decimal, unit_path));
         }
 
         // Plain number
         let decimal = parse_decimal_string(num_text, &num_span, self)?;
         Ok(Value::Number(decimal))
+    }
+
+    /// One or more labels separated by `.` (bare unit or qualified unit path).
+    fn parse_unit_path(&mut self) -> Result<(String, Span), Error> {
+        let first = self.next()?;
+        if !can_be_label(&first.kind) {
+            return Err(self.error_at_token(
+                &first,
+                format!("Expected a unit name, found {}", first.kind),
+            ));
+        }
+        let mut path = first.text.clone();
+        let mut end_span = first.span.clone();
+        while self.at(&TokenKind::Dot)? {
+            self.next()?;
+            let seg = self.next()?;
+            if !can_be_label(&seg.kind) {
+                return Err(self.error_at_token(
+                    &seg,
+                    format!("Expected a unit path segment after '.', found {}", seg.kind),
+                ));
+            }
+            path.push('.');
+            path.push_str(&seg.text);
+            end_span = seg.span.clone();
+        }
+        Ok((path, end_span))
     }
 
     fn parse_date_literal(&mut self, year_text: String, start_span: Span) -> Result<Value, Error> {
@@ -2241,9 +2266,29 @@ impl Parser {
             } else if let Some(primitive) = token_kind_to_primitive(&target_tok.kind) {
                 ConversionTarget::Type(primitive)
             } else if can_be_label(&target_tok.kind) {
-                ConversionTarget::Unit {
-                    unit_name: target_tok.text.clone(),
+                let mut unit_path = target_tok.text.clone();
+                let mut end_span = target_tok.span.clone();
+                while self.at(&TokenKind::Dot)? {
+                    self.next()?;
+                    let seg = self.next()?;
+                    if !can_be_label(&seg.kind) {
+                        return Err(self.error_at_token(
+                            &seg,
+                            format!("Expected a unit path segment after '.', found {}", seg.kind),
+                        ));
+                    }
+                    unit_path.push('.');
+                    unit_path.push_str(&seg.text);
+                    end_span = seg.span.clone();
                 }
+                let target = ConversionTarget::Unit {
+                    unit_name: unit_path,
+                };
+                expr = self.new_expression(
+                    ExpressionKind::UnitConversion(Arc::new(expr), target),
+                    self.make_source(self.span_covering(&start_span, &end_span)),
+                )?;
+                continue;
             } else {
                 return Err(self.error_at_token(
                     &target_tok,
@@ -2520,6 +2565,13 @@ impl Parser {
                 .unwrap_or_else(|| start_span.clone());
             let span = self.span_covering(&start_span, &end_span);
 
+            if let ExpressionKind::Literal(value) = &operand.kind {
+                if let Ok(negated) = try_negate_numeric_literal(value.clone()) {
+                    return self
+                        .new_expression(ExpressionKind::Literal(negated), self.make_source(span));
+                }
+            }
+
             let zero = self.new_expression(
                 ExpressionKind::Literal(Value::Number(Decimal::ZERO)),
                 self.make_source(start_span),
@@ -2759,11 +2811,11 @@ impl Parser {
         }
 
         if can_be_label(&self.peek()?.kind) {
-            let unit_tok = self.next()?;
+            let (unit_path, end_span) = self.parse_unit_path()?;
             let decimal = parse_decimal_string(&num_text, &start_span, self)?;
             return self.new_expression(
-                ExpressionKind::Literal(Value::NumberWithUnit(decimal, unit_tok.text.clone())),
-                self.make_source(self.span_covering(&start_span, &unit_tok.span)),
+                ExpressionKind::Literal(Value::NumberWithUnit(decimal, unit_path)),
+                self.make_source(self.span_covering(&start_span, &end_span)),
             );
         }
 
@@ -2821,6 +2873,15 @@ fn parse_decimal_string(text: &str, span: &Span, parser: &Parser) -> Result<Deci
             None::<String>,
         )
     })
+}
+
+/// Negate a numeric literal value. Returns `Err(value)` when the value is not a number.
+fn try_negate_numeric_literal(value: Value) -> Result<Value, Value> {
+    match value {
+        Value::Number(d) => Ok(Value::Number(-d)),
+        Value::NumberWithUnit(d, unit) => Ok(Value::NumberWithUnit(-d, unit)),
+        other => Err(other),
+    }
 }
 
 fn is_comparison_operator(kind: &TokenKind) -> bool {

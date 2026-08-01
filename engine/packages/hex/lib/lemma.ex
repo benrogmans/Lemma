@@ -35,7 +35,8 @@ defmodule Lemma do
   Loads Lemma source(s).
 
   - binary → one volatile workspace source
-  - map or `[{label, code}, ...]` → labeled sources in one planning pass
+  - `[{label, code}, ...]` → labeled sources in caller list order
+  - map → labeled sources in lexicographic label order (BEAM maps have no insertion order)
   """
   @spec load(engine(), String.t()) :: :ok | {:error, [map()]}
   @spec load(engine(), map() | [{String.t(), String.t()}]) :: :ok | {:error, [map()]}

@@ -27,5 +27,5 @@ dead_code = "deny"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 chrono = { version = "0.4", features = ["serde"] }
-tokio = { version = "1.39.2", features = ["full"] }
-rust_decimal = { version = "1.33", features = ["serde", "maths"] }
+tokio = { version = "1.53.1", features = ["full"] }
+rust_decimal = { version = "1.42", features = ["serde", "maths"] }

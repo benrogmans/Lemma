@@ -66,7 +66,7 @@ CI runs `cargo precommit --fuzz`. That must pass.
 ## Project structure
 
 - `cli/`: CLI application (HTTP server, MCP server, interactive mode, formatter)
-- `engine/`: core parser, planner, and evaluator
+- `engine/`: core parser, planner, and evaluator (parse → plan NormalForm DAG → evaluate; see [engine/README.md](https://github.com/lemma/lemma/blob/main/engine/README.md))
 - `engine/fuzz/`: fuzz testing targets
 - `openapi/`: Lemma-to-OpenAPI generation
 

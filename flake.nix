@@ -38,7 +38,7 @@
               pkgs.cargo-deny
               pkgs.wasm-pack
               pkgs.nodejs_24
-              pkgs.elixir
+              pkgs.beamPackages.elixir
               pkgs.pkg-config
             ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.libiconv ];
 

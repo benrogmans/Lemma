@@ -22,6 +22,29 @@ Lemma has a rich type system built from primitives, quantities with units, ratio
 
 See [Primitive types in the language reference](../reference/readme.md#primitive-types).
 
+## Qualifying units
+
+Optionally qualify units; you must qualify when the bare name is ambiguous in scope.
+
+| Form | Meaning |
+|------|---------|
+| `kilogram` | Bare — exactly one in-scope owner |
+| `my_weight.kilogram` | Local owning type |
+| `units.mass.kilogram` | Import alias + type |
+| `units.kilogram` | Import sugar — unique under that alias |
+
+Bare `5 kilogram` plans when only one type declares `kilogram`. Qualified forms are always allowed when the path uniquely identifies an owner, even if bare would also work. If two types declare the same unit name, bare use is a planning error that lists legal qualifiers (`money_a.eur`, `money_b.eur`, …). The same rule applies to `as` targets and each factor in a compound unit expression.
+
+```lemma
+spec wages
+
+data money_a: measure -> unit eur 1
+data money_b: measure -> unit eur 2
+
+rule a: 10 money_a.eur
+rule b: 10 money_b.eur
+```
+
 ## Arithmetic
 
 ```lemma
@@ -94,7 +117,7 @@ Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `ex
 
 ## Standard library: `uses lemma units`
 
-Lemma embeds SI bases, derived compounds, imperial, and information units in the standard library (Repo `lemma`, Spec `units`). Import with `uses lemma units`, then use units directly in literals or reference types as `units.mass`, `units.duration`, `units.length`, `units.calendar`, `units.force`, and others.
+Lemma embeds SI bases, derived compounds, imperial, and information units in the standard library (Repo `lemma`, Spec `units`). Import with `uses lemma units`, then use units directly in literals or reference types as `units.mass`, `units.duration`, `units.length`, `units.calendar`, `units.force`, and others. When a local type reuses a stdlib unit name, qualify (`units.kilogram` or `units.mass.kilogram`) — see [Qualifying units](#qualifying-units).
 
 Names are singular only (`8 hour`, not `8 hours`). Length uses American `meter` (not `metre`).
 

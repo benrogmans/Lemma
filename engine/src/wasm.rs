@@ -2,6 +2,7 @@ use crate::error::ErrorKind;
 use crate::evaluation::RunDataValue;
 use crate::parsing::source::Source;
 use crate::{Engine, Error, SourceType};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
@@ -17,7 +18,7 @@ impl Default for WasmEngine {
     }
 }
 
-#[wasm_bindgen]
+#[wasm_bindgen(js_class = "Engine")]
 impl WasmEngine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
@@ -551,7 +552,7 @@ fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsV
         }
         return Ok(batch);
     }
-    let map: HashMap<String, String> = serde_wasm_bindgen::from_value(sources).map_err(|e| {
+    let map: IndexMap<String, String> = serde_wasm_bindgen::from_value(sources).map_err(|e| {
         request_error_js(format!(
             "load: sources must be a string, plain object, or array of [label, code] pairs: {e}"
         ))

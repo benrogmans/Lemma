@@ -12,11 +12,15 @@ use crate::parsing::ast::{
     arithmetic_associativity, arithmetic_precedence, operand_needs_parentheses, Associativity,
     CalendarPeriodUnit, DateCalendarKind, DateRelativeKind, OperandSide, PrimitiveKind,
 };
+use crate::planning::ordered_dispatch::{
+    classify_dispatch, dispatch_key_of_literal, region_count, region_for_value, regions_matching,
+    sorted_unique_boundaries, DispatchClass, DispatchKey, DispatchKeyBuildError,
+};
 use crate::planning::semantics::{
-    negated_comparison, primitive_number_arc, ArithmeticComputation, ComparisonComputation,
-    DataDefinition, DataPath, Expression, ExpressionKind, LiteralValue, MathematicalComputation,
-    ReferenceTarget, RulePath, SemanticConversionTarget, Source, TypeSpecification, ValueKind,
-    VetoExpression,
+    mirrored_comparison, negated_comparison, primitive_number_arc, ArithmeticComputation,
+    ComparisonComputation, DataDefinition, DataPath, Expression, ExpressionKind, LemmaType,
+    LiteralValue, MathematicalComputation, ReferenceTarget, RulePath, SemanticConversionTarget,
+    Source, TypeSpecification, ValueKind, VetoExpression,
 };
 use crate::Error;
 use indexmap::IndexMap;
@@ -104,7 +108,6 @@ pub(crate) fn build_normalized_rule(
     interner: &mut NormalFormInterner,
 ) -> Result<NormalizedRule, Error> {
     let data = ctx.data;
-    let unit_ctx = ctx.unit_ctx;
     let max_normalized_expression_nodes = ctx.max_normalized_expression_nodes;
     let piecewise = unless_branches_to_piecewise(branches);
     let rule_target_data = build_in_plan_rule_target_data_map(data);
@@ -114,7 +117,7 @@ pub(crate) fn build_normalized_rule(
     };
 
     let root = to_normal_form(&piecewise, interner, &lower);
-    let nf = normalize_once(root, interner, Some(unit_ctx), source.clone())?;
+    let nf = normalize_once(root, interner, ctx, source.clone())?;
 
     if normal_form_exceeds_node_budget(interner, nf, max_normalized_expression_nodes) {
         return Err(expression_node_limit_error(
@@ -201,6 +204,12 @@ fn normal_form_exceeds_node_budget(
                     worklist.push(*result);
                 }
             }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                worklist.push(*scrutinee);
+                worklist.extend(regions.iter().copied());
+            }
         }
         if let Some(origin) = interner.get(current).origin {
             worklist.push(origin);
@@ -257,6 +266,16 @@ pub(crate) fn normal_form_depth(interner: &NormalFormInterner, root: NormalFormI
                     })
                     .max()
                     .unwrap_or(0)
+            }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                1 + regions
+                    .iter()
+                    .map(|region| child_depth(interner, *region, memo))
+                    .max()
+                    .unwrap_or(0)
+                    .max(child_depth(interner, *scrutinee, memo))
             }
         };
         let depth = if let Some(origin) = interner.get(id).origin {
@@ -357,6 +376,16 @@ pub(crate) enum NormalFormKind {
     ResultIsVeto(NormalFormId),
     Now,
     Piecewise(Vec<(NormalFormId, NormalFormId)>),
+    /// A [`Self::Piecewise`] over one scrutinee, decided by binary search instead
+    /// of a linear arm scan. Built by [`ordered_dispatch`], which always records
+    /// the pre-image as `origin`, so explanation keeps reading the Piecewise.
+    OrderedDispatch {
+        scrutinee: NormalFormId,
+        /// Sorted, deduplicated, all of one [`DispatchKey`] class.
+        boundaries: Vec<DispatchKey>,
+        /// Exactly [`region_count`] entries; see [`crate::planning::ordered_dispatch`].
+        regions: Vec<NormalFormId>,
+    },
 }
 
 /// One node in THE DAG: algebraic Kind, optional conversion span, optional fold
@@ -525,6 +554,12 @@ fn push_child_ids(kind: &NormalFormKind, worklist: &mut Vec<NormalFormId>) {
                 worklist.push(*r);
             }
         }
+        NormalFormKind::OrderedDispatch {
+            scrutinee, regions, ..
+        } => {
+            worklist.push(*scrutinee);
+            worklist.extend(regions.iter().copied());
+        }
     }
 }
 
@@ -574,6 +609,15 @@ fn remap_kind(kind: &NormalFormKind, remap: &HashMap<u32, NormalFormId>) -> Norm
         NormalFormKind::Piecewise(arms) => {
             NormalFormKind::Piecewise(arms.iter().map(|(c, r)| (map(*c), map(*r))).collect())
         }
+        NormalFormKind::OrderedDispatch {
+            scrutinee,
+            boundaries,
+            regions,
+        } => NormalFormKind::OrderedDispatch {
+            scrutinee: map(*scrutinee),
+            boundaries: boundaries.clone(),
+            regions: regions.iter().copied().map(map).collect(),
+        },
     }
 }
 
@@ -665,7 +709,7 @@ fn return_if_rule_embed(id: NormalFormId, interner: &NormalFormInterner) -> Opti
 fn normalize_once(
     id: NormalFormId,
     interner: &mut NormalFormInterner,
-    unit_ctx: Option<&UnitResolutionContext<'_>>,
+    ctx: &NormalizeContext<'_>,
     source: Option<Source>,
 ) -> Result<NormalFormId, Error> {
     // Body already normalized when that rule completed. Re-entering through a
@@ -681,37 +725,35 @@ fn normalize_once(
         current = *inner;
     }
     let mut normalized = {
-        let nf = normalize_children(current, interner, unit_ctx, source.clone())?;
-        simplify(nf, interner, unit_ctx, source)?
+        let nf = normalize_children(current, interner, ctx, source.clone())?;
+        simplify(nf, interner, ctx, source)?
     };
     while let Some((provenance, origin, target)) = wrappers.pop() {
-        if unit_ctx.is_some() {
-            if let NormalFormKind::Leaf(LeafKind::Literal(literal)) =
-                interner.get(normalized).kind.clone()
+        if let NormalFormKind::Leaf(LeafKind::Literal(literal)) =
+            interner.get(normalized).kind.clone()
+        {
+            if let (
+                ValueKind::Number(number),
+                SemanticConversionTarget::Type(PrimitiveKind::Number),
+            ) = (&literal.value, &target)
             {
-                if let (
-                    ValueKind::Number(number),
-                    SemanticConversionTarget::Type(PrimitiveKind::Number),
-                ) = (&literal.value, &target)
-                {
-                    let destroyed = rebuild(
-                        interner,
-                        NormalFormKind::UnitConversion(normalized, target.clone()),
-                        provenance.clone(),
-                        origin,
-                    );
-                    normalized = fold_into(
-                        interner,
-                        NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
-                            LiteralValue::number_with_type(
-                                number.clone(),
-                                primitive_number_arc().clone(),
-                            ),
-                        ))),
-                        destroyed,
-                    );
-                    continue;
-                }
+                let destroyed = rebuild(
+                    interner,
+                    NormalFormKind::UnitConversion(normalized, target.clone()),
+                    provenance.clone(),
+                    origin,
+                );
+                normalized = fold_into(
+                    interner,
+                    NormalFormKind::Leaf(LeafKind::Literal(Arc::new(
+                        LiteralValue::number_with_type(
+                            number.clone(),
+                            primitive_number_arc().clone(),
+                        ),
+                    ))),
+                    destroyed,
+                );
+                continue;
             }
         }
         normalized = rebuild(
@@ -727,7 +769,7 @@ fn normalize_once(
 fn normalize_children(
     id: NormalFormId,
     interner: &mut NormalFormInterner,
-    unit_ctx: Option<&UnitResolutionContext<'_>>,
+    ctx: &NormalizeContext<'_>,
     source: Option<Source>,
 ) -> Result<NormalFormId, Error> {
     let (carried, origin) = node_source_origin(interner, id);
@@ -735,7 +777,7 @@ fn normalize_children(
     let mut normalize_vec = |children: Vec<NormalFormId>| -> Result<Vec<NormalFormId>, Error> {
         children
             .into_iter()
-            .map(|child| normalize_once(child, interner, unit_ctx, source.clone()))
+            .map(|child| normalize_once(child, interner, ctx, source.clone()))
             .collect()
     };
     match kind {
@@ -758,8 +800,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Subtract(a, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Subtract(a, b),
@@ -768,8 +810,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Divide(a, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Divide(a, b),
@@ -778,8 +820,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Power(a, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Power(a, b),
@@ -788,8 +830,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Modulo(a, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Modulo(a, b),
@@ -798,7 +840,7 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Negate(x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Negate(x),
@@ -807,7 +849,7 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Reciprocal(x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Reciprocal(x),
@@ -816,8 +858,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Comparison(a, op, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::Comparison(a, op, b),
@@ -835,11 +877,11 @@ fn normalize_children(
             ))
         }
         NormalFormKind::Not(x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(interner, NormalFormKind::Not(x), carried, origin))
         }
         NormalFormKind::MathOp(op, x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::MathOp(op, x),
@@ -851,7 +893,7 @@ fn normalize_children(
             unreachable!("BUG: UnitConversion peeled in normalize_once before normalize_children")
         }
         NormalFormKind::DateRelative(kind, x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::DateRelative(kind, x),
@@ -860,7 +902,7 @@ fn normalize_children(
             ))
         }
         NormalFormKind::DateCalendar(kind, unit, x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::DateCalendar(kind, unit, x),
@@ -869,8 +911,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::RangeLiteral(a, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::RangeLiteral(a, b),
@@ -879,7 +921,7 @@ fn normalize_children(
             ))
         }
         NormalFormKind::PastFutureRange(kind, x) => {
-            let x = normalize_once(x, interner, unit_ctx, source.clone())?;
+            let x = normalize_once(x, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::PastFutureRange(kind, x),
@@ -888,8 +930,8 @@ fn normalize_children(
             ))
         }
         NormalFormKind::RangeContainment(a, b) => {
-            let a = normalize_once(a, interner, unit_ctx, source.clone())?;
-            let b = normalize_once(b, interner, unit_ctx, source.clone())?;
+            let a = normalize_once(a, interner, ctx, source.clone())?;
+            let b = normalize_once(b, interner, ctx, source.clone())?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::RangeContainment(a, b),
@@ -898,7 +940,7 @@ fn normalize_children(
             ))
         }
         NormalFormKind::ResultIsVeto(operand) => {
-            let operand = normalize_once(operand, interner, unit_ctx, source)?;
+            let operand = normalize_once(operand, interner, ctx, source)?;
             Ok(rebuild(
                 interner,
                 NormalFormKind::ResultIsVeto(operand),
@@ -909,13 +951,36 @@ fn normalize_children(
         NormalFormKind::Piecewise(arms) => {
             let mut normalized_arms = Vec::with_capacity(arms.len());
             for (condition, result) in arms {
-                let c = normalize_once(condition, interner, unit_ctx, source.clone())?;
-                let r = normalize_once(result, interner, unit_ctx, source.clone())?;
+                let c = normalize_once(condition, interner, ctx, source.clone())?;
+                let r = normalize_once(result, interner, ctx, source.clone())?;
                 normalized_arms.push((c, r));
             }
             Ok(rebuild(
                 interner,
                 NormalFormKind::Piecewise(normalized_arms),
+                carried,
+                origin,
+            ))
+        }
+        // A nested unless chain folds while its parent is still being built, so a
+        // dispatch cell can sit anywhere a value can. Walking it must preserve it.
+        NormalFormKind::OrderedDispatch {
+            scrutinee,
+            boundaries,
+            regions,
+        } => {
+            let scrutinee = normalize_once(scrutinee, interner, ctx, source.clone())?;
+            let mut normalized_regions = Vec::with_capacity(regions.len());
+            for region in regions {
+                normalized_regions.push(normalize_once(region, interner, ctx, source.clone())?);
+            }
+            Ok(rebuild(
+                interner,
+                NormalFormKind::OrderedDispatch {
+                    scrutinee,
+                    boundaries,
+                    regions: normalized_regions,
+                },
                 carried,
                 origin,
             ))
@@ -929,7 +994,7 @@ fn normalize_children(
 fn simplify(
     id: NormalFormId,
     interner: &mut NormalFormInterner,
-    unit_ctx: Option<&UnitResolutionContext<'_>>,
+    ctx: &NormalizeContext<'_>,
     source: Option<Source>,
 ) -> Result<NormalFormId, Error> {
     let id = expand_numeric_subtract_divide(id, interner);
@@ -939,20 +1004,21 @@ fn simplify(
     let id = double_negate_reciprocal(id, interner);
     let id = math_identities(id, interner);
     let id = constant_fold(id, interner, source.clone())?;
-    let id = fold_unit_literals(id, interner, unit_ctx, source.clone())?;
+    let id = fold_unit_literals(id, interner, ctx.unit_ctx, source.clone())?;
     let id = demorgan(id, interner);
     let id = logical_flatten(id, interner);
     let id = logical_short_circuit(id, interner);
     let id = logical_idempotency(id, interner);
     let id = collapse_piecewise(id, interner);
     let id = negated_comparisons(id, interner);
-    Ok(canonical_order(id, interner))
+    let id = canonical_order(id, interner);
+    ordered_dispatch(id, interner, ctx.data, source)
 }
 
 fn fold_unit_literals(
     id: NormalFormId,
     interner: &mut NormalFormInterner,
-    unit_ctx: Option<&UnitResolutionContext<'_>>,
+    unit_ctx: &UnitResolutionContext<'_>,
     source: Option<Source>,
 ) -> Result<NormalFormId, Error> {
     if let Some(id) = return_if_rule_embed(id, interner) {
@@ -1085,8 +1151,7 @@ fn fold_unit_literals(
         }
         NormalFormKind::UnitConversion(inner, target) => {
             let inner_done = fold_unit_literals(inner, interner, unit_ctx, source.clone())?;
-            if let (Some(_unit_context), NormalFormKind::Leaf(LeafKind::Literal(literal))) =
-                (unit_ctx, &interner.get(inner_done).kind)
+            if let NormalFormKind::Leaf(LeafKind::Literal(literal)) = &interner.get(inner_done).kind
             {
                 if let (
                     ValueKind::Number(number),
@@ -1174,6 +1239,34 @@ fn fold_unit_literals(
                 origin,
             ))
         }
+        // A nested unless chain folds while its parent is still being built, so a
+        // dispatch cell can sit anywhere a value can. Walking it must preserve it.
+        NormalFormKind::OrderedDispatch {
+            scrutinee,
+            boundaries,
+            regions,
+        } => {
+            let scrutinee = fold_unit_literals(scrutinee, interner, unit_ctx, source.clone())?;
+            let mut folded_regions = Vec::with_capacity(regions.len());
+            for region in regions {
+                folded_regions.push(fold_unit_literals(
+                    region,
+                    interner,
+                    unit_ctx,
+                    source.clone(),
+                )?);
+            }
+            Ok(rebuild(
+                interner,
+                NormalFormKind::OrderedDispatch {
+                    scrutinee,
+                    boundaries,
+                    regions: folded_regions,
+                },
+                provenance,
+                origin,
+            ))
+        }
         NormalFormKind::Leaf(LeafKind::Literal(literal)) => {
             if let Some(expanded) = expand_named_measure_literal(literal.as_ref(), unit_ctx) {
                 Ok(fold_into(
@@ -1199,9 +1292,9 @@ fn fold_unit_literals(
 
 pub(crate) fn expand_named_measure_literal(
     literal: &LiteralValue,
-    unit_ctx: Option<&UnitResolutionContext<'_>>,
+    unit_ctx: &UnitResolutionContext<'_>,
 ) -> Option<LiteralValue> {
-    let UnitResolutionContext::WithIndex(unit_index) = unit_ctx? else {
+    let UnitResolutionContext::WithIndex(unit_index) = unit_ctx else {
         return None;
     };
     let ValueKind::Measure(magnitude, signature) = &literal.value else {
@@ -1211,7 +1304,8 @@ pub(crate) fn expand_named_measure_literal(
         return None;
     }
     let unit_name = &signature[0].0;
-    let owning_type = unit_index.get(unit_name)?;
+    let owners = [literal.lemma_type.as_ref()];
+    let owning_type = unit_index.owning_type_for_signature_factor(unit_name, &owners)?;
     let TypeSpecification::Measure { units, .. } = &owning_type.specifications else {
         return None;
     };
@@ -1219,8 +1313,9 @@ pub(crate) fn expand_named_measure_literal(
     if unit.derived_measure_factors.is_empty() {
         return None;
     }
-    let expanded =
-        crate::computation::arithmetic::expand_signature_to_base_units(signature, unit_index);
+    let expanded = crate::computation::arithmetic::expand_signature_to_base_units(
+        signature, unit_index, &owners,
+    );
     Some(LiteralValue::measure_with_signature(
         magnitude.clone(),
         expanded,
@@ -2490,6 +2585,189 @@ fn unless_condition_contains_literal_false(
     }
 }
 
+/// Fold a Piecewise whose arms all compare one scrutinee against constants into an
+/// [`NormalFormKind::OrderedDispatch`], turning the linear arm scan into a binary
+/// search over a precomputed region table.
+///
+/// Runs last in [`simplify`], after `collapse_piecewise` has dropped statically dead
+/// arms and left the default at index 0. The incoming cell becomes the fold origin,
+/// so explanation keeps reading the Piecewise.
+///
+/// Declines whenever the shape does not hold. Declining is the pattern not applying,
+/// not a fallback: the Piecewise is returned untouched and evaluates as before.
+///
+/// After the shape matches, key construction and boundary sort failures are planning
+/// errors — not a silent return to Piecewise.
+fn ordered_dispatch(
+    id: NormalFormId,
+    interner: &mut NormalFormInterner,
+    data: &IndexMap<DataPath, DataDefinition>,
+    source: Option<Source>,
+) -> Result<NormalFormId, Error> {
+    if let Some(id) = return_if_rule_embed(id, interner) {
+        return Ok(id);
+    }
+    let NormalFormKind::Piecewise(arms) = interner.get(id).kind.clone() else {
+        return Ok(id);
+    };
+    if arms.len() < 2 || !is_literal_bool(interner, arms[0].0, true) {
+        return Ok(id);
+    }
+    let Some(scan) = scan_dispatch_arms(interner, &arms) else {
+        return Ok(id);
+    };
+    let Some(scrutinee_type) = dispatch_scrutinee_type(interner, scan.scrutinee, data) else {
+        return Ok(id);
+    };
+    let key_literals: Vec<&LiteralValue> = scan.keys.iter().map(Arc::as_ref).collect();
+    let Some(class) = classify_dispatch(scrutinee_type, &key_literals) else {
+        return Ok(id);
+    };
+    if class == DispatchClass::Text
+        && scan.operators.iter().any(|operator| {
+            !matches!(
+                operator,
+                ComparisonComputation::Is | ComparisonComputation::IsNot
+            )
+        })
+    {
+        return Ok(id);
+    }
+
+    let mut keys = Vec::with_capacity(scan.keys.len());
+    for literal in &scan.keys {
+        match dispatch_key_of_literal(&literal.value) {
+            Ok(key) => keys.push(key),
+            Err(DispatchKeyBuildError::CalendarFailure(message)) => {
+                return Err(Error::validation(
+                    format!("ordered dispatch: {message}"),
+                    source,
+                    None::<String>,
+                ));
+            }
+            Err(DispatchKeyBuildError::Unsupported) => {
+                panic!(
+                    "BUG: classify_dispatch accepted a key that dispatch_key_of_literal rejects: {:?}",
+                    literal.value
+                );
+            }
+        }
+    }
+    let boundaries = sorted_unique_boundaries(keys.clone())
+        .map_err(|failure| normalization_error(source.clone(), failure, "ordered dispatch"))?;
+
+    // Later arms overwrite earlier ones, which is exactly last-match-wins.
+    let mut regions = vec![arms[0].1; region_count(boundaries.len())];
+    for (index, operator) in scan.operators.iter().enumerate() {
+        let region = region_for_value(&boundaries, &keys[index].as_probe())
+            .map_err(|failure| normalization_error(source.clone(), failure, "ordered dispatch"))?;
+        assert!(
+            region % 2 == 1,
+            "BUG: fold key absent from the boundary list built from it"
+        );
+        let boundary_index = (region - 1) / 2;
+        for (start, end) in regions_matching(operator, boundary_index, boundaries.len())
+            .into_iter()
+            .flatten()
+        {
+            regions[start..=end].fill(arms[index + 1].1);
+        }
+    }
+
+    Ok(fold_into(
+        interner,
+        NormalFormKind::OrderedDispatch {
+            scrutinee: scan.scrutinee,
+            boundaries,
+            regions,
+        },
+        id,
+    ))
+}
+
+/// The scrutinee, operators and key literals of a foldable unless chain.
+struct DispatchArmScan {
+    scrutinee: NormalFormId,
+    /// One per unless arm in arm order, mirrored so the scrutinee reads on the left.
+    operators: Vec<ComparisonComputation>,
+    keys: Vec<Arc<LiteralValue>>,
+}
+
+fn scan_dispatch_arms(
+    interner: &NormalFormInterner,
+    arms: &[(NormalFormId, NormalFormId)],
+) -> Option<DispatchArmScan> {
+    let mut scrutinee: Option<NormalFormId> = None;
+    let mut operators = Vec::with_capacity(arms.len() - 1);
+    let mut keys = Vec::with_capacity(arms.len() - 1);
+    for (condition, _) in arms.iter().skip(1) {
+        let cell = interner.get(*condition);
+        // An embed cell borrows the rule body's kind; folding would erase that identity.
+        if cell.rule_embed.is_some() {
+            return None;
+        }
+        let NormalFormKind::Comparison(left, operator, right) = &cell.kind else {
+            return None;
+        };
+        let (candidate, key, operator) = match (
+            literal_operand(interner, *left),
+            literal_operand(interner, *right),
+        ) {
+            (None, Some(key)) => (*left, key, operator.clone()),
+            // `canonical_order` never reorders a Comparison, so `"AD" is code`
+            // arrives literal-first and the operator has to be mirrored.
+            (Some(key), None) => (*right, key, mirrored_comparison(operator.clone())),
+            (Some(_), Some(_)) | (None, None) => return None,
+        };
+        match scrutinee {
+            None => scrutinee = Some(candidate),
+            Some(established) if established == candidate => {}
+            Some(_) => return None,
+        }
+        operators.push(operator);
+        keys.push(key);
+    }
+    Some(DispatchArmScan {
+        scrutinee: scrutinee?,
+        operators,
+        keys,
+    })
+}
+
+fn literal_operand(interner: &NormalFormInterner, id: NormalFormId) -> Option<Arc<LiteralValue>> {
+    let cell = interner.get(id);
+    if cell.rule_embed.is_some() {
+        return None;
+    }
+    match &cell.kind {
+        NormalFormKind::Leaf(LeafKind::Literal(literal)) => Some(Arc::clone(literal)),
+        _ => None,
+    }
+}
+
+/// Resolved type of a data-path scrutinee. `None` when the cell is not a plain data
+/// path, or the path has no type to classify against (an import, or a rule-target
+/// reference, which deliberately ships `Undetermined`).
+fn dispatch_scrutinee_type<'a>(
+    interner: &NormalFormInterner,
+    scrutinee: NormalFormId,
+    data: &'a IndexMap<DataPath, DataDefinition>,
+) -> Option<&'a LemmaType> {
+    let cell = interner.get(scrutinee);
+    if cell.rule_embed.is_some() {
+        return None;
+    }
+    let NormalFormKind::Leaf(LeafKind::DataPath(path)) = &cell.kind else {
+        return None;
+    };
+    match data.get(path)? {
+        DataDefinition::Value { value, .. } => Some(value.lemma_type.as_ref()),
+        DataDefinition::TypeDeclaration { resolved_type, .. }
+        | DataDefinition::Reference { resolved_type, .. } => Some(resolved_type.as_ref()),
+        DataDefinition::Import { .. } => None,
+    }
+}
+
 fn fold_math_op(
     op: &MathematicalComputation,
     operand: &RationalInteger,
@@ -2804,7 +3082,8 @@ fn normal_form_precedence(kind: &NormalFormKind) -> u8 {
         | NormalFormKind::Veto(_)
         | NormalFormKind::Now
         | NormalFormKind::PastFutureRange(..)
-        | NormalFormKind::Piecewise(_) => 10,
+        | NormalFormKind::Piecewise(_)
+        | NormalFormKind::OrderedDispatch { .. } => 10,
     }
 }
 
@@ -3060,6 +3339,10 @@ fn explanation_display_inner(forms: &[NormalForm], id: NormalFormId) -> String {
             )
         }
         NormalFormKind::Now => "now".to_string(),
+        NormalFormKind::OrderedDispatch { .. } => unreachable!(
+            "BUG: OrderedDispatch always carries its Piecewise pre-image as origin, \
+             so the origin return above fires before this arm"
+        ),
     }
 }
 
@@ -3077,22 +3360,36 @@ mod tests {
         &interner.forms
     }
 
-    /// Normalize a semantic expression to canonical form (drift-free, single pass).
+    /// Normalize through the production pipeline. An empty data map makes the
+    /// ordered-dispatch fold decline (no scrutinee type), so algebraic tests stay focused.
     fn normalize_expression(
         expr: &Expression,
-        unit_ctx: Option<&UnitResolutionContext<'_>>,
+        unit_ctx: &UnitResolutionContext<'_>,
     ) -> Result<Expression, Error> {
+        let data = IndexMap::new();
+        normalize_expression_with_data(expr, &data, unit_ctx).map(|(expr, _)| expr)
+    }
+
+    /// Normalize with a resolved data map in scope, returning the normalized
+    /// expression alongside the interner so tests can inspect the shipped shape.
+    fn normalize_expression_with_data(
+        expr: &Expression,
+        data: &IndexMap<DataPath, DataDefinition>,
+        unit_ctx: &UnitResolutionContext<'_>,
+    ) -> Result<(Expression, NormalFormInterner), Error> {
         let source = expr.source_location.clone();
         let mut interner = NormalFormInterner::new();
-        let completed_rules = HashMap::new();
-        let rule_target_data = HashMap::new();
-        let lower = LowerCtx {
-            completed_rules: &completed_rules,
-            rule_target_data: &rule_target_data,
+        let root = to_normal_form_empty(expr, &mut interner);
+        let limits = crate::limits::ResourceLimits::default();
+        let ctx = NormalizeContext {
+            data,
+            unit_ctx,
+            max_normalized_expression_nodes: limits.max_normalized_expression_nodes,
+            max_normal_form_depth: limits.max_normal_form_depth,
         };
-        let root = to_normal_form(expr, &mut interner, &lower);
-        let nf = normalize_once(root, &mut interner, unit_ctx, source.clone())?;
-        Ok(to_expression(interner_forms(&interner), nf, source))
+        let nf = normalize_once(root, &mut interner, &ctx, source.clone())?;
+        let expression = to_expression(interner_forms(&interner), nf, source);
+        Ok((expression, interner))
     }
 
     fn to_normal_form_empty(expr: &Expression, interner: &mut NormalFormInterner) -> NormalFormId {
@@ -3219,6 +3516,13 @@ mod tests {
                         )
                     })
                     .collect(),
+            ),
+            // A dispatch table has no Expression spelling; its pre-image does.
+            NormalFormKind::OrderedDispatch { .. } => nf_to_kind(
+                forms,
+                nf.origin
+                    .expect("BUG: OrderedDispatch without its Piecewise pre-image"),
+                source,
             ),
         }
     }
@@ -3373,11 +3677,629 @@ mod tests {
         )
     }
 
+    mod ordered_dispatch_fold {
+        use super::*;
+        use crate::parsing::source::{Source as ParseSource, SourceType};
+        use crate::planning::ordered_dispatch::{region_count, DispatchKey};
+        use crate::planning::semantics::{
+            primitive_boolean_arc, primitive_date_arc, primitive_number_arc, primitive_text_arc,
+            LemmaType, TypeSpecification,
+        };
+        use crate::Span;
+
+        fn test_source() -> ParseSource {
+            ParseSource::new(
+                SourceType::Volatile,
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 1,
+                },
+            )
+        }
+
+        fn data_path(name: &str) -> DataPath {
+            DataPath::new(vec![], name.into())
+        }
+
+        fn declared(name: &str, resolved_type: Arc<LemmaType>) -> (DataPath, DataDefinition) {
+            (
+                data_path(name),
+                DataDefinition::TypeDeclaration {
+                    resolved_type,
+                    declared_suggestion: None,
+                    source: test_source(),
+                },
+            )
+        }
+
+        /// `x: number`, `code: text`, `flag: boolean`, `day: date`, `rate: ratio`.
+        fn scope() -> IndexMap<DataPath, DataDefinition> {
+            let mut data = IndexMap::new();
+            for entry in [
+                declared("x", primitive_number_arc().clone()),
+                declared("y", primitive_number_arc().clone()),
+                declared("code", primitive_text_arc().clone()),
+                declared("flag", primitive_boolean_arc().clone()),
+                declared("day", primitive_date_arc().clone()),
+                declared(
+                    "rate",
+                    Arc::new(LemmaType::primitive(TypeSpecification::ratio())),
+                ),
+            ] {
+                data.insert(entry.0, entry.1);
+            }
+            data
+        }
+
+        fn path_expr(name: &str) -> Expression {
+            Expression::with_source(ExpressionKind::DataPath(data_path(name)), None)
+        }
+
+        fn text_expr(text: &str) -> Expression {
+            Expression::with_source(
+                ExpressionKind::Literal(Box::new(LiteralValue::text(text.to_string()))),
+                None,
+            )
+        }
+
+        fn compare(left: Expression, op: ComparisonComputation, right: Expression) -> Expression {
+            Expression::with_source(
+                ExpressionKind::Comparison(Arc::new(left), op, Arc::new(right)),
+                None,
+            )
+        }
+
+        /// `default` followed by `unless <condition> then <result>` arms.
+        fn chain(default: Expression, arms: Vec<(Expression, Expression)>) -> Expression {
+            let mut branches: Vec<(Option<Expression>, Expression)> = vec![(None, default)];
+            for (condition, result) in arms {
+                branches.push((Some(condition), result));
+            }
+            unless_branches_to_piecewise(&branches)
+        }
+
+        /// Normalize `expr` against `scope()` and return the root cell.
+        fn fold(expr: &Expression) -> (NormalFormId, NormalFormInterner) {
+            let data = scope();
+            let mut interner = NormalFormInterner::new();
+            let root = to_normal_form_empty(expr, &mut interner);
+            let limits = crate::limits::ResourceLimits::default();
+            let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
+            let ctx = NormalizeContext {
+                data: &data,
+                unit_ctx: &unit_ctx,
+                max_normalized_expression_nodes: limits.max_normalized_expression_nodes,
+                max_normal_form_depth: limits.max_normal_form_depth,
+            };
+            let nf = normalize_once(root, &mut interner, &ctx, None).expect("normalize");
+            (nf, interner)
+        }
+
+        /// Boundaries and the result-per-region table, as literal display strings.
+        fn table(expr: &Expression) -> (Vec<DispatchKey>, Vec<String>) {
+            let (nf, interner) = fold(expr);
+            let NormalFormKind::OrderedDispatch {
+                boundaries,
+                regions,
+                ..
+            } = &interner.get(nf).kind
+            else {
+                panic!("expected OrderedDispatch, got {:?}", interner.get(nf).kind);
+            };
+            let rendered = regions
+                .iter()
+                .map(|region| explanation_display(interner_forms(&interner), *region))
+                .collect();
+            (boundaries.clone(), rendered)
+        }
+
+        fn assert_declines(expr: &Expression, reason: &str) {
+            let (nf, interner) = fold(expr);
+            assert!(
+                !matches!(
+                    interner.get(nf).kind,
+                    NormalFormKind::OrderedDispatch { .. }
+                ),
+                "must not fold ({reason}), got {:?}",
+                interner.get(nf).kind
+            );
+        }
+
+        #[test]
+        fn equality_chain_on_text_folds_to_point_regions() {
+            let expr = chain(
+                num_expr(0),
+                vec![
+                    (
+                        compare(
+                            path_expr("code"),
+                            ComparisonComputation::Is,
+                            text_expr("NL"),
+                        ),
+                        num_expr(1),
+                    ),
+                    (
+                        compare(
+                            path_expr("code"),
+                            ComparisonComputation::Is,
+                            text_expr("BE"),
+                        ),
+                        num_expr(2),
+                    ),
+                ],
+            );
+            let (boundaries, regions) = table(&expr);
+            assert_eq!(
+                boundaries,
+                vec![
+                    DispatchKey::Text("BE".to_string()),
+                    DispatchKey::Text("NL".to_string())
+                ]
+            );
+            // Every interval holds the default; only the two points carry results.
+            assert_eq!(regions, vec!["0", "2", "0", "1", "0"]);
+        }
+
+        #[test]
+        fn later_arm_wins_when_two_arms_share_a_constant() {
+            let expr = chain(
+                num_expr(0),
+                vec![
+                    (
+                        compare(path_expr("x"), ComparisonComputation::Is, num_expr(5)),
+                        num_expr(1),
+                    ),
+                    (
+                        compare(path_expr("x"), ComparisonComputation::Is, num_expr(5)),
+                        num_expr(2),
+                    ),
+                ],
+            );
+            let (boundaries, regions) = table(&expr);
+            assert_eq!(boundaries.len(), 1, "duplicates collapse to one breakpoint");
+            assert_eq!(regions, vec!["0", "2", "0"]);
+        }
+
+        #[test]
+        fn greater_than_and_greater_or_equal_differ_at_the_boundary() {
+            let strict = chain(
+                num_expr(0),
+                vec![(
+                    compare(
+                        path_expr("x"),
+                        ComparisonComputation::GreaterThan,
+                        num_expr(5),
+                    ),
+                    num_expr(1),
+                )],
+            );
+            assert_eq!(table(&strict).1, vec!["0", "0", "1"]);
+
+            let inclusive = chain(
+                num_expr(0),
+                vec![(
+                    compare(
+                        path_expr("x"),
+                        ComparisonComputation::GreaterThanOrEqual,
+                        num_expr(5),
+                    ),
+                    num_expr(1),
+                )],
+            );
+            assert_eq!(table(&inclusive).1, vec!["0", "1", "1"]);
+        }
+
+        #[test]
+        fn is_not_claims_every_region_but_its_own_point() {
+            let expr = chain(
+                num_expr(0),
+                vec![(
+                    compare(path_expr("x"), ComparisonComputation::IsNot, num_expr(5)),
+                    num_expr(1),
+                )],
+            );
+            assert_eq!(table(&expr).1, vec!["1", "0", "1"]);
+        }
+
+        #[test]
+        fn overlapping_ordering_arms_resolve_by_arm_order() {
+            // `x > 5 then 1` is shadowed above 10 by the later `x > 10 then 2`.
+            let expr = chain(
+                num_expr(0),
+                vec![
+                    (
+                        compare(
+                            path_expr("x"),
+                            ComparisonComputation::GreaterThan,
+                            num_expr(5),
+                        ),
+                        num_expr(1),
+                    ),
+                    (
+                        compare(
+                            path_expr("x"),
+                            ComparisonComputation::GreaterThan,
+                            num_expr(10),
+                        ),
+                        num_expr(2),
+                    ),
+                ],
+            );
+            let (boundaries, regions) = table(&expr);
+            assert_eq!(boundaries.len(), 2);
+            assert_eq!(regions.len(), region_count(2));
+            // below 5 | at 5 | between | at 10 | above 10
+            assert_eq!(regions, vec!["0", "0", "1", "1", "2"]);
+        }
+
+        #[test]
+        fn literal_on_the_left_mirrors_the_operator() {
+            let expr = chain(
+                num_expr(0),
+                vec![(
+                    compare(num_expr(5), ComparisonComputation::LessThan, path_expr("x")),
+                    num_expr(1),
+                )],
+            );
+            // `5 < x` is `x > 5`: only the region above the boundary.
+            assert_eq!(table(&expr).1, vec!["0", "0", "1"]);
+        }
+
+        #[test]
+        fn dates_fold_with_ordering_operators() {
+            let day = |year: i32| {
+                Expression::with_source(
+                    ExpressionKind::Literal(Box::new(LiteralValue::date(
+                        crate::planning::semantics::SemanticDateTime {
+                            year,
+                            month: 1,
+                            day: 1,
+                            hour: 0,
+                            minute: 0,
+                            second: 0,
+                            microsecond: 0,
+                            timezone: None,
+                        },
+                    ))),
+                    None,
+                )
+            };
+            let expr = chain(
+                num_expr(0),
+                vec![(
+                    compare(
+                        path_expr("day"),
+                        ComparisonComputation::GreaterThanOrEqual,
+                        day(2020),
+                    ),
+                    num_expr(1),
+                )],
+            );
+            let (boundaries, regions) = table(&expr);
+            assert!(matches!(boundaries.as_slice(), [DispatchKey::Date(_)]));
+            assert_eq!(regions, vec!["0", "1", "1"]);
+        }
+
+        #[test]
+        fn calendar_failure_literal_is_a_planning_error() {
+            let invalid_day = Expression::with_source(
+                ExpressionKind::Literal(Box::new(LiteralValue::date(
+                    crate::planning::semantics::SemanticDateTime {
+                        year: 2020,
+                        month: 13,
+                        day: 1,
+                        hour: 0,
+                        minute: 0,
+                        second: 0,
+                        microsecond: 0,
+                        timezone: None,
+                    },
+                ))),
+                None,
+            );
+            let expr = chain(
+                num_expr(0),
+                vec![(
+                    compare(path_expr("day"), ComparisonComputation::Is, invalid_day),
+                    num_expr(1),
+                )],
+            );
+            let data = scope();
+            let mut interner = NormalFormInterner::new();
+            let root = to_normal_form_empty(&expr, &mut interner);
+            let limits = crate::limits::ResourceLimits::default();
+            let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
+            let ctx = NormalizeContext {
+                data: &data,
+                unit_ctx: &unit_ctx,
+                max_normalized_expression_nodes: limits.max_normalized_expression_nodes,
+                max_normal_form_depth: limits.max_normal_form_depth,
+            };
+            let err = normalize_once(root, &mut interner, &ctx, None).expect_err(
+                "invalid calendar literal must fail planning, not silently stay Piecewise",
+            );
+            let message = err.to_string();
+            assert!(
+                message.contains("ordered dispatch") && message.contains("Invalid date"),
+                "unexpected error: {message}"
+            );
+        }
+
+        #[test]
+        fn the_pre_image_is_kept_as_the_fold_origin() {
+            let expr = chain(
+                num_expr(0),
+                vec![(
+                    compare(path_expr("x"), ComparisonComputation::Is, num_expr(5)),
+                    num_expr(1),
+                )],
+            );
+            let (nf, interner) = fold(&expr);
+            let origin = interner
+                .get(nf)
+                .origin
+                .expect("dispatch must record its pre-image");
+            assert!(
+                matches!(interner.get(origin).kind, NormalFormKind::Piecewise(_)),
+                "origin must be the Piecewise, got {:?}",
+                interner.get(origin).kind
+            );
+        }
+
+        #[test]
+        fn a_collapsed_arm_keeps_the_whole_origin_chain() {
+            // The `1 < 0` arm is statically false, so `collapse_piecewise` folds first
+            // and hands this pass a cell that already carries an origin.
+            let expr = chain(
+                num_expr(0),
+                vec![
+                    (lt_expr(num_expr(1), num_expr(0)), num_expr(9)),
+                    (
+                        compare(path_expr("x"), ComparisonComputation::Is, num_expr(5)),
+                        num_expr(1),
+                    ),
+                ],
+            );
+            let (nf, interner) = fold(&expr);
+            let origin = interner
+                .get(nf)
+                .origin
+                .expect("dispatch must record its pre-image");
+            assert!(
+                matches!(interner.get(origin).kind, NormalFormKind::Piecewise(_)),
+                "origin must be the Piecewise, got {:?}",
+                interner.get(origin).kind
+            );
+            let recorded = interner
+                .get(origin)
+                .origin
+                .expect("collapse origin must survive the second fold");
+            let NormalFormKind::Piecewise(arms) = &interner.get(recorded).kind else {
+                panic!("recorded pre-image must be a Piecewise");
+            };
+            assert_eq!(arms.len(), 3, "the dropped arm must still be recorded");
+        }
+
+        #[test]
+        fn text_declines_ordering_operators() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(
+                            path_expr("code"),
+                            ComparisonComputation::GreaterThan,
+                            text_expr("NL"),
+                        ),
+                        num_expr(1),
+                    )],
+                ),
+                "text has no ordering comparison",
+            );
+        }
+
+        #[test]
+        fn arms_on_different_scrutinees_decline() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![
+                        (
+                            compare(path_expr("x"), ComparisonComputation::Is, num_expr(1)),
+                            num_expr(1),
+                        ),
+                        (
+                            compare(path_expr("y"), ComparisonComputation::Is, num_expr(2)),
+                            num_expr(2),
+                        ),
+                    ],
+                ),
+                "two scrutinees",
+            );
+        }
+
+        #[test]
+        fn boolean_scrutinee_declines() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(
+                            path_expr("flag"),
+                            ComparisonComputation::Is,
+                            bool_expr(true),
+                        ),
+                        num_expr(1),
+                    )],
+                ),
+                "boolean has at most two keys",
+            );
+        }
+
+        #[test]
+        fn mismatched_key_and_scrutinee_types_decline() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(path_expr("code"), ComparisonComputation::Is, num_expr(1)),
+                        num_expr(1),
+                    )],
+                ),
+                "text scrutinee against a number key",
+            );
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(path_expr("rate"), ComparisonComputation::Is, num_expr(1)),
+                        num_expr(1),
+                    )],
+                ),
+                "ratio scrutinee against a plain number key",
+            );
+        }
+
+        #[test]
+        fn a_non_data_path_scrutinee_declines() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(
+                            add_expr(path_expr("x"), num_expr(1)),
+                            ComparisonComputation::Is,
+                            num_expr(5),
+                        ),
+                        num_expr(1),
+                    )],
+                ),
+                "the scrutinee is an expression, whose runtime kind is unknown here",
+            );
+        }
+
+        #[test]
+        fn an_unknown_data_path_declines() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(path_expr("absent"), ComparisonComputation::Is, num_expr(5)),
+                        num_expr(1),
+                    )],
+                ),
+                "the scrutinee has no resolved type in scope",
+            );
+        }
+
+        #[test]
+        fn a_non_comparison_condition_declines() {
+            assert_declines(
+                &chain(num_expr(0), vec![(path_expr("flag"), num_expr(1))]),
+                "a bare boolean condition is not a comparison",
+            );
+        }
+
+        #[test]
+        fn a_comparison_between_two_data_paths_declines() {
+            assert_declines(
+                &chain(
+                    num_expr(0),
+                    vec![(
+                        compare(path_expr("x"), ComparisonComputation::Is, path_expr("y")),
+                        num_expr(1),
+                    )],
+                ),
+                "neither side is a constant",
+            );
+        }
+
+        /// Every folded cell must agree with its pre-image for every input, which is
+        /// the property the whole region model exists to preserve.
+        #[test]
+        fn folded_table_agrees_with_the_piecewise_it_replaced() {
+            let operators = [
+                ComparisonComputation::Is,
+                ComparisonComputation::IsNot,
+                ComparisonComputation::GreaterThan,
+                ComparisonComputation::GreaterThanOrEqual,
+                ComparisonComputation::LessThan,
+                ComparisonComputation::LessThanOrEqual,
+            ];
+            // Duplicated constants and out-of-order constants are both covered.
+            let constants = [5i64, 2, 5, 8];
+            let mut checked = 0usize;
+
+            for first in &operators {
+                for second in &operators {
+                    for third in &operators {
+                        let arm_operators = [first, second, third];
+                        let arms: Vec<(Expression, Expression)> = arm_operators
+                            .iter()
+                            .enumerate()
+                            .map(|(index, operator)| {
+                                (
+                                    compare(
+                                        path_expr("x"),
+                                        (*operator).clone(),
+                                        num_expr(constants[index]),
+                                    ),
+                                    num_expr(index as i64 + 1),
+                                )
+                            })
+                            .collect();
+                        let expr = chain(num_expr(0), arms);
+                        let (boundaries, regions) = table(&expr);
+
+                        // Sample below, at and above every constant, plus far outside.
+                        for probe in [-100i64, 1, 2, 3, 5, 6, 8, 9, 100] {
+                            let expected = arm_operators
+                                .iter()
+                                .enumerate()
+                                .rev()
+                                .find_map(|(index, operator)| {
+                                    predicate_holds(probe, operator, constants[index])
+                                        .then_some(index as i64 + 1)
+                                })
+                                .unwrap_or(0);
+                            let region = crate::planning::ordered_dispatch::region_for_value(
+                                &boundaries,
+                                &DispatchKey::Rational(rational_new(probe, 1)).as_probe(),
+                            )
+                            .expect("integers compare");
+                            assert_eq!(
+                                regions[region],
+                                expected.to_string(),
+                                "operators {first} / {second} / {third} disagree at x = {probe}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            assert_eq!(checked, 6 * 6 * 6 * 9);
+        }
+
+        fn predicate_holds(value: i64, operator: &ComparisonComputation, constant: i64) -> bool {
+            match operator {
+                ComparisonComputation::Is => value == constant,
+                ComparisonComputation::IsNot => value != constant,
+                ComparisonComputation::GreaterThan => value > constant,
+                ComparisonComputation::GreaterThanOrEqual => value >= constant,
+                ComparisonComputation::LessThan => value < constant,
+                ComparisonComputation::LessThanOrEqual => value <= constant,
+            }
+        }
+    }
+
     #[test]
     fn flatten_associative_sum_nested() {
         let inner = add_expr(num_expr(1), num_expr(2));
         let expr = add_expr(inner, num_expr(3));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3389,7 +4311,8 @@ mod tests {
     fn flatten_associative_product_nested() {
         let inner = mul_expr(num_expr(2), num_expr(3));
         let expr = mul_expr(inner, num_expr(4));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3421,14 +4344,16 @@ mod tests {
     #[test]
     fn identity_add_zero() {
         let expr = add_expr(dx(), num_expr(0));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(norm.kind, ExpressionKind::DataPath(ref p) if p.data == "x"));
     }
 
     #[test]
     fn identity_mul_one() {
         let expr = mul_expr(dx(), num_expr(1));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(norm.kind, ExpressionKind::DataPath(ref p) if p.data == "x"));
     }
 
@@ -3437,7 +4362,8 @@ mod tests {
         // `x * 0` must stay a runtime multiply: folding it to `0` would erase
         // a missing-data veto for `x` and drop `x` from the data manifest.
         let expr = mul_expr(dx(), num_expr(0));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::Arithmetic(left, ArithmeticComputation::Multiply, right) = norm.kind
         else {
             panic!("expected preserved multiply, got {:?}", norm.kind);
@@ -3454,7 +4380,8 @@ mod tests {
     fn identity_mul_zero_with_literal_folds() {
         // All-literal products still fold: `7 * 0 → 0`.
         let expr = mul_expr(num_expr(7), num_expr(0));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3464,11 +4391,19 @@ mod tests {
 
     #[test]
     fn identity_pow_one_and_zero() {
-        let p1 = normalize_expression(&pow_expr(dx(), num_expr(1)), None).expect("normalize");
+        let p1 = normalize_expression(
+            &pow_expr(dx(), num_expr(1)),
+            &UnitResolutionContext::NamedMeasureOnly,
+        )
+        .expect("normalize");
         assert!(matches!(p1.kind, ExpressionKind::DataPath(ref p) if p.data == "x"));
         // `x ^ 0` must stay a runtime power: folding it to `1` would erase a
         // missing-data veto for `x`.
-        let p0 = normalize_expression(&pow_expr(dx(), num_expr(0)), None).expect("normalize");
+        let p0 = normalize_expression(
+            &pow_expr(dx(), num_expr(0)),
+            &UnitResolutionContext::NamedMeasureOnly,
+        )
+        .expect("normalize");
         let ExpressionKind::Arithmetic(base, ArithmeticComputation::Power, exp) = p0.kind else {
             panic!("expected preserved power, got {:?}", p0.kind);
         };
@@ -3479,8 +4414,11 @@ mod tests {
                 if matches!(l.value, crate::planning::semantics::ValueKind::Number(ref n) if n == &rational_new(0, 1))
         ));
         // A total, nonzero literal base still folds: `7 ^ 0 → 1`.
-        let literal_pow_zero =
-            normalize_expression(&pow_expr(num_expr(7), num_expr(0)), None).expect("normalize");
+        let literal_pow_zero = normalize_expression(
+            &pow_expr(num_expr(7), num_expr(0)),
+            &UnitResolutionContext::NamedMeasureOnly,
+        )
+        .expect("normalize");
         assert!(matches!(
             literal_pow_zero.kind,
             ExpressionKind::Literal(ref l)
@@ -3490,8 +4428,11 @@ mod tests {
 
     #[test]
     fn double_logical_negation() {
-        let norm =
-            normalize_expression(&not_expr(not_expr(bool_expr(true))), None).expect("normalize");
+        let norm = normalize_expression(
+            &not_expr(not_expr(bool_expr(true))),
+            &UnitResolutionContext::NamedMeasureOnly,
+        )
+        .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l) if matches!(l.value, crate::planning::semantics::ValueKind::Boolean(true))
@@ -3517,7 +4458,8 @@ mod tests {
             ),
             None,
         );
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(norm.kind, ExpressionKind::DataPath(ref p) if p.data == "x"));
     }
 
@@ -3542,7 +4484,8 @@ mod tests {
             ),
             None,
         );
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::Arithmetic(_, ArithmeticComputation::Divide, outer_denominator) =
             norm.kind
         else {
@@ -3569,7 +4512,8 @@ mod tests {
             None,
         );
         let expr = pow_expr(sqrt2, num_expr(2));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3588,7 +4532,8 @@ mod tests {
             None,
         );
         let expr = pow_expr(num_expr(2), half);
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(
             matches!(
                 norm.kind,
@@ -3611,7 +4556,8 @@ mod tests {
             )
         }
         let expr = not_expr(and_expr(dx(), dy()));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::LogicalNegation(inner, _) = norm.kind else {
             panic!("expected preserved negation, got {:?}", norm.kind);
         };
@@ -3625,7 +4571,8 @@ mod tests {
     #[test]
     fn power_law_nested_power() {
         let expr = pow_expr(pow_expr(dx(), num_expr(2)), num_expr(3));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Arithmetic(_, ArithmeticComputation::Power, _)
@@ -3647,7 +4594,8 @@ mod tests {
     #[test]
     fn power_law_like_base_product() {
         let expr = mul_expr(pow_expr(dx(), num_expr(2)), pow_expr(dx(), num_expr(3)));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::Arithmetic(base, ArithmeticComputation::Power, exp) = norm.kind else {
             panic!("expected single power, got {:?}", norm.kind);
         };
@@ -3662,7 +4610,8 @@ mod tests {
     #[test]
     fn negated_comparison_not_less_than() {
         let cmp = lt_expr(dx(), num_expr(0));
-        let norm = normalize_expression(&not_expr(cmp), None).expect("normalize");
+        let norm = normalize_expression(&not_expr(cmp), &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::Comparison(_, op, _) = norm.kind else {
             panic!("expected Comparison, got {:?}", norm.kind);
         };
@@ -3674,7 +4623,8 @@ mod tests {
         // `false and x` must stay a conjunction: folding it to `false` would
         // erase a missing-data veto for `x`.
         let expr = and_expr(bool_expr(false), dx());
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::LogicalAnd(left, right) = norm.kind else {
             panic!("expected preserved conjunction, got {:?}", norm.kind);
         };
@@ -3688,7 +4638,8 @@ mod tests {
     #[test]
     fn logical_short_circuit_and_false_all_literal_folds() {
         let expr = and_expr(bool_expr(false), bool_expr(true));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l) if matches!(l.value, crate::planning::semantics::ValueKind::Boolean(false))
@@ -3699,7 +4650,8 @@ mod tests {
     fn logical_idempotency_and_duplicate_paths() {
         let a = dx();
         let expr = and_expr(a.clone(), a);
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(norm.kind, ExpressionKind::DataPath(ref p) if p.data == "x"));
     }
 
@@ -3714,7 +4666,7 @@ mod tests {
             None,
         );
         let ctx = UnitResolutionContext::NamedMeasureOnly;
-        let norm = normalize_expression(&expr, Some(&ctx)).expect("normalize");
+        let norm = normalize_expression(&expr, &ctx).expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3769,7 +4721,8 @@ mod tests {
     fn piecewise_collapse_last_true_unless_keeps_only_that_result() {
         let branches = vec![(None, num_expr(0)), (Some(bool_expr(true)), num_expr(42))];
         let piecewise = unless_branches_to_piecewise(&branches);
-        let norm = normalize_expression(&piecewise, None).expect("normalize");
+        let norm = normalize_expression(&piecewise, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3789,7 +4742,16 @@ mod tests {
             rule_target_data: &rule_target_data,
         };
         let root = to_normal_form(&piecewise, &mut interner, &lower);
-        let nf = normalize_once(root, &mut interner, None, None).expect("normalize");
+        let data = IndexMap::new();
+        let unit_ctx = UnitResolutionContext::NamedMeasureOnly;
+        let limits = crate::limits::ResourceLimits::default();
+        let ctx = NormalizeContext {
+            data: &data,
+            unit_ctx: &unit_ctx,
+            max_normalized_expression_nodes: limits.max_normalized_expression_nodes,
+            max_normal_form_depth: limits.max_normal_form_depth,
+        };
+        let nf = normalize_once(root, &mut interner, &ctx, None).expect("normalize");
         let cell = interner.get(nf);
         assert!(
             cell.origin.is_some(),
@@ -3811,7 +4773,8 @@ mod tests {
             (Some(lt_expr(num_expr(1), num_expr(0))), num_expr(99)),
         ];
         let piecewise = unless_branches_to_piecewise(&branches);
-        let norm = normalize_expression(&piecewise, None).expect("normalize");
+        let norm = normalize_expression(&piecewise, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3822,7 +4785,8 @@ mod tests {
     #[test]
     fn constant_fold_divide_of_literals_to_number() {
         let expr = div_expr(num_expr(5), num_expr(2));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l)
@@ -3833,7 +4797,8 @@ mod tests {
     #[test]
     fn constant_fold_divide_comparison_to_true() {
         let expr = lt_expr(div_expr(num_expr(5), num_expr(2)), num_expr(4));
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l) if matches!(l.value, ValueKind::Boolean(true))
@@ -3850,7 +4815,8 @@ mod tests {
             ),
             num_expr(10),
         );
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l) if matches!(l.value, ValueKind::Boolean(true))
@@ -3883,7 +4849,8 @@ mod tests {
             ),
             None,
         );
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let mut interner = NormalFormInterner::new();
         let id = to_normal_form_empty(&norm, &mut interner);
         assert!(
@@ -3907,7 +4874,8 @@ mod tests {
             ExpressionKind::MathematicalComputation(MathematicalComputation::Exp, Arc::new(inner)),
             None,
         );
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         let ExpressionKind::MathematicalComputation(MathematicalComputation::Exp, inner) =
             norm.kind
         else {
@@ -3934,7 +4902,8 @@ mod tests {
             ),
             None,
         );
-        let norm = normalize_expression(&expr, None).expect("normalize");
+        let norm = normalize_expression(&expr, &UnitResolutionContext::NamedMeasureOnly)
+            .expect("normalize");
         assert!(matches!(
             norm.kind,
             ExpressionKind::Literal(ref l) if matches!(l.value, crate::planning::semantics::ValueKind::Number(ref n) if n == &rational_new(5, 1))

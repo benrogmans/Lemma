@@ -16,6 +16,6 @@ crate-type = ["cdylib"]
 [dependencies]
 lemma-engine = { path = "../../../../" }
 lemma-openapi = { path = "../../../../../openapi" }
-rustler = "0.37"
+rustler = "0.38"
 rust_decimal = "1"
 serde_json.workspace = true

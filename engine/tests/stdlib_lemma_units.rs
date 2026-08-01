@@ -219,6 +219,47 @@ rule x: 1 byte as bit"#,
 }
 
 #[test]
+fn kilobyte_as_bit() {
+    let out = eval_rule(
+        r#"spec info_test
+uses lemma units
+rule x: 1 kilobyte as bit"#,
+        "info_test",
+        "x",
+    );
+    assert!(
+        out.contains("8000") && out.contains("bit"),
+        "expected 8000 bit, got: {out}"
+    );
+}
+
+#[test]
+fn megabyte_differs_from_mebibyte() {
+    let mb = eval_rule(
+        r#"spec info_test
+uses lemma units
+rule x: 1 megabyte as byte"#,
+        "info_test",
+        "x",
+    );
+    let mib = eval_rule(
+        r#"spec info_test
+uses lemma units
+rule x: 1 mebibyte as byte"#,
+        "info_test",
+        "x",
+    );
+    assert!(
+        mb.contains("1000000") && mb.contains("byte"),
+        "expected 1000000 byte, got: {mb}"
+    );
+    assert!(
+        mib.contains("1048576") && mib.contains("byte"),
+        "expected 1048576 byte, got: {mib}"
+    );
+}
+
+#[test]
 fn show_omits_stdlib_typedefs_with_no_rules() {
     let engine = Engine::new();
     let show = engine

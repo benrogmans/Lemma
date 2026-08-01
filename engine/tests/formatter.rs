@@ -99,6 +99,80 @@ fn precedence_deeply_nested() {
 }
 
 // =============================================================================
+// Numeric unary minus
+// =============================================================================
+
+#[test]
+fn unary_minus_number_literal_stays_signed() {
+    let src = "spec test rule x: -2";
+    assert_eq!(format_and_extract_rule_expr(src), "-2");
+}
+
+#[test]
+fn unary_minus_unless_then_stays_signed() {
+    let src = r#"spec test
+data id: text
+rule x: 0
+unless id is "America/Noronha" then -2
+"#;
+    let formatted = format_source(src, lemma::SourceType::Volatile).unwrap();
+    assert!(
+        formatted.contains("then -2"),
+        "expected signed literal in unless result, got:\n{formatted}"
+    );
+    assert!(
+        !formatted.contains("0 - 2"),
+        "must not desugar unary minus to subtract-from-zero, got:\n{formatted}"
+    );
+    let twice = format_source(&formatted, lemma::SourceType::Volatile).unwrap();
+    assert_eq!(formatted, twice);
+}
+
+#[test]
+fn explicit_subtract_from_zero_preserved() {
+    let src = "spec test rule x: 0 - 2";
+    assert_eq!(format_and_extract_rule_expr(src), "0 - 2");
+}
+
+#[test]
+fn unary_minus_measure_stays_signed() {
+    let src = "spec test rule x: -5 kilometer";
+    assert_eq!(format_and_extract_rule_expr(src), "-5 kilometer");
+}
+
+#[test]
+fn unary_minus_over_sum_stays_subtract_from_zero() {
+    let src = "spec test data a: 1 data b: 2 rule x: -(a + b)";
+    assert_eq!(format_and_extract_rule_expr(src), "0 - (a + b)");
+}
+
+#[test]
+fn same_prec_right_add_under_subtract_keeps_parens() {
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: a - (b + c)";
+    assert_eq!(format_and_extract_rule_expr(src), "a - (b + c)");
+}
+
+#[test]
+fn same_prec_right_subtract_under_subtract_keeps_parens() {
+    let src = "spec test data a: 1 data b: 2 data c: 3 rule x: a - (b - c)";
+    assert_eq!(format_and_extract_rule_expr(src), "a - (b - c)");
+}
+
+#[test]
+fn same_prec_right_parens_format_idempotent() {
+    for expr in ["a - (b + c)", "a - (b - c)", "0 - (a + b)"] {
+        let src = format!("spec test data a: 1 data b: 2 data c: 3 rule x: {expr}");
+        let once = format_source(&src, lemma::SourceType::Volatile).unwrap();
+        let twice = format_source(&once, lemma::SourceType::Volatile).unwrap();
+        assert_eq!(once, twice, "idempotent for {expr}");
+        assert!(
+            once.contains(expr),
+            "formatted source must keep parens for {expr}, got:\n{once}"
+        );
+    }
+}
+
+// =============================================================================
 // Round-trip tests against example .lemma files
 // =============================================================================
 

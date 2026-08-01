@@ -5,26 +5,6 @@ nav_order: 50
 
 # Python (coming soon!)
 
-A Python package that brings the Lemma engine to Python is on the way, so Python projects will be able to embed the engine directly. It is not published yet.
+A Python package that brings the Lemma engine to Python is on the way. It is not published yet; no installable API exists to copy from.
 
-Until it lands, embed Lemma through one of the other SDKs, or drive the engine from the command line with the [Lemma CLI](../reference/cli.md). Check back soon.
-
-# Example
-
-```python
-from lemma import Engine
-
-engine = Engine()
-
-engine.load("""
-    spec pricing
-    data count: number
-    data price: 10
-    rule total: count * price
-    rule discount: 0
-      unless count >= 10 then 5
-      unless count >= 50 then 15
-""")
-
-response = engine.run("pricing", {"count": "25"})
-```
+Until it lands, embed Lemma through one of the published SDKs — [Rust](rust.md), [JavaScript / TypeScript](javascript.md), [Elixir](elixir.md), or [Maven](maven.md) — or drive the engine from the command line with the [Lemma CLI](../reference/cli.md).

@@ -95,6 +95,12 @@ rule step3: step2 - 3
                     worklist.push(*r);
                 }
             }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                worklist.push(*scrutinee);
+                worklist.extend(regions.iter().copied());
+            }
         }
         if let Some(origin) = plan.normal_form(id).origin {
             worklist.push(origin);
@@ -111,6 +117,62 @@ rule step3: step2 - 3
             "shipped cell {id} not reachable from any rule root"
         );
     }
+}
+
+#[test]
+fn unless_lookup_chain_folds_to_ordered_dispatch() {
+    let code = r#"
+spec lookup
+data code: text
+  -> option "NL"
+  -> option "BE"
+  -> option "DE"
+rule name: veto "unknown"
+  unless code is "NL" then "Netherlands"
+  unless code is "BE" then "Belgium"
+  unless code is "DE" then "Germany"
+"#;
+    let plan = plan_from_code(code);
+    let root = rule_root(&plan, "name");
+    let NormalFormKind::OrderedDispatch {
+        boundaries,
+        regions,
+        ..
+    } = &root.kind
+    else {
+        panic!(
+            "lookup chain must fold to a dispatch table, got {:?}",
+            root.kind
+        );
+    };
+    assert_eq!(boundaries.len(), 3, "one breakpoint per distinct code");
+    assert_eq!(regions.len(), 2 * 3 + 1);
+    let origin = root.origin.expect("fold must keep its pre-image");
+    assert!(
+        matches!(plan.normal_form(origin).kind, NormalFormKind::Piecewise(_)),
+        "pre-image must be the Piecewise, got {:?}",
+        plan.normal_form(origin).kind
+    );
+}
+
+#[test]
+fn ordering_chain_over_a_number_folds_to_ordered_dispatch() {
+    let code = r#"
+spec tiers
+data quantity: number
+rule discount: 0
+  unless quantity >= 10 then 5
+  unless quantity >= 100 then 10
+"#;
+    let plan = plan_from_code(code);
+    let root = rule_root(&plan, "discount");
+    let NormalFormKind::OrderedDispatch { boundaries, .. } = &root.kind else {
+        panic!(
+            "ordering chain must fold to a dispatch table, got {:?}",
+            root.kind
+        );
+    };
+    assert_eq!(boundaries.len(), 2);
 }
 
 #[test]

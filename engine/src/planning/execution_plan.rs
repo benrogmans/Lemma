@@ -791,7 +791,7 @@ impl ExecutionPlan {
     /// Expression-scope unit index (local types plus direct `uses` imports).
     /// Rule-result units outside this scope are resolved from [`ExecutableRule::rule_type`]
     /// when building RuleResultValue.
-    pub(crate) fn expression_unit_index(&self) -> &HashMap<String, Arc<LemmaType>> {
+    pub(crate) fn expression_unit_index(&self) -> &crate::planning::unit_index::UnitIndex {
         &self.resolved_types.unit_index
     }
 
@@ -1033,6 +1033,14 @@ pub(crate) fn reachable_data_paths(
                     push_live_child(*body, dead_here, &visited, &mut stack);
                 }
             }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                push_live_child(*scrutinee, dead_here, &visited, &mut stack);
+                for region in regions {
+                    push_live_child(*region, dead_here, &visited, &mut stack);
+                }
+            }
         }
     }
     out
@@ -1041,7 +1049,7 @@ pub(crate) fn reachable_data_paths(
 pub(crate) fn validate_value_against_type(
     expected_type: &LemmaType,
     value: &LiteralValue,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> Result<(), String> {
     use crate::computation::rational::{
         checked_mul, rational_new, try_pow_i32, BigInt, RationalInteger,
@@ -1422,7 +1430,7 @@ fn validate_range_literal(
     range_spec: &TypeSpecification,
     left: &LiteralValue,
     right: &LiteralValue,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> Result<(), String> {
     use crate::computation::{comparison_operation, OperationResult, UnitResolutionContext};
     use crate::planning::semantics::{
@@ -1593,51 +1601,43 @@ fn validate_range_literal(
             minimum, maximum, ..
         } => {
             let allow_calendar = matches!(range_spec, TypeSpecification::DateRange { .. });
-            let resolve_bound = |bound: &(
-                crate::computation::rational::RationalInteger,
-                String,
-            ),
-                                 command: &str|
-             -> Result<LiteralValue, String> {
-                let owner = unit_index.get(bound.1.as_str()).ok_or_else(|| {
-                        format!(
-                            "{command} width unit '{}' is not in scope (add `uses lemma units` or declare the unit)",
-                            bound.1
-                        )
-                    })?;
-                if allow_calendar {
-                    if !owner.is_duration_like() && !owner.is_calendar_like() {
+            let resolve_bound =
+                |bound: &(crate::computation::rational::RationalInteger, String),
+                 command: &str|
+                 -> Result<LiteralValue, String> {
+                    let (bare, owner) = unit_index
+                        .resolve(bound.1.as_str())
+                        .map_err(|err| format!("{command} width unit '{}': {err}", bound.1))?;
+                    if allow_calendar {
+                        if !owner.is_duration_like() && !owner.is_calendar_like() {
+                            return Err(format!(
+                                "{command} width unit '{bare}' must be a duration or calendar unit",
+                            ));
+                        }
+                    } else if !owner.is_duration_like() {
                         return Err(format!(
-                            "{command} width unit '{}' must be a duration or calendar unit",
-                            bound.1
+                            "{command} width unit '{bare}' must be a duration unit",
                         ));
                     }
-                } else if !owner.is_duration_like() {
-                    return Err(format!(
-                        "{command} width unit '{}' must be a duration unit",
-                        bound.1
-                    ));
-                }
-                let TypeSpecification::Measure { units, .. } = &owner.specifications else {
-                    return Err(format!(
-                        "{command} width unit '{}' must resolve to a measure type",
-                        bound.1
-                    ));
+                    let TypeSpecification::Measure { units, .. } = &owner.specifications else {
+                        return Err(format!(
+                            "{command} width unit '{bare}' must resolve to a measure type",
+                        ));
+                    };
+                    let type_name = owner.name();
+                    let canonical = measure_declared_bound_to_canonical(
+                        &bound.0,
+                        &bare,
+                        units,
+                        type_name.as_str(),
+                        command,
+                    )?;
+                    Ok(LiteralValue::measure_with_type(
+                        canonical,
+                        bare,
+                        Arc::clone(&owner),
+                    ))
                 };
-                let type_name = owner.name();
-                let canonical = measure_declared_bound_to_canonical(
-                    &bound.0,
-                    &bound.1,
-                    units,
-                    type_name.as_str(),
-                    command,
-                )?;
-                Ok(LiteralValue::measure_with_type(
-                    canonical,
-                    bound.1.clone(),
-                    Arc::clone(owner),
-                ))
-            };
             if let Some(min_w) = minimum {
                 let bound = resolve_bound(min_w, "minimum")?;
                 compare_width(
@@ -1767,6 +1767,14 @@ fn validate_unit_conversion_targets(plan: &ExecutionPlan) -> Result<(), Error> {
                 for (condition, result) in arms.iter() {
                     walk(plan, *condition, errors, visited, spec_name);
                     walk(plan, *result, errors, visited, spec_name);
+                }
+            }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                walk(plan, *scrutinee, errors, visited, spec_name);
+                for region in regions.iter() {
+                    walk(plan, *region, errors, visited, spec_name);
                 }
             }
         }
@@ -3005,12 +3013,12 @@ rule total: wh.total_logistics_per_ce
 
         let expression_units = &plan.resolved_types.unit_index;
         assert!(
-            !expression_units.contains_key("week"),
+            expression_units.unique_owner("week").is_none(),
             "consumer expression scope must not contain week: {:?}",
             expression_units.keys().collect::<Vec<_>>()
         );
         assert!(
-            !expression_units.contains_key("minute"),
+            expression_units.unique_owner("minute").is_none(),
             "consumer expression scope must not contain minute: {:?}",
             expression_units.keys().collect::<Vec<_>>()
         );
@@ -3055,7 +3063,10 @@ rule total: wh.total_logistics_per_ce
             .expect("plans for quotation");
         let plan = plans.values().next().expect("plan");
         assert!(
-            !plan.resolved_types.unit_index.contains_key("week"),
+            plan.resolved_types
+                .unit_index
+                .unique_owner("week")
+                .is_none(),
             "consumer unit_index must not contain week"
         );
         let now = DateTimeValue::now();

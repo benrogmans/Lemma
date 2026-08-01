@@ -90,7 +90,7 @@ rule discount: 0
 | Function | Description |
 |----------|-------------|
 | `Lemma.new/1` | Create engine (optional limits map) |
-| `Lemma.load/2` | Load sources: binary (volatile) or map / list of `{label, code}` (labeled) |
+| `Lemma.load/2` | Load sources: binary (volatile); map (lexicographic label order) or list of `{label, code}` (caller order) |
 | `Lemma.list/1` | List loaded specs (includes embedded `lemma` / `spec units`) |
 | `Lemma.show/4` | Spec interface and temporal window (`repository`, `spec`, `effective`) |
 | `Lemma.source/4` | Formatted canonical Lemma source |

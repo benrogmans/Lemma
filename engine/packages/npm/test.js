@@ -211,6 +211,54 @@ rule y: x * 3`],
       assert(ruleNumber(r.results.y) === 6, 'list batch load run');
     });
 
+    await run('load object preserves key insertion order in list', () => {
+      const fresh = new Engine();
+      // Non-alphabetical insertion order; HashMap would scramble this.
+      fresh.load({
+        'zebra.lemma': `spec zebra
+data n: 1
+rule r: n`,
+        'alpha.lemma': `spec alpha
+data n: 1
+rule r: n`,
+        'mike.lemma': `spec mike
+data n: 1
+rule r: n`,
+      });
+      const workspace = fresh.list().find((g) => g.repository == null);
+      assert(workspace, 'workspace group must be present');
+      const names = workspace.specs.map((s) => s.name);
+      assert(
+        JSON.stringify(names) === JSON.stringify(['zebra', 'alpha', 'mike']),
+        `workspace list must follow object key order, got ${JSON.stringify(names)}`
+      );
+    });
+
+    await run('load object preserves key order in parse errors', () => {
+      const fresh = new Engine();
+      let threw = false;
+      try {
+        fresh.load({
+          'zebra.lemma': 'this is not lemma',
+          'yankee.lemma': `spec ok
+rule r: 1
+`,
+          'xray.lemma': 'also not lemma',
+        });
+      } catch (e) {
+        threw = true;
+        assert(Array.isArray(e), 'load throw must be array of EngineError');
+        const attrs = e
+          .map((err) => err.source && err.source.attribute)
+          .filter(Boolean);
+        assert(
+          JSON.stringify(attrs) === JSON.stringify(['zebra.lemma', 'xray.lemma']),
+          `parse errors must follow object key order, got ${JSON.stringify(attrs)}`
+        );
+      }
+      assert(threw, 'load with invalid sources must throw');
+    });
+
     await run('load + run shape + double rule', () => {
       engine.load({ 'test.lemma': `spec test
       data x: 10
