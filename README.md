@@ -267,7 +267,7 @@ lemma run pricing -x                      # show reasoning
 lemma show pricing                      # spec interface
 lemma list                                # list all specs
 lemma format                               # format .lemma files
-lemma fetch                               # fetch registry dependencies
+lemma fetch --all                         # fetch all @... registry dependencies
 lemma lsp                                 # language server (stdio)
 ```
 
@@ -301,8 +301,8 @@ lemma server --prefix ./policies --watch
 AI assistants interact with Lemma specs via the [Model Context Protocol](https://modelcontextprotocol.io):
 
 ```bash
-lemma mcp             # read-only
-lemma mcp --admin     # enable spec creation
+lemma mcp             # read-only (evaluate, list, show)
+lemma mcp --admin     # also enable add_spec and source
 ```
 
 ### WebAssembly
@@ -336,11 +336,12 @@ See [engine/packages/maven/README.md](engine/packages/maven/README.md) and [docu
 docker pull ghcr.io/lemma/lemma:latest
 
 # Run a spec
-docker run --rm -v "$(pwd):/specs" ghcr.io/lemma/lemma run shipping
+docker run --rm -v "$(pwd):/specs" ghcr.io/lemma/lemma \
+  run --prefix /specs shipping
 
 # Deploy as HTTP API
 docker run -d -p 8012:8012 -v "$(pwd):/specs" ghcr.io/lemma/lemma \
-  server /specs --host 0.0.0.0 --port 8012
+  server --prefix /specs --host 0.0.0.0 --port 8012
 ```
 
 Supports `linux/amd64` and `linux/arm64`.

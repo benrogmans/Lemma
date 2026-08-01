@@ -175,7 +175,7 @@ lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
 - `--request-timeout <second>`: wall-clock timeout for a single request (default: `10`)
 
 **Tools (default):**
-- `evaluate` — evaluate rules in a spec
+- `evaluate` — evaluate rules in a spec (always includes explanation trees; unlike CLI/HTTP/WASM, there is no opt-out)
 - `list` — list loaded specs by repository
 - `show` — show a spec interface (data and rules)
 
@@ -219,7 +219,7 @@ Resource limits control parse-time and planning-time budgets. These are security
 
 **Accept-Datetime (HTTP)**: clients send `Accept-Datetime` with the same formats as `--effective`: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO 8601 datetime. Empty or omitted → now. Invalid values are a bad request. Responses include `Vary: Accept-Datetime`. When the resolved spec row has an `effective_from`, the server also sets `Memento-Datetime` to that instant.
 
-**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and WASM. Use `--explain` (CLI), `--explanations` (server) + `x-explanations` (client), or `explain: true` (SDK) to opt in. Evaluate JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`api.v1.json`](../schemas/api.v1.json) — bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
+**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and WASM. Use `--explain` (CLI), `--explanations` (server) + `x-explanations` (client), or `explain: true` (SDK) to opt in. MCP `evaluate` always sets `explain: true` (no opt-out). Evaluate JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`api.v1.json`](../schemas/api.v1.json) — bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
 
 ## See Also
 

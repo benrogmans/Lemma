@@ -119,6 +119,13 @@ data capacitance: measure
 data information: measure
   -> unit bit 1
   -> unit byte 8
+  -> unit kilobyte 8000
+  -> unit megabyte 8000000
+  -> unit gigabyte 8000000000
+  -> unit terabyte 8000000000000
+  -> unit petabyte 8000000000000000
   -> unit kibibyte 8192
   -> unit mebibyte 8388608
   -> unit gibibyte 8589934592
+  -> unit tebibyte 8796093022208
+  -> unit pebibyte 9007199254740992

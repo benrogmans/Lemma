@@ -181,6 +181,75 @@ defmodule LemmaTest do
 
       assert hd(errors)[:kind] == "request"
     end
+
+    test "list of tuples preserves caller order in list/1" do
+      {:ok, engine} = Lemma.new()
+
+      assert :ok =
+               Lemma.load(engine, [
+                 {"zebra.lemma", "spec zebra\ndata n: 1\nrule r: n"},
+                 {"alpha.lemma", "spec alpha\ndata n: 1\nrule r: n"},
+                 {"mike.lemma", "spec mike\ndata n: 1\nrule r: n"}
+               ])
+
+      assert {:ok, groups} = Lemma.list(engine)
+      [workspace] = workspace_groups(groups)
+      names = Enum.map(workspace["specs"], & &1["name"])
+      assert names == ["zebra", "alpha", "mike"]
+    end
+
+    test "list of tuples preserves caller order in parse errors" do
+      {:ok, engine} = Lemma.new()
+
+      assert {:error, errors} =
+               Lemma.load(engine, [
+                 {"zebra.lemma", "this is not lemma"},
+                 {"yankee.lemma", "spec ok\nrule r: 1\n"},
+                 {"xray.lemma", "also not lemma"}
+               ])
+
+      attrs =
+        errors
+        |> Enum.map(fn err -> get_in(err, [:source, :attribute]) end)
+        |> Enum.reject(&is_nil/1)
+
+      assert attrs == ["zebra.lemma", "xray.lemma"]
+    end
+
+    test "map load orders sources lexicographically by label in list/1" do
+      {:ok, engine} = Lemma.new()
+
+      # Literal key order is non-alphabetical; contract is lexicographic labels.
+      assert :ok =
+               Lemma.load(engine, %{
+                 "zebra.lemma" => "spec zebra\ndata n: 1\nrule r: n",
+                 "alpha.lemma" => "spec alpha\ndata n: 1\nrule r: n",
+                 "mike.lemma" => "spec mike\ndata n: 1\nrule r: n"
+               })
+
+      assert {:ok, groups} = Lemma.list(engine)
+      [workspace] = workspace_groups(groups)
+      names = Enum.map(workspace["specs"], & &1["name"])
+      assert names == ["alpha", "mike", "zebra"]
+    end
+
+    test "map load orders parse errors lexicographically by label" do
+      {:ok, engine} = Lemma.new()
+
+      assert {:error, errors} =
+               Lemma.load(engine, %{
+                 "zebra.lemma" => "this is not lemma",
+                 "yankee.lemma" => "spec ok\nrule r: 1\n",
+                 "xray.lemma" => "also not lemma"
+               })
+
+      attrs =
+        errors
+        |> Enum.map(fn err -> get_in(err, [:source, :attribute]) end)
+        |> Enum.reject(&is_nil/1)
+
+      assert attrs == ["xray.lemma", "zebra.lemma"]
+    end
   end
 
   describe "list/1" do

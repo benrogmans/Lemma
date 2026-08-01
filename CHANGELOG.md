@@ -4,7 +4,11 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.9.1] - 2026-08-01
 
-0.9.1 consolidates the consumer API schema into a single `api.v1.json` document, completes the Java Maven SDK (typed Show/ExplanationNode/LemmaType, BigDecimal magnitudes, JDK 21, thread-safe Engine), aligns the TypeScript and Elixir SDKs to the canonical wire format, and hardens release quality gates.
+0.9.1 consolidates the consumer API schema into a single `api.v1.json` document, completes the Java Maven SDK (typed Show/ExplanationNode/LemmaType, BigDecimal magnitudes, JDK 21, thread-safe Engine), aligns the TypeScript and Elixir SDKs to the canonical wire format, hardens release quality gates, adds qualified units, and folds long `unless` chains into ordered lookups.
+
+### Added
+
+- **Qualified units**: optionally qualify unit names (`Type.unit`, `alias.unit`, `alias.Type.unit`); must qualify when the bare name is ambiguous in scope. Cross-type duplicate unit names no longer block loading the spec — bare use sites report a planning error with legal qualifiers.
 
 ### Changed
 
@@ -15,11 +19,15 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - **Native library loading**: Java SDK honors `lemma.native.library` system property and `LEMMA_JNI_LIBRARY` environment variable. Bundled natives are extracted to a version-keyed cache (`~/.lemma/native/{version}/{platform}/`) with atomic rename.
 - **ExplanationNode**: removed dead `UnitEquivalence` variant from Rust, schema, TypeScript, and Java.
 - **Performance**: engine evaluation ~10% faster, memory per evaluate call reduced ~15%, compile/plan up to 20% faster on complex specs.
+- **Performance — long `unless` chains**: planning folds a chain of `unless` clauses that all test the same value into an ordered lookup, so evaluation binary-searches instead of testing every clause in turn. Applies when each clause compares one shared scrutinee against a literal text, number, measure, ratio, date, datetime or time, using `is`, `is not`, or an ordering operator; mixed scrutinees, mixed value types, and non-literal comparands keep the existing behaviour. On the engine evaluate fixtures, evaluation is about 3–7% faster. Explain mode still narrates from the original `unless` chain (so explanation text, vetoes and missing-data reporting stay the same) and therefore evaluates the lookup for the value and then replays the pre-image for narration — a small constant cost on the explain path.
 - **Release CI**: each release quality gate runs `cargo precommit --fuzz` — 30 minutes of fuzz testing total, split across `engine/fuzz` targets.
 
 ### Fixed
 
-- **`with`-bound reference inputs in `show` / `missing_data`**: when a local promptable input is the ultimate target of a `with`-bound data reference (for example `with prev.code: code` and `rule name: prev.name`), `Engine::show().data` now lists that input and missing-data vetoes name its `input_key`, matching `RuleResult.missing_data`. Planning stores ultimate reference targets once; show and evaluation look them up — no reference-chain walk at request time.
+- **Unary minus on numeric literals in expressions**: `rule x: -2` and `unless … then -2` format as `-2` again (parser keeps a signed literal). Explicit `0 - 2` is unchanged; non-literal unary minus (e.g. `-(a + b)`) still desugars to subtract-from-zero.
+- **Source formatter dropped same-precedence parentheses**: left-associative arithmetic no longer loses required parens on the right operand (`a - (b + c)`, `a - (b - c)`, `0 - (a + b)`). Uses the same parenthesis policy as expression display.
+- **`show` hid inputs that `run` still asked for**: if you filled a nested field via `with` from a local input (e.g. `with prev.code: code`), evaluation correctly said `code` was missing, but `show` listed no inputs and error text named the nested path instead of `code`. Interactive prompts and OpenAPI bodies built from `show` therefore could not ask for the right field. Fixed so `show`, missing-data lists, and veto messages all name the same caller-facing input.
+- JS plain-object `load` no longer loses key order via `HashMap` (uses `IndexMap`); Hex map `load` sorts labels lexicographically so order is not VM-dependent. List/array forms already preserved caller order.
 
 ## [0.9.0] - 2026-07-25
 

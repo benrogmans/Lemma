@@ -25,6 +25,20 @@ pub fn negated_comparison(op: ComparisonComputation) -> ComparisonComputation {
     }
 }
 
+/// Returns the operator that states the same fact with the operands swapped:
+/// `k < x` and `x > k` hold on exactly the same values.
+#[must_use]
+pub fn mirrored_comparison(op: ComparisonComputation) -> ComparisonComputation {
+    match op {
+        ComparisonComputation::LessThan => ComparisonComputation::GreaterThan,
+        ComparisonComputation::LessThanOrEqual => ComparisonComputation::GreaterThanOrEqual,
+        ComparisonComputation::GreaterThan => ComparisonComputation::LessThan,
+        ComparisonComputation::GreaterThanOrEqual => ComparisonComputation::LessThanOrEqual,
+        ComparisonComputation::Is => ComparisonComputation::Is,
+        ComparisonComputation::IsNot => ComparisonComputation::IsNot,
+    }
+}
+
 // Internal-only parsing imports (used only within this module for value/type resolution).
 use crate::computation::rational::{checked_div, checked_mul, rational_new, RationalInteger};
 use crate::parsing::ast::Constraint;
@@ -36,7 +50,7 @@ use crate::parsing::ast::{
 use crate::Error;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::hash::Hash;
 use std::str::FromStr;
@@ -188,7 +202,7 @@ fn parse_unresolved_width_bound(
 /// callers that only check number/ratio/measure ranges.
 pub(crate) fn check_range_bound_consistency(
     spec: &TypeSpecification,
-    unit_index: &std::collections::HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> Result<(), String> {
     use std::cmp::Ordering;
 
@@ -316,45 +330,42 @@ pub(crate) fn check_range_bound_consistency(
 fn check_temporal_width_pair_consistency(
     minimum: &Option<(RationalInteger, String)>,
     maximum: &Option<(RationalInteger, String)>,
-    unit_index: &std::collections::HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
     allow_calendar: bool,
 ) -> Result<(), String> {
     let resolve = |bound: &(RationalInteger, String),
                    command: &str|
      -> Result<(RationalInteger, Arc<LemmaType>), String> {
-        let owner = unit_index.get(bound.1.as_str()).ok_or_else(|| {
+        let (bare, owner) = unit_index.resolve(bound.1.as_str()).map_err(|err| {
             format!(
-                "{command} width unit '{}' is not in scope (add `uses lemma units` or declare the unit)",
+                "{command} width unit '{}': {err} (add `uses lemma units` or declare the unit)",
                 bound.1
             )
         })?;
         if allow_calendar {
             if !owner.is_duration_like() && !owner.is_calendar_like() {
                 return Err(format!(
-                    "{command} width unit '{}' must be a duration or calendar unit",
-                    bound.1
+                    "{command} width unit '{bare}' must be a duration or calendar unit",
                 ));
             }
         } else if !owner.is_duration_like() {
             return Err(format!(
-                "{command} width unit '{}' must be a duration unit",
-                bound.1
+                "{command} width unit '{bare}' must be a duration unit",
             ));
         }
         let TypeSpecification::Measure { units, .. } = &owner.specifications else {
             return Err(format!(
-                "{command} width unit '{}' must resolve to a measure type",
-                bound.1
+                "{command} width unit '{bare}' must resolve to a measure type",
             ));
         };
         let canonical = measure_declared_bound_to_canonical(
             &bound.0,
-            &bound.1,
+            &bare,
             units,
             owner.name().as_str(),
             command,
         )?;
-        Ok((canonical, Arc::clone(owner)))
+        Ok((canonical, Arc::clone(&owner)))
     };
 
     match (minimum, maximum) {
@@ -402,11 +413,12 @@ fn owner_declares_measure_unit(owner: &LemmaType, unit_name: &str) -> bool {
 /// 1. When `owner` declares the unit, use `owner.measure_unit_factor(unit_name)`.
 /// 2. Fall back to `expression_units[unit_name].measure_unit_factor(unit_name)`.
 /// 3. Unknown names panic with `"BUG: signature_factor called with unresolved unit name"`.
+///    Ambiguous multi-owner names panic asking the caller to pass a declaring owner.
 ///
 /// Returns the product of `factor^exponent` over all pairs, or `NumericFailure` on overflow.
 pub fn signature_factor(
     signature: &[(String, i32)],
-    expression_units: &std::collections::HashMap<String, Arc<LemmaType>>,
+    expression_units: &crate::planning::unit_index::UnitIndex,
     owner: Option<&LemmaType>,
 ) -> Result<
     crate::computation::rational::RationalInteger,
@@ -418,8 +430,13 @@ pub fn signature_factor(
         let factor =
             if let Some(owner) = owner.filter(|owner| owner_declares_measure_unit(owner, name)) {
                 owner.measure_unit_factor(name).clone()
-            } else if let Some(lemma_type) = expression_units.get(name) {
+            } else if let Some(lemma_type) = expression_units.unique_owner(name) {
                 lemma_type.measure_unit_factor(name).clone()
+            } else if !expression_units.owners_for(name).is_empty() {
+                panic!(
+                "BUG: signature_factor called with ambiguous unit name '{}' (pass declaring owner)",
+                name
+            );
             } else {
                 panic!(
                     "BUG: signature_factor called with unresolved unit name '{}'",
@@ -4889,19 +4906,15 @@ pub(crate) fn compare_semantic_times(
 /// Convert AST conversion target to semantic (planning boundary; evaluation/computation use only semantic).
 pub fn conversion_target_to_semantic(
     ct: &ConversionTarget,
-    unit_index: Option<&HashMap<String, Arc<LemmaType>>>,
+    unit_index: Option<&crate::planning::unit_index::UnitIndex>,
 ) -> Result<SemanticConversionTarget, String> {
     match ct {
         ConversionTarget::Type(kind) => Ok(SemanticConversionTarget::Type(*kind)),
         ConversionTarget::Unit { unit_name } => {
-            let unit_name = crate::parsing::ast::ascii_lowercase_logical_name(unit_name.clone());
             let index = unit_index.ok_or_else(|| format!("Unknown unit '{unit_name}'."))?;
-            let owning_type = index
-                .get(&unit_name)
-                .ok_or_else(|| format!("Unknown unit '{unit_name}'."))?
-                .clone();
+            let (bare, owning_type) = index.resolve(unit_name)?;
             Ok(SemanticConversionTarget::Unit {
-                unit_name,
+                unit_name: bare,
                 owning_type,
             })
         }
@@ -5998,9 +6011,8 @@ pub(crate) mod tests {
 
     #[test]
     fn signature_factor_with_calendar_units() {
-        use std::collections::HashMap;
         let calendar = test_calendar_type_for_signature_factor();
-        let unit_index: HashMap<String, Arc<LemmaType>> = HashMap::new();
+        let unit_index = crate::planning::unit_index::UnitIndex::new();
         // month factor = 1, year factor = 12.
         // [(month,1),(year,-1)] = 1/12
         let sig_month_per_year = sig(&[("month", 1), ("year", -1)]);
@@ -6051,17 +6063,15 @@ pub(crate) mod tests {
     #[test]
     #[should_panic(expected = "BUG: signature_factor called with unresolved unit name")]
     fn signature_factor_panics_on_unresolved_name() {
-        use std::collections::HashMap;
-        let unit_index: HashMap<String, Arc<LemmaType>> = HashMap::new();
+        let unit_index = crate::planning::unit_index::UnitIndex::new();
         let bad_sig = sig(&[("nonexistent_unit_xyz", 1)]);
         let _ = signature_factor(&bad_sig, &unit_index, None);
     }
 
     #[test]
     fn signature_factor_uses_owner_when_expression_index_empty() {
-        use std::collections::HashMap;
         let money = test_money_type_for_signature_factor();
-        let expression_units: HashMap<String, Arc<LemmaType>> = HashMap::new();
+        let expression_units = crate::planning::unit_index::UnitIndex::new();
         let sig_usd = sig(&[("usd", 1)]);
         let factor =
             signature_factor(&sig_usd, &expression_units, Some(&money)).expect("must not overflow");

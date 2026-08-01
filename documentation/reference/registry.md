@@ -11,7 +11,7 @@ A registry is where Lemma looks up the specs you import from outside your own wo
 
 The engine itself never touches the network. It does not know about any registry, and it never downloads anything. Every external reference has to be resolved into source text first, and only then is that source handed to the engine.
 
-How you resolve references depends on how you run Lemma. From the command line you run lemma fetch, which follows the @ references and saves the downloaded specs into a lemma_deps folder inside your workspace. Every other command, such as run, server, show, list, mcp, and format, then reads your local .lemma files together with whatever is cached in lemma_deps. There is no lock file, so you should commit lemma_deps to version control.
+How you resolve references depends on how you run Lemma. From the command line you run `lemma fetch --all` (or `lemma fetch @owner/repo` for one dependency), which follows the @ references and saves the downloaded specs into a lemma_deps folder inside your workspace. Every other command, such as run, server, show, list, mcp, and format, then reads your local .lemma files together with whatever is cached in lemma_deps. There is no lock file, so you should commit lemma_deps to version control.
 
 If you are calling Lemma as a Rust crate, you resolve references yourself by calling resolve_registry_references, and then you load the resulting source into the engine. The example further down shows exactly how. If you are using the JavaScript package from npm (`@lemmabase/lemma-engine`), call `fetch` to download the source and then `load` (using the returned id as the source label) before loading your own specs.
 

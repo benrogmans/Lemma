@@ -80,19 +80,27 @@ fn sources_from_load_term(term: Term) -> Result<Vec<(SourceType, String)>, Strin
 }
 
 fn sources_from_label_map(iter: MapIterator) -> Result<Vec<(SourceType, String)>, String> {
-    let mut result = Vec::new();
+    // BEAM maps have no insertion-order contract. Lexicographic label order is the
+    // documented map-load contract; list-of-tuples preserves caller order instead.
+    let mut pairs = Vec::new();
     for (key, value) in iter {
-        let key_str: String = key
+        let label: String = key
             .decode()
             .map_err(|_| "load: map keys must be strings".to_string())?;
         let code: String = value
             .decode()
             .map_err(|_| "load: map values must be strings (Lemma source text)".to_string())?;
-        let source_type = SourceType::from_binding_label(&key_str)
-            .map_err(|e| format!("load: label '{key_str}': {e}"))?;
-        result.push((source_type, code));
+        pairs.push((label, code));
     }
-    Ok(result)
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    pairs
+        .into_iter()
+        .map(|(label, code)| {
+            SourceType::from_binding_label(&label)
+                .map(|source_type| (source_type, code))
+                .map_err(|e| format!("load: label '{label}': {e}"))
+        })
+        .collect()
 }
 
 fn sources_from_label_pairs(

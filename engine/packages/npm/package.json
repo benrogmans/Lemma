@@ -7,6 +7,6 @@
     "typecheck:fixtures": "tsc --noEmit -p tsconfig.fixtures.json"
   },
   "devDependencies": {
-    "typescript": "^5.8.2"
+    "typescript": "^7.0.2"
   }
 }

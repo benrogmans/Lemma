@@ -14,6 +14,9 @@ use crate::evaluation::EvaluationContext;
 use crate::planning::execution_plan::{ExecutableRule, ExecutionPlan};
 use crate::planning::explanation::{Cause, ExplanationNode};
 use crate::planning::normalize::{explanation_display, LeafKind, NormalFormId, NormalFormKind};
+use crate::planning::ordered_dispatch::{
+    dispatch_probe_of, region_count, region_for_value, DispatchKey, DispatchProbeOutcome,
+};
 use crate::planning::semantics::{
     negated_comparison, ArithmeticComputation, DataPath, LiteralValue, RulePath, ValueKind,
 };
@@ -158,6 +161,12 @@ fn collect_direct_rule_embed_paths(
                     worklist.push(*c);
                     worklist.push(*r);
                 }
+            }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                worklist.push(*scrutinee);
+                worklist.extend(regions.iter().copied());
             }
         }
     }
@@ -310,16 +319,33 @@ fn eval_uncached(
 ) -> Explained {
     if explain {
         if let Some(origin) = plan.normal_form(id).origin {
-            if matches!(&plan.normal_form(origin).kind, NormalFormKind::Piecewise(_)) {
-                return explain_with_piecewise_origin(id, origin, plan, ctx);
+            // Match on the *current* cell. OrderedDispatch narrates by replaying its
+            // Piecewise pre-image. Any other cell whose origin is still a Piecewise
+            // (including a literal left after collapse_piecewise) uses the record path
+            // so dead arms become data_unused without re-evaluating them.
+            match &plan.normal_form(id).kind {
+                NormalFormKind::OrderedDispatch {
+                    scrutinee,
+                    boundaries,
+                    regions,
+                } => {
+                    return explain_ordered_dispatch(
+                        id, origin, *scrutinee, boundaries, regions, plan, ctx,
+                    );
+                }
+                _ if matches!(&plan.normal_form(origin).kind, NormalFormKind::Piecewise(_)) => {
+                    return explain_with_piecewise_origin(id, origin, plan, ctx);
+                }
+                _ => {
+                    let value = eval(id, plan, ctx, false);
+                    let previous = ctx.record_control_decisions;
+                    ctx.record_control_decisions = false;
+                    let mut explained = eval(origin, plan, ctx, true);
+                    ctx.record_control_decisions = previous;
+                    explained.result = value.result;
+                    return explained;
+                }
             }
-            let value = eval(id, plan, ctx, false);
-            let previous = ctx.record_control_decisions;
-            ctx.record_control_decisions = false;
-            let mut explained = eval(origin, plan, ctx, true);
-            ctx.record_control_decisions = previous;
-            explained.result = value.result;
-            return explained;
         }
     }
 
@@ -455,6 +481,12 @@ fn structural_data_paths_from(id: NormalFormId, plan: &ExecutionPlan) -> Vec<Dat
                     stack.push(*c);
                     stack.push(*r);
                 }
+            }
+            NormalFormKind::OrderedDispatch {
+                scrutinee, regions, ..
+            } => {
+                stack.push(*scrutinee);
+                stack.extend(regions.iter().copied());
             }
             NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => {}
         }
@@ -719,6 +751,151 @@ fn evaluate_piecewise(
     not_taken.reverse();
     let causes = not_taken.into_iter().map(|(_, c)| c).collect();
     finish_piecewise(body_e, causes, true)
+}
+
+/// Explain an [`NormalFormKind::OrderedDispatch`]: value from the table, narration from
+/// the Piecewise origin. Before narrating, assert the Piecewise winner body is the
+/// same cell the table selected — two decision procedures must not disagree.
+fn explain_ordered_dispatch(
+    id: NormalFormId,
+    origin: NormalFormId,
+    scrutinee: NormalFormId,
+    boundaries: &[DispatchKey],
+    regions: &[NormalFormId],
+    plan: &ExecutionPlan,
+    ctx: &mut EvaluationContext,
+) -> Explained {
+    let value = eval(id, plan, ctx, false);
+    if !value.result.vetoed() {
+        let selected = dispatch_selected_body(scrutinee, boundaries, regions, plan, ctx);
+        let NormalFormKind::Piecewise(arms) = &plan.normal_form(origin).kind else {
+            panic!("BUG: OrderedDispatch origin must be Piecewise");
+        };
+        let winner_body = piecewise_winner_body(arms, plan, ctx);
+        assert_eq!(
+            selected, winner_body,
+            "BUG: OrderedDispatch region disagrees with Piecewise origin"
+        );
+    }
+    let previous = ctx.record_control_decisions;
+    ctx.record_control_decisions = false;
+    let mut explained = eval(origin, plan, ctx, true);
+    ctx.record_control_decisions = previous;
+    explained.result = value.result;
+    explained
+}
+
+/// Body id the dispatch table selects for the current scrutinee value.
+///
+/// Scrutinee must already have evaluated to a non-veto value (caller checked).
+fn dispatch_selected_body(
+    scrutinee: NormalFormId,
+    boundaries: &[DispatchKey],
+    regions: &[NormalFormId],
+    plan: &ExecutionPlan,
+    ctx: &mut EvaluationContext,
+) -> NormalFormId {
+    assert_eq!(
+        regions.len(),
+        region_count(boundaries.len()),
+        "BUG: OrderedDispatch region table does not match its boundary list"
+    );
+    let scrutinee_e = eval(scrutinee, plan, ctx, false);
+    let value = borrow_value(&scrutinee_e.result, "dispatch scrutinee for region check");
+    let probe = match dispatch_probe_of(&value.value) {
+        DispatchProbeOutcome::Probe(probe) => probe,
+        DispatchProbeOutcome::CalendarFailure(message) => {
+            panic!(
+                "BUG: OrderedDispatch region check saw calendar failure after non-veto value: {message}"
+            );
+        }
+        DispatchProbeOutcome::Unsupported => panic!(
+            "BUG: OrderedDispatch scrutinee evaluated to {:?}, a kind the fold excludes",
+            value.value
+        ),
+    };
+    let region = region_for_value(boundaries, &probe).unwrap_or_else(|failure| {
+        panic!(
+            "BUG: OrderedDispatch region check saw numeric failure after non-veto value: {failure}"
+        );
+    });
+    regions[region]
+}
+
+/// Body id the Piecewise reverse scan selects (default when no unless arm is Taken).
+fn piecewise_winner_body(
+    arms: &[(NormalFormId, NormalFormId)],
+    plan: &ExecutionPlan,
+    ctx: &mut EvaluationContext,
+) -> NormalFormId {
+    assert!(!arms.is_empty(), "BUG: empty piecewise record");
+    for i in (1..arms.len()).rev() {
+        match record_condition_outcome(arms[i].0, plan, ctx) {
+            BranchOutcome::Taken => return arms[i].1,
+            BranchOutcome::NotTaken | BranchOutcome::Propagate(_) => {}
+        }
+    }
+    arms[0].1
+}
+
+/// Value of an [`NormalFormKind::OrderedDispatch`] cell: evaluate the scrutinee once,
+/// binary-search its region, evaluate that region's result.
+///
+/// Value mode only. Explanation routes through [`explain_ordered_dispatch`].
+fn evaluate_ordered_dispatch(
+    id: NormalFormId,
+    scrutinee: NormalFormId,
+    boundaries: &[DispatchKey],
+    regions: &[NormalFormId],
+    plan: &ExecutionPlan,
+    ctx: &mut EvaluationContext,
+    explain: bool,
+) -> Explained {
+    assert!(
+        !explain,
+        "BUG: OrderedDispatch narrated directly; explain mode must route through explain_ordered_dispatch"
+    );
+    assert_eq!(
+        regions.len(),
+        region_count(boundaries.len()),
+        "BUG: OrderedDispatch region table does not match its boundary list"
+    );
+
+    let scrutinee_e = eval(scrutinee, plan, ctx, false);
+    if scrutinee_e.result.vetoed() {
+        return scrutinee_e;
+    }
+    let value = borrow_value(&scrutinee_e.result, "dispatch scrutinee");
+    let probe = match dispatch_probe_of(&value.value) {
+        DispatchProbeOutcome::Probe(probe) => probe,
+        DispatchProbeOutcome::CalendarFailure(message) => {
+            return Explained::value_only(OperationResult::Veto(VetoType::computation(message)));
+        }
+        DispatchProbeOutcome::Unsupported => panic!(
+            "BUG: OrderedDispatch scrutinee evaluated to {:?}, a kind the fold excludes",
+            value.value
+        ),
+    };
+    let region = match region_for_value(boundaries, &probe) {
+        Ok(region) => region,
+        Err(failure) => {
+            return Explained::value_only(OperationResult::Veto(VetoType::computation(
+                failure.to_string(),
+            )));
+        }
+    };
+
+    let selected = regions[region];
+    // A result id can occupy several regions; it is dead only when the selected
+    // region does not hold it. Build the dead list only when recording is on —
+    // otherwise every eval would allocate a Vec the recorder immediately ignores.
+    if ctx.record_control_decisions {
+        ctx.record_dead_control_edges(
+            id,
+            regions.iter().copied().filter(|region| *region != selected),
+        );
+    }
+    Explained::value_only(eval(selected, plan, ctx, false).result)
 }
 
 fn cause_children(as_operand: Option<ExplanationNode>) -> Vec<ExplanationNode> {
@@ -1177,6 +1354,11 @@ fn eval_kind(
             compose_unary(id, result, inner_e, explain, plan)
         }
         NormalFormKind::Piecewise(arms) => evaluate_piecewise(id, arms, plan, ctx, explain),
+        NormalFormKind::OrderedDispatch {
+            scrutinee,
+            boundaries,
+            regions,
+        } => evaluate_ordered_dispatch(id, *scrutinee, boundaries, regions, plan, ctx, explain),
     }
 }
 

@@ -2,10 +2,8 @@ use crate::computation::arithmetic::SignatureIndex;
 use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::{rational_abs, rational_zero, RationalInteger};
 use crate::planning::semantics::{
-    ArithmeticComputation, ComparisonComputation, LemmaType, LiteralValue, ValueKind,
+    ArithmeticComputation, ComparisonComputation, LiteralValue, ValueKind,
 };
-use std::collections::HashMap;
-
 pub fn compute_span(left: &LiteralValue, right: &LiteralValue) -> OperationResult {
     absolute_span(compute_signed_span(left, right))
 }
@@ -37,7 +35,7 @@ fn compute_signed_span(left: &LiteralValue, right: &LiteralValue) -> OperationRe
         _ => {
             // Span computation only performs Subtract, which never resolves a signature_index
             // entry (the result type matches the operand family).
-            let empty_unit_index: HashMap<String, std::sync::Arc<LemmaType>> = HashMap::new();
+            let empty_unit_index = crate::planning::unit_index::UnitIndex::new();
             let empty_signature_index = SignatureIndex::new();
             super::arithmetic_operation(
                 right,

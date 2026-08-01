@@ -5,8 +5,9 @@
 //! Canonical source includes ASCII-lowercase logical identifier names.
 
 use crate::parsing::ast::{
-    expression_precedence, AsLemmaSource, Constraint, DataValue, Expression, ExpressionKind,
-    LemmaData, LemmaRule, LemmaSpec,
+    arithmetic_associativity, expression_precedence, operand_needs_parentheses, AsLemmaSource,
+    Constraint, DataValue, Expression, ExpressionKind, LemmaData, LemmaRule, LemmaSpec,
+    OperandSide,
 };
 use crate::parsing::{parse, ParseResult};
 use crate::{Error, ResourceLimits};
@@ -499,7 +500,9 @@ fn indent_after_first_line(s: &str, indent: &str) -> String {
 }
 
 /// Format an expression with optional wrapping at arithmetic operators when over max_cols.
-/// `parent_prec` is used to add parentheses when needed (pass 10 for top level).
+///
+/// Arithmetic children use the same parenthesis policy as [`Expression`] display
+/// ([`operand_needs_parentheses`]). Pass `10` for top-level (no outer wrap).
 fn format_expr_wrapped(
     expr: &Expression,
     max_cols: usize,
@@ -508,30 +511,57 @@ fn format_expr_wrapped(
 ) -> String {
     let my_prec = expression_precedence(&expr.kind);
 
-    let wrap_in_parens = |s: String| {
-        if parent_prec < 10 && my_prec < parent_prec {
-            format!("({})", s)
-        } else {
-            s
-        }
-    };
-
     match &expr.kind {
         ExpressionKind::Arithmetic(left, op, right) => {
-            let left_str = format_expr_wrapped(left.as_ref(), max_cols, indent, my_prec);
-            let right_str = format_expr_wrapped(right.as_ref(), max_cols, indent, my_prec);
+            let assoc = Some(arithmetic_associativity(op));
+            // Children formatted as top-level; this node applies paren policy.
+            let left_inner = format_expr_wrapped(left.as_ref(), max_cols, indent, 10);
+            let right_inner = format_expr_wrapped(right.as_ref(), max_cols, indent, 10);
+            let left_str = if operand_needs_parentheses(
+                expression_precedence(&left.kind),
+                my_prec,
+                OperandSide::Left,
+                assoc,
+            ) {
+                format!("({})", left_inner)
+            } else {
+                left_inner
+            };
+            let right_str = if operand_needs_parentheses(
+                expression_precedence(&right.kind),
+                my_prec,
+                OperandSide::Right,
+                assoc,
+            ) {
+                format!("({})", right_inner)
+            } else {
+                right_inner
+            };
             let single_line = format!("{} {} {}", left_str, op, right_str);
-            if single_line.len() <= max_cols && !single_line.contains('\n') {
-                return wrap_in_parens(single_line);
+            let body = if single_line.len() <= max_cols && !single_line.contains('\n') {
+                single_line
+            } else {
+                let continued_right = indent_after_first_line(&right_str, indent);
+                let continuation = format!("{}{} {}", indent, op, continued_right);
+                format!("{}\n{}", left_str, continuation)
+            };
+            if parent_prec < 10
+                && operand_needs_parentheses(my_prec, parent_prec, OperandSide::Left, None)
+            {
+                format!("({})", body)
+            } else {
+                body
             }
-            let continued_right = indent_after_first_line(&right_str, indent);
-            let continuation = format!("{}{} {}", indent, op, continued_right);
-            let multi_line = format!("{}\n{}", left_str, continuation);
-            wrap_in_parens(multi_line)
         }
         _ => {
             let s = expr.to_string();
-            wrap_in_parens(s)
+            if parent_prec < 10
+                && operand_needs_parentheses(my_prec, parent_prec, OperandSide::Left, None)
+            {
+                format!("({})", s)
+            } else {
+                s
+            }
         }
     }
 }

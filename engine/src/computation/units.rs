@@ -15,12 +15,7 @@ use std::sync::Arc;
 /// still resolve unit names from an expression-scope index (e.g. arithmetic naming).
 #[derive(Copy, Clone)]
 pub enum UnitResolutionContext<'a> {
-    WithIndex(
-        &'a std::collections::HashMap<
-            String,
-            std::sync::Arc<crate::planning::semantics::LemmaType>,
-        >,
-    ),
+    WithIndex(&'a crate::planning::unit_index::UnitIndex),
     NamedMeasureOnly,
 }
 
@@ -278,7 +273,7 @@ fn cast_to_number(value: &LiteralValue) -> OperationResult {
             } else if signature.len() == 1 && signature[0].1 == 1 {
                 crate::planning::semantics::signature_factor(
                     signature,
-                    &std::collections::HashMap::new(),
+                    &crate::planning::unit_index::UnitIndex::new(),
                     Some(value.lemma_type.as_ref()),
                 )
                 .expect("BUG: de-canonicalization by unit factor must not fail")

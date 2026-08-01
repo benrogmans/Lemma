@@ -17,7 +17,7 @@ use std::sync::Arc;
 pub type SignatureIndex = HashMap<Vec<(String, i32)>, (String, Arc<LemmaType>)>;
 
 struct CalendarRangeShiftIndexes<'a> {
-    unit_index: &'a HashMap<String, Arc<LemmaType>>,
+    unit_index: &'a crate::planning::unit_index::UnitIndex,
     signature_index: &'a SignatureIndex,
 }
 
@@ -29,7 +29,7 @@ struct CalendarRangeShiftIndexes<'a> {
 fn promote_anonymous_measure_result(
     result: OperationResult,
     signature_index: &SignatureIndex,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> OperationResult {
     let OperationResult::Value(value) = result else {
         return result;
@@ -40,7 +40,7 @@ fn promote_anonymous_measure_result(
     if !value.lemma_type.is_anonymous_measure() {
         return OperationResult::from_literal_arc(value);
     }
-    let expanded = expand_signature_to_base_units(raw_signature, unit_index);
+    let expanded = expand_signature_to_base_units(raw_signature, unit_index, &[]);
     let Some((unit_name, owning_type)) = signature_index.get(&expanded) else {
         return OperationResult::from_literal_arc(value);
     };
@@ -62,20 +62,21 @@ fn promote_anonymous_measure_result(
 /// - Single remaining units keep their declared name (e.g. `minute` stays `minute`).
 fn measure_family_key(
     unit_name: &str,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
+    typed_owners: &[&LemmaType],
 ) -> Option<String> {
     use crate::planning::semantics::calendar_unit_factor;
     if calendar_unit_factor(unit_name).is_some() {
         return Some("__calendar__".to_string());
     }
     unit_index
-        .get(unit_name)
+        .owning_type_for_signature_factor(unit_name, typed_owners)
         .and_then(|t| t.measure_family_name().map(str::to_string))
 }
 
 fn canonical_unit_in_family(
     family_key: &str,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
 ) -> String {
     use crate::planning::semantics::TypeSpecification;
     if family_key == "__calendar__" {
@@ -96,14 +97,17 @@ fn canonical_unit_in_family(
 
 pub(crate) fn expand_signature_to_base_units(
     raw: &[(String, i32)],
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
+    typed_owners: &[&LemmaType],
 ) -> Vec<(String, i32)> {
     use crate::planning::semantics::canonicalize_signature;
     use crate::planning::semantics::TypeSpecification;
     use std::collections::BTreeMap;
     let mut expanded: Vec<(String, i32)> = Vec::new();
     for (unit_name, exp) in raw {
-        if let Some(owning_type) = unit_index.get(unit_name) {
+        if let Some(owning_type) =
+            unit_index.owning_type_for_signature_factor(unit_name, typed_owners)
+        {
             if let TypeSpecification::Measure { units, .. } = &owning_type.specifications {
                 if let Ok(unit) = units.get(unit_name) {
                     if !unit.derived_measure_factors.is_empty() {
@@ -122,7 +126,7 @@ pub(crate) fn expand_signature_to_base_units(
     let mut by_family: BTreeMap<String, Vec<(String, i32)>> = BTreeMap::new();
     let mut ungrouped: Vec<(String, i32)> = Vec::new();
     for (unit_name, exp) in expanded {
-        if let Some(family) = measure_family_key(&unit_name, unit_index) {
+        if let Some(family) = measure_family_key(&unit_name, unit_index, typed_owners) {
             by_family.entry(family).or_default().push((unit_name, exp));
         } else {
             ungrouped.push((unit_name, exp));
@@ -245,7 +249,7 @@ pub fn arithmetic_operation(
     left: &LiteralValue,
     op: &ArithmeticComputation,
     right: &LiteralValue,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
     match (&left.value, &right.value) {
@@ -487,7 +491,9 @@ pub fn arithmetic_operation(
                         primitive_number_arc().clone(),
                     ));
                 }
-                let expanded_signature = expand_signature_to_base_units(&raw_signature, unit_index);
+                let owners = [left.lemma_type.as_ref(), right.lemma_type.as_ref()];
+                let expanded_signature =
+                    expand_signature_to_base_units(&raw_signature, unit_index, &owners);
                 if let Some((unit_name, owning_type)) = signature_index.get(&expanded_signature) {
                     return OperationResult::from_literal(LiteralValue::measure_with_type(
                         raw_result,
@@ -680,8 +686,9 @@ pub fn arithmetic_operation(
                             primitive_number_arc().clone(),
                         ))
                     } else {
+                        let owners = [left.lemma_type.as_ref(), right.lemma_type.as_ref()];
                         let expanded_signature =
-                            expand_signature_to_base_units(&raw_signature, unit_index);
+                            expand_signature_to_base_units(&raw_signature, unit_index, &owners);
                         if let Some((unit_name, owning_type)) =
                             signature_index.get(&expanded_signature)
                         {
@@ -997,7 +1004,7 @@ fn operate_on_operation_results(
     left_result: OperationResult,
     op: &ArithmeticComputation,
     right_result: OperationResult,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
     let left_value = match left_result {
@@ -1021,7 +1028,7 @@ fn operate_with_left_result(
     left_result: OperationResult,
     op: &ArithmeticComputation,
     right: &LiteralValue,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
     let left_value = match left_result {
@@ -1035,7 +1042,7 @@ fn operate_with_right_result(
     left: &LiteralValue,
     op: &ArithmeticComputation,
     right_result: OperationResult,
-    unit_index: &HashMap<String, Arc<LemmaType>>,
+    unit_index: &crate::planning::unit_index::UnitIndex,
     signature_index: &SignatureIndex,
 ) -> OperationResult {
     let right_value = match right_result {
@@ -1174,7 +1181,7 @@ mod tests {
         use rust_decimal::Decimal;
         let left = LiteralValue::number(decimal_to_rational(Decimal::new(11, 1)).unwrap());
         let right = LiteralValue::number(decimal_to_rational(Decimal::new(9, 1)).unwrap());
-        let unit_index = HashMap::new();
+        let unit_index = crate::planning::unit_index::UnitIndex::new();
         let signature_index = SignatureIndex::new();
         let OperationResult::Value(lit) = arithmetic_operation(
             &left,
@@ -1197,7 +1204,7 @@ mod tests {
     fn arithmetic_operation_propagates_veto_from_left() {
         let left = OperationResult::Veto(VetoType::computation("left failed"));
         let right = LiteralValue::number(rational_new(1, 1));
-        let unit_index = HashMap::new();
+        let unit_index = crate::planning::unit_index::UnitIndex::new();
         let signature_index = SignatureIndex::new();
         let result = operate_on_operation_results(
             left,

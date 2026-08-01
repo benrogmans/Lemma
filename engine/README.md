@@ -203,7 +203,7 @@ cargo add lemma-engine
 
 ```bash
 cargo install lemma
-lemma run pricing measure=10
+lemma run pricing quantity=10
 ```
 
 ### HTTP server

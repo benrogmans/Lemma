@@ -48,8 +48,8 @@ defmodule Lemma.MixProject do
     [
       {:jason, "~> 1.4"},
       {:rustler_precompiled, "~> 0.9"},
-      {:rustler, ">= 0.9.0", optional: true},
-      {:ex_doc, "~> 0.40.1", only: :dev, runtime: false}
+      {:rustler, "~> 0.38", optional: true},
+      {:ex_doc, "~> 0.40.3", only: :dev, runtime: false}
     ]
   end
 

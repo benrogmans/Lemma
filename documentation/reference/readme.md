@@ -169,6 +169,7 @@ Chained casts nest from left to right: `expr as unit as unit … as number`.
 | `as <unit>` | Convert, relabel, or construct a measure/ratio in that unit                         | `mass as gram`, `5 as eur`, `rate as hour`  |
 | `as number` | Strip to raw magnitude (requires explicit unit on prior step for quantities/ranges) | `10 eur as number`, `span as day as number` |
 
+`<unit>` may be bare (`eur`) or qualified (`money.eur`, `units.kilogram`, `units.mass.kilogram`). Optionally qualify; must qualify when the bare name is ambiguous in scope — see [Qualifying units](#qualifying-units).
 
 Same-family conversion applies factors (`2 kilogram as gram` → `2000 gram`). Cross-family relabel keeps magnitude (`5 eur as kg` → `5 kg`).
 
@@ -709,7 +710,7 @@ Each `->` row on a `data` declaration is a **data command**. Built-in primitives
 
 **For** `measure` **and** `number`**:**
 
-- `unit <name> <value>` - Define a unit (measure only; see [Compound units](#compound-units) for derived forms)
+- `unit <name> <value>` - Define a unit (measure only; see [Compound units](#compound-units) for derived forms). Literals and `as` targets that use the unit follow [Qualifying units](#qualifying-units).
 - `decimals <n>` - Set decimal precision (0-255)
 - `minimum <value>` - Set minimum value
 - `maximum <value>` - Set maximum value
@@ -761,9 +762,24 @@ On ranges, `minimum` / `maximum` always mean **width**. Endpoint limits use `low
 
 
 
+### Qualifying units
+
+Optionally qualify units; must qualify when the bare name is ambiguous in scope.
+
+| Form | Meaning |
+|------|---------|
+| `kilogram` | Bare — exactly one in-scope owner |
+| `my_weight.kilogram` | Local owning type |
+| `units.mass.kilogram` | Import alias + type |
+| `units.kilogram` | Import sugar — unique under that alias |
+
+Bare literals and `as` targets plan when the unit name has a unique owner. Qualified paths are allowed whenever they uniquely identify an owner. Ambiguous bare use is a planning error that lists legal qualifiers. The same rule applies to each factor in a compound unit expression. Two measure types may declare the same unit name; the spec still loads — clash surfaces only at a bare use site.
+
+Wire shapes for `run` / `show` measure maps stay bare declared unit names. Qualification is source syntax only.
+
 ### Compound units
 
-On `measure`, `-> unit` may define a **named** unit from other units with `/`, `*`, and `^`. Declare base units on earlier measure types in the same spec (or import them) so dimensions resolve. Import `uses lemma units` when the expression needs stdlib time bases (`second`, `hour`, …).
+On `measure`, `-> unit` may define a **named** unit from other units with `/`, `*`, and `^`. Declare base units on earlier measure types in the same spec (or import them) so dimensions resolve. Import `uses lemma units` when the expression needs stdlib time bases (`second`, `hour`, …). Factor labels in the compound expression follow [Qualifying units](#qualifying-units).
 
 ```lemma
 spec rates
@@ -814,7 +830,7 @@ Unit names are **singular only** (`8 hour`, not `8 hours`). Length uses American
 | `units.voltage` | Electric potential | `volt`, `millivolt`, `kilovolt` |
 | `units.resistance` | Electric resistance | `ohm`, `kilohm` |
 | `units.capacitance` | Capacitance | `farad`, `microfarad` |
-| `units.information` | Digital information | `bit`, `byte`, `kibibyte`, `mebibyte`, `gibibyte` |
+| `units.information` | Digital information | `bit`, `byte`; SI `kilobyte`…`petabyte` (1000ⁿ); IEC `kibibyte`…`pebibyte` (1024ⁿ) |
 
 After `uses lemma units`, declare slots against those types directly:
 

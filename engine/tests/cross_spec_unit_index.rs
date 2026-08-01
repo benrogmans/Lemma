@@ -176,6 +176,6 @@ fn quotation_rejects_minutes_in_local_rule() {
         .expect("load must report minute out of scope");
     assert_eq!(
         minutes_err.message(),
-        "Unit 'minute' is not in scope for this spec"
+        "Unknown unit 'minute' is not in scope for this spec"
     );
 }

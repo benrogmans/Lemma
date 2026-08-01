@@ -28,12 +28,10 @@ walkdir = "2.4"
 super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
 rust_decimal.workspace = true
-strip-ansi-escapes = "0.2"
 
 # Server dependencies
-axum = "0.8.8"
-tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors"] }
+axum = "0.8.9"
+tower-http = { version = "0.7", features = ["cors"] }
 indexmap = { version = "2.0", features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -50,7 +48,6 @@ workspace = true
 assert_cmd = "2.0"
 predicates = "3.0"
 tempfile = "3.8"
-proptest = "1.4"
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
 criterion = { version = "0.8", features = ["html_reports"] }
 

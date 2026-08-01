@@ -88,7 +88,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | Method | Description |
 |--------|-------------|
 | `load(code)` | Load inline Lemma source as a volatile workspace source |
-| `load(sources)` | Load multiple sources in one planning pass (object or `[label, code][]`; `@owner/name` keys tag registry dependencies) |
+| `load(sources)` | Load multiple sources in one planning pass (object or `[label, code][]`; object keys keep insertion order, array form is the explicit ordered API; `@owner/name` keys tag registry dependencies) |
 | `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. |
 | `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs`. |
 | `show(repo?, spec, effective?)` | `Show`: interface + temporal window (no Lemma text) |
