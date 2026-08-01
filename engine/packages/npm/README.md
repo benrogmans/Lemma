@@ -30,7 +30,7 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 await engine.load({ 'pricing.lemma': pricing });
 
-const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null, false);
+const response = engine.run({ spec: 'pricing', data: { quantity: 50, is_vip: false } });
 // response.results.unit_price → 16 eur
 // response.results.total      → 800 eur
 ```
@@ -40,7 +40,7 @@ The `Response` carries every rule's value (or `veto` if no result could be compu
 ## Why use it from JavaScript?
 
 - **Deterministic.** `(spec, data, effective_date) → result`. No DB, no clock, no ambient state. Same inputs → same outputs, every time.
-- **Explainable.** Pass `explain: true` (6th `run` argument) to get a per-rule explanation tree; see [explanation.v1.json](https://github.com/lemma/lemma/blob/main/documentation/schemas/explanation.v1.json). Pair with the [CLI](https://github.com/lemma/lemma) for human reasoning tables.
+- **Explainable.** Pass `explain: true` in your `run()` options to get a per-rule explanation tree; see [api.v1.json](https://github.com/lemma/lemma/blob/main/documentation/schemas/api.v1.json). Pair with the [CLI](https://github.com/lemma/lemma) for human reasoning tables.
 - **Time-aware.** Multiple versions of the same spec coexist. Pass an `effective` date and the engine resolves the version in force on that day.
 - **Statically checked.** Type errors, missing data, cycles, measure-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
 - **Runs anywhere JavaScript does.** ~2 MB package, no native binary, no postinstall script.
@@ -117,7 +117,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `list()` | Slim catalog: `ResolvedRepository[]` with `repository` and temporal `specs` rows. Always includes embedded `lemma` / `spec units`. |
 | `show(repo, name, effective?)` | Spec interface + temporal window; `repo` null for workspace. |
 | `source(repo, spec?, effective?)` | Canonical Lemma source text. Omit `spec` for whole repository. |
-| `run(repo, name, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. `explain: true` adds per-rule explanation trees. |
+| `run({ spec, repository?, effective?, data?, rules?, explain? })` | Evaluate. Omit `rules` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. `explain: true` adds per-rule explanation trees. |
 | `remove(repo, name, effective?)` | Remove a temporal spec slice. |
 | `limits()` | Resource limits for this engine. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |

@@ -4,7 +4,7 @@
 //! conditions and `and` conjuncts. One rule for both: a vetoed condition
 //! propagates its veto; a `true` boolean takes; a `false` boolean does not.
 
-use super::operations::OperationResult;
+use crate::computation::OperationResult;
 use crate::planning::semantics::ValueKind;
 
 /// Outcome of inspecting a branch condition or a boolean operand.
@@ -53,7 +53,7 @@ pub(crate) fn condition_outcome(condition: &OperationResult) -> BranchOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evaluation::operations::VetoType;
+    use crate::computation::VetoType;
     use crate::planning::semantics::{DataPath, LiteralValue};
 
     fn boolean(value: bool) -> OperationResult {

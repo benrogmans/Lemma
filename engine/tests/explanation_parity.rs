@@ -132,7 +132,7 @@ rule huge: 10 ^ 100
     let explanation = result.explanation.as_ref().expect("explanation built");
     assert!(
         !explanation.result.vetoed(),
-        "explanation.result reflects exact rule_results storage; response materialization veto is separate"
+        "explanation.result reflects exact rule_results storage; RuleResultValue veto is separate"
     );
 }
 
@@ -157,7 +157,7 @@ rule r: flag and expensive_check
     );
     let result = rule_result(&response, "r");
     assert!(!result.vetoed);
-    assert_eq!(result.display.as_deref(), Some("false"));
+    assert_eq!(result.display(), Some("false"));
 
     let explanation = result.explanation.as_ref().expect("explanation built");
     let rendered = format_explanation(explanation);
@@ -182,7 +182,7 @@ rule active: a >= b
     let response = run_explain(&engine, "comparison_operands", &[("a", "7"), ("b", "3")]);
     let result = rule_result(&response, "active");
     assert!(!result.vetoed);
-    assert_eq!(result.display.as_deref(), Some("true"));
+    assert_eq!(result.display(), Some("true"));
 
     let explanation = result.explanation.as_ref().expect("explanation built");
     let rendered = format_explanation(explanation);

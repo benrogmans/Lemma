@@ -84,7 +84,7 @@ fn alpha2_analog_199_branches_compiles_and_evaluates() {
         .expect("evaluate base code");
     let result = response.results.get("name").expect("name rule");
     assert_eq!(
-        result.display.as_ref().map(|d| d.to_string()),
+        result.display().map(|d| d.to_string()),
         Some("Name 042".to_string())
     );
 
@@ -102,7 +102,7 @@ fn alpha2_analog_199_branches_compiles_and_evaluates() {
         .expect("evaluate layer code");
     let result = response.results.get("name").expect("name rule");
     assert_eq!(
-        result.display.as_ref().map(|d| d.to_string()),
+        result.display().map(|d| d.to_string()),
         Some("Layer 17".to_string())
     );
 }
@@ -149,7 +149,7 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
         explanation
             .causes
             .iter()
-            .any(|c| c.condition == "code is L17" && c.value.as_deref() == Some("true")),
+            .any(|c| c.condition == "code is L17" && c.value == "true"),
         "expected the matched condition stated as a fact, got {:?}",
         explanation.causes
     );
@@ -182,5 +182,5 @@ fn alpha2_analog_explanation_states_evaluated_conditions() {
     // The condition `code is "L17"` was false; the cause states the
     // flipped fact that held.
     assert_eq!(explanation.causes[0].condition, "code is not L17");
-    assert_eq!(explanation.causes[0].value.as_deref(), Some("true"));
+    assert_eq!(explanation.causes[0].value, "true");
 }

@@ -60,7 +60,7 @@ fn run_plan_does_not_commit_typedecl_suggestion() {
     );
     let rule = response.results.get("r").expect("rule r");
     assert!(!rule.vetoed, "rule r must succeed once n is supplied");
-    assert_eq!(rule.display.as_deref(), Some("42"));
+    assert_eq!(rule.display(), Some("42"));
 }
 
 #[test]
@@ -93,9 +93,14 @@ fn show_shows_suggestion_not_prefilled_without_overlay() {
     );
     let suggestion = entry.suggestion.expect("show must expose suggestion");
     assert_eq!(
-        suggestion.display_value(),
-        "42",
+        suggestion.number.as_deref(),
+        Some("42"),
         "suggestion magnitude must be the declared 42"
+    );
+    assert_eq!(
+        suggestion.display.as_deref(),
+        Some("42"),
+        "suggestion must carry engine-rendered display from LiteralValue::display_value"
     );
 }
 
@@ -138,8 +143,7 @@ rule r: a.r
         template_x
             .prefilled
             .as_ref()
-            .map(|v| v.display_value())
-            .as_deref(),
+            .and_then(|v| v.number.as_deref()),
         Some("2"),
         "literal with prefills magnitude 2"
     );

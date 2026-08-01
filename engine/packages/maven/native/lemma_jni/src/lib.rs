@@ -90,11 +90,11 @@ fn jstring_optional(env: &mut JNIEnv, value: &JString) -> Result<Option<String>,
     }
 }
 
-fn string_map_from_java(
+fn string_pairs_from_java(
     env: &mut JNIEnv,
     keys: &JObjectArray,
     values: &JObjectArray,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<Vec<(String, String)>, String> {
     let len = env
         .get_array_length(keys)
         .map_err(|e| format!("BUG: get_array_length keys: {e}"))?;
@@ -104,7 +104,7 @@ fn string_map_from_java(
     if len != values_len {
         return Err("BUG: data key/value array length mismatch".to_string());
     }
-    let mut out = HashMap::new();
+    let mut out = Vec::with_capacity(len as usize);
     for i in 0..len {
         let key_obj = env
             .get_object_array_element(keys, i)
@@ -114,7 +114,7 @@ fn string_map_from_java(
             .map_err(|e| format!("BUG: get value[{i}]: {e}"))?;
         let key = jstring_required(env, &JString::from(key_obj))?;
         let value = jstring_required(env, &JString::from(val_obj))?;
-        out.insert(key, value);
+        out.push((key, value));
     }
     Ok(out)
 }
@@ -267,9 +267,9 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_loadLabeled(
 ) {
     with_catch(&mut env, (), |env| {
         let engine = handle_from_jlong(handle)?;
-        let map = string_map_from_java(env, &labels, &codes)?;
-        let mut batch = Vec::with_capacity(map.len());
-        for (label, code) in map {
+        let pairs = string_pairs_from_java(env, &labels, &codes)?;
+        let mut batch = Vec::with_capacity(pairs.len());
+        for (label, code) in pairs {
             match SourceType::from_binding_label(&label) {
                 Ok(source_type) => batch.push((source_type, code)),
                 Err(e) => {
@@ -407,7 +407,9 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_run(
             Ok(v) => v,
             Err(()) => return Ok(std::ptr::null_mut()),
         };
-        let data = string_map_from_java(env, &data_keys, &data_values)?;
+        let data: HashMap<String, String> = string_pairs_from_java(env, &data_keys, &data_values)?
+            .into_iter()
+            .collect();
         let rules = if rules.is_null() {
             None
         } else {

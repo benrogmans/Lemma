@@ -21,6 +21,7 @@ allow = [
     "ISC",
     "CC0-1.0",
     "CDLA-Permissive-2.0",
+    "Zlib",
 ]
 exceptions = []
 

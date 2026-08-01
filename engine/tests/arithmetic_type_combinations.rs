@@ -43,12 +43,15 @@ fn eval_rule(
     data: HashMap<String, String>,
 ) -> String {
     eval_result(code, spec_name, rule_name, data)
-        .display
+        .display()
         .expect("display")
+        .to_string()
 }
 
 fn eval_measure_map(code: &str, spec_name: &str, rule_name: &str) -> BTreeMap<String, String> {
     eval_result(code, spec_name, rule_name, HashMap::new())
+        .value
+        .expect("rule result value")
         .measure
         .expect("measure map")
 }

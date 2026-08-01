@@ -4,7 +4,7 @@ Workspace automation from the repo root.
 
 | Command | Alias | Purpose |
 |---------|-------|---------|
-| `cargo run -p xtask` | `cargo precommit` | `versions-verify`, mix precommit (hex), vscode npm precommit, `fmt --check`, clippy (`--all-features`), `cargo check -p lemma-engine --no-default-features`, nextest (`--all-features`), npm WASM build+test, Maven `./mvnw test` (after `lemma_jni` build), cargo-deny, `coverage all --check` |
+| `cargo run -p xtask -- [precommit] [--fuzz]` | `cargo precommit [--fuzz]` | `versions-verify`, mix precommit (hex), vscode npm precommit, `fmt --check`, clippy (`--all-features`), `cargo check -p lemma-engine --no-default-features`, nextest (`--all-features`), npm WASM build+test, Maven `./mvnw -B verify` (after `lemma_jni` build), cargo-deny, `coverage all --check`. With `--fuzz` (CI): 30 minutes total across `engine/fuzz` targets (nightly + `cargo-fuzz`). Bare `cargo precommit` skips fuzz. |
 | `cargo run -p xtask -- versions-verify` | `cargo verify` | Ensure release version matches everywhere (see below) |
 | `cargo run -p xtask -- versions-bump <semver>` | `cargo bump <semver>` | Bump `[workspace.package] version` and all mirrored copies, then `cargo generate-lockfile`, `mix deps.get` (hex), `npm install --package-lock-only` (vscode) |
 | `cargo run -p xtask -- versions-diff [semver]` | `cargo changelog [semver]` | `git fetch --tags`, then `git diff --stat`, `git log`, then `git diff`. **No arg:** latest release tag (`lemma-v*`, or legacy `cli-v*`) → **working tree** (includes uncommitted changes); log is `tag..HEAD`. **`versions-diff <semver>`:** previous tag → requested version's tag on history only. |
@@ -13,7 +13,7 @@ Workspace automation from the repo root.
 
 Aliases are in [`.cargo/config.toml`](../.cargo/config.toml) (`-q` on bump/verify/changelog reduces Cargo noise).
 
-**Precommit prerequisites:** [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, Node.js/npm, `wasm-pack` (CI uses 0.14.0: `cargo install wasm-pack --version 0.14.0 --locked`), JDK 17+ (Maven wrapper under `engine/packages/maven/`). [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) is only needed to regenerate coverage reports (`cargo coverage all`), not for precommit. Mix, VS Code npm, and Maven precommits always run (not path-gated).
+**Precommit prerequisites:** [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, Node.js/npm, `wasm-pack` (CI uses 0.14.0: `cargo install wasm-pack --version 0.14.0 --locked`), JDK 21+ (Maven wrapper under `engine/packages/maven/`). For `--fuzz` / CI: Rust nightly (`rustup install nightly`) and [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz). [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) is only needed to regenerate coverage reports (`cargo coverage all`), not for precommit. Mix, VS Code npm, and Maven precommits always run (not path-gated).
 
 Release version must match in:
 
@@ -21,6 +21,7 @@ Release version must match in:
 - Path dependency pins in `cli/`, `openapi/`, `engine/lsp/` `Cargo.toml` files (`lemma` / `lemma-openapi`, `=…` exact pins)
 - `engine/packages/hex/mix.exs` (`@version`)
 - `engine/packages/maven/pom.xml` (project `<version>`)
+- Maven install snippets: root `README.md`, `engine/README.md`, `documentation/tools/maven.md`, `engine/packages/maven/README.md` (XML and/or Gradle coords)
 - `engine/README.md` (quick-start `lemma-engine = "…"`)
 - `engine/lsp/editors/vscode/package.json` (`version`)
 

@@ -2,6 +2,9 @@
 result
 result-*
 
+# Node.js
+node_modules/
+
 # npm build output
 engine/packages/npm/dist/
 cli/packages/npm/dist/

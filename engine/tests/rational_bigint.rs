@@ -40,11 +40,11 @@ rule product: max_val * two
     assert_eq!(
         rule.veto_reason.as_deref(),
         Some("Calculated result exceeds decimal value limit"),
-        "response materialization must veto magnitude overflow, not fail with numeric overflow"
+        "rule_result_value_from_literal must veto magnitude overflow, not fail with numeric overflow"
     );
     assert_ne!(
         rule.veto_reason.as_deref(),
         Some("numeric overflow"),
-        "must not spuriously veto during exact rational evaluation before response materialization"
+        "must not spuriously veto during exact rational evaluation before building RuleResultValue"
     );
 }

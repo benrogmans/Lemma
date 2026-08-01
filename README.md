@@ -324,7 +324,7 @@ See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.0</version>
+  <version>0.9.1</version>
 </dependency>
 ```
 
@@ -364,7 +364,7 @@ Lemma is pre-1.0. The language and APIs are stable for most use cases, but break
 
 Contributions welcome! See [Contributing](documentation/community/contributing.md) for setup and workflow.
 
-From the repository root, run **`cargo precommit`** before opening a PR. It runs **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy (`--all-features`), **`cargo check -p lemma-engine --no-default-features`**, Nextest (`--all-features`), WASM npm `build.js` + `test.js`, Maven `./mvnw test` (after `lemma_jni` build), cargo-deny, and **`cargo coverage all --check`** (verifies published coverage docs are current). Install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), [`wasm-pack`](https://rustwasm.github.io/wasm-pack/), and a **JDK 17+** first. Regenerate coverage with **`cargo coverage all`** when engine/cli sources change ([`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) required). SDK steps always run, not only when their directories change. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** so every mirrored copy stays aligned (see [`xtask/README.md`](xtask/README.md)).
+CI runs **`cargo precommit --fuzz`**. That is the PR bar: same gate as local **`cargo precommit`**, then 30 minutes of fuzz total across [`engine/fuzz`](engine/fuzz) targets. Use bare **`cargo precommit`** as a faster local shortcut (no fuzz). The gate covers **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy (`--all-features`), **`cargo check -p lemma-engine --no-default-features`**, Nextest (`--all-features`), WASM npm `build.js` + `test.js`, Maven `./mvnw -B verify` (after `lemma_jni` build), cargo-deny, and **`cargo coverage all --check`**. Install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), [`wasm-pack`](https://rustwasm.github.io/wasm-pack/), and a **JDK 21+** first; for `--fuzz` also install nightly (`rustup install nightly`) and [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz). Regenerate coverage with **`cargo coverage all`** when engine/cli sources change ([`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) required). `cargo nextest` alone is Rust tests only. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** (see [`xtask/README.md`](xtask/README.md)).
 
 ## License
 

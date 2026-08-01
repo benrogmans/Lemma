@@ -1,0 +1,168 @@
+{
+  "boolean": {
+    "name": "is_active",
+    "kind": "boolean",
+    "help": "A yes/no value.",
+    "extends": { "kind": "primitive" }
+  },
+  "measure": {
+    "name": "money",
+    "kind": "measure",
+    "minimum": null,
+    "maximum": null,
+    "decimals": 2,
+    "units": [
+      {
+        "name": "eur",
+        "factor": { "numer": "1", "denom": "1" },
+        "derived_measure_factors": [],
+        "decomposition": { "money": 1 }
+      }
+    ],
+    "traits": [],
+    "decomposition": { "money": 1 },
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "measure_duration_trait": {
+    "name": "elapsed",
+    "kind": "measure",
+    "minimum": null,
+    "maximum": null,
+    "decimals": null,
+    "units": [
+      {
+        "name": "hour",
+        "factor": { "numer": "3600", "denom": "1" },
+        "derived_measure_factors": [],
+        "decomposition": { "duration": 1 }
+      }
+    ],
+    "traits": ["duration"],
+    "decomposition": { "duration": 1 },
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "measure_calendar_trait": {
+    "name": "age_in_months",
+    "kind": "measure",
+    "minimum": null,
+    "maximum": null,
+    "decimals": null,
+    "units": [
+      {
+        "name": "month",
+        "factor": { "numer": "1", "denom": "1" },
+        "derived_measure_factors": [],
+        "decomposition": { "calendar": 1 }
+      }
+    ],
+    "traits": ["calendar"],
+    "decomposition": { "calendar": 1 },
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "number": {
+    "name": "amount",
+    "kind": "number",
+    "minimum": null,
+    "maximum": null,
+    "decimals": null,
+    "help": "A dimensionless number.",
+    "extends": { "kind": "primitive" }
+  },
+  "numberrange": {
+    "name": "age_range",
+    "kind": "numberrange",
+    "lower": null,
+    "upper": null,
+    "minimum": "0",
+    "maximum": "120",
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "ratio": {
+    "name": "rate",
+    "kind": "ratio",
+    "minimum": null,
+    "maximum": null,
+    "decimals": null,
+    "units": [{ "name": "percent", "value": { "numer": "100", "denom": "1" } }],
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "ratiorange": {
+    "name": "rate_range",
+    "kind": "ratiorange",
+    "lower": null,
+    "upper": null,
+    "minimum": null,
+    "maximum": null,
+    "units": [{ "name": "percent", "value": { "numer": "100", "denom": "1" } }],
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "text": {
+    "name": "label",
+    "kind": "text",
+    "length": 40,
+    "options": [],
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "date": {
+    "name": "birthday",
+    "kind": "date",
+    "minimum": null,
+    "maximum": null,
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "daterange": {
+    "name": "period",
+    "kind": "daterange",
+    "lower": null,
+    "upper": null,
+    "minimum": null,
+    "maximum": null,
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "time": {
+    "name": "start_time",
+    "kind": "time",
+    "minimum": null,
+    "maximum": null,
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "timerange": {
+    "name": "window",
+    "kind": "timerange",
+    "lower": null,
+    "upper": null,
+    "minimum": null,
+    "maximum": null,
+    "help": "",
+    "extends": { "kind": "primitive" }
+  },
+  "measurerange": {
+    "name": "distance_range",
+    "kind": "measurerange",
+    "lower": null,
+    "upper": null,
+    "minimum": null,
+    "maximum": null,
+    "units": [
+      {
+        "name": "km",
+        "factor": { "numer": "1", "denom": "1" },
+        "derived_measure_factors": [],
+        "decomposition": { "length": 1 }
+      }
+    ],
+    "decomposition": { "length": 1 },
+    "help": "",
+    "extends": { "kind": "primitive" }
+  }
+}

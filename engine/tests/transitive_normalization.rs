@@ -26,7 +26,10 @@ fn run_decimal(code: &str, spec: &str, rule: &str) -> Decimal {
         "rule '{rule}' must not veto; reason={:?}",
         rule_result.veto_reason
     );
-    let display = rule_result.display.clone().expect("authoritative display");
+    let display = rule_result
+        .display()
+        .expect("authoritative display")
+        .to_string();
     display.parse().unwrap_or_else(|_| {
         panic!("authoritative display for '{rule}' must be decimal, got '{display}'")
     })

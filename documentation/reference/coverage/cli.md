@@ -40,14 +40,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 1297 | 3258 | 39.81% |
-| Functions | 130 | 310 | 41.94% |
-| Regions | 1988 | 4943 | 40.22% |
+| Lines | 1300 | 3260 | 39.88% |
+| Functions | 130 | 311 | 41.80% |
+| Regions | 1994 | 4950 | 40.28% |
 
 ## Test run
 
-- Total: 113
-- Passed: 113
+- Total: 115
+- Passed: 115
 - Skipped: 0
 - Failed: 0
 
@@ -58,8 +58,8 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | Module | Line % | Function % | Region % | Lines covered/total |
 |--------|-------:|-----------:|---------:|--------------------:|
 | `server.rs` | 0.00 | 0.00 | 0.00 | 0/650 |
-| `interactive.rs` | 1.08 | 3.64 | 0.59 | 7/649 |
-| `main.rs` | 37.13 | 47.95 | 35.47 | 313/843 |
+| `interactive.rs` | 1.08 | 3.57 | 0.59 | 7/651 |
+| `main.rs` | 37.49 | 47.95 | 35.89 | 316/843 |
 | `error_formatter.rs` | 61.76 | 100.00 | 62.26 | 42/68 |
 | `formatter.rs` | 80.56 | 83.33 | 81.70 | 116/144 |
 | `mcp/server.rs` | 90.03 | 80.52 | 84.97 | 704/782 |
@@ -70,4 +70,4 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 - [CLI integration test catalog](../../../cli/tests/README.md)
 - [Engine test coverage](engine.md)
 - [CLI benchmarks](../benchmarks/cli.md)
-<!-- coverage-input-digest: fcabb3414439b1ee -->
+<!-- coverage-input-digest: c08fc41b365fa850 -->

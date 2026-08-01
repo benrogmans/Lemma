@@ -3,9 +3,14 @@ package com.lemmabase.lemma;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.Locale;
+import java.util.jar.Manifest;
 
 /** JNI declarations and native library load. */
 final class Native {
@@ -49,31 +54,172 @@ final class Native {
 
   private static void loadLibrary() {
     String triple = rustTargetTriple();
-    String resourcePath = "native/" + triple + "/" + libraryFileName();
-    try (InputStream in = Native.class.getClassLoader().getResourceAsStream(resourcePath)) {
-      if (in == null) {
-        // Development: load from cargo target directory next to the package.
-        Path dev = discoverDevLibrary();
-        if (dev != null) {
-          System.load(dev.toAbsolutePath().toString());
-          return;
-        }
+    String libName = libraryFileName();
+
+    String propertyOverride = System.getProperty("lemma.native.library");
+    if (propertyOverride != null && !propertyOverride.isBlank()) {
+      Path overridePath = Path.of(propertyOverride);
+      if (!Files.isRegularFile(overridePath)) {
         throw new LemmaBugError(
-            "BUG: native library resource missing: "
-                + resourcePath
-                + " (and no local cargo build found)");
+            "BUG: lemma.native.library set to '"
+                + propertyOverride
+                + "' but it is not a regular file");
       }
-      Path dir = Files.createTempDirectory("lemma-jni-");
-      dir.toFile().deleteOnExit();
-      Path lib = dir.resolve(libraryFileName());
-      try (OutputStream out = Files.newOutputStream(lib)) {
-        in.transferTo(out);
-      }
-      lib.toFile().deleteOnExit();
-      System.load(lib.toAbsolutePath().toString());
-    } catch (IOException e) {
-      throw new LemmaBugError("BUG: failed to extract native library: " + e.getMessage());
+      System.load(overridePath.toAbsolutePath().toString());
+      return;
     }
+
+    String envOverride = System.getenv("LEMMA_JNI_LIBRARY");
+    if (envOverride != null && !envOverride.isBlank()) {
+      Path overridePath = Path.of(envOverride);
+      if (!Files.isRegularFile(overridePath)) {
+        throw new LemmaBugError(
+            "BUG: LEMMA_JNI_LIBRARY set to '" + envOverride + "' but it is not a regular file");
+      }
+      System.load(overridePath.toAbsolutePath().toString());
+      return;
+    }
+
+    String resourcePath = "native/" + triple + "/" + libName;
+    URL resourceUrl = Native.class.getClassLoader().getResource(resourcePath);
+
+    if (resourceUrl != null) {
+      String protocol = resourceUrl.getProtocol();
+      if ("file".equals(protocol)) {
+        try {
+          Path filePath = Path.of(resourceUrl.toURI());
+          System.load(filePath.toAbsolutePath().toString());
+          return;
+        } catch (URISyntaxException e) {
+          throw new LemmaBugError("BUG: invalid resource URI: " + resourceUrl + " - " + e);
+        }
+      } else if ("jar".equals(protocol)) {
+        loadFromJar(resourceUrl, resourcePath, triple, libName);
+        return;
+      } else {
+        throw new LemmaBugError("BUG: unsupported resource URL protocol: " + protocol);
+      }
+    }
+
+    Path dev = discoverDevLibrary();
+    if (dev != null) {
+      System.load(dev.toAbsolutePath().toString());
+      return;
+    }
+
+    throw new LemmaBugError(
+        "BUG: native library not found. Checked: "
+            + "lemma.native.library property, "
+            + "LEMMA_JNI_LIBRARY env, "
+            + "resource '"
+            + resourcePath
+            + "', "
+            + "cargo target directories");
+  }
+
+  private static void loadFromJar(URL resourceUrl, String resourcePath, String triple, String libName) {
+    String version = getImplementationVersion();
+    Path cacheRoot = getCacheRoot();
+    Path cachedLib = extractToCache(resourcePath, triple, libName, version, cacheRoot);
+    System.load(cachedLib.toAbsolutePath().toString());
+  }
+
+  static Path extractToCache(
+      String resourcePath, String triple, String libName, String version, Path cacheRoot) {
+    Path cacheDir = cacheRoot.resolve("lemma-jni").resolve(version + "-" + triple);
+    Path cachedLib = cacheDir.resolve(libName);
+
+    if (Files.isRegularFile(cachedLib)) {
+      return cachedLib;
+    }
+
+    try {
+      Files.createDirectories(cacheDir);
+    } catch (IOException e) {
+      throw new LemmaBugError(
+          "BUG: failed to create cache directory '"
+              + cacheDir
+              + "': "
+              + e
+              + " (override with lemma.native.cache.dir property)");
+    }
+
+    Path tempFile;
+    try {
+      tempFile = Files.createTempFile(cacheDir, "lemma_jni_", ".tmp");
+    } catch (IOException e) {
+      throw new LemmaBugError(
+          "BUG: failed to create temp file in '"
+              + cacheDir
+              + "': "
+              + e
+              + " (override with lemma.native.cache.dir property)");
+    }
+
+    try (InputStream in = Native.class.getClassLoader().getResourceAsStream(resourcePath);
+        OutputStream out = Files.newOutputStream(tempFile)) {
+      if (in == null) {
+        throw new LemmaBugError("BUG: resource disappeared: " + resourcePath);
+      }
+      in.transferTo(out);
+    } catch (IOException e) {
+      try {
+        Files.deleteIfExists(tempFile);
+      } catch (IOException ignored) {
+      }
+      throw new LemmaBugError("BUG: failed to extract native library: " + e);
+    }
+
+    try {
+      Files.move(tempFile, cachedLib, StandardCopyOption.ATOMIC_MOVE);
+    } catch (FileAlreadyExistsException e) {
+      try {
+        Files.deleteIfExists(tempFile);
+      } catch (IOException ignored) {
+      }
+    } catch (IOException e) {
+      try {
+        Files.deleteIfExists(tempFile);
+      } catch (IOException ignored) {
+      }
+      throw new LemmaBugError("BUG: failed to move extracted library to cache: " + e);
+    }
+
+    return cachedLib;
+  }
+
+  private static String getImplementationVersion() {
+    try {
+      URL manifestUrl = Native.class.getClassLoader().getResource("META-INF/MANIFEST.MF");
+      if (manifestUrl == null) {
+        throw new LemmaBugError(
+            "BUG: no MANIFEST.MF found; cannot determine version for cache key");
+      }
+      try (InputStream in = manifestUrl.openStream()) {
+        Manifest manifest = new Manifest(in);
+        String version = manifest.getMainAttributes().getValue("Implementation-Version");
+        if (version == null || version.isBlank()) {
+          throw new LemmaBugError(
+              "BUG: Implementation-Version missing from manifest; cannot determine version for cache key");
+        }
+        return version;
+      }
+    } catch (IOException e) {
+      throw new LemmaBugError("BUG: failed to read MANIFEST.MF: " + e);
+    }
+  }
+
+  private static Path getCacheRoot() {
+    String cacheDirProperty = System.getProperty("lemma.native.cache.dir");
+    if (cacheDirProperty != null && !cacheDirProperty.isBlank()) {
+      return Path.of(cacheDirProperty);
+    }
+    String userHome = System.getProperty("user.home");
+    if (userHome == null || userHome.isBlank()) {
+      throw new LemmaBugError(
+          "BUG: user.home property is not set; override with lemma.native.cache.dir property");
+    }
+    return Path.of(userHome, ".cache");
   }
 
   private static Path discoverDevLibrary() {
@@ -103,13 +249,6 @@ final class Native {
     for (Path candidate : candidates) {
       if (Files.isRegularFile(candidate)) {
         return candidate;
-      }
-    }
-    String override = System.getenv("LEMMA_JNI_LIBRARY");
-    if (override != null && !override.isBlank()) {
-      Path path = Path.of(override);
-      if (Files.isRegularFile(path)) {
-        return path;
       }
     }
     return null;

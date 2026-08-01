@@ -1,7 +1,11 @@
+#![recursion_limit = "512"]
+
 mod benchmarks;
 mod coverage;
 mod hex_standalone;
 mod lsp;
+mod maven_natives;
+mod schema;
 mod versions;
 mod versions_diff;
 
@@ -36,6 +40,16 @@ fn run_versions_verify() {
 const HEX_PACKAGE_DIR: &str = "engine/packages/hex";
 const NPM_WASM_DIR: &str = "engine/packages/npm";
 const MAVEN_PACKAGE_DIR: &str = "engine/packages/maven";
+const FUZZ_PACKAGE_DIR: &str = "engine/fuzz";
+const FUZZ_TARGETS: &[&str] = &[
+    "fuzz_parser",
+    "fuzz_expressions",
+    "fuzz_literals",
+    "fuzz_deeply_nested",
+    "fuzz_data_bindings",
+];
+/// Wall-clock budget for `--fuzz`, split evenly across [`FUZZ_TARGETS`].
+const FUZZ_BUDGET_SECS: u64 = 1800;
 
 fn require_command(name: &str, install_hint: &str) {
     let ok = Command::new(name)
@@ -47,6 +61,18 @@ fn require_command(name: &str, install_hint: &str) {
         .unwrap_or(false);
     if !ok {
         panic!("{name} not found on PATH. {install_hint}");
+    }
+}
+
+fn require_nightly() {
+    let status = Command::new("rustup")
+        .args(["run", "nightly", "rustc", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap_or_else(|e| panic!("failed to invoke rustup for nightly: {e}"));
+    if !status.success() {
+        panic!("Rust nightly toolchain required for --fuzz. Install with: rustup install nightly");
     }
 }
 
@@ -105,15 +131,15 @@ fn run_vscode_precommit() {
 fn run_maven_precommit() {
     require_command(
         "java",
-        "Install a JDK 17+ (https://adoptium.net/) for the Maven package tests.",
+        "Install a JDK 21+ (https://adoptium.net/) for the Maven package tests.",
     );
     eprintln!("xtask: cargo build -p lemma_jni");
     run(&["build", "-p", "lemma_jni"]);
     let maven_dir = versions::workspace_root().join(MAVEN_PACKAGE_DIR);
     let mvnw = maven_dir.join("mvnw");
-    eprintln!("xtask: maven ./mvnw -B test");
+    eprintln!("xtask: maven ./mvnw -B verify");
     let status = Command::new(&mvnw)
-        .args(["-B", "test"])
+        .args(["-B", "verify"])
         .current_dir(&maven_dir)
         .status()
         .unwrap_or_else(|e| {
@@ -141,7 +167,79 @@ fn run_deny_precommit() {
     }
 }
 
-fn precommit() {
+fn run_fuzz_precommit() {
+    require_command(
+        "rustup",
+        "Install rustup (https://rustup.rs/) for the nightly toolchain used by --fuzz.",
+    );
+    require_nightly();
+    let fuzz_ok = Command::new(cargo_bin())
+        .args(["fuzz", "--version"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !fuzz_ok {
+        panic!("cargo fuzz not available. Install cargo-fuzz: cargo install cargo-fuzz");
+    }
+
+    let per_target_secs = FUZZ_BUDGET_SECS / FUZZ_TARGETS.len() as u64;
+    if per_target_secs == 0 {
+        panic!(
+            "BUG: FUZZ_BUDGET_SECS ({FUZZ_BUDGET_SECS}) smaller than target count ({})",
+            FUZZ_TARGETS.len()
+        );
+    }
+    let max_total_time_arg = format!("-max_total_time={per_target_secs}");
+    let fuzz_dir = versions::workspace_root().join(FUZZ_PACKAGE_DIR);
+    eprintln!(
+        "xtask: fuzz budget {FUZZ_BUDGET_SECS}s across {} targets ({per_target_secs}s each)",
+        FUZZ_TARGETS.len()
+    );
+    for target in FUZZ_TARGETS {
+        eprintln!("xtask: fuzz {target} ({max_total_time_arg})");
+        let status = Command::new("rustup")
+            .args([
+                "run",
+                "nightly",
+                "cargo",
+                "fuzz",
+                "run",
+                target,
+                "--",
+                max_total_time_arg.as_str(),
+            ])
+            .current_dir(&fuzz_dir)
+            .status()
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to run rustup run nightly cargo fuzz run {target} in {}: {e}",
+                    fuzz_dir.display()
+                )
+            });
+        if !status.success() {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+    }
+}
+
+fn parse_precommit_flags(args: impl Iterator<Item = String>) -> bool {
+    let mut run_fuzz = false;
+    for arg in args {
+        match arg.as_str() {
+            "--fuzz" => run_fuzz = true,
+            other => {
+                eprintln!("xtask: unknown precommit flag {other:?}");
+                usage();
+                std::process::exit(1);
+            }
+        }
+    }
+    run_fuzz
+}
+
+fn precommit(run_fuzz: bool) {
     eprintln!("xtask: versions-verify");
     run_versions_verify();
     eprintln!("xtask: mix precommit");
@@ -182,12 +280,16 @@ fn precommit() {
         eprintln!("coverage: {e}");
         std::process::exit(1);
     }
+    if run_fuzz {
+        eprintln!("xtask: fuzz (30 minute budget across targets)");
+        run_fuzz_precommit();
+    }
     eprintln!("xtask: done");
 }
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit | cargo run -p xtask\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>\n  cargo coverage <engine|cli|all> [--check] | cargo run -p xtask -- coverage <engine|cli|all> [--check]"
+        "usage:\n  cargo precommit [--fuzz] | cargo run -p xtask -- [precommit] [--fuzz]\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>\n  cargo coverage <engine|cli|all> [--check] | cargo run -p xtask -- coverage <engine|cli|all> [--check]\n  cargo run -p xtask -- schema\n  cargo run -p xtask -- maven-natives\n\n  --fuzz  after the gate, run engine/fuzz for 30 minutes total (split across targets; CI uses this)"
     );
 }
 
@@ -195,7 +297,13 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let sub = args.next();
     match sub.as_deref() {
-        None | Some("precommit") => precommit(),
+        None => precommit(parse_precommit_flags(args)),
+        Some("precommit") => precommit(parse_precommit_flags(args)),
+        Some("--fuzz") => {
+            let mut rest = vec!["--fuzz".to_string()];
+            rest.extend(args);
+            precommit(parse_precommit_flags(rest.into_iter()));
+        }
         Some("versions-verify") => {
             run_versions_verify();
         }
@@ -265,6 +373,30 @@ fn main() {
             if let Err(e) = coverage::run(&root, &rest) {
                 eprintln!("coverage: {e}");
                 usage();
+                std::process::exit(1);
+            }
+        }
+        Some("schema") => {
+            if args.next().is_some() {
+                eprintln!("schema: takes no arguments");
+                usage();
+                std::process::exit(1);
+            }
+            let root = versions::workspace_root();
+            if let Err(e) = schema::run(&root) {
+                eprintln!("schema: {e}");
+                std::process::exit(1);
+            }
+        }
+        Some("maven-natives") => {
+            if args.next().is_some() {
+                eprintln!("maven-natives: takes no arguments");
+                usage();
+                std::process::exit(1);
+            }
+            let root = versions::workspace_root();
+            if let Err(e) = maven_natives::run(&root) {
+                eprintln!("maven-natives: {e}");
                 std::process::exit(1);
             }
         }

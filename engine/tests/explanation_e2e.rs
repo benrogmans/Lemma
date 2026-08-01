@@ -34,7 +34,7 @@ rule doubled: base_value * 2
         .expect("doubled rule");
 
     assert_eq!(
-        doubled.display.clone().expect("display"),
+        doubled.display().expect("display").to_string(),
         LiteralValue::number_from_decimal(rust_decimal::Decimal::from(200)).to_string(),
     );
 
@@ -119,7 +119,7 @@ rule out: 1 unless flag then 2
     assert_eq!(explanation.causes.len(), 1);
     // The condition `flag` was false; the cause states the fact that held.
     assert_eq!(explanation.causes[0].condition, "flag is false");
-    assert_eq!(explanation.causes[0].value.as_deref(), Some("true"));
+    assert_eq!(explanation.causes[0].value, "true");
 }
 
 #[test]

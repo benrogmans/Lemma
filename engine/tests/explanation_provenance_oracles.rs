@@ -74,7 +74,11 @@ rule total: line
             .get(name)
             .unwrap_or_else(|| panic!("rule '{name}' missing from explain:true response"));
         assert_eq!(left.vetoed, right.vetoed, "vetoed mismatch for {name}");
-        assert_eq!(left.display, right.display, "display mismatch for {name}");
+        assert_eq!(
+            left.display(),
+            right.display(),
+            "display mismatch for {name}"
+        );
         assert_eq!(left.rule.name, right.rule.name);
         assert!(
             left.explanation.is_none(),
@@ -112,10 +116,10 @@ rule sqrt_product: sqrt_two * sqrt_two
         .expect("sqrt_product in response");
     assert!(!product_value.vetoed);
     assert_eq!(
-        product_value.display.as_deref(),
+        product_value.display(),
         Some("2"),
         "folded product value must be 2, got {:?}",
-        product_value.display
+        product_value.display()
     );
 
     let response = run(
@@ -131,7 +135,7 @@ rule sqrt_product: sqrt_two * sqrt_two
         .results
         .get("sqrt_product")
         .expect("sqrt_product in response");
-    assert_eq!(product.display, product_value.display);
+    assert_eq!(product.display(), product_value.display());
     assert_eq!(product.vetoed, product_value.vetoed);
 
     let explanation = product
@@ -181,13 +185,13 @@ rule out: 1 unless true then 2
     );
     let out = response.results.get("out").expect("out in response");
     assert!(!out.vetoed);
-    assert_eq!(out.display.as_deref(), Some("2"));
+    assert_eq!(out.display(), Some("2"));
 
     let explanation = out.explanation.as_ref().expect("out explanation");
     assert_eq!(explanation.body, "2");
     assert_eq!(explanation.causes.len(), 1);
     assert_eq!(explanation.causes[0].condition, "true");
-    assert_eq!(explanation.causes[0].value.as_deref(), Some("true"));
+    assert_eq!(explanation.causes[0].value, "true");
 }
 
 /// Statically false unless: default body, falsified arm narrated as a cause.
@@ -209,13 +213,13 @@ rule out: 1 unless false then 2
     );
     let out = response.results.get("out").expect("out in response");
     assert!(!out.vetoed);
-    assert_eq!(out.display.as_deref(), Some("1"));
+    assert_eq!(out.display(), Some("1"));
 
     let explanation = out.explanation.as_ref().expect("out explanation");
     assert_eq!(explanation.body, "1");
     assert_eq!(explanation.causes.len(), 1);
     assert_eq!(explanation.causes[0].condition, "false");
-    assert_eq!(explanation.causes[0].value.as_deref(), Some("false"));
+    assert_eq!(explanation.causes[0].value, "false");
 }
 
 /// A → B → C: outermost explanation embeds B, which embeds A (multi-hop).
@@ -238,7 +242,7 @@ rule c: b
         true,
     );
     let c = response.results.get("c").expect("c in response");
-    assert_eq!(c.display.as_deref(), Some("10"));
+    assert_eq!(c.display(), Some("10"));
     let explanation = c.explanation.as_ref().expect("c explanation");
     let json = serde_json::to_value(explanation).expect("serialize");
     let rule_nodes = explanation_tree_rule_nodes(&json);
@@ -281,7 +285,7 @@ rule out: 1 unless outer then inner_choice
     let response = run(&engine, "nested_piecewise_oracle", data, Some(&rules), true);
     let out = response.results.get("out").expect("out in response");
     assert!(!out.vetoed);
-    assert_eq!(out.display.as_deref(), Some("3"));
+    assert_eq!(out.display(), Some("3"));
     let explanation = out.explanation.as_ref().expect("out explanation");
     let json = serde_json::to_value(explanation).expect("serialize");
     assert_eq!(json["result"].as_str(), Some("3"));
@@ -328,7 +332,7 @@ rule as_kg: (1 / zero) as kg
     assert!(
         as_kg.vetoed,
         "1/0 as kg must veto, got display={:?}",
-        as_kg.display
+        as_kg.display()
     );
     let explanation = as_kg.explanation.as_ref().expect("as_kg explanation");
     let json = serde_json::to_value(explanation).expect("serialize");

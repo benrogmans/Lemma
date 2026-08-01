@@ -26,9 +26,9 @@ fn rule_display(response: &lemma::Response, rule_name: &str) -> String {
         .values()
         .find(|r| r.rule.name == rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule_name))
-        .display
-        .clone()
+        .display()
         .unwrap_or_else(|| panic!("rule '{}' has no display", rule_name))
+        .to_string()
 }
 
 fn rule_vetoed(response: &lemma::Response, rule_name: &str) -> bool {

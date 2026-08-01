@@ -30,9 +30,9 @@ fn eval_display(code: &str, spec_name: &str, rule_name: &str) -> String {
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{rule_name}' missing"))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 const PURCHASE_COST_SPEC: &str = r#"spec units

@@ -587,41 +587,55 @@ fn ratio_display_none_vs_percent_unit() {
 // Section 5 — Ratio ranges with multiple ratio data fields
 // -----------------------------------------------------------------------------
 
-fn assert_range_endpoints_canonical_ratio(
-    lit: &LiteralValue,
+/// Assert a show suggestion's API `ratio` map carries `expected` for `unit`.
+/// `RuleResultValue` has no canonical magnitude or unit tag of its own — only the flat
+/// per-unit map — so this checks the map value directly.
+fn assert_ratio_unit_value(
+    suggestion: &lemma::RuleResultValue,
     ctx: &str,
-    expected_left_canonical: &str,
-    expected_left_unit: Option<&str>,
-    expected_right_canonical: &str,
-    expected_right_unit: Option<&str>,
+    unit: &str,
+    expected: &str,
 ) {
-    let (left, right) = match &lit.value {
-        ValueKind::Range(left, right) => (left.as_ref(), right.as_ref()),
-        other => panic!("{ctx}: expected Range, got {other:?}"),
-    };
-    assert!(
-        left.lemma_type.is_ratio(),
-        "{ctx}: left endpoint lemma_type must be ratio, got {} (specs={:?})",
-        left.lemma_type.name(),
-        left.lemma_type.specifications,
-    );
-    assert!(
-        right.lemma_type.is_ratio(),
-        "{ctx}: right endpoint lemma_type must be ratio, got {} (specs={:?})",
-        right.lemma_type.name(),
-        right.lemma_type.specifications,
-    );
-    assert_ratio_exact(
-        left,
-        &format!("{ctx} left"),
-        expected_left_canonical,
-        expected_left_unit,
-    );
-    assert_ratio_exact(
-        right,
-        &format!("{ctx} right"),
-        expected_right_canonical,
-        expected_right_unit,
+    let actual = suggestion
+        .ratio
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .unwrap_or_else(|| panic!("{ctx}: missing ratio unit '{unit}'"));
+    assert_eq!(decimal_lit(actual), decimal_lit(expected), "{ctx}");
+}
+
+/// Assert each range endpoint's API `ratio` map carries `expected_left`/`expected_right` for
+/// `unit`. `RuleResultValue` (the type behind `ShowData.suggestion`) has no canonical
+/// magnitude or unit tag of its own — only the flat per-unit map — so this checks the map
+/// value directly rather than reconstructing a canonical `LiteralValue`.
+fn assert_range_endpoints_ratio_unit(
+    suggestion: &lemma::RuleResultValue,
+    ctx: &str,
+    unit: &str,
+    expected_left: &str,
+    expected_right: &str,
+) {
+    let range = suggestion
+        .range
+        .as_ref()
+        .unwrap_or_else(|| panic!("{ctx}: expected a range suggestion"));
+    let left = range
+        .from
+        .ratio
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .unwrap_or_else(|| panic!("{ctx}: left endpoint missing ratio unit '{unit}'"));
+    let right = range
+        .to
+        .ratio
+        .as_ref()
+        .and_then(|m| m.get(unit))
+        .unwrap_or_else(|| panic!("{ctx}: right endpoint missing ratio unit '{unit}'"));
+    assert_eq!(decimal_lit(left), decimal_lit(expected_left), "{ctx}: left");
+    assert_eq!(
+        decimal_lit(right),
+        decimal_lit(expected_right),
+        "{ctx}: right"
     );
 }
 
@@ -636,30 +650,28 @@ rule band: allowed_band
     load_ok(&mut engine, code, "ratio_range_default_pct.lemma");
 
     let now = DateTimeValue::now();
-    let suggestion = engine
+    let show = engine
         .show(None, "policy", Some(&now))
-        .expect("plan must build with ratio range default")
-        .data
-        .get("allowed_band")
-        .expect("allowed_band in show")
-        .suggestion
-        .clone()
-        .expect("ratio range typedef must surface declared suggestion");
+        .expect("plan must build with ratio range default");
+    let entry = show.data.get("allowed_band").expect("allowed_band in show");
     assert!(
         matches!(
-            &suggestion.lemma_type.specifications,
+            &entry.lemma_type.specifications,
             TypeSpecification::RatioRange { .. }
         ),
         "default suggestion lemma_type must be RatioRange, got {:?}",
-        suggestion.lemma_type.specifications
+        entry.lemma_type.specifications
     );
-    assert_range_endpoints_canonical_ratio(
+    let suggestion = entry
+        .suggestion
+        .clone()
+        .expect("ratio range typedef must surface declared suggestion");
+    assert_range_endpoints_ratio_unit(
         &suggestion,
         "ratio_range_default percent",
-        "0.10",
-        Some("percent"),
-        "0.50",
-        Some("percent"),
+        "percent",
+        "10",
+        "50",
     );
 }
 
@@ -685,13 +697,12 @@ rule band: allowed_band
         .suggestion
         .clone()
         .expect("ratio range typedef must surface declared suggestion");
-    assert_range_endpoints_canonical_ratio(
+    assert_range_endpoints_ratio_unit(
         &suggestion,
         "ratio_range_default basis_points",
-        "0.02",
-        Some("basis_points"),
-        "0.35",
-        Some("basis_points"),
+        "basis_points",
+        "200",
+        "3500",
     );
 }
 
@@ -779,7 +790,7 @@ fn show_declared_suggestions_canonical_for_targets() {
         .suggestion
         .as_ref()
         .expect("margin declared suggestion");
-    assert_ratio_exact(default, "margin show default", "0.15", Some("percent"));
+    assert_ratio_unit_value(default, "margin show default", "percent", "15");
 
     let insurance = show
         .data
@@ -789,12 +800,7 @@ fn show_declared_suggestions_canonical_for_targets() {
         .suggestion
         .as_ref()
         .expect("insurance declared suggestion");
-    assert_ratio_exact(
-        ins_default,
-        "insurance show default",
-        "0.015",
-        Some("percent"),
-    );
+    assert_ratio_unit_value(ins_default, "insurance show default", "percent", "1.5");
 }
 
 // -----------------------------------------------------------------------------

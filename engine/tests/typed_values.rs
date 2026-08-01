@@ -48,7 +48,13 @@ rule double_meeting: meeting_length * 2
         .run(None, "scheduling", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let rule = response.results.get("double_meeting").unwrap();
-    let measure = rule.measure.as_ref().expect("measure map");
+    let measure = rule
+        .value
+        .as_ref()
+        .expect("rule result value")
+        .measure
+        .as_ref()
+        .expect("measure map");
     assert_eq!(
         measure.get("minute").map(String::as_str),
         Some("60"),

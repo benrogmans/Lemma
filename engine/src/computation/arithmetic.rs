@@ -1,10 +1,10 @@
 //! Type-aware arithmetic operations
 
+use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::{
     checked_add, checked_div, checked_mul, checked_sub, rational_operation_with_fallback,
     NumericFailure, NumericOperation, RationalInteger,
 };
-use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::planning::semantics::{
     combine_signatures, primitive_number_arc, ArithmeticComputation, LemmaType, LiteralValue,
     SemanticCalendarUnit, ValueKind,
@@ -1139,7 +1139,6 @@ fn type_name(value: &LiteralValue) -> String {
 mod tests {
     use super::*;
     use crate::computation::rational::rational_new;
-    use crate::evaluation::operations::{OperationResult, VetoType};
     use crate::planning::semantics::{ArithmeticComputation, LiteralValue, ValueKind};
     use rust_decimal::Decimal;
 
@@ -1242,7 +1241,7 @@ mod tests {
         if rule_result.vetoed {
             panic!("rule '{}' vetoed", rule);
         }
-        rule_result.materialized_literal()
+        rule_result.to_literal()
     }
 
     /// Phase 0 — Q*Q producing a signature hit must emit a named lemma_type.

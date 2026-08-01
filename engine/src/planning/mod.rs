@@ -145,12 +145,31 @@ pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) ->
 
     for (repository, inner) in context.repositories().iter() {
         for (_, lemma_spec_set) in inner.iter() {
+            let versions: Vec<execution_plan::ShowVersion> = lemma_spec_set
+                .iter_with_ranges()
+                .map(|(_, from, to)| execution_plan::ShowVersion {
+                    effective_from: from,
+                    effective_to: to,
+                })
+                .collect();
+
             for spec in lemma_spec_set.iter_specs() {
                 let spec_name = &spec.name;
                 let mut slice_errors = Vec::new();
                 let mut slice_plans = Vec::new();
 
-                for effective in lemma_spec_set.effective_dates(spec, context) {
+                let breakpoints =
+                    match discovery::plan_breakpoints(context, lemma_spec_set, spec, limits) {
+                        Ok(dates) => dates,
+                        Err(errors) => {
+                            slice_errors.extend(errors);
+                            // Skip the slice loop: existing error handling below treats empty
+                            // slice_plans + non-empty slice_errors as a failed spec.
+                            Vec::new()
+                        }
+                    };
+
+                for effective in breakpoints {
                     let ordered_dependencies = match discovery::discover_dependency_order(
                         context, spec, &effective, limits,
                     ) {
@@ -180,7 +199,15 @@ pub(crate) fn plan(context: &Context, limits: &crate::limits::ResourceLimits) ->
                                 &effective,
                                 limits,
                             ) {
-                                Ok(execution_plan) => slice_plans.push(execution_plan),
+                                Ok(mut execution_plan) => {
+                                    execution_plan::attach_show_cache(
+                                        &mut execution_plan,
+                                        lemma_spec_set,
+                                        spec,
+                                        &versions,
+                                    );
+                                    slice_plans.push(execution_plan);
+                                }
                                 Err(plan_errors) => slice_errors.extend(plan_errors),
                             }
                         }
@@ -311,6 +338,444 @@ mod tests {
             2,
             "errors from different specs must both survive dedup, got: {:?}",
             errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    use crate::literals::DateGranularity;
+    use crate::parsing::ast::DateTimeValue;
+
+    fn date(year: i32, month: u32, day: u32) -> DateTimeValue {
+        DateTimeValue {
+            year,
+            month,
+            day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            microsecond: 0,
+            timezone: None,
+            granularity: DateGranularity::Full,
+        }
+    }
+
+    /// Count the temporal slices that were planned for `spec_name` across all versions.
+    fn slice_count(engine: &crate::Engine, spec_name: &str) -> usize {
+        engine
+            .plans
+            .get_plans(None, spec_name)
+            .map(|m| m.len())
+            .unwrap_or(0)
+    }
+
+    /// Run `spec_name` at `at` with no data and return the display string for `rule_name`.
+    fn run_display(
+        engine: &crate::Engine,
+        spec_name: &str,
+        at: &DateTimeValue,
+        rule_name: &str,
+    ) -> String {
+        engine
+            .run(
+                None,
+                spec_name,
+                Some(at),
+                std::collections::HashMap::new(),
+                None,
+                false,
+            )
+            .expect("evaluation must succeed")
+            .results
+            .get(rule_name)
+            .expect("rule must be in results")
+            .display()
+            .expect("rule must have a display value")
+            .to_string()
+    }
+
+    /// Sum of workspace plan-set sizes for `scale_test_0` .. `scale_test_{count-1}`.
+    fn slice_count_for_independent_specs(engine: &crate::Engine, count: usize) -> usize {
+        (0..count)
+            .map(|i| slice_count(engine, &format!("scale_test_{i}")))
+            .sum()
+    }
+
+    /// Axis 5: each temporal version is one slice → count exactly.
+    #[test]
+    fn planning_slice_count_temporal_versions_of_one_spec_is_exact() {
+        use crate::tests::scaling_generators::temporal_versions_of_one_spec;
+
+        for count in [1_usize, 4, 16] {
+            let engine = load(&temporal_versions_of_one_spec(count));
+            let slices = slice_count(&engine, "scale_test");
+            assert_eq!(
+                slices, count,
+                "count={count}: temporal versions of one spec must yield exactly count slices, got {slices}"
+            );
+        }
+    }
+
+    /// Axis 6 — dated independent specs: each spec must get exactly one slice
+    /// (its own effective date is the only breakpoint in its closure).
+    #[test]
+    fn planning_slice_count_dated_independent_specs_each_get_one_slice() {
+        use crate::tests::scaling_generators::specs_at_distinct_effective_dates;
+
+        for count in [4_usize, 8] {
+            let engine = load(&specs_at_distinct_effective_dates(count));
+            let slices = slice_count_for_independent_specs(&engine, count);
+            assert_eq!(
+                slices, count,
+                "count={count}: each independent dated spec must get exactly one slice, got {slices}"
+            );
+            for i in 0..count {
+                assert_eq!(
+                    slice_count(&engine, &format!("scale_test_{i}")),
+                    1,
+                    "scale_test_{i} must have exactly one slice"
+                );
+            }
+        }
+    }
+
+    /// Axis 6 — undated control: all specs undated → each gets exactly one slice.
+    #[test]
+    fn planning_slice_count_undated_independent_specs_each_get_one_slice() {
+        use crate::tests::scaling_generators::specs_all_undated;
+
+        for count in [4_usize, 8] {
+            let engine = load(&specs_all_undated(count));
+            let slices = slice_count_for_independent_specs(&engine, count);
+            assert_eq!(
+                slices, count,
+                "count={count}: undated independent specs must each get exactly one slice, got {slices}"
+            );
+        }
+    }
+
+    fn nf_size(source: &str, spec_name: &str) -> usize {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(SourceType::Volatile, source.to_string())])
+            .expect("spec must load");
+        engine
+            .plans
+            .get_plans(None, spec_name)
+            .expect("plans for spec")
+            .values()
+            .next()
+            .expect("at least one slice")
+            .normal_forms
+            .len()
+    }
+
+    /// Axes 1–4: NF size grows with ratio below 8 for fourfold input increase.
+    ///
+    /// Correct before and after all parts (NF build is already linear).
+    #[test]
+    fn planning_nf_size_options_scales_near_linear() {
+        use crate::tests::scaling_generators::options_per_data_declaration;
+
+        let small = nf_size(&options_per_data_declaration(8), "scale_test");
+        let large = nf_size(&options_per_data_declaration(32), "scale_test");
+        let ratio = large as f64 / small as f64;
+        assert!(
+            ratio < 8.0,
+            "axis 1 (options): NF size ratio must be < 8 for 4x input; \
+             small={small} large={large} ratio={ratio:.2}"
+        );
+    }
+
+    #[test]
+    fn planning_nf_size_shared_path_arms_scales_near_linear() {
+        use crate::tests::scaling_generators::unless_arms_on_shared_path;
+
+        let small = nf_size(&unless_arms_on_shared_path(8), "scale_test");
+        let large = nf_size(&unless_arms_on_shared_path(32), "scale_test");
+        let ratio = large as f64 / small as f64;
+        assert!(
+            ratio < 8.0,
+            "axis 2 (shared-path arms): NF size ratio must be < 8 for 4x input; \
+             small={small} large={large} ratio={ratio:.2}"
+        );
+    }
+
+    #[test]
+    fn planning_nf_size_distinct_path_arms_scales_near_linear() {
+        use crate::tests::scaling_generators::unless_arms_on_distinct_paths;
+
+        let small = nf_size(&unless_arms_on_distinct_paths(8), "scale_test");
+        let large = nf_size(&unless_arms_on_distinct_paths(32), "scale_test");
+        let ratio = large as f64 / small as f64;
+        assert!(
+            ratio < 8.0,
+            "axis 3 (distinct-path arms): NF size ratio must be < 8 for 4x input; \
+             small={small} large={large} ratio={ratio:.2}"
+        );
+    }
+
+    #[test]
+    fn planning_nf_size_conjunction_chain_scales_near_linear() {
+        use crate::tests::scaling_generators::conjunction_chain;
+
+        let small = nf_size(&conjunction_chain(8), "scale_test");
+        let large = nf_size(&conjunction_chain(32), "scale_test");
+        let ratio = large as f64 / small as f64;
+        assert!(
+            ratio < 8.0,
+            "axis 4 (conjunction chain): NF size ratio must be < 8 for 4x input; \
+             small={small} large={large} ratio={ratio:.2}"
+        );
+    }
+
+    fn load(source: &str) -> crate::Engine {
+        let mut engine = crate::Engine::new();
+        engine
+            .load([(SourceType::Volatile, source.to_string())])
+            .expect("spec must load");
+        engine
+    }
+
+    // --- Part 2 corpus: breakpoint correctness ---
+
+    /// Unpinned dependency with two versions inside the consumer's range → consumer gets
+    /// exactly two slices.  Evaluating at dates within each slice yields the corresponding
+    /// dependency version's value.
+    #[test]
+    fn breakpoints_unpinned_dep_two_versions_consumer_gets_two_slices() {
+        let engine = load(
+            r#"
+spec dep
+data v: 1
+rule r: v
+
+spec dep 2025-06-01
+data v: 2
+rule r: v
+
+spec consumer 2025-01-01
+uses d: dep
+rule out: d.r
+"#,
+        );
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            2,
+            "consumer must have exactly 2 slices"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 3, 1), "out"),
+            "1",
+            "before dep v2 boundary: must use dep v1"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 9, 1), "out"),
+            "2",
+            "after dep v2 boundary: must use dep v2"
+        );
+    }
+
+    /// Pinned dependency with two versions → consumer gets exactly one slice regardless of
+    /// the number of dep versions in the context.
+    #[test]
+    fn breakpoints_pinned_dep_two_versions_consumer_gets_one_slice() {
+        let engine = load(
+            r#"
+spec dep
+data v: 1
+rule r: v
+
+spec dep 2025-06-01
+data v: 2
+rule r: v
+
+spec consumer 2025-01-01
+uses d: dep 2025-01-01
+rule out: d.r
+"#,
+        );
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            1,
+            "pinned dep: consumer must have exactly 1 slice"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 3, 1), "out"),
+            "1",
+            "pinned dep: must always use dep v1"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 9, 1), "out"),
+            "1",
+            "pinned dep: must still use dep v1 after dep v2 boundary"
+        );
+    }
+
+    /// Pinned dependency whose own dependency has versions → consumer still gets one slice.
+    /// The pin prunes the entire subtree: nothing beneath the pinned dep can shift.
+    #[test]
+    fn breakpoints_pinned_dep_subtree_pruned_consumer_gets_one_slice() {
+        let engine = load(
+            r#"
+spec base
+data v: 10
+rule r: v
+
+spec base 2025-06-01
+data v: 20
+rule r: v
+
+spec dep 2025-01-01
+uses b: base
+rule r: b.r
+
+spec consumer 2025-01-01
+uses d: dep 2025-01-01
+rule out: d.r
+"#,
+        );
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            1,
+            "pinned dep with versioned transitive dep: consumer must still get 1 slice"
+        );
+    }
+
+    /// Origin consumer with a dependency that gains a second version at a dated boundary →
+    /// consumer gets two slices (at Origin using dep v1, and at dep's v2 date using dep v2).
+    #[test]
+    fn breakpoints_origin_consumer_dated_dep_gets_two_slices() {
+        let engine = load(
+            r#"
+spec dep
+data v: 5
+rule r: v
+
+spec dep 2025-01-01
+data v: 99
+rule r: v
+
+spec consumer
+uses d: dep
+rule out: d.r
+"#,
+        );
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            2,
+            "origin consumer with dated dep: must have slices at Origin and dep's second-version date"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2024, 6, 1), "out"),
+            "5",
+            "before dep v2: must use dep v1"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 3, 1), "out"),
+            "99",
+            "after dep v2 boundary: must use dep v2"
+        );
+    }
+
+    /// Diamond closure: two paths lead to the same dependency. Dependency version dates
+    /// must be counted once, not duplicated.
+    #[test]
+    fn breakpoints_diamond_closure_dates_counted_once() {
+        let engine = load(
+            r#"
+spec dep
+data v: 1
+rule r: v
+
+spec dep 2025-06-01
+data v: 2
+rule r: v
+
+spec mid_a
+uses d: dep
+rule r: d.r
+
+spec mid_b
+uses d: dep
+rule r: d.r
+
+spec consumer
+uses a: mid_a
+uses b: mid_b
+rule out: a.r
+"#,
+        );
+        // Two paths to dep but only 2 breakpoints: Origin and 2025-06-01.
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            2,
+            "diamond closure: dep dates must be counted once, not doubled"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 3, 1), "out"),
+            "1",
+            "diamond: before dep v2 boundary"
+        );
+        assert_eq!(
+            run_display(&engine, "consumer", &date(2025, 9, 1), "out"),
+            "2",
+            "diamond: after dep v2 boundary"
+        );
+    }
+
+    /// Unrelated noise boundaries inside the consumer's range must not add slices.
+    /// A consumer with no dependencies should have exactly one slice regardless of how
+    /// many other dated specs are in the context.
+    #[test]
+    fn breakpoints_unrelated_noise_boundaries_do_not_add_slices() {
+        let engine = load(
+            r#"
+spec consumer
+data v: 1
+rule out: v
+
+spec noise_a 2025-01-01
+data x: 1
+
+spec noise_b 2025-06-01
+data x: 1
+"#,
+        );
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            1,
+            "independent consumer must have exactly 1 slice even with unrelated dated specs"
+        );
+    }
+
+    /// A dependency closure that breaches max_dag_specs must return an error, and the spec
+    /// must surface no slices.
+    #[test]
+    fn breakpoints_closure_exceeding_max_dag_specs_errors() {
+        // Build a spec with many dependencies to exceed the tiny limit.
+        let mut source = String::new();
+        for i in 0..6 {
+            source.push_str(&format!("spec dep_{i}\ndata v: {i}\nrule r: v\n\n"));
+        }
+        source.push_str("spec consumer\n");
+        for i in 0..6 {
+            source.push_str(&format!("uses d_{i}: dep_{i}\n"));
+        }
+        source.push_str("rule out: d_0.r\n");
+
+        let limits = crate::ResourceLimits {
+            max_dag_specs: 3,
+            ..crate::ResourceLimits::default()
+        };
+        let mut engine = crate::Engine::with_limits(limits);
+        engine
+            .load([(SourceType::Volatile, source)])
+            .expect_err("must fail with too many closure members");
+
+        // No slice must have been produced for consumer.
+        assert_eq!(
+            slice_count(&engine, "consumer"),
+            0,
+            "consumer must have no slices when closure exceeds max_dag_specs"
         );
     }
 }

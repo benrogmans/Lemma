@@ -356,11 +356,11 @@ Lemma distinguishes three outcomes:
 | Outcome | When | Example |
 |---------|------|---------|
 | Planning Error | Invalid Spec (wrong types, unsupported operations) | `5 and "text"` (logical AND requires boolean operands); `1 / 0` (literal division by zero) |
-| Request Error | Malformed run request (before evaluation) | Duplicate overlay keys that canonicalize to the same name (`Age` and `age`) |
+| Request Error | Malformed run request (before evaluation) | Duplicate run data keys that canonicalize to the same name (`Age` and `age`) |
 | Veto | Domain "no value" at runtime | Division by zero from Data, missing Data, invalid Data override, user `veto "..."`, date overflow |
 | Panic | Bug (invariant violated; should never happen after planning) | Internal consistency failure |
 
-After planning succeeds, a well-formed run completes with Rule results (values or Vetoes). Data overrides that violate type constraints, minimum/maximum bounds, or allowed options bind as a Veto on that Data (dependent Rules veto); they are not a planning error. Unknown overlay keys and import aliases are ignored; a `MissingData` veto may suggest a near match from ignored keys. Duplicate canonical keys in the same request are a request Error and abort before evaluation.
+After planning succeeds, a well-formed run completes with Rule results (values or Vetoes). Data overrides that violate type constraints, minimum/maximum bounds, or allowed options bind as a Veto on that Data (dependent Rules veto); they are not a planning error. Unknown run data keys and import aliases are ignored; a `MissingData` veto may suggest a near match from ignored keys. Duplicate canonical keys in the same request are a request Error and abort before evaluation.
 
 Veto is only for domain-level "no value", not for type errors or invalid operations in the Spec itself. Those are caught at planning time.
 

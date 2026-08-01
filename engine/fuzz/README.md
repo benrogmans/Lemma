@@ -1,49 +1,48 @@
 # Fuzzing Lemma Parser
 
-This directory contains fuzz targets for testing the Lemma engine's robustness against malformed input.
+Fuzz targets for malformed and adversarial Lemma input.
 
 ## Setup
-
-Fuzzing requires Rust nightly:
 
 ```bash
 rustup install nightly
 cargo install cargo-fuzz
 ```
 
-## Run like CI (before pushing)
+## Run like CI
 
-From repo root or from `engine/`:
+CI runs the full gate then 30 minutes of fuzz total (split evenly across targets):
 
 ```bash
-cargo test --ignored run_fuzz_targets
-# or with nextest:
-cargo nextest run -p lemma-engine --ignored run_fuzz_targets
+cargo precommit --fuzz
 ```
 
-Runs an ignored test that builds and runs each fuzz target for 30s with a 5s timeout, matching the quality workflow.
+Bare `cargo precommit` skips fuzz (local shortcut only).
 
-## Running Fuzz Tests
+## Running Fuzz Tests Manually
 
 ### Quick Test (30 second)
+
 ```bash
+cd engine/fuzz
 cargo +nightly fuzz run fuzz_parser -- -max_total_time=30
 ```
 
 ### Full Fuzzing Session (1 hour)
+
 ```bash
 cargo +nightly fuzz run fuzz_parser -- -max_total_time=3600
 ```
 
 ### Available Targets
 
-1. **fuzz_parser** - Full spec parsing with random input
-2. **fuzz_expressions** - Expression parsing within valid spec context
-3. **fuzz_literals** - Literal value parsing (numbers, strings, units)
-4. **fuzz_deeply_nested** - Nested expressions to test stack limits
-5. **fuzz_data_bindings** - Data binding parsing and evaluation
+1. `fuzz_parser` - Full spec parsing with random input
+2. `fuzz_expressions` - Expression parsing within valid spec context
+3. `fuzz_literals` - Literal value parsing (numbers, strings, units)
+4. `fuzz_deeply_nested` - Nested expressions to test stack limits
+5. `fuzz_data_bindings` - Data binding parsing and evaluation
 
-### Running Pageific Targets
+### Running Specific Targets
 
 ```bash
 cargo +nightly fuzz run fuzz_expressions -- -max_total_time=60
@@ -61,8 +60,6 @@ cargo +nightly fuzz run fuzz_parser artifacts/fuzz_parser/crash-abc123
 ```
 
 ### Minimizing Test Cases
-
-To find the smallest input that reproduces a crash:
 
 ```bash
 cargo +nightly fuzz tmin fuzz_parser artifacts/fuzz_parser/crash-abc123
@@ -94,21 +91,7 @@ ASAN_OPTIONS="detect_leaks=0" cargo +nightly fuzz run fuzz_parser
 1. Create `fuzz_targets/fuzz_your_target.rs`
 2. Add a `[[bin]]` entry in `Cargo.toml`
 3. Follow the pattern from existing targets
-
-Example:
-
-```rust
-#![no_main]
-use libfuzzer_sys::fuzz_target;
-use lemma::Engine;
-
-fuzz_target!(|data: &[u8]| {
-    if let Ok(s) = std::str::from_utf8(data) {
-        let mut engine = Engine::new();
-        let _ = engine.load(s, Some("fuzz"));
-    }
-});
-```
+4. Add the target name to `FUZZ_TARGETS` in `xtask/src/main.rs` so `cargo precommit --fuzz` / CI runs it
 
 ## Continuous Fuzzing
 

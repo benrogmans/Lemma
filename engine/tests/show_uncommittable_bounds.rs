@@ -1,7 +1,7 @@
 //! Declared measure bounds: input parse enforces `Decimal::MAX_SCALE`; planning accepts valid ℚ bounds.
 //!
 //! IN: literals in `.lemma` must parse as `Decimal`. Oversize literals are rejected at parse.
-//! OUT: show materializes per-unit magnitudes as rounded decimal strings.
+//! OUT: show converts per-unit magnitudes to rounded decimal strings.
 
 use lemma::DateTimeValue;
 use lemma::Engine;
@@ -9,7 +9,7 @@ use lemma::TypeSpecification;
 use rust_decimal::Decimal;
 use std::str::FromStr;
 
-/// Largest power of ten that parses as a `Decimal` and materializes through planning/show.
+/// Largest power of ten that parses as a `Decimal` and converts to decimal through planning/show.
 const COMMITTABLE_BOUND: &str = "10000000000000000000000000000";
 
 /// Eur minimum so milli per-unit magnitude stays within `Decimal::MAX` (10^25 eur → 10^28 milli).
@@ -99,12 +99,12 @@ fn committable_minimum_at_10_pow_28_loads() {
 
     let json = serde_json::to_value(&entry.lemma_type).expect("serde");
     assert_eq!(
+        json["minimum"]["value"].as_str(),
+        Some(COMMITTABLE_BOUND),
+        "declared measure bound must be named {{value, unit}}, got {}",
         json["minimum"]
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|v| v.as_str()),
-        Some(COMMITTABLE_BOUND)
     );
+    assert_eq!(json["minimum"]["unit"].as_str(), Some("eur"));
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn oversize_minimum_literal_rejected_at_parse() {
 }
 
 #[test]
-fn minimum_with_milli_unit_loads_and_show_materializes() {
+fn minimum_with_milli_unit_loads_and_show_converts() {
     let mut engine = Engine::new();
     load(
         &mut engine,
@@ -138,7 +138,7 @@ fn minimum_with_milli_unit_loads_and_show_materializes() {
     let milli = quantity_unit(&entry.lemma_type.specifications, "milli");
     assert!(
         milli.minimum_decimal().is_some(),
-        "milli minimum must materialize as decimal for show"
+        "milli minimum must convert to decimal for show"
     );
 
     let json = serde_json::to_value(&entry.lemma_type).expect("serde");
@@ -154,7 +154,7 @@ fn minimum_with_milli_unit_loads_and_show_materializes() {
 }
 
 #[test]
-fn maximum_with_milli_unit_loads_and_show_materializes() {
+fn maximum_with_milli_unit_loads_and_show_converts() {
     let mut engine = Engine::new();
     load(
         &mut engine,
@@ -177,7 +177,7 @@ fn maximum_with_milli_unit_loads_and_show_materializes() {
 }
 
 #[test]
-fn suggest_with_milli_unit_loads_and_show_materializes() {
+fn suggest_with_milli_unit_loads_and_show_converts() {
     let mut engine = Engine::new();
     load(
         &mut engine,
@@ -217,12 +217,12 @@ fn committable_maximum_at_10_pow_28_loads() {
 
     let json = serde_json::to_value(&entry.lemma_type).expect("serde");
     assert_eq!(
+        json["maximum"]["value"].as_str(),
+        Some(COMMITTABLE_BOUND),
+        "declared measure bound must be named {{value, unit}}, got {}",
         json["maximum"]
-            .as_array()
-            .and_then(|a| a.first())
-            .and_then(|v| v.as_str()),
-        Some(COMMITTABLE_BOUND)
     );
+    assert_eq!(json["maximum"]["unit"].as_str(), Some("eur"));
 }
 
 #[test]

@@ -209,9 +209,9 @@ struct InputData {
     /// The resolved Lemma type for this data.
     lemma_type: LemmaType,
     /// Spec literal or literal `with` binding.
-    prefilled: Option<lemma::LiteralValue>,
+    prefilled: Option<lemma::RuleResultValue>,
     /// Suggestion from `-> suggest ...` (UI hint only; never commits at evaluation).
-    suggestion: Option<lemma::LiteralValue>,
+    suggestion: Option<lemma::RuleResultValue>,
 }
 
 /// Collect all local input data from a pre-built schema.
@@ -261,8 +261,8 @@ fn index_path_item(engine: &Engine) -> Value {
                                                 "type": "object",
                                                 "properties": {
                                                     "name": { "type": "string" },
-                                                    "effective_from": { "type": ["object", "null"] },
-                                                    "effective_to": { "type": ["object", "null"] }
+                                                    "effective_from": { "type": ["string", "null"] },
+                                                    "effective_to": { "type": ["string", "null"] }
                                                 },
                                                 "required": ["name"]
                                             }
@@ -350,9 +350,11 @@ fn build_get_show_response() -> Value {
                 "description": "Optional commentary from the spec source"
             },
             "effective_from": {
+                "type": ["string", "null"],
                 "description": "Effective-from of the resolved temporal version, if any"
             },
             "effective_to": {
+                "type": ["string", "null"],
                 "description": "Exclusive effective-to of the resolved temporal version, if any"
             },
             "start_line": {
@@ -484,6 +486,14 @@ fn build_evaluate_response_schema(show: &lemma::Show, rule_names: &[String]) -> 
             "effective": {
                 "type": "string",
                 "description": "Evaluation instant used for temporal resolution (matches request instant unless overridden)"
+            },
+            "spec_effective_from": {
+                "type": "string",
+                "description": "Start of the resolved spec version's declared temporal window"
+            },
+            "spec_effective_to": {
+                "type": "string",
+                "description": "End of the resolved spec version's declared temporal window (absent if unbounded)"
             },
             "results": {
                 "type": "object",
@@ -775,7 +785,7 @@ fn build_post_request_schema(data: &[InputData]) -> Value {
 
 fn build_post_property_schema(
     lemma_type: &LemmaType,
-    data_value: Option<&lemma::LiteralValue>,
+    data_value: Option<&lemma::RuleResultValue>,
 ) -> Value {
     let mut schema = build_post_type_schema(lemma_type);
 
@@ -785,7 +795,7 @@ fn build_post_property_schema(
     }
 
     if let Some(v) = data_value {
-        schema["default"] = Value::String(v.display_value());
+        schema["default"] = Value::String(v.to_literal(lemma_type).display_value());
     }
 
     schema
@@ -835,7 +845,7 @@ fn build_post_form_request_schema(data: &[InputData]) -> Value {
 
 fn build_post_form_property_schema(
     lemma_type: &LemmaType,
-    data_value: Option<&lemma::LiteralValue>,
+    data_value: Option<&lemma::RuleResultValue>,
 ) -> Value {
     let mut schema = build_post_form_type_schema(lemma_type);
 
@@ -845,7 +855,7 @@ fn build_post_form_property_schema(
     }
 
     if let Some(v) = data_value {
-        schema["default"] = Value::String(v.display_value());
+        schema["default"] = Value::String(v.to_literal(lemma_type).display_value());
     }
 
     schema

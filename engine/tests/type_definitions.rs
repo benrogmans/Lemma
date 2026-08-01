@@ -93,7 +93,7 @@ rule total: age + adult_age + twenties
         .expect("total rule not found");
 
     // 25 + 30 + 25 = 80
-    assert_eq!(total_rule.display.clone().expect("display"), "80");
+    assert_eq!(total_rule.display().expect("display").to_string(), "80");
 }
 
 #[test]
@@ -126,7 +126,7 @@ rule x: pi
         .expect("run finance");
 
     let rule_x = response.results.get("x").expect("rule x");
-    assert_eq!(rule_x.display.clone().expect("display"), "3.14");
+    assert_eq!(rule_x.display().expect("display").to_string(), "3.14");
 }
 
 /// Regression test: measure type with `-> suggest` before `-> unit` must work.
@@ -455,7 +455,7 @@ fn child_measure_may_add_new_unit() {
     let display = response
         .results
         .get("r")
-        .and_then(|r| r.display.clone())
+        .and_then(|r| r.display().map(str::to_string))
         .expect("display");
     assert!(
         display.contains("eur"),

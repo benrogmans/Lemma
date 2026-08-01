@@ -1,0 +1,15 @@
+{
+  "primitive": { "kind": "primitive" },
+  "custom_local": {
+    "kind": "custom",
+    "parent": "number",
+    "family": "amount",
+    "defining_spec": { "kind": "local" }
+  },
+  "custom_import": {
+    "kind": "custom",
+    "parent": "number",
+    "family": "amount",
+    "defining_spec": { "kind": "import" }
+  }
+}

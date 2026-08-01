@@ -1,0 +1,65 @@
+{
+  "spec": "sample",
+  "effective_from": "2024-01-01",
+  "versions": [
+    {
+      "effective_from": "2024-01-01"
+    }
+  ],
+  "start_line": 1,
+  "source_type": "volatile",
+  "data": {
+    "amount": {
+      "type": {
+        "name": "amount",
+        "kind": "number",
+        "minimum": null,
+        "maximum": null,
+        "decimals": null,
+        "help": "A dimensionless number.",
+        "extends": {
+          "kind": "custom",
+          "parent": "number",
+          "family": "amount",
+          "defining_spec": {
+            "kind": "local"
+          }
+        }
+      },
+      "suggestion": {
+        "number": "1"
+      },
+      "needed_by_rules": [
+        "ok"
+      ]
+    }
+  },
+  "rules": {
+    "ok": {
+      "name": "amount",
+      "kind": "number",
+      "minimum": null,
+      "maximum": null,
+      "decimals": null,
+      "help": "A dimensionless number.",
+      "extends": {
+        "kind": "custom",
+        "parent": "number",
+        "family": "amount",
+        "defining_spec": {
+          "kind": "local"
+        }
+      }
+    }
+  },
+  "meta": {
+    "title": {
+      "literal": {
+        "text": "t"
+      }
+    },
+    "author": {
+      "unquoted": "alice"
+    }
+  }
+}

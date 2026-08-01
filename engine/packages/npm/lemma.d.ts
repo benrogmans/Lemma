@@ -31,7 +31,7 @@ declare module './lemma.bindings.js' {
      * each item has `repository` (name or null for workspace) and `specs`
      * (`ListedSpec` rows: name, effective_from, effective_to).
      */
-    list(): ResolvedRepositoryJson[];
+    list(): ResolvedRepository[];
 
     /**
      * Spec interface and temporal window at `effective`. Lemma text is {@link Engine.source}.
@@ -61,7 +61,7 @@ declare module './lemma.bindings.js' {
     ): void;
 
     /** Resource limits configured for this engine. */
-    limits(): ResourceLimitsJson;
+    limits(): ResourceLimits;
 
     /**
      * Canonical formatting of Lemma source. Throws `EngineError` on parse error.
@@ -70,17 +70,26 @@ declare module './lemma.bindings.js' {
     format(code: string, attribute?: string | null): string;
 
     /**
-     * `data_values`: pass integers as numbers, decimals as strings.
+     * Evaluate a spec. Pass integers as numbers, decimals as strings in `data`.
      */
-    run(
-      repository: string | null | undefined,
-      spec: string,
-      effective: string | null | undefined,
-      data_values?: Record<string, unknown>,
-      rule_names?: string[] | string | null,
-      explain?: boolean,
-    ): EvaluationResponse;
+    run(options: RunOptions): Response;
   }
+}
+
+/** Options for {@link Engine.run}. */
+export interface RunOptions {
+  /** Spec name (required). */
+  spec: string;
+  /** Repository qualifier (e.g. `@org/repo`), or omit for workspace. */
+  repository?: string | null;
+  /** ISO datetime for temporal resolution, or omit for now. */
+  effective?: string | null;
+  /** Input data values. Pass integers as numbers, decimals as strings. */
+  data?: Record<string, unknown>;
+  /** Rule names to evaluate, or omit for all rules. */
+  rules?: string[] | string | null;
+  /** Include explanation tree in response. */
+  explain?: boolean;
 }
 
 /**
@@ -126,68 +135,114 @@ export interface EngineError {
   suggestion: string | null;
   /** Present for `missing_repository` and `registry` errors (`@…` id). */
   repository: string | null;
+  /** Present only for `kind: "registry"`. */
+  registry_kind:
+    | "not_found"
+    | "unauthorized"
+    | "network_error"
+    | "server_error"
+    | "other"
+    | null;
+  /** Present only for `kind: "request"`. */
+  request_kind: "spec_not_found" | "rule_not_found" | "invalid_request" | null;
+  /** Present only for `kind: "resource_limit"`. */
+  limit_name: string | null;
+  limit_value: string | null;
+  actual_value: string | null;
 }
 
 // ---------------------------------------------------------------------------
 // Show envelope (return shape of Engine.show)
 // ---------------------------------------------------------------------------
 
-/** Literal value on API wire (`suggestion`, `prefilled`, committed `value`). Canonical plan storage omits `measure` / `ratio` maps. */
-export interface WireLiteralValue {
-  value: unknown;
-  lemma_type: LemmaType;
-  display_value: string;
-  /** All declared measure units when the type has unit definitions. */
+/**
+ * API value fields shared by `RuleResult` (flattened into its top-level fields),
+ * `ShowData.prefilled`, `ShowData.suggestion`, and range endpoints.
+ * A `None` field is absent (not `null`) per Rust `skip_serializing_if`.
+ * When present: always `display`, plus exactly one typed field.
+ */
+export interface RuleResultValueEndpoint {
+  /** Engine-rendered string (`LiteralValue::display_value`). */
+  display?: string;
+  /** All declared measure units, keyed by unit name. */
   measure?: Record<string, string>;
-  /** All declared ratio units when the type has unit definitions. */
+  /** All declared ratio units, keyed by unit name. */
   ratio?: Record<string, string>;
+  number?: string;
+  boolean?: boolean;
+  text?: string;
+  date?: string;
+  time?: string;
+  calendar?: { value: string; unit: string };
 }
+
+/**
+ * API value shared by `RuleResult` (flattened into its top-level fields),
+ * `ShowData.prefilled`, and `ShowData.suggestion`. When present: always `display`,
+ * plus exactly one typed field for a non-range value; `range` is set instead for a
+ * range value. A range endpoint (`range.from`/`range.to`) never itself carries a
+ * `range` field.
+ */
+export interface RuleResultValue extends RuleResultValueEndpoint {
+  range?: { from: RuleResultValueEndpoint; to: RuleResultValueEndpoint };
+}
+
+/** Where a custom type's extension chain is rooted: local to this spec, or imported. */
+export type TypeDefiningSpec = { kind: "local" } | { kind: "import" };
 
 export type TypeExtends =
-  | "primitive"
+  | { kind: "primitive" }
   | {
+      kind: "custom";
       parent: string;
       family: string;
-      defining_spec: unknown;
+      defining_spec: TypeDefiningSpec;
     };
 
-export interface UnitDef {
+/** A unit-scoped bound (Measure/DateRange/TimeRange/MeasureRange minimum/maximum/lower/upper). */
+export interface NamedBound {
+  value: string;
+  unit: string;
+}
+
+export interface MeasureUnit {
   name: string;
   factor: { numer: string; denom: string };
-  minimum?: string | null;
-  maximum?: string | null;
-  suggestion?: string | null;
+  /** (measure_ref, exponent) pairs from a compound unit declaration (e.g. meter/second). */
+  derived_measure_factors: [string, number][];
+  decomposition: Record<string, number>;
+  minimum?: string;
+  maximum?: string;
+  suggestion?: string;
 }
 
-export interface RatioUnitDef {
+export interface RatioUnit {
   name: string;
   value: { numer: string; denom: string };
-  minimum?: string | null;
-  maximum?: string | null;
-  suggestion?: string | null;
+  minimum?: string;
+  maximum?: string;
+  suggestion?: string;
 }
 
-/** Discriminated union over the 10 Lemma type kinds. Field `kind` is the
- *  serde tag; kind-specific fields sit at the top level next to `kind`,
- *  `name`, and `extends`. */
+/**
+ * Discriminated union over the 12 Lemma type kinds reachable at the API boundary.
+ * Field `kind` is the serde tag; kind-specific fields sit at the top level next to
+ * `kind`, `name`, and `extends`. The `veto`/`undetermined` `TypeSpecification`
+ * variants are internal sentinels that never reach a successfully planned API
+ * response and are intentionally excluded.
+ */
 export type LemmaType =
   & { name: string | null; extends: TypeExtends }
   & (
     | { kind: "boolean"; help: string }
     | {
         kind: "measure";
-        minimum: string | null;
-        maximum: string | null;
+        minimum: NamedBound | null;
+        maximum: NamedBound | null;
         decimals: number | null;
-        units: UnitDef[];
-        help: string;
-      }
-    | {
-        kind: "measure range";
-        minimum: string | null;
-        maximum: string | null;
-        decimals: number | null;
-        units: UnitDef[];
+        units: MeasureUnit[];
+        traits: ("duration" | "calendar")[];
+        decomposition: Record<string, number> | null;
         help: string;
       }
     | {
@@ -198,80 +253,110 @@ export type LemmaType =
         help: string;
       }
     | {
+        kind: "numberrange";
+        lower: string | null;
+        upper: string | null;
+        minimum: string | null;
+        maximum: string | null;
+        help: string;
+      }
+    | {
         kind: "ratio";
         minimum: string | null;
         maximum: string | null;
         decimals: number | null;
-        units: RatioUnitDef[];
+        units: RatioUnit[];
         help: string;
       }
     | {
-        kind: "ratio range";
+        kind: "ratiorange";
+        lower: string | null;
+        upper: string | null;
         minimum: string | null;
         maximum: string | null;
-        decimals: number | null;
-        units: RatioUnitDef[];
+        units: RatioUnit[];
         help: string;
       }
     | {
         kind: "text";
-        minimum: number | null;
-        maximum: number | null;
         length: number | null;
         options: string[];
         help: string;
       }
     | { kind: "date"; minimum: string | null; maximum: string | null; help: string }
+    | {
+        kind: "daterange";
+        lower: string | null;
+        upper: string | null;
+        minimum: NamedBound | null;
+        maximum: NamedBound | null;
+        help: string;
+      }
     | { kind: "time"; minimum: string | null; maximum: string | null; help: string }
-    | { kind: "veto"; message: string | null }
+    | {
+        kind: "timerange";
+        lower: string | null;
+        upper: string | null;
+        minimum: NamedBound | null;
+        maximum: NamedBound | null;
+        help: string;
+      }
+    | {
+        kind: "measurerange";
+        lower: NamedBound | null;
+        upper: NamedBound | null;
+        minimum: NamedBound | null;
+        maximum: NamedBound | null;
+        units: MeasureUnit[];
+        decomposition: Record<string, number> | null;
+        help: string;
+      }
   );
 
 /** One input declared in a spec. Omitted fields are absent (not `null`). */
-export interface DataEntry {
+export interface ShowData {
   type: LemmaType;
   /** Spec literal or literal `with` binding; UIs may skip review. */
-  prefilled?: WireLiteralValue;
+  prefilled?: RuleResultValue;
   /** `-> suggest ...` suggestion; prompt with prefill in interactive UIs. */
-  suggestion?: WireLiteralValue;
+  suggestion?: RuleResultValue;
   /** Local rule names that transitively need this data (planning time). */
   needed_by_rules: string[];
 }
 
 /** Return shape of {@link Engine.run}. */
-export interface EvaluationResponse {
+export interface Response {
   spec: string;
   effective: string;
+  /** Declared temporal window of the resolved spec version actually evaluated. */
+  spec_effective_from?: string;
+  spec_effective_to?: string;
   results: Record<string, RuleResult>;
 }
 
-export interface RuleResult {
+/**
+ * A rule's result. Fields of `RuleResultValue` are flattened directly onto this
+ * object (the Rust side uses `#[serde(flatten)]`), so a measure result's map appears
+ * at `result.measure`, not nested under a `value` key.
+ */
+export type RuleResult = RuleResultValue & {
   vetoed: boolean;
-  display?: string | null;
-  veto_reason?: string | null;
+  veto_reason?: string;
   rule_type: string;
-  /** Input keys still unbound for this rule (overlay-aware; same keys as Show.data). */
+  /** Input keys still unbound for this rule (run-data-aware; same keys as Show.data). */
   missing_data?: string[];
-  measure?: Record<string, string> | null;
-  ratio?: Record<string, string> | null;
-  number?: string | null;
-  boolean?: boolean | null;
-  text?: string | null;
-  date?: unknown | null;
-  time?: unknown | null;
-  calendar?: { value: string; unit: string } | null;
-  range?: { from: RuleResultPayload; to: RuleResultPayload } | null;
-  /** Present when `run(..., explain: true)`. Shape: documentation/schemas/explanation.v1.json */
-  explanation?: Explanation | null;
-}
+  /** Present when `run(..., explain: true)`. Shape: documentation/schemas/api.v1.json (`RuleResult.explanation`). */
+  explanation?: Explanation;
+};
 
 /** One evaluated unless condition, stated as a fact. */
-export interface ExplanationCause {
+export interface Cause {
   condition: string;
   value: string;
   children?: ExplanationNode[];
 }
 
-export interface ExplanationConversionStep {
+export interface ConversionStep {
   role: "outcome" | "rule" | "source";
   text: string;
 }
@@ -283,7 +368,7 @@ export type ExplanationNode =
       name: string;
       result: string;
       body: string;
-      causes?: ExplanationCause[];
+      causes?: Cause[];
       children?: ExplanationNode[];
     }
   | {
@@ -303,16 +388,12 @@ export type ExplanationNode =
   | {
       type: "conversion";
       expression: string;
-      steps: ExplanationConversionStep[];
+      steps: ConversionStep[];
       operands: ExplanationNode[];
     }
   | {
       type: "veto";
       message?: string;
-    }
-  | {
-      type: "unit_equivalence";
-      text: string;
     };
 
 /** Root and nested rule explanation (same shape). */
@@ -321,69 +402,64 @@ export interface Explanation {
   name: string;
   result: string;
   body: string;
-  causes?: ExplanationCause[];
+  causes?: Cause[];
   children?: ExplanationNode[];
-}
-
-export interface RuleResultPayload {
-  measure?: Record<string, string> | null;
-  ratio?: Record<string, string> | null;
-  number?: string | null;
-  boolean?: boolean | null;
-  text?: string | null;
-  date?: unknown | null;
-  time?: unknown | null;
-  calendar?: { value: string; unit: string } | null;
 }
 
 /** Half-open `[effective_from, effective_to)` for one loaded temporal row. */
 export interface ShowVersion {
-  effective_from?: string | null;
-  effective_to?: string | null;
+  effective_from?: string;
+  effective_to?: string;
 }
+
+/** Provenance of a loaded source. Externally tagged; the unit `Volatile` variant
+ *  is the bare string `"volatile"`. */
+export type SourceType = "volatile" | { path: string } | { dependency: string };
+
+/** Parsed literal value (meta field value). Externally tagged. */
+export type LiteralValue =
+  | { number: string }
+  | { number_with_unit: [string, string] }
+  | { text: string }
+  | { date: string }
+  | { time: string }
+  | { boolean: "true" | "false" | "yes" | "no" }
+  | { range: [LiteralValue, LiteralValue] };
+
+/** Spec `meta` field value. Externally tagged. */
+export type MetaValue = { literal: LiteralValue } | { unquoted: string };
 
 /** Return shape of {@link Engine.show}. */
 export interface Show {
   spec: string;
-  commentary?: string | null;
-  effective_from?: string | null;
-  effective_to?: string | null;
+  commentary?: string;
+  effective_from?: string;
+  effective_to?: string;
   start_line: number;
-  source_type?: string | null;
+  source_type?: SourceType;
   versions?: ShowVersion[];
-  data: Record<string, DataEntry>;
+  data: Record<string, ShowData>;
   /** Rule result types; measure and ratio entries expose `units[]` like their data counterparts. */
   rules: Record<string, LemmaType>;
-  meta: Record<string, unknown>;
+  meta: Record<string, MetaValue>;
 }
 
-/** JSON mirror of slim listed spec row (engine `list`). */
-export interface ListedSpecJson {
+/** Slim listed spec row (engine `list`). */
+export interface ListedSpec {
   name: string;
-  effective_from?: DateTimeValueJson | null;
-  effective_to?: DateTimeValueJson | null;
+  effective_from?: string;
+  effective_to?: string;
 }
 
-/** JSON mirror of Rust `ResolvedRepository` (engine `list`). */
-export interface ResolvedRepositoryJson {
-  repository: string | null;
-  specs: ListedSpecJson[];
+/** Rust `ResolvedRepository` (engine `list`). */
+export interface ResolvedRepository {
+  /** Absent for the local workspace group (only real repositories carry a name). */
+  repository?: string;
+  specs: ListedSpec[];
 }
 
-/** JSON mirror of Rust `DateTimeValue`. */
-export interface DateTimeValueJson {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-  second: number;
-  microsecond: number;
-  timezone: unknown;
-}
-
-/** JSON mirror of Rust `ResourceLimits`. */
-export interface ResourceLimitsJson {
+/** Rust `ResourceLimits`. */
+export interface ResourceLimits {
   max_source_size_bytes: number;
   max_expression_depth: number;
   max_expression_count: number;

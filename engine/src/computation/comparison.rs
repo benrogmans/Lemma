@@ -1,9 +1,8 @@
 //! Type-aware comparison operations
 
+use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::RationalInteger;
 use crate::computation::UnitResolutionContext;
-use crate::evaluation::operations::VetoType;
-use crate::evaluation::OperationResult;
 use crate::planning::semantics::{
     primitive_boolean_arc, ComparisonComputation, LiteralValue, ValueKind,
 };
@@ -232,7 +231,6 @@ fn type_name(value: &LiteralValue) -> String {
 mod tests {
     use super::*;
     use crate::computation::rational::rational_new;
-    use crate::evaluation::operations::OperationResult;
     use crate::planning::semantics::{ComparisonComputation, LiteralValue, ValueKind};
 
     fn eval_bool(left: &LiteralValue, op: &ComparisonComputation, right: &LiteralValue) -> bool {

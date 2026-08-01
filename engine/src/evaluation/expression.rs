@@ -2,10 +2,10 @@
 //!
 //! Domain failures (division by zero, etc.) surface as Veto, not Error.
 
-use super::operations::{OperationResult, VetoType};
 use crate::computation::measure_math::{
     mathematical_computation_preserves_measure_magnitude, measure_magnitude_math,
 };
+use crate::computation::{OperationResult, VetoType};
 use crate::planning::semantics::{LiteralValue, MathematicalComputation, ValueKind};
 use std::sync::Arc;
 

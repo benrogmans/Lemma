@@ -33,9 +33,9 @@ fn eval(engine: &Engine, spec: &str, rule: &str, data: HashMap<String, String>) 
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("Rule '{}' should exist", rule))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -210,7 +210,7 @@ fn eval_honors_supplied_override_for_unless_arm() {
         .get("discount")
         .expect("discount must be present");
     assert_eq!(
-        discount.display.as_deref(),
+        discount.display(),
         Some("20%"),
         "supplied override is_member true must activate member unless arm"
     );

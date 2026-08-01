@@ -5,3 +5,5 @@ mod error;
 mod planning;
 mod serializers;
 mod transitive_normalization_plan_shape;
+
+pub(crate) mod scaling_generators;

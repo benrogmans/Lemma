@@ -92,7 +92,8 @@ pub enum Error {
 }
 
 /// Distinguishes HTTP 404 (not found) from 400 (bad request) for request errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RequestErrorKind {
     /// Spec not found or no temporal version for effective — map to 404.
     SpecNotFound,
@@ -667,6 +668,53 @@ impl Error {
     /// Name of a related spec referenced by this error (e.g. a transitive dependency).
     pub fn related_spec(&self) -> Option<&str> {
         self.details().related_spec_name.as_deref()
+    }
+
+    /// Registry failure sub-kind, populated only for [`Error::Registry`].
+    #[must_use]
+    pub fn registry_kind(&self) -> Option<RegistryErrorKind> {
+        match self {
+            Error::Registry { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    /// Request failure sub-kind, populated only for [`Error::Request`].
+    #[must_use]
+    pub fn request_kind(&self) -> Option<RequestErrorKind> {
+        match self {
+            Error::Request { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
+    /// Name of the exceeded resource limit, populated only for [`Error::ResourceLimitExceeded`].
+    #[must_use]
+    pub fn limit_name(&self) -> Option<&str> {
+        match self {
+            Error::ResourceLimitExceeded { limit_name, .. } => Some(limit_name.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Configured value of the exceeded resource limit, populated only for
+    /// [`Error::ResourceLimitExceeded`].
+    #[must_use]
+    pub fn limit_value(&self) -> Option<&str> {
+        match self {
+            Error::ResourceLimitExceeded { limit_value, .. } => Some(limit_value.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Actual value that exceeded the resource limit, populated only for
+    /// [`Error::ResourceLimitExceeded`].
+    #[must_use]
+    pub fn actual_value(&self) -> Option<&str> {
+        match self {
+            Error::ResourceLimitExceeded { actual_value, .. } => Some(actual_value.as_str()),
+            _ => None,
+        }
     }
 }
 

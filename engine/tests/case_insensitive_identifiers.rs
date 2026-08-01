@@ -47,7 +47,7 @@ fn rule_value(result: &lemma::Response, name: &str) -> String {
             rule_result.veto_reason.as_deref().unwrap_or("Vetoed")
         )
     } else {
-        rule_result.display.clone().expect("display")
+        rule_result.display().expect("display").to_string()
     }
 }
 

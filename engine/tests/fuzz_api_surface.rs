@@ -70,13 +70,87 @@ fn fuzz_data_bindings_api_number_too_long_no_panic() {
     assert!(
         doubled.vetoed,
         "expected veto for unrepresentable number, got {:?}",
-        doubled.display
+        doubled.display()
     );
     let reason = doubled.veto_reason.as_deref().expect("veto reason");
     assert!(
         reason.contains("Invalid number"),
         "expected parse-failure veto, got: {reason}"
     );
+}
+
+#[test]
+fn show_and_response_serialize_infallibly_across_fixture_variants() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "numbers",
+            r#"
+spec numbers
+data n: number -> suggest 1
+data t: text -> suggest "hi"
+data b: boolean -> suggest true
+data d: 2025-03-04
+data tm: 12:30:45
+rule rn: n
+rule rt: t
+rule rb: b
+rule rd: d
+rule rtm: tm
+"#,
+        ),
+        (
+            "measures",
+            r#"
+spec measures
+uses lemma units
+data money: measure
+  -> unit eur 1
+  -> suggest 10 eur
+data rate: ratio -> suggest 15%
+data window: 1...10
+rule rm: money
+rule rr: rate
+rule rw: window
+"#,
+        ),
+        (
+            "veto_and_range",
+            r#"
+spec veto_and_range
+uses lemma units
+data band: measure range
+  -> unit kilogram 1
+  -> suggest 1 kilogram...5 kilogram
+rule outcome: veto "nope"
+rule band_out: band
+"#,
+        ),
+    ];
+
+    for (name, code) in cases {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(format!(
+                    "{name}.lemma"
+                )))),
+                code.to_string(),
+            )])
+            .unwrap_or_else(|e| panic!("{name} must load: {e:?}"));
+        let now = DateTimeValue::now();
+        let show = engine
+            .show(None, name, Some(&now))
+            .unwrap_or_else(|e| panic!("{name} show: {e:?}"));
+        serde_json::to_string(&show).unwrap_or_else(|e| panic!("{name} Show serialize: {e}"));
+
+        let response = engine
+            .run(None, name, Some(&now), HashMap::new(), None, true)
+            .unwrap_or_else(|e| panic!("{name} run: {e:?}"));
+        serde_json::to_string(&response)
+            .unwrap_or_else(|e| panic!("{name} Response serialize: {e}"));
+        let list = engine.list();
+        serde_json::to_string(&list).unwrap_or_else(|e| panic!("{name} list serialize: {e}"));
+    }
 }
 
 #[test]
@@ -109,7 +183,12 @@ fn data_binding_with_excess_fractional_digits_truncates_at_input() {
         doubled.veto_reason
     );
     assert_eq!(
-        doubled.number.as_deref(),
+        doubled
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
         Some("0.2469135780246913578024691358"),
         "doubled truncated input"
     );

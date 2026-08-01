@@ -1,6 +1,6 @@
 use crate::computation::arithmetic::SignatureIndex;
+use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::{rational_abs, rational_zero, RationalInteger};
-use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, LemmaType, LiteralValue, ValueKind,
 };

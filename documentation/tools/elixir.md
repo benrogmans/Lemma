@@ -66,8 +66,8 @@ Format source code (no engine needed):
 | `Lemma.load/2` | Load sources: binary (volatile) or map / `[{label, code}, ...]` (labeled) |
 | `Lemma.list/1` | List loaded Specs (includes embedded `lemma` / `spec units`) |
 | `Lemma.source/4` | Formatted Lemma source (`repository`, `spec`, `effective`; omit `spec` for repo-wide) |
-| `Lemma.show/4` | Spec interface + temporal window (`repository`, `spec`, `effective`) |
-| `Lemma.run/3` | Evaluate: `target` map (`repo`, `spec`, `effective`), `options` map (`data`, `rules`, `explain`). Each rule result may include `missing_data` (unbound input keys). With `explain: true`, `explanation` matches [explanation.v1.json](../schemas/explanation.v1.json). Types and suggestions are on `Lemma.show/4` only. |
+| `Lemma.show/4` | Spec interface + temporal window (`repository`, `spec`, `effective`). `Show.data` values are `Lemma.ShowData`. |
+| `Lemma.run/3` | Evaluate: `target` map (`repo`, `spec`, `effective`), `options` map (`data`, `rules`, `explain`). Each rule result may include `missing_data` (unbound input keys). Non-veto results carry flattened `display` + typed keys (`Lemma.RuleResult`). With `explain: true`, `explanation` matches [api.v1.json](../schemas/api.v1.json) (`RuleResult.explanation` / `ExplanationNode`). Types and suggestions are on `Lemma.show/4` only. |
 | `Lemma.remove/4` | Remove temporal slice: `repository`, `spec`, `effective` |
 | `Lemma.format/1` | Format Lemma source code (no engine needed) |
 

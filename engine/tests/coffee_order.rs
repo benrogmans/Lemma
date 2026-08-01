@@ -307,8 +307,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .expect("total rule not found");
 
     let total_eur = total
-        .measure
+        .value
         .as_ref()
+        .and_then(|v| v.measure.as_ref())
         .and_then(|m| m.get("eur"))
         .expect("total measure map must include eur");
     let subtotal_eur = response
@@ -316,8 +317,9 @@ fn test_coffee_order_espresso_small_no_loyalty() {
         .values()
         .find(|r| r.rule.name == "subtotal")
         .expect("subtotal rule not found")
-        .measure
+        .value
         .as_ref()
+        .and_then(|v| v.measure.as_ref())
         .and_then(|m| m.get("eur"))
         .expect("subtotal measure map must include eur");
     assert_eq!(
@@ -500,8 +502,9 @@ fn test_coffee_order_latte_large_with_loyalty() {
     );
 
     let total_eur = total
-        .measure
+        .value
         .as_ref()
+        .and_then(|v| v.measure.as_ref())
         .and_then(|m| m.get("eur"))
         .expect("total measure map must include eur");
     // discount_amount = 12.60 * 0.10 = 1.26
@@ -534,12 +537,12 @@ fn test_coffee_order_ordered_priority() {
             .expect("ordered_priority rule not found");
 
         assert_eq!(
-            ordered_priority.display.clone().expect("display"),
+            ordered_priority.display().expect("display").to_string(),
             *expected,
             "priority '{}' should map to {}, got: {}",
             priority,
             expected,
-            ordered_priority.display.as_deref().unwrap_or("")
+            ordered_priority.display().unwrap_or("")
         );
     }
 }

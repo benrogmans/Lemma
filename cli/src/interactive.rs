@@ -239,7 +239,11 @@ fn prompt_data(
             .get(&name)
             .unwrap_or_else(|| panic!("BUG: missing_data key {name:?} must exist in show.data"));
         let lemma_type = entry.lemma_type.clone();
-        let suggestion = entry.suggestion.as_ref();
+        // `ShowData.suggestion` is the API-facing per-unit map (`RuleResultValue`); prompts
+        // need canonical `LiteralValue` methods (`magnitude_in_unit`, unit signatures, etc.),
+        // so reconstruct once here and thread `LiteralValue` through the existing prompt code.
+        let suggestion = entry.suggestion.as_ref().map(|v| v.to_literal(&lemma_type));
+        let suggestion = suggestion.as_ref();
 
         if !header_printed {
             println!("\nEnter values for data (press Enter to accept suggestion):");

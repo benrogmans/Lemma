@@ -18,6 +18,14 @@ mod tracked {
     pub const MAVEN_POM: &str = "engine/packages/maven/pom.xml";
     pub const ENGINE_README: &str = "engine/README.md";
     pub const VSCODE_PACKAGE_JSON: &str = "engine/lsp/editors/vscode/package.json";
+
+    /// Doc/README snippets that embed the Maven artifact version (XML and/or Gradle).
+    pub const MAVEN_VERSION_DOCS: &[&str] = &[
+        "README.md",
+        "engine/README.md",
+        "documentation/tools/maven.md",
+        "engine/packages/maven/README.md",
+    ];
 }
 
 fn dep_pin_needle(v: &str) -> String {
@@ -34,6 +42,33 @@ fn readme_needle(v: &str) -> String {
 
 fn pom_project_version_block(v: &str) -> String {
     format!("<artifactId>lemma-engine</artifactId>\n  <version>{v}</version>")
+}
+
+fn maven_gradle_coord(v: &str) -> String {
+    format!("lemma-engine:{v}")
+}
+
+fn replace_maven_doc_versions(content: &str, old: &str, new: &str) -> Result<String, String> {
+    let from_xml = pom_project_version_block(old);
+    let to_xml = pom_project_version_block(new);
+    let from_gradle = maven_gradle_coord(old);
+    let to_gradle = maven_gradle_coord(new);
+    if !content.contains(&from_xml) && !content.contains(&from_gradle) {
+        return Err(format!("expected `{from_xml}` and/or `{from_gradle}`"));
+    }
+    Ok(content
+        .replace(&from_xml, &to_xml)
+        .replace(&from_gradle, &to_gradle))
+}
+
+fn verify_maven_doc_versions(content: &str, v: &str) -> Result<(), String> {
+    let xml = pom_project_version_block(v);
+    let gradle = maven_gradle_coord(v);
+    if content.contains(&xml) || content.contains(&gradle) {
+        Ok(())
+    } else {
+        Err(format!("expected `{xml}` and/or `{gradle}`"))
+    }
 }
 
 /// Paths relative to workspace root that must carry the same release version as `[workspace.package]`.
@@ -198,6 +233,14 @@ pub fn versions_bump(root: &Path, new: &str) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", pom.display()))?;
     fs::write(&pom, pom2).map_err(|e| format!("{}: {e}", pom.display()))?;
 
+    for rel in tracked::MAVEN_VERSION_DOCS {
+        let p = root.join(rel);
+        let raw = fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let updated = replace_maven_doc_versions(&raw, &old, new)
+            .map_err(|e| format!("{}: {e}", p.display()))?;
+        fs::write(&p, updated).map_err(|e| format!("{}: {e}", p.display()))?;
+    }
+
     let readme = root.join(tracked::ENGINE_README);
     let rm = fs::read_to_string(&readme).map_err(|e| format!("{}: {e}", readme.display()))?;
     let rm2 = replace_readme_engine_line(&rm, &old, new);
@@ -330,6 +373,18 @@ pub fn versions_verify(root: &Path) -> Result<(), String> {
         Err(e) => errs.push(format!("{}: {e}", pom.display())),
     }
 
+    for rel in tracked::MAVEN_VERSION_DOCS {
+        let p = root.join(rel);
+        match fs::read_to_string(&p) {
+            Ok(s) => {
+                if let Err(e) = verify_maven_doc_versions(&s, &v) {
+                    errs.push(format!("{}: {e}", p.display()));
+                }
+            }
+            Err(e) => errs.push(format!("{}: {e}", p.display())),
+        }
+    }
+
     let readme = root.join(tracked::ENGINE_README);
     match fs::read_to_string(&readme) {
         Ok(s) => {
@@ -413,5 +468,17 @@ version = "0.8.4"
         assert!(out.contains("<version>0.9.1</version>"));
         assert!(out.contains("<version>2.18.2</version>"));
         assert!(!out.contains("lemma-engine</artifactId>\n  <version>0.9.0</version>"));
+    }
+
+    #[test]
+    fn replace_maven_doc_versions_updates_xml_and_gradle() {
+        let t = r#"  <artifactId>lemma-engine</artifactId>
+  <version>0.9.0</version>
+implementation("com.lemmabase:lemma-engine:0.9.0")
+"#;
+        let out = replace_maven_doc_versions(t, "0.9.0", "0.9.1").unwrap();
+        assert!(out.contains("<version>0.9.1</version>"));
+        assert!(out.contains("lemma-engine:0.9.1"));
+        assert!(!out.contains("0.9.0"));
     }
 }

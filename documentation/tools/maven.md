@@ -17,17 +17,17 @@ Maven:
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.0</version>
+  <version>0.9.1</version>
 </dependency>
 ```
 
 Gradle (Kotlin DSL) — consume the published artifact; this repository builds the package with Maven only:
 
 ```kotlin
-implementation("com.lemmabase:lemma-engine:0.9.0")
+implementation("com.lemmabase:lemma-engine:0.9.1")
 ```
 
-Requires JDK 17+.
+Requires JDK 21+.
 
 ## Java example
 
@@ -107,7 +107,7 @@ Engine.create().use { engine ->
 | `Lemma.format(String)` | Format source without an engine |
 | `close()` | Drop native engine (`AutoCloseable` + `Cleaner`) |
 
-`RunRequest.of(spec)` defaults: repository null, effective null, rules null (all rules), explain false. An empty `rules` list is a request error. With `explain(true)`, `RuleResult.explanation()` is a JSON tree matching [explanation.v1.json](../schemas/explanation.v1.json).
+`RunRequest.of(spec)` defaults: repository null, effective null, rules null (all rules), explain false. An empty `rules` list is a request error. With `explain(true)`, `RuleResult.explanation()` is an `ExplanationNode.Rule` (schema `RuleNode`) whose children are a sealed `ExplanationNode` tree matching [api.v1.json](../schemas/api.v1.json). `show(...)` returns `Show`; each `Show.data` entry is `ShowData`. Non-veto `RuleResult` flattens `RuleResultValue` (`display()` / typed accessors).
 
 ## Errors and veto
 
@@ -117,13 +117,43 @@ Engine.create().use { engine ->
 
 ## Thread safety
 
-One `Engine` instance; serialize access across threads (native side holds a mutex). Prefer one engine per worker, or external locking around a shared instance.
+`Engine` is thread-safe: every method acquires an internal `ReentrantLock`. Multiple threads may share one instance without external synchronization. Long-running evaluations block other callers on that lock, so prefer one engine per worker for throughput.
+
+## Native library loading
+
+The JAR embeds `lemma_jni` natives. On first use, the SDK extracts the native for the current platform to a version-keyed cache and loads it. Override the automatic resolution:
+
+| Priority | Source | Example |
+|----------|--------|---------|
+| 1 | System property `lemma.native.library` | `-Dlemma.native.library=/opt/liblemma_jni.so` |
+| 2 | Environment variable `LEMMA_JNI_LIBRARY` | `LEMMA_JNI_LIBRARY=/opt/liblemma_jni.so` |
+| 3 | Bundled JAR resource (extracted to cache) | Automatic |
+
+The cache path is `~/.lemma/native/{version}/{platform}/`. Use `file:/path` or `jar:file:...!/resource` URLs for custom extraction behavior.
+
+## ExplanationNode dispatch
+
+`ExplanationNode` is a sealed interface. Each variant record implements `ExplanationNode.type()` returning its discriminator (`rule`, `compose`, `data`, `data_unused`, `conversion`, `veto`). Use pattern matching (Java 21+) or switch on `type()`:
+
+```java
+switch (node.type()) {
+    case "rule" -> handleRule((ExplanationNode.Rule) node);
+    case "compose" -> handleCompose((ExplanationNode.Compose) node);
+    case "data" -> handleData((ExplanationNode.Data) node);
+    case "data_unused" -> handleDataUnused((ExplanationNode.DataUnused) node);
+    case "conversion" -> handleConversion((ExplanationNode.Conversion) node);
+    case "veto" -> handleVeto((ExplanationNode.Veto) node);
+    default -> throw new IllegalStateException("unknown explanation type: " + node.type());
+}
+```
+
+Records match [api.v1.json](../schemas/api.v1.json). `LemmaType` follows the same pattern with `kind()`.
 
 ## Development in this repository
 
 ```bash
 cargo build -p lemma_jni
-cd engine/packages/maven && ./mvnw test
+cd engine/packages/maven && ./mvnw verify
 ```
 
-`cargo precommit` builds `lemma_jni` and runs `./mvnw -B test`.
+`cargo precommit` (and CI’s `cargo precommit --fuzz`) builds `lemma_jni` and runs `./mvnw -B verify`.

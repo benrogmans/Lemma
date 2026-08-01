@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.9.0"
+lemma-engine = "0.9.1"
 ```
 
 ### Minimal example
@@ -58,7 +58,7 @@ let response = engine.run(
 
 for (rule_name, rule_result) in &response.results {
     if !rule_result.vetoed {
-        println!("{rule_name}: {}", rule_result.display.as_deref().unwrap_or(""));
+        println!("{rule_name}: {}", rule_result.display().unwrap_or(""));
     }
 }
 ```
@@ -106,7 +106,7 @@ let response = engine.run(
 
 ### Discovering required data
 
-`Engine::show` is static: data used by the spec's rules, plus local rule result types and temporal window. Types, prefilled literals, and `-> suggest` hints live on `Show.data`. For overlay-aware requirements on a partial run, call `run` and inspect each rule's `missing_data`:
+`Engine::show` is static: data used by the spec's rules, plus local rule result types and temporal window. Types, prefilled literals, and `-> suggest` hints live on `Show.data`. For run-data-aware requirements on a partial run, call `run` and inspect each rule's `missing_data`:
 
 ```rust
 let response = engine.run(
@@ -125,7 +125,7 @@ for (name, result) in &response.results {
 }
 ```
 
-Bound inputs (caller overlay, spec prefilled literals, or data vetoes) are omitted from `missing_data`. Suggestions on `Show.data` do not bind until supplied in `run`'s data map.
+Bound inputs (caller run bindings, spec prefilled literals, or data vetoes) are omitted from `missing_data`. Suggestions on `Show.data` do not bind until supplied in `run`'s data map.
 
 ### Loading registry dependencies
 
@@ -164,7 +164,7 @@ Public `load` rejects `SourceType::Dependency("lemma")` — that id is reserved 
 | `list()` | All loaded repositories (`ResolvedRepository[]`: name, effective_from, effective_to per row) |
 | `show(repository, spec, effective)` | Interface + temporal window (`Show`; no Lemma text) |
 | `source(repository, spec?, effective)` | Formatted Lemma source (repo-wide when `spec` omitted) |
-| `run(repository, spec, effective, data, rules, explain)` | Evaluate; each `RuleResult` may include `missing_data`; `explanation` when `explain` is true ([schema](../documentation/schemas/explanation.v1.json)) |
+| `run(repository, spec, effective, data, rules, explain)` | Evaluate; each `RuleResult` may include `missing_data`; `explanation` when `explain` is true ([schema](../documentation/schemas/api.v1.json)) |
 | `remove(repository, spec, effective)` | Remove a temporal spec slice |
 | `limits()` | Resource limits |
 
@@ -172,7 +172,7 @@ Free function: `lemma::resolve_effective`.
 
 ## Consumer API tiers
 
-**Tier 1 — always available** (all targets, `registry` feature optional): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), wire types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult` — explanation JSON uses `"type"` + `"name"`; see [`explanation.v1.json`](../documentation/schemas/explanation.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests — not a minimal “verbs only” crate.
+**Tier 1 — always available** (all targets, `registry` feature optional): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), API types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult` — explanation JSON uses `"type"` + `"name"`; see [`api.v1.json`](../documentation/schemas/api.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests — not a minimal “verbs only” crate.
 
 **Tier 2 — `registry` feature:** `Registry`, `LemmaBase`, `RegistryBundle`, `RegistryError*`, `Context`, `LemmaRepository`, `LemmaSpec`, `LemmaSpecSet`, and native `resolve_registry_references`.
 
@@ -185,7 +185,7 @@ Free function: `lemma::resolve_effective`.
 - **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
 - **Automatic unit conversions** – convert between units inside expressions without extra code
 - **Page composition** – extend specs, bind data, and reuse rules across modules
-- **Audit trail** – with `explain: true`, each rule result carries a structured explanation (see [`documentation/schemas/explanation.v1.json`](../documentation/schemas/explanation.v1.json))
+- **Audit trail** – with `explain: true`, each rule result carries a structured explanation (see [`documentation/schemas/api.v1.json`](../documentation/schemas/api.v1.json))
 - **JavaScript / TypeScript** – `npm install @lemmabase/lemma-engine` for browser, Node, and edge runtimes
 - **Java / Kotlin** – `com.lemmabase:lemma-engine` on Maven Central (`BigDecimal`-first JNI binding)
 
@@ -232,11 +232,11 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.0</version>
+  <version>0.9.1</version>
 </dependency>
 ```
 
-Build/test: `cargo build -p lemma_jni` then `./mvnw test` under `engine/packages/maven/`. See [packages/maven/README.md](packages/maven/README.md).
+Build/test: `cargo build -p lemma_jni` then `./mvnw verify` under `engine/packages/maven/` (also via `cargo precommit`). See [packages/maven/README.md](packages/maven/README.md).
 
 ## Documentation
 

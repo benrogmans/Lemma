@@ -90,10 +90,16 @@ rule is_odd: (value % 2) is 1
         .unwrap();
 
     let is_even = response.results.get("is_even").unwrap();
-    assert_eq!(is_even.boolean, Some(false));
+    assert_eq!(
+        is_even.value.as_ref().expect("rule result value").boolean,
+        Some(false)
+    );
 
     let is_odd = response.results.get("is_odd").unwrap();
-    assert_eq!(is_odd.boolean, Some(true));
+    assert_eq!(
+        is_odd.value.as_ref().expect("rule result value").boolean,
+        Some(true)
+    );
 }
 
 #[test]

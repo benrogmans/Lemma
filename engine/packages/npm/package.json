@@ -1,0 +1,12 @@
+{
+  "name": "@lemmabase/lemma",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test.js",
+    "typecheck:fixtures": "tsc --noEmit -p tsconfig.fixtures.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

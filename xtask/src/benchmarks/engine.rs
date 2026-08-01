@@ -4,8 +4,9 @@
 //! `engine/benches/common/mod.rs`.
 
 use super::common::{
-    capture_environment, capture_stdout, format_latency_ns, format_ratio, push_environment_block,
-    read_latency_estimate, run_engine_criterion_bench, write_report, EnvironmentInfo, LatencyRow,
+    capture_environment, capture_stdout, format_latency_ns, format_ratio, github_source_link,
+    push_environment_block, read_latency_estimate, run_engine_criterion_bench, write_report,
+    EnvironmentInfo, LatencyRow,
 };
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -656,15 +657,16 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
     }
 
     out.push_str("## Python implementation\n\n");
-    out.push_str(
-        "Hand-written ports of the three Lemma specs live in \
-         [`../../engine/benches/python/business_rules/`](../../engine/benches/python/business_rules). \
+    out.push_str(&format!(
+        "Hand-written ports of the three Lemma specs live in {}. \
          Each module exports `Inputs`, `Outputs`, `TERMINAL_RULE`, `build_inputs(raw)`, \
          `compute_terminal(inputs)`, and `compute(inputs)`. \
          Standard library only (`fractions`, `dataclasses`, `importlib`, `time`, \
          `gc`, `pathlib`, `statistics`). \
-         The Python benchmark harness is [`../../engine/benches/python/benchmark.py`](../../engine/benches/python/benchmark.py).\n\n",
-    );
+         The Python benchmark harness is {}.\n\n",
+        github_source_link(&env.git_sha, "engine/benches/python/business_rules", true,),
+        github_source_link(&env.git_sha, "engine/benches/python/benchmark.py", false),
+    ));
 
     out.push_str("## Inputs\n\n");
     out.push_str(&format!(
@@ -672,11 +674,11 @@ fn compose_report(ctx: ComposeReportContext<'_>) -> Result<String, String> {
          Input values are inline string literals built inside every timed iteration on both sides.\n\n",
     ));
     for fixture in FIXTURES {
-        let lemma_link = format!("../../{}", fixture.lemma_path);
         out.push_str(&format!("### `{}`\n\n", fixture.spec_name));
         out.push_str(&format!(
-            "Lemma source: [`{}`]({lemma_link}). Python module: `{}`.\n\n",
-            fixture.lemma_path, fixture.python_module,
+            "Lemma source: {}. Python module: `{}`.\n\n",
+            github_source_link(&env.git_sha, fixture.lemma_path, false),
+            fixture.python_module,
         ));
         out.push_str("| Field | Value |\n|-------|-------|\n");
         for (field, value) in fixture.inputs {
@@ -795,7 +797,13 @@ mod tests {
 
         assert!(report.contains("cargo benchmarks engine"));
         assert!(report.contains("Compile (Lemma, parse + plan)"));
-        assert!(report.contains("../../engine/benches/specs/shipping.lemma"));
+        assert!(report.contains(
+            "[`engine/benches/specs/shipping.lemma`](https://github.com/lemma/lemma/blob/abc123/engine/benches/specs/shipping.lemma)"
+        ));
+        assert!(report.contains(
+            "[`engine/benches/python/business_rules`](https://github.com/lemma/lemma/tree/abc123/engine/benches/python/business_rules)"
+        ));
+        assert!(!report.contains("../../engine/benches/"));
     }
 
     #[test]

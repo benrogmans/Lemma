@@ -89,7 +89,7 @@ fn magnitude_overflow_intermediate_stored_exactly_explain_result_not_vetoed() {
     let huge = rule_by_name(&response, "huge");
     assert!(
         huge.vetoed,
-        "response must veto when output materialization exceeds decimal magnitude limit"
+        "response must veto when building RuleResultValue exceeds decimal magnitude limit"
     );
     assert_eq!(
         huge.veto_reason.as_deref(),
@@ -99,7 +99,7 @@ fn magnitude_overflow_intermediate_stored_exactly_explain_result_not_vetoed() {
     let explanation = huge.explanation.as_ref().expect("huge explanation");
     assert!(
         !explanation.result.vetoed(),
-        "rule_results must store the exact computed value; materialization applies only at response output"
+        "rule_results must store the exact computed value; RuleResultValue conversion applies only at response output"
     );
 }
 
@@ -132,9 +132,16 @@ fn magnitude_overflow_boundary_full_eval_huge_vetoes_safe_succeeds() {
     let safe = response.results.get("safe").expect("safe");
     assert!(
         !safe.vetoed,
-        "safe must materialize at response output even when huge exceeds magnitude limit"
+        "safe must build RuleResultValue at response output even when huge exceeds magnitude limit"
     );
-    assert_eq!(safe.number.as_deref(), Some(max_decimal_string().as_str()));
+    assert_eq!(
+        safe.value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
+        Some(max_decimal_string().as_str())
+    );
 }
 
 #[test]
@@ -159,7 +166,14 @@ fn magnitude_overflow_boundary_targeted_safe_succeeds() {
     assert_eq!(response.results.len(), 1);
     let safe = response.results.get("safe").expect("safe");
     assert!(!safe.vetoed);
-    assert_eq!(safe.number.as_deref(), Some(max_decimal_string().as_str()));
+    assert_eq!(
+        safe.value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
+        Some(max_decimal_string().as_str())
+    );
 }
 
 fn max_decimal_string() -> String {

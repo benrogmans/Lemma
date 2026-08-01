@@ -1,5 +1,7 @@
 package com.lemmabase.lemma;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,7 +29,10 @@ public final class RunRequest {
     this.spec = Objects.requireNonNull(spec, "spec");
     this.repository = repository;
     this.effective = effective;
-    this.data = Map.copyOf(Objects.requireNonNull(data, "data"));
+    // Not Map.copyOf: callers may pass a null value (e.g. an explicit override probe) and
+    // must get back an attributed LemmaException from RunDataValues.toEngineStrings, not a bare
+    // NullPointerException from the immutable-map constructor.
+    this.data = Collections.unmodifiableMap(new LinkedHashMap<>(Objects.requireNonNull(data, "data")));
     this.rules = rules == null ? null : List.copyOf(rules);
     this.explain = explain;
   }

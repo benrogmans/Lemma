@@ -46,7 +46,12 @@ rule third: 1 / 3
     let result = rule_result(&response, "third");
     assert!(!result.vetoed);
     assert_eq!(
-        result.number.as_deref(),
+        result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
         Some("0.3333333333333333333333333333")
     );
 }
@@ -65,7 +70,15 @@ rule dust: 1 / (10 ^ 30)
     let response = run(&engine, "tiny", HashMap::new(), false);
     let result = rule_result(&response, "dust");
     assert!(!result.vetoed);
-    assert_eq!(result.number.as_deref(), Some("0"));
+    assert_eq!(
+        result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
+        Some("0")
+    );
 }
 
 #[test]
@@ -118,7 +131,7 @@ rule safe: huge / two
     let explanation = huge.explanation.as_ref().expect("huge explanation");
     assert!(
         !explanation.result.vetoed(),
-        "rule_results must store exact Q; materialization veto is separate"
+        "rule_results must store exact Q; RuleResultValue veto is separate"
     );
 
     let response = run(
@@ -129,7 +142,14 @@ rule safe: huge / two
     );
     let safe = rule_result(&response, "safe");
     assert!(!safe.vetoed);
-    assert_eq!(safe.number.as_deref(), Some(max.as_str()));
+    assert_eq!(
+        safe.value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
+        Some(max.as_str())
+    );
 }
 
 #[test]
@@ -194,7 +214,7 @@ rule r: price
     );
     assert!(
         !reason.contains("decimal value limit"),
-        "must not use materialization veto message for input constraint, got: {reason}"
+        "must not use RuleResultValue veto message for input constraint, got: {reason}"
     );
 
     let accepted = run(
@@ -205,7 +225,15 @@ rule r: price
     );
     let result = rule_result(&accepted, "r");
     assert!(!result.vetoed);
-    assert_eq!(result.number.as_deref(), Some("1.23"));
+    assert_eq!(
+        result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_deref(),
+        Some("1.23")
+    );
 }
 
 #[test]
@@ -246,6 +274,12 @@ rule r: cost
     );
     let result = rule_result(&accepted, "r");
     assert!(!result.vetoed);
-    let measure = result.measure.as_ref().expect("measure map");
+    let measure = result
+        .value
+        .as_ref()
+        .expect("rule result value")
+        .measure
+        .as_ref()
+        .expect("measure map");
     assert_eq!(measure.get("eur"), Some(&"1.23".to_string()));
 }

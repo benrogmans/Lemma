@@ -1,8 +1,7 @@
 //! Source-level grouping: specs sharing a name, keyed by effective_from.
 
-use crate::engine::Context;
 use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaRepository, LemmaSpec};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// All spec versions sharing a (repository, name) identity, keyed by effective_from.
@@ -130,22 +129,6 @@ impl LemmaSpecSet {
             .next()
             .and_then(|(_, next)| next.effective_from().cloned());
         (from, to)
-    }
-
-    /// Global effective dates filtered to the `[eff_from, eff_to)` validity range of `spec`.
-    #[must_use]
-    pub fn effective_dates(&self, spec: &LemmaSpec, context: &Context) -> Vec<EffectiveDate> {
-        let (from, to) = self.effective_range(spec);
-        let from_key = EffectiveDate::from_option(from);
-        let all_dates: BTreeSet<EffectiveDate> =
-            context.iter().map(|s| s.effective_from.clone()).collect();
-        match to {
-            Some(dt) => all_dates
-                .range(from_key..EffectiveDate::DateTimeValue(dt))
-                .cloned()
-                .collect(),
-            None => all_dates.range(from_key..).cloned().collect(),
-        }
     }
 }
 

@@ -1,0 +1,1869 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lemma.dev/schemas/api.v1.json",
+  "title": "Lemma engine API",
+  "description": "Schema for the four JSON document shapes the engine produces at its consumer boundary: Show (Engine::show), Response (Engine::run), list (Engine::list, array of ResolvedRepository), and errors (array of EngineError, thrown by load/show/run/fetch). Explanation trees live under RuleResult.explanation (RuleNode / ExplanationNode).",
+  "$defs": {
+    "DecimalString": {
+      "type": "string",
+      "format": "lemma-decimal",
+      "description": "Arbitrary-precision decimal literal (never a JSON number, to avoid float precision loss). Maps to Java BigDecimal, a plain string in TypeScript/Elixir."
+    },
+    "RationalFactor": {
+      "type": "object",
+      "required": [
+        "numer",
+        "denom"
+      ],
+      "additionalProperties": false,
+      "description": "Exact rational as a reduced numerator/denominator pair of arbitrary-precision integer strings.",
+      "properties": {
+        "numer": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "denom": {
+          "$ref": "#/$defs/DecimalString"
+        }
+      }
+    },
+    "NamedBound": {
+      "type": "object",
+      "required": [
+        "value",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "description": "A unit-scoped bound (Measure/DateRange/TimeRange/MeasureRange minimum/maximum/lower/upper).",
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "unit": {
+          "type": "string"
+        }
+      }
+    },
+    "MeasureUnit": {
+      "type": "object",
+      "required": [
+        "name",
+        "factor",
+        "derived_measure_factors",
+        "decomposition"
+      ],
+      "additionalProperties": false,
+      "description": "One declared unit of a Measure type. `factor`: 1 of this unit equals `factor` canonical units.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "factor": {
+          "$ref": "#/$defs/RationalFactor"
+        },
+        "derived_measure_factors": {
+          "type": "array",
+          "description": "(measure_ref, exponent) pairs from a compound unit declaration (e.g. meter/second). Empty for base units.",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "decomposition": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "minimum": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "maximum": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "suggestion": {
+          "$ref": "#/$defs/DecimalString"
+        }
+      }
+    },
+    "RatioUnit": {
+      "type": "object",
+      "required": [
+        "name",
+        "value"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/RationalFactor"
+        },
+        "minimum": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "maximum": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "suggestion": {
+          "$ref": "#/$defs/DecimalString"
+        }
+      }
+    },
+    "TypeDefiningSpec": {
+      "description": "Where a custom type's extension chain is rooted.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "local"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "import"
+            }
+          }
+        }
+      ]
+    },
+    "TypeExtends": {
+      "description": "What a type extends: a primitive built-in, or a custom type by name.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "primitive"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "parent",
+            "family",
+            "defining_spec"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "custom"
+            },
+            "parent": {
+              "type": "string"
+            },
+            "family": {
+              "type": "string"
+            },
+            "defining_spec": {
+              "$ref": "#/$defs/TypeDefiningSpec"
+            }
+          }
+        }
+      ]
+    },
+    "LemmaType": {
+      "description": "Resolved Lemma type: `TypeSpecification` fields flattened alongside `name` and `extends`. Sentinel-only specifications (`veto`, `undetermined`) never reach the API and are excluded.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/LemmaTypeBoolean"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeMeasure"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeNumber"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeNumberRange"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeRatio"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeRatioRange"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeText"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeDate"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeDateRange"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeTime"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeTimeRange"
+        },
+        {
+          "$ref": "#/$defs/LemmaTypeMeasureRange"
+        }
+      ]
+    },
+    "LemmaTypeBoolean": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "boolean"
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeMeasure": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "minimum",
+        "maximum",
+        "decimals",
+        "units",
+        "traits",
+        "decomposition",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "measure"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "decimals": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MeasureUnit"
+          }
+        },
+        "traits": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "duration",
+              "calendar"
+            ]
+          }
+        },
+        "decomposition": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeNumber": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "minimum",
+        "maximum",
+        "decimals",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "number"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "decimals": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeNumberRange": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "lower",
+        "upper",
+        "minimum",
+        "maximum",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "numberrange"
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeRatio": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "minimum",
+        "maximum",
+        "decimals",
+        "units",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "ratio"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "decimals": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RatioUnit"
+          }
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeRatioRange": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "lower",
+        "upper",
+        "minimum",
+        "maximum",
+        "units",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "ratiorange"
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/DecimalString"
+            }
+          ]
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RatioUnit"
+          }
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeText": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "length",
+        "options",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "text"
+        },
+        "length": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeDate": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "minimum",
+        "maximum",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "date"
+        },
+        "minimum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeDateRange": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "lower",
+        "upper",
+        "minimum",
+        "maximum",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "daterange"
+        },
+        "lower": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upper": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeTime": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "minimum",
+        "maximum",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "time"
+        },
+        "minimum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "maximum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeTimeRange": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "lower",
+        "upper",
+        "minimum",
+        "maximum",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "timerange"
+        },
+        "lower": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upper": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "LemmaTypeMeasureRange": {
+      "type": "object",
+      "required": [
+        "name",
+        "kind",
+        "lower",
+        "upper",
+        "minimum",
+        "maximum",
+        "units",
+        "decomposition",
+        "help",
+        "extends"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "const": "measurerange"
+        },
+        "lower": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/NamedBound"
+            }
+          ]
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/MeasureUnit"
+          }
+        },
+        "decomposition": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer"
+              }
+            }
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "extends": {
+          "$ref": "#/$defs/TypeExtends"
+        }
+      }
+    },
+    "CalendarResult": {
+      "type": "object",
+      "required": [
+        "value",
+        "unit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "unit": {
+          "type": "string"
+        }
+      }
+    },
+    "RuleResultValueEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "RuleResultValue fields without `range` — a range endpoint must never itself be a range.",
+      "properties": {
+        "display": {
+          "type": "string"
+        },
+        "measure": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          }
+        },
+        "ratio": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          }
+        },
+        "number": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "boolean": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        },
+        "calendar": {
+          "$ref": "#/$defs/CalendarResult"
+        }
+      }
+    },
+    "RangeResult": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/RuleResultValueEndpoint"
+        },
+        "to": {
+          "$ref": "#/$defs/RuleResultValueEndpoint"
+        }
+      }
+    },
+    "RuleResultValue": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "API value shared by RuleResult (flattened), ShowData.prefilled, and ShowData.suggestion. When present: always `display`, plus exactly one typed field for a non-range value; `range` is set instead for a range value.",
+      "properties": {
+        "display": {
+          "type": "string"
+        },
+        "measure": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          }
+        },
+        "ratio": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          }
+        },
+        "number": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "boolean": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        },
+        "calendar": {
+          "$ref": "#/$defs/CalendarResult"
+        },
+        "range": {
+          "$ref": "#/$defs/RangeResult"
+        }
+      }
+    },
+    "ShowData": {
+      "type": "object",
+      "required": [
+        "type",
+        "needed_by_rules"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/LemmaType"
+        },
+        "prefilled": {
+          "$ref": "#/$defs/RuleResultValue"
+        },
+        "suggestion": {
+          "$ref": "#/$defs/RuleResultValue"
+        },
+        "needed_by_rules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ShowVersion": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Half-open [effective_from, effective_to) for one loaded temporal row.",
+      "properties": {
+        "effective_from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "SourceType": {
+      "description": "Provenance of a loaded source. Externally tagged; the unit `Volatile` variant is the bare string \"volatile\".",
+      "oneOf": [
+        {
+          "const": "volatile"
+        },
+        {
+          "type": "object",
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dependency"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dependency": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "LiteralValue": {
+      "description": "Parsed literal value (meta field value). Externally tagged.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "number"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "number": {
+              "$ref": "#/$defs/DecimalString"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "number_with_unit"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "number_with_unit": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/DecimalString"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "date"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "date": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "time"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "time": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "boolean"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "enum": [
+                "true",
+                "false",
+                "yes",
+                "no"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "range"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "range": {
+              "type": "array",
+              "prefixItems": [
+                {
+                  "$ref": "#/$defs/LiteralValue"
+                },
+                {
+                  "$ref": "#/$defs/LiteralValue"
+                }
+              ],
+              "items": false,
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        }
+      ]
+    },
+    "MetaValue": {
+      "description": "Spec `meta` field value. Externally tagged.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "literal"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "literal": {
+              "$ref": "#/$defs/LiteralValue"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "unquoted"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "unquoted": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "Show": {
+      "type": "object",
+      "required": [
+        "spec",
+        "start_line",
+        "data",
+        "rules",
+        "meta"
+      ],
+      "additionalProperties": false,
+      "description": "Result of Engine::show: data used by the spec's rules, local rule result types, and resolved temporal window.",
+      "properties": {
+        "spec": {
+          "type": "string"
+        },
+        "commentary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "effective_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ShowVersion"
+          }
+        },
+        "start_line": {
+          "type": "integer"
+        },
+        "source_type": {
+          "$ref": "#/$defs/SourceType"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ShowData"
+          }
+        },
+        "rules": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/LemmaType"
+          }
+        },
+        "meta": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/MetaValue"
+          }
+        }
+      }
+    },
+    "RuleResult": {
+      "type": "object",
+      "required": [
+        "vetoed",
+        "rule_type"
+      ],
+      "additionalProperties": false,
+      "description": "Result of evaluating one rule. RuleResultValue fields are flattened directly onto this object (no `value` wrapper key) when the rule is not vetoed.",
+      "properties": {
+        "display": {
+          "type": "string"
+        },
+        "measure": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          }
+        },
+        "ratio": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/DecimalString"
+          }
+        },
+        "number": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "boolean": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        },
+        "calendar": {
+          "$ref": "#/$defs/CalendarResult"
+        },
+        "range": {
+          "$ref": "#/$defs/RangeResult"
+        },
+        "vetoed": {
+          "type": "boolean"
+        },
+        "veto_reason": {
+          "type": "string"
+        },
+        "rule_type": {
+          "type": "string"
+        },
+        "explanation": {
+          "$ref": "#/$defs/RuleNode"
+        },
+        "missing_data": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Response": {
+      "type": "object",
+      "required": [
+        "spec",
+        "effective",
+        "results"
+      ],
+      "additionalProperties": false,
+      "description": "Result of Engine::run.",
+      "properties": {
+        "spec": {
+          "type": "string"
+        },
+        "effective": {
+          "type": "string"
+        },
+        "spec_effective_from": {
+          "type": "string"
+        },
+        "spec_effective_to": {
+          "type": "string"
+        },
+        "results": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RuleResult"
+          }
+        }
+      }
+    },
+    "ListedSpec": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "effective_from": {
+          "type": "string"
+        },
+        "effective_to": {
+          "type": "string"
+        }
+      }
+    },
+    "ResolvedRepository": {
+      "type": "object",
+      "required": [
+        "specs"
+      ],
+      "additionalProperties": false,
+      "description": "One repository group from Engine::list. `repository` is absent for the local workspace group.",
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "specs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListedSpec"
+          }
+        }
+      }
+    },
+    "EngineErrorSource": {
+      "type": "object",
+      "required": [
+        "attribute",
+        "line",
+        "column",
+        "length"
+      ],
+      "additionalProperties": false,
+      "description": "Source location attached to an EngineError. Line/column are 1-based; length is the UTF-8 byte length of the offending span.",
+      "properties": {
+        "attribute": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "column": {
+          "type": "integer"
+        },
+        "length": {
+          "type": "integer"
+        }
+      }
+    },
+    "EngineError": {
+      "type": "object",
+      "required": [
+        "kind",
+        "message",
+        "related_data",
+        "spec",
+        "related_spec",
+        "source",
+        "suggestion",
+        "repository",
+        "registry_kind",
+        "request_kind",
+        "limit_name",
+        "limit_value",
+        "actual_value"
+      ],
+      "additionalProperties": false,
+      "description": "Structured error thrown by Engine::run/show/load/fetch.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "parsing",
+            "validation",
+            "inversion",
+            "registry",
+            "missing_repository",
+            "request",
+            "resource_limit"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "related_data": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "related_spec": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/EngineErrorSource"
+            }
+          ]
+        },
+        "suggestion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registry_kind": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "not_found",
+                "unauthorized",
+                "network_error",
+                "server_error",
+                "other"
+              ]
+            }
+          ]
+        },
+        "request_kind": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": [
+                "spec_not_found",
+                "rule_not_found",
+                "invalid_request"
+              ]
+            }
+          ]
+        },
+        "limit_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "actual_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "Cause": {
+      "type": "object",
+      "required": [
+        "condition",
+        "value"
+      ],
+      "additionalProperties": false,
+      "description": "One evaluated unless condition, stated as a fact. A falsified comparison is flipped to its complement, so the condition text describes what held.",
+      "properties": {
+        "condition": {
+          "type": "string",
+          "description": "True-form condition expression text from the source rule."
+        },
+        "value": {
+          "type": "string",
+          "description": "\"true\" for facts stated positively (including flipped conditions), \"false\" when the condition could not be flipped into a positive statement, or the veto text when evaluating the condition vetoed."
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExplanationNode"
+          }
+        }
+      }
+    },
+    "ConversionStep": {
+      "type": "object",
+      "required": [
+        "role",
+        "text"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "role": {
+          "enum": [
+            "outcome",
+            "rule",
+            "source"
+          ]
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "ExplanationNode": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/RuleNode"
+        },
+        {
+          "$ref": "#/$defs/ComposeNode"
+        },
+        {
+          "$ref": "#/$defs/DataNode"
+        },
+        {
+          "$ref": "#/$defs/DataUnusedNode"
+        },
+        {
+          "$ref": "#/$defs/ConversionNode"
+        },
+        {
+          "$ref": "#/$defs/VetoNode"
+        }
+      ]
+    },
+    "RuleNode": {
+      "type": "object",
+      "required": [
+        "type",
+        "name",
+        "result",
+        "body"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "rule"
+        },
+        "name": {
+          "type": "string"
+        },
+        "result": {
+          "type": "string",
+          "description": "Display string for this rule's result."
+        },
+        "body": {
+          "type": "string"
+        },
+        "causes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Cause"
+          }
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExplanationNode"
+          }
+        }
+      }
+    },
+    "ComposeNode": {
+      "type": "object",
+      "required": [
+        "type",
+        "expression",
+        "operands"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "compose"
+        },
+        "expression": {
+          "type": "string"
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExplanationNode"
+          }
+        }
+      }
+    },
+    "DataNode": {
+      "type": "object",
+      "required": [
+        "type",
+        "name",
+        "display"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "data"
+        },
+        "name": {
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        }
+      }
+    },
+    "DataUnusedNode": {
+      "type": "object",
+      "required": [
+        "type",
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Data path present in a cause condition structure but never looked up (short-circuit or static and-false).",
+      "properties": {
+        "type": {
+          "const": "data_unused"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "ConversionNode": {
+      "type": "object",
+      "required": [
+        "type",
+        "expression",
+        "steps",
+        "operands"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "conversion"
+        },
+        "expression": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConversionStep"
+          }
+        },
+        "operands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ExplanationNode"
+          }
+        }
+      }
+    },
+    "VetoNode": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "veto"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/Show"
+    },
+    {
+      "$ref": "#/$defs/Response"
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ResolvedRepository"
+      }
+    },
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EngineError"
+      }
+    }
+  ]
+}

@@ -23,7 +23,7 @@ Numbers are produced by `cargo benchmarks engine`. Hand-written Lemma specs and 
 ## Environment
 
 - Host: `Linux 7.0.0-28-generic x86_64`
-- Lemma git SHA: `7a90395b195a7267e268ca23092dbb603745def5`
+- Lemma git SHA: `6a81a7972853f92330f4c95bf42972b017c6db96`
 - Python: `Python 3.12.3`
 - Rustc:
 
@@ -43,17 +43,17 @@ One-time cost per spec load. Not included in the Python/Lemma latency ratio; amo
 
 | Spec | Median | Std dev |
 |------|-------:|--------:|
-| `bench_shipping` | 2.827 ms | 30.03 us |
-| `bench_pricing` | 3.562 ms | 47.10 us |
-| `bench_order_pipeline` | 5.153 ms | 138.25 us |
+| `bench_shipping` | 2.768 ms | 107.87 us |
+| `bench_pricing` | 3.396 ms | 78.99 us |
+| `bench_order_pipeline` | 4.093 ms | 83.46 us |
 
 ## Latency
 
 | Spec | Terminal rule | Lemma median | Lemma std dev | Python median | Python iter | Python std dev | Python / Lemma |
 |------|---------------|-------------:|--------------:|--------------:|------------:|---------------:|---------------:|
-| `bench_shipping` | `total` | 15.94 us | 1.14 us | 7.14 us | 10000 | 720 ns | 0.4483 |
-| `bench_pricing` | `total` | 39.71 us | 507 ns | 28.16 us | 10000 | 4.75 us | 0.7091 |
-| `bench_order_pipeline` | `grand_total` | 72.14 us | 1.61 us | 48.40 us | 10000 | 6.76 us | 0.6709 |
+| `bench_shipping` | `total` | 14.23 us | 410 ns | 7.15 us | 10000 | 1.04 us | 0.5023 |
+| `bench_pricing` | `total` | 35.89 us | 3.19 us | 28.39 us | 10000 | 9.62 us | 0.7912 |
+| `bench_order_pipeline` | `grand_total` | 64.13 us | 2.40 us | 48.85 us | 10000 | 18.47 us | 0.7618 |
 
 ## Explain latency (`evaluate_explain`)
 
@@ -61,17 +61,17 @@ Same fixtures and terminal rules as the latency table, with `explain: true`. Rat
 
 | Spec | Terminal rule | `evaluate` median | `evaluate_explain` median | Explain / `evaluate` |
 |------|---------------|------------------:|--------------------------:|---------------------:|
-| `bench_shipping` | `total` | 15.94 us | 97.03 us | 6.089 |
-| `bench_pricing` | `total` | 39.71 us | 340.47 us | 8.573 |
-| `bench_order_pipeline` | `grand_total` | 72.14 us | 701.63 us | 9.726 |
+| `bench_shipping` | `total` | 14.23 us | 94.77 us | 6.658 |
+| `bench_pricing` | `total` | 35.89 us | 327.35 us | 9.122 |
+| `bench_order_pipeline` | `grand_total` | 64.13 us | 675.07 us | 10.53 |
 
 ## Memory (per `evaluate` call)
 
 | Spec | Iterations | Allocations/eval | Bytes allocated/eval | Reallocations/eval | Net bytes retained/eval |
 |------|-----------:|-----------------:|---------------------:|-------------------:|------------------------:|
-| `bench_shipping` | 1000 | 303.00 | 17637 | 1.00 | 0.00 |
-| `bench_pricing` | 1000 | 763.00 | 39289 | 1.00 | 0.00 |
-| `bench_order_pipeline` | 1000 | 1331.00 | 61264 | 1.00 | 0.00 |
+| `bench_shipping` | 1000 | 287.00 | 15034 | 1.00 | 0.00 |
+| `bench_pricing` | 1000 | 725.00 | 33053 | 1.00 | 0.00 |
+| `bench_order_pipeline` | 1000 | 1269.00 | 53510 | 1.00 | 0.00 |
 
 ## Numerical accuracy
 
@@ -79,7 +79,7 @@ Same fixtures and terminal rules as the latency table, with `explain: true`. Rat
 
 ## Python implementation
 
-Hand-written ports of the three Lemma specs live in [`../../engine/benches/python/business_rules/`](../../engine/benches/python/business_rules). Each module exports `Inputs`, `Outputs`, `TERMINAL_RULE`, `build_inputs(raw)`, `compute_terminal(inputs)`, and `compute(inputs)`. Standard library only (`fractions`, `dataclasses`, `importlib`, `time`, `gc`, `pathlib`, `statistics`). The Python benchmark harness is [`../../engine/benches/python/benchmark.py`](../../engine/benches/python/benchmark.py).
+Hand-written ports of the three Lemma specs live in [`engine/benches/python/business_rules`](https://github.com/lemma/lemma/tree/6a81a7972853f92330f4c95bf42972b017c6db96/engine/benches/python/business_rules). Each module exports `Inputs`, `Outputs`, `TERMINAL_RULE`, `build_inputs(raw)`, `compute_terminal(inputs)`, and `compute(inputs)`. Standard library only (`fractions`, `dataclasses`, `importlib`, `time`, `gc`, `pathlib`, `statistics`). The Python benchmark harness is [`engine/benches/python/benchmark.py`](https://github.com/lemma/lemma/blob/6a81a7972853f92330f4c95bf42972b017c6db96/engine/benches/python/benchmark.py).
 
 ## Inputs
 
@@ -87,7 +87,7 @@ All fixtures share `effective = 2026-01-01T00:00:00Z` (no timezone). Input value
 
 ### `bench_shipping`
 
-Lemma source: [`engine/benches/specs/shipping.lemma`](../../engine/benches/specs/shipping.lemma). Python module: `business_rules.shipping`.
+Lemma source: [`engine/benches/specs/shipping.lemma`](https://github.com/lemma/lemma/blob/6a81a7972853f92330f4c95bf42972b017c6db96/engine/benches/specs/shipping.lemma). Python module: `business_rules.shipping`.
 
 | Field | Value |
 |-------|-------|
@@ -97,7 +97,7 @@ Lemma source: [`engine/benches/specs/shipping.lemma`](../../engine/benches/specs
 
 ### `bench_pricing`
 
-Lemma source: [`engine/benches/specs/pricing.lemma`](../../engine/benches/specs/pricing.lemma). Python module: `business_rules.pricing`.
+Lemma source: [`engine/benches/specs/pricing.lemma`](https://github.com/lemma/lemma/blob/6a81a7972853f92330f4c95bf42972b017c6db96/engine/benches/specs/pricing.lemma). Python module: `business_rules.pricing`.
 
 | Field | Value |
 |-------|-------|
@@ -112,7 +112,7 @@ Lemma source: [`engine/benches/specs/pricing.lemma`](../../engine/benches/specs/
 
 ### `bench_order_pipeline`
 
-Lemma source: [`engine/benches/specs/order_pipeline.lemma`](../../engine/benches/specs/order_pipeline.lemma). Python module: `business_rules.order_pipeline`.
+Lemma source: [`engine/benches/specs/order_pipeline.lemma`](https://github.com/lemma/lemma/blob/6a81a7972853f92330f4c95bf42972b017c6db96/engine/benches/specs/order_pipeline.lemma). Python module: `business_rules.order_pipeline`.
 
 | Field | Value |
 |-------|-------|

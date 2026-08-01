@@ -31,7 +31,7 @@ rule total: validated_price * quantity
         .find(|r| r.rule.name == "total")
         .expect("total rule");
 
-    assert_eq!(total.display.as_deref(), Some("0"));
+    assert_eq!(total.display(), Some("0"));
 }
 
 #[test]
@@ -89,7 +89,10 @@ rule flag: validated_quantity is veto
         .find(|r| r.rule.name == "flag")
         .expect("flag");
 
-    assert_eq!(flag.boolean, Some(true));
+    assert_eq!(
+        flag.value.as_ref().expect("rule result value").boolean,
+        Some(true)
+    );
 }
 
 #[test]
@@ -119,7 +122,7 @@ rule total: price * validated_quantity
         .find(|r| r.rule.name == "total")
         .expect("total");
 
-    assert_eq!(total.display.as_deref(), Some("0"));
+    assert_eq!(total.display(), Some("0"));
 }
 
 #[test]
@@ -147,7 +150,10 @@ rule flag: validated_price is veto
         .find(|r| r.rule.name == "flag")
         .expect("flag");
 
-    assert_eq!(flag.boolean, Some(false));
+    assert_eq!(
+        flag.value.as_ref().expect("rule result value").boolean,
+        Some(false)
+    );
 }
 
 #[test]
@@ -181,8 +187,10 @@ rule right_to_left: veto is validated_price
         .find(|r| r.rule.name == "right_to_left")
         .expect("right_to_left");
 
-    assert_eq!(ltr.boolean, rtl.boolean);
-    assert_eq!(ltr.boolean, Some(true));
+    let ltr_bool = ltr.value.as_ref().expect("rule result value").boolean;
+    let rtl_bool = rtl.value.as_ref().expect("rule result value").boolean;
+    assert_eq!(ltr_bool, rtl_bool);
+    assert_eq!(ltr_bool, Some(true));
 }
 
 #[test]
@@ -214,8 +222,10 @@ rule b: not veto is validated_price
         .values()
         .find(|r| r.rule.name == "b")
         .expect("b");
-    assert_eq!(a.boolean, b.boolean);
-    assert_eq!(a.boolean, Some(true));
+    let a_bool = a.value.as_ref().expect("rule result value").boolean;
+    let b_bool = b.value.as_ref().expect("rule result value").boolean;
+    assert_eq!(a_bool, b_bool);
+    assert_eq!(a_bool, Some(true));
 }
 
 #[test]
@@ -249,7 +259,7 @@ rule total: validated_price * quantity
         explanation
             .causes
             .iter()
-            .any(|c| c.condition.contains("is veto") && c.value.as_deref() == Some("true")),
+            .any(|c| c.condition.contains("is veto") && c.value == "true"),
         "expected unless cause with is veto true, got {:?}",
         explanation.causes
     );

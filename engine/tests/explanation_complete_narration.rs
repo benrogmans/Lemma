@@ -39,12 +39,7 @@ fn cause_pairs(explanation: &Explanation) -> Vec<(&str, &str)> {
     explanation
         .causes
         .iter()
-        .map(|c| {
-            (
-                c.condition.as_str(),
-                c.value.as_deref().expect("cause value filled"),
-            )
-        })
+        .map(|c| (c.condition.as_str(), c.value.as_str()))
         .collect()
 }
 
@@ -149,7 +144,7 @@ rule out: true
         true,
     );
     let out = response.results.get("out").expect("out");
-    assert_eq!(out.display.as_deref(), Some("true"));
+    assert_eq!(out.display(), Some("true"));
     let explanation = out_explanation(&response);
     assert_eq!(explanation.body, "true");
     assert_eq!(cause_pairs(explanation), vec![("5 >= 3", "true")]);
@@ -171,7 +166,7 @@ rule out: 1 unless false then 2
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("1")
     );
     let explanation = out_explanation(&response);
@@ -195,7 +190,7 @@ rule out: 1 unless true then 2
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("2")
     );
     let explanation = out_explanation(&response);
@@ -219,7 +214,7 @@ rule out: 1 unless 5 > 3 then 2
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("2")
     );
     let explanation = out_explanation(&response);
@@ -244,7 +239,7 @@ rule out: 1 unless x then 2 unless true then 3
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("3")
     );
     let explanation = out_explanation(&response);
@@ -270,7 +265,7 @@ rule out: 1 unless false then 2 unless x then 3
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("3")
     );
     let explanation = out_explanation(&response);
@@ -298,14 +293,14 @@ rule out: 1 unless flag and false then 2
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("1")
     );
     let explanation = out_explanation(&response);
     assert_eq!(explanation.body, "1");
     assert_eq!(explanation.causes.len(), 1);
     assert_eq!(explanation.causes[0].condition, "flag and false");
-    assert_eq!(explanation.causes[0].value.as_deref(), Some("false"));
+    assert_eq!(explanation.causes[0].value, "false");
     let json = explanation_json(explanation);
     let children = json["causes"][0]["children"]
         .as_array()
@@ -341,13 +336,13 @@ rule out: "ok"
     data.insert("b".into(), "true".into());
     let response = run(&engine, "bound_and", data, Some(&["out".to_string()]), true);
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("ok")
     );
     let explanation = out_explanation(&response);
     assert_eq!(explanation.causes.len(), 1);
     assert_eq!(explanation.causes[0].condition, "a and b");
-    assert_eq!(explanation.causes[0].value.as_deref(), Some("false"));
+    assert_eq!(explanation.causes[0].value, "false");
     let json = explanation_json(explanation);
     let children = json["causes"][0]["children"]
         .as_array()
@@ -385,7 +380,7 @@ rule out: "ok"
     data.insert("a".into(), "false".into());
     let response = run(&engine, "short_and", data, Some(&["out".to_string()]), true);
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("ok")
     );
     let explanation = out_explanation(&response);
@@ -426,7 +421,7 @@ rule out: 0 unless 1 < 0 then 1 unless true then 2
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("2")
     );
     let explanation = out_explanation(&response);
@@ -452,7 +447,7 @@ rule out: (sqrt 4) * (sqrt 9)
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("6")
     );
     let explanation = out_explanation(&response);
@@ -485,7 +480,7 @@ rule out: a * b
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("6")
     );
     let explanation = out_explanation(&response);
@@ -545,7 +540,7 @@ rule out: 50 eur_per_hour
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("50 eur_per_hour")
     );
     let explanation = out_explanation(&response);
@@ -568,7 +563,7 @@ rule out: (exp(log(5))) + 0
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("5")
     );
     let explanation = out_explanation(&response);
@@ -593,7 +588,7 @@ rule out: 100 as number
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("100")
     );
     let explanation = out_explanation(&response);
@@ -624,7 +619,7 @@ rule out: mass as gram
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("2000 gram")
     );
     let explanation = out_explanation(&response);
@@ -649,7 +644,7 @@ rule out: 2 + 1
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("3")
     );
     let explanation = out_explanation(&response);
@@ -683,7 +678,7 @@ rule out: true unless 5 < 3 then false
     let left = without.results.get("out").expect("out");
     let right = with.results.get("out").expect("out");
     assert_eq!(left.vetoed, right.vetoed);
-    assert_eq!(left.display, right.display);
+    assert_eq!(left.display(), right.display());
     assert!(left.explanation.is_none());
     assert!(right.explanation.is_some());
 }
@@ -705,7 +700,7 @@ rule out: base
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("1")
     );
     let explanation = out_explanation(&response);
@@ -738,7 +733,7 @@ rule out: true unless n < 3 then false
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("true")
     );
     let explanation = out_explanation(&response);
@@ -761,7 +756,7 @@ rule out: 0 unless true then 1 unless true then 2
         true,
     );
     assert_eq!(
-        response.results.get("out").expect("out").display.as_deref(),
+        response.results.get("out").expect("out").display(),
         Some("2")
     );
     let explanation = out_explanation(&response);

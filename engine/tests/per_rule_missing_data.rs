@@ -50,6 +50,232 @@ fn show_has(engine: &Engine, spec: &str, key: &str) {
     );
 }
 
+// --- H. AND / Piecewise control release precision ---
+//
+// These cases pin the behavioral invariants tested by the deleted data_releases_* unit tests in
+// execution_plan.rs and extend coverage with one new case (h5) that the old precomputed
+// release table could not satisfy: a path released by two distinct control nodes, each blocking
+// one route, where the old code over-reported the path as still missing.
+
+/// Porting data_releases_and_does_not_release_path_still_reachable_outside:
+/// When the AND short-circuits (flag=false), `expensive` is still needed for the
+/// default body — it must remain in missing_data.
+#[test]
+fn h1_and_short_circuit_does_not_release_path_reachable_via_default_body() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data flag: boolean
+data expensive: number
+rule main: expensive
+  unless flag and (expensive > 100) then 0
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("flag".to_string(), "false".to_string());
+    let response = run(&engine, "demo", data, None, false);
+    let md = missing(&response, "main");
+    assert!(
+        md.contains(&"expensive".to_string()),
+        "expensive is still needed via default body; must not be released when flag=false: {md:?}"
+    );
+}
+
+/// Porting data_releases_nested_and_each_node_has_own_entry:
+/// a and b and c — when a=false, both b and c must be released.
+#[test]
+fn h2_nested_and_first_false_releases_all_right_operands() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data a: boolean
+data b: boolean
+data c: boolean
+rule main: a and b and c
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("a".to_string(), "false".to_string());
+    let response = run(&engine, "demo", data, None, false);
+    let md = missing(&response, "main");
+    assert!(
+        !md.contains(&"b".to_string()),
+        "b must be released when a=false (outer And short-circuits): {md:?}"
+    );
+    assert!(
+        !md.contains(&"c".to_string()),
+        "c must be released when a=false (outer And short-circuits): {md:?}"
+    );
+}
+
+/// Nested AND: when a=true but b=false, c is released and a is not listed.
+#[test]
+fn h3_nested_and_middle_false_releases_rightmost_only() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data a: boolean
+data b: boolean
+data c: boolean
+rule main: a and b and c
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("a".to_string(), "true".to_string());
+    data.insert("b".to_string(), "false".to_string());
+    let response = run(&engine, "demo", data, None, false);
+    let md = missing(&response, "main");
+    assert!(
+        !md.contains(&"c".to_string()),
+        "c must be released when b=false (inner And short-circuits): {md:?}"
+    );
+    assert!(
+        !md.contains(&"a".to_string()),
+        "a is supplied, must not appear: {md:?}"
+    );
+    assert!(
+        !md.contains(&"b".to_string()),
+        "b is supplied, must not appear: {md:?}"
+    );
+}
+
+/// Porting data_releases_piecewise_taken_multi_edge_releases_shared_body:
+/// `shared` appears in both the default body and flag_a's arm body. When flag_b
+/// arm is Taken, all routes to `shared` are dead — it must not appear in missing_data.
+#[test]
+fn h4_piecewise_taken_arm_releases_shared_body_all_routes_dead() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data shared: number
+data flag_a: boolean
+data flag_b: boolean
+rule main: shared
+  unless flag_a then shared
+  unless flag_b then 0
+"#,
+    );
+    // flag_b arm is taken: default body (shared) and flag_a body (shared) are both dead.
+    let mut data = HashMap::new();
+    data.insert("flag_b".to_string(), "true".to_string());
+    let response = run(&engine, "demo", data, None, false);
+    let md = missing(&response, "main");
+    assert!(
+        !md.contains(&"shared".to_string()),
+        "all routes to shared are dead when flag_b arm is taken; must be released: {md:?}"
+    );
+    assert!(
+        !md.contains(&"flag_a".to_string()),
+        "flag_a's arm is dead when flag_b arm is taken: {md:?}"
+    );
+}
+
+/// Porting data_releases_piecewise_not_taken_releases_arm_body /
+/// data_releases_piecewise_default_wins_releases_unless_bodies:
+/// When the unless condition is false (arm NOT taken, default wins), the arm body is not
+/// needed and must not appear in missing_data.
+#[test]
+fn h5_piecewise_arm_not_taken_arm_body_absent_from_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data flag: boolean
+data expensive: number
+rule main: 1
+  unless flag then expensive
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("flag".to_string(), "false".to_string());
+    let response = run(&engine, "demo", data, None, false);
+    let md = missing(&response, "main");
+    assert!(
+        !md.contains(&"expensive".to_string()),
+        "flag=false → default wins → arm body expensive must be released: {md:?}"
+    );
+}
+
+/// New precision case — two distinct piecewise control nodes each blocking one route to
+/// `expensive`.
+///
+/// Spec structure (two rules, because Lemma does not allow nested `unless` in expressions):
+/// ```
+/// rule guarded: expensive
+///   unless flag_inner then 0
+///
+/// rule main: expensive
+///   unless flag_outer then guarded
+/// ```
+///
+/// The NormalForm DAG for `main` (after rule inlining) contains:
+///   P_outer = Piecewise(flag_outer): default=expensive, arm=P_inner
+///   P_inner = Piecewise(flag_inner): default=expensive, arm=0
+///
+/// Routes to `expensive`:
+///   Route 1: P_outer default body  → dead when P_outer arm is Taken (flag_outer=true)
+///   Route 2: P_inner default body  → dead when P_inner arm is Taken (flag_inner=true)
+///
+/// When flag_outer=true AND flag_inner=true, and `expensive` not provided:
+///   - P_outer Taken: Route 1 dead. Result comes from P_inner.
+///   - P_inner Taken: Route 2 dead. Result = 0.
+///   - Every route to `expensive` is blocked → `expensive` must not appear in missing_data.
+///
+/// Why the precomputed release table (before Part 3) fails:
+/// `fill_structural_needed` walks all DAG nodes, so structural_needed["main"] includes
+/// `expensive` via both routes. Then:
+/// - P_outer arm-taken analysis: slots["expensive"] = {default_leaf, P_inner} — P_inner
+///   also carries expensive, so dead_children={default_leaf} does not cover all slots →
+///   not released.
+/// - P_inner arm-taken analysis: bypass_leaves(main_root, skip=P_inner) traverses P_outer
+///   and collects `expensive` from P_outer's default body → expensive is in bypass →
+///   released_for_dead_children skips it.
+///
+/// Result: released={}, expensive remains in structural_needed−bound → over-reported.
+///
+/// The decision-aware reachability walk (Part 3) prunes from the actual root with actual
+/// control decisions simultaneously and correctly finds `expensive` unreachable.
+///
+/// This test pins the precision case that the walk must satisfy.
+#[test]
+fn h6_two_control_nodes_each_blocking_one_route_expensive_released() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data flag_outer: boolean
+data flag_inner: boolean
+data expensive: number
+
+rule guarded: expensive
+  unless flag_inner then 0
+
+rule main: expensive
+  unless flag_outer then guarded
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("flag_outer".to_string(), "true".to_string());
+    data.insert("flag_inner".to_string(), "true".to_string());
+    let response = run(&engine, "demo", data, None, false);
+    let md = missing(&response, "main");
+    assert!(
+        !md.contains(&"expensive".to_string()),
+        "both routes to expensive are blocked by two independent piecewise decisions; \
+         expensive must be released — not over-reported as missing: {md:?}"
+    );
+}
+
 // --- A. Complete vs incomplete ---
 
 #[test]
@@ -585,7 +811,7 @@ rule main: a + b
     let p = rule(&plain, "main");
     let e = rule(&explained, "main");
     assert_eq!(p.vetoed, e.vetoed);
-    assert_eq!(p.display, e.display);
+    assert_eq!(p.display(), e.display());
     assert_eq!(p.veto_reason, e.veto_reason);
 }
 

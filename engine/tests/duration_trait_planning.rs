@@ -57,8 +57,9 @@ fn eval_rule_measure_unit(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .measure
+        .value
         .as_ref()
+        .and_then(|v| v.measure.as_ref())
         .and_then(|m| m.get(unit))
         .cloned()
         .unwrap_or_else(|| panic!("measure map missing unit '{unit}'"))
@@ -85,9 +86,9 @@ fn eval_rule(code: impl AsRef<str>, spec_name: &str, rule_name: &str) -> String 
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 fn assert_contains_all(actual: &str, expected_parts: &[&str]) {

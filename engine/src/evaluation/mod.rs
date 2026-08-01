@@ -6,27 +6,25 @@
 
 pub(crate) mod branch_semantics;
 pub(crate) mod conversion_trace;
-pub mod data_input;
 pub mod explanations;
 pub mod expression;
-pub mod operations;
 pub mod response;
+pub mod run_data;
 pub(crate) mod tree;
 
-use crate::evaluation::operations::VetoType;
+pub use crate::computation::OperationResult;
+use crate::computation::VetoType;
 use crate::evaluation::response::EvaluatedRule;
 use crate::planning::execution_plan::{
-    collect_structural_data_paths, order_data_paths_by_plan, validate_value_against_type,
-    ControlDataReleases, ExecutionPlan,
+    expand_data_reference_targets, reachable_data_paths, validate_value_against_type, ExecutionPlan,
 };
 use crate::planning::normalize::NormalFormId;
 use crate::planning::semantics::{
     DataDefinition, DataPath, LiteralValue, ReferenceTarget, RulePath, ValueKind,
 };
-pub use data_input::{DataOverlay, DataValueInput};
 use indexmap::IndexMap;
-pub use operations::OperationResult;
 pub use response::{Response, RuleResult};
+pub use run_data::{RunData, RunDataValue};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -35,20 +33,25 @@ use std::sync::Arc;
 fn closest_ignored_key(needed: &str, ignored: &[String]) -> Option<String> {
     let max_distance = if needed.len() <= 3 { 1 } else { 2 };
     let needed_lower = needed.to_ascii_lowercase();
-    let mut best: Option<(usize, &String)> = None;
+    let mut best: Option<(usize, String, &String)> = None;
     for candidate in ignored {
-        let distance = levenshtein(&needed_lower, &candidate.to_ascii_lowercase());
+        let candidate_lower = candidate.to_ascii_lowercase();
+        let distance = levenshtein(&needed_lower, &candidate_lower);
         if distance == 0 || distance > max_distance {
             continue;
         }
-        if best
-            .map(|(best_distance, _)| distance < best_distance)
-            .unwrap_or(true)
-        {
-            best = Some((distance, candidate));
+        let dominated = best
+            .as_ref()
+            .map(|(best_distance, best_lower, _)| {
+                distance < *best_distance
+                    || (distance == *best_distance && candidate_lower < *best_lower)
+            })
+            .unwrap_or(true);
+        if dominated {
+            best = Some((distance, candidate_lower, candidate));
         }
     }
-    best.map(|(_, key)| key.clone())
+    best.map(|(_, _, key)| key.clone())
 }
 
 fn levenshtein(left: &str, right: &str) -> usize {
@@ -76,7 +79,7 @@ fn levenshtein(left: &str, right: &str) -> usize {
     previous[right_len]
 }
 
-/// Request-local mutable state for one plan run (overlay values, release tracking, explain caches).
+/// Request-local mutable state for one plan run (run data, control decisions, explain caches).
 /// The [`ExecutionPlan`] is passed separately so the tree walk can match Kind in place.
 pub(crate) struct EvaluationContext {
     pub(crate) data_values: HashMap<DataPath, Arc<LiteralValue>>,
@@ -87,25 +90,27 @@ pub(crate) struct EvaluationContext {
     now: Arc<LiteralValue>,
     /// Computation vetoes on data that cannot be read (bad override or reference constraint).
     vetoes: HashMap<DataPath, VetoType>,
-    /// Ignored input keys from overlay (typo hints for MissingData).
+    /// Ignored input keys from run data (typo hints for MissingData).
     ignored_unknown: Vec<String>,
-    /// Requested local rule whose `missing_data` is being built. Fixed across embeds.
-    pub(crate) release_rule: Option<RulePath>,
-    /// DataPaths released by control outcomes under `release_rule` this evaluation.
-    pub(crate) released: HashSet<DataPath>,
-    /// When false, And/Piecewise outcomes do not apply planned releases (explain narration
-    /// after the value walk already recorded them).
-    pub(crate) record_releases: bool,
+    /// Whether this run data left any of the plan's promptable data paths unbound.
+    /// False means no rule can report missing data, so control decisions need no recording.
+    any_promptable_data_unbound: bool,
+    /// Per And/Piecewise control node: immediate child NormalFormIds that are dead given
+    /// the control decisions observed so far in this evaluation.
+    pub(crate) dead_control_edges: HashMap<NormalFormId, HashSet<NormalFormId>>,
+    /// When false, And/Piecewise outcomes do not record dead control edges (fully bound
+    /// run data, or explain narration re-walking nodes after the value walk recorded them).
+    pub(crate) record_control_decisions: bool,
     /// Value memo by NormalFormId for shared-DAG walks within one requested rule.
     pub(crate) value_memo: HashMap<crate::planning::normalize::NormalFormId, OperationResult>,
 }
 
 impl EvaluationContext {
-    fn new(plan: &ExecutionPlan, overlay: &DataOverlay, now: LiteralValue) -> Self {
+    fn new(plan: &ExecutionPlan, run_data: &RunData, now: LiteralValue) -> Self {
         let mut data_values: HashMap<DataPath, Arc<LiteralValue>> = HashMap::new();
         let mut vetoes: HashMap<DataPath, VetoType> = HashMap::new();
 
-        for (path, binding) in &overlay.bindings {
+        for (path, binding) in &run_data.bindings {
             match binding {
                 OperationResult::Value(value) => {
                     data_values.insert(path.clone(), Arc::clone(value));
@@ -178,16 +183,20 @@ impl EvaluationContext {
             }
         }
 
+        let any_promptable_data_unbound = plan
+            .promptable_data_paths()
+            .any(|path| !data_values.contains_key(path) && !vetoes.contains_key(path));
+
         Self {
             data_values,
             rule_results: HashMap::new(),
             rule_explanations: HashMap::new(),
             now: Arc::new(now),
             vetoes,
-            ignored_unknown: overlay.ignored_unknown.clone(),
-            release_rule: None,
-            released: HashSet::new(),
-            record_releases: true,
+            ignored_unknown: run_data.ignored_unknown.clone(),
+            any_promptable_data_unbound,
+            dead_control_edges: HashMap::new(),
+            record_control_decisions: any_promptable_data_unbound,
             value_memo: HashMap::new(),
         }
     }
@@ -208,119 +217,56 @@ impl EvaluationContext {
         closest_ignored_key(&data_path.input_key(), &self.ignored_unknown)
     }
 
-    /// Begin evaluating one requested local rule: release tracking + per-rule caches.
-    pub(crate) fn begin_requested_rule(&mut self, rule_path: RulePath) {
-        self.release_rule = Some(rule_path);
-        self.released.clear();
+    /// Begin evaluating one requested local rule: dead-edge tracking + per-rule caches.
+    pub(crate) fn begin_requested_rule(&mut self) {
+        self.dead_control_edges.clear();
         self.value_memo.clear();
         self.rule_results.clear();
         self.rule_explanations.clear();
     }
 
-    pub(crate) fn end_requested_rule(&mut self) {
-        self.release_rule = None;
-        self.released.clear();
-    }
-
-    /// Union planned release paths for a control outcome under the current release rule.
-    pub(crate) fn apply_releases(
+    /// Record immediate child NormalFormIds of `control_id` that are dead given the
+    /// current control decision. Called once per control outcome during the value walk.
+    pub(crate) fn record_dead_control_edges(
         &mut self,
-        plan: &ExecutionPlan,
         control_id: NormalFormId,
-        pick: impl FnOnce(&ControlDataReleases) -> &[DataPath],
+        dead_children: impl IntoIterator<Item = NormalFormId>,
     ) {
-        if !self.record_releases {
+        if !self.record_control_decisions {
             return;
         }
-        let rule_path = self.release_rule.as_ref().unwrap_or_else(|| {
-            panic!("BUG: apply_releases without release_rule set for control {control_id:?}")
-        });
-        let rule_releases = plan.data_releases.get(rule_path).unwrap_or_else(|| {
-            panic!(
-                "BUG: no data_releases for rule '{}' (control {control_id:?})",
-                rule_path.rule
-            )
-        });
-        let control_releases = rule_releases.get(&control_id).unwrap_or_else(|| {
-            panic!(
-                "BUG: no ControlDataReleases for control {control_id:?} under rule '{}'",
-                rule_path.rule
-            )
-        });
-        for path in pick(control_releases) {
-            self.released.insert(path.clone());
+        let entry = self.dead_control_edges.entry(control_id).or_default();
+        for child in dead_children {
+            entry.insert(child);
         }
     }
 
-    fn bound_paths(&self) -> HashSet<DataPath> {
-        let mut bound = HashSet::new();
-        bound.extend(self.data_values.keys().cloned());
-        bound.extend(self.vetoes.keys().cloned());
-        bound
+    /// Whether this evaluation has a value or a veto for `data_path`.
+    fn is_data_bound(&self, data_path: &DataPath) -> bool {
+        self.data_values.contains_key(data_path) || self.vetoes.contains_key(data_path)
     }
 
-    /// `structural_needed − bound − released`, ordered by plan.data.
+    /// Promptable data paths this rule still needs, in plan.data declaration order.
     ///
-    /// Data→data references expand to their ultimate non-reference target (the
-    /// promptable input). Rule-target references are omitted (embeds cover them).
+    /// Returns immediately when the run data bound every promptable path: no rule can
+    /// report missing data, and no control decisions were recorded. Otherwise walks from
+    /// `rule_root` respecting the `dead_control_edges` recorded during the value walk,
+    /// and keeps the promptable paths that are both reachable and unbound.
     pub(crate) fn missing_data_for_rule(
         &self,
         plan: &ExecutionPlan,
         rule_root: NormalFormId,
     ) -> Vec<String> {
-        let mut structural = HashSet::new();
-        collect_structural_data_paths(plan, rule_root, &mut structural);
-        let structural = expand_data_reference_targets(plan, structural);
-        let bound = self.bound_paths();
-        let still: HashSet<DataPath> = structural
-            .into_iter()
-            .filter(|path| !bound.contains(path) && !self.released.contains(path))
-            .collect();
-        order_data_paths_by_plan(plan, still)
-            .into_iter()
+        if !self.any_promptable_data_unbound {
+            return Vec::new();
+        }
+        let reachable = reachable_data_paths(plan, rule_root, &self.dead_control_edges);
+        let reachable = expand_data_reference_targets(plan, reachable);
+        plan.promptable_data_paths()
+            .filter(|path| reachable.contains(*path) && !self.is_data_bound(path))
             .map(|path| path.input_key())
             .collect()
     }
-}
-
-/// Replace data-reference paths with their ultimate value-bearing targets.
-fn expand_data_reference_targets(
-    plan: &ExecutionPlan,
-    paths: HashSet<DataPath>,
-) -> HashSet<DataPath> {
-    let mut out = HashSet::new();
-    for path in paths {
-        let mut cursor = path;
-        let mut seen = HashSet::new();
-        loop {
-            if !seen.insert(cursor.clone()) {
-                panic!(
-                    "BUG: cyclic data reference while expanding missing_data at '{}'",
-                    cursor
-                );
-            }
-            match plan.data.get(&cursor) {
-                Some(DataDefinition::Reference {
-                    target: ReferenceTarget::Data(next),
-                    ..
-                }) => {
-                    cursor = next.clone();
-                }
-                Some(DataDefinition::Reference {
-                    target: ReferenceTarget::Rule(_),
-                    ..
-                })
-                | Some(DataDefinition::Import { .. }) => {
-                    break;
-                }
-                Some(_) | None => {
-                    out.insert(cursor);
-                    break;
-                }
-            }
-        }
-    }
-    out
 }
 
 /// Evaluates Lemma rules within their spec context
@@ -331,26 +277,28 @@ impl Evaluator {
     /// Evaluate an execution plan: one tree walk per requested local rule.
     ///
     /// Values come from walking Kind under those roots. Unbound live inputs are
-    /// reported per rule as `missing_data` (structural needed − bound − released).
-    /// When `explain` is true, Rule embeds evaluate dependency rules on demand.
+    /// reported per rule as `missing_data` (reachable under recorded control
+    /// decisions, intersected with unbound promptable paths). When `explain` is
+    /// true, Rule embeds evaluate dependency rules on demand.
     pub(crate) fn evaluate(
         &self,
         plan: &ExecutionPlan,
-        overlay: &DataOverlay,
+        run_data: &RunData,
         now: LiteralValue,
         response_rules: &std::collections::HashSet<String>,
         explain: bool,
-    ) -> (Response, EvaluationContext) {
+    ) -> Response {
         let effective = match &now.value {
             ValueKind::Date(date) => date.to_string(),
             other => panic!("BUG: evaluation now must be a date, got {other:?}"),
         };
-        let mut context = EvaluationContext::new(plan, overlay, now);
+        let mut context = EvaluationContext::new(plan, run_data, now);
 
         let mut response = Response {
             spec_name: plan.spec_name.clone(),
             effective,
-            spec_hash: None,
+            // Set by `Engine::run` after evaluation from the plan's cached
+            // version window (`ExecutionPlan::effective_from` / `effective_to`).
             spec_effective_from: None,
             spec_effective_to: None,
             results: IndexMap::new(),
@@ -361,7 +309,7 @@ impl Evaluator {
                 continue;
             }
 
-            context.begin_requested_rule(exec_rule.path.clone());
+            context.begin_requested_rule();
 
             let (result, explanation) = if explain {
                 let (result, explanation) =
@@ -375,7 +323,6 @@ impl Evaluator {
             };
 
             let missing_data = context.missing_data_for_rule(plan, exec_rule.normal_form);
-            context.end_requested_rule();
 
             response.add_result(RuleResult::from_operation_result(
                 EvaluatedRule {
@@ -391,12 +338,12 @@ impl Evaluator {
             ));
         }
 
-        (response, context)
+        response
     }
 }
 
 #[cfg(test)]
-mod runtime_invariant_tests {
+mod tests {
     use super::*;
     use crate::parsing::ast::DateTimeValue;
     use crate::Engine;
@@ -446,7 +393,7 @@ rule r: i.slot
             _ => unreachable!("filter above kept only Reference entries"),
         };
 
-        let overlay = DataOverlay::default();
+        let run_data = RunData::default();
 
         let now = DateTimeValue::now();
         let now_lit = LiteralValue {
@@ -455,7 +402,7 @@ rule r: i.slot
             ),
             lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
-        let context = EvaluationContext::new(plan_basis, &overlay, now_lit);
+        let context = EvaluationContext::new(plan_basis, &run_data, now_lit);
 
         let stored = context
             .data_values

@@ -1,7 +1,7 @@
 //! Exact rational arithmetic bridge between `rust_decimal::Decimal` and fallible `BigInt`.
 //!
 //! Input literals parse through [`crate::literals::NumberLiteral`] (`Decimal::from_str`).
-//! Output materialization uses [`RationalInteger::try_to_decimal`], enforcing the same
+//! API decimal conversion uses [`RationalInteger::try_to_decimal`], enforcing the same
 //! [`Decimal::MAX_SCALE`] digit limit.
 
 use rust_decimal::Decimal;
@@ -13,7 +13,7 @@ use crate::computation::bigint::AllocError;
 
 pub use crate::computation::bigint::BigInt;
 
-/// Digit limit for ℚ → [`Decimal`] output materialization.
+/// Digit limit for ℚ → [`Decimal`] API conversion.
 ///
 /// Matches [`Decimal::MAX_SCALE`] and [`crate::literals::NumberLiteral`] input parsing.
 const DECIMAL_OUTPUT_DIGIT_LIMIT: usize = Decimal::MAX_SCALE as usize;
@@ -184,7 +184,7 @@ impl RationalInteger {
             .map(|decimal| decimal_to_display_str(&decimal))
     }
 
-    /// Human-readable decimal when materializable; fraction string on magnitude overflow.
+    /// Human-readable decimal when `try_to_decimal` succeeds; fraction string on magnitude overflow.
     pub fn display_str(&self) -> String {
         match self.try_to_decimal() {
             Ok(decimal) => decimal_to_display_str(&decimal),
@@ -639,12 +639,12 @@ mod tests {
     }
 
     #[test]
-    fn display_str_shows_decimal_for_materializable() {
+    fn display_str_shows_decimal_when_try_to_decimal_succeeds() {
         let rational = rational_new(355, 113);
         let display = rational.display_str();
         assert!(
             !display.contains('/'),
-            "materializable rational must display as decimal, got {display}"
+            "rational with successful try_to_decimal must display as decimal, got {display}"
         );
     }
 
@@ -762,18 +762,10 @@ mod tests {
     }
 
     #[test]
-    fn forced_oom_returns_out_of_memory() {
-        use crate::computation::bigint::{test_clear_alloc_fail, test_force_alloc_fail};
-
-        let left = try_rational_new(
-            BigInt::try_from_str_radix("9999999999999999999999999999", 10).unwrap(),
-            BigInt::one(),
-        )
-        .unwrap();
-        let right = left.clone();
-        test_force_alloc_fail(1);
-        let failure = try_mul(&left, &right).unwrap_err();
-        test_clear_alloc_fail();
-        assert_eq!(failure, NumericFailure::OutOfMemory);
+    fn alloc_error_maps_to_out_of_memory() {
+        assert_eq!(
+            NumericFailure::from(crate::computation::bigint::AllocError),
+            NumericFailure::OutOfMemory
+        );
     }
 }

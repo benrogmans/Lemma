@@ -80,10 +80,10 @@ rule test_passes: result is expected
         .unwrap();
 
     let result = response.results.get("result").unwrap();
-    assert_eq!(result.display.clone().expect("display"), "150");
+    assert_eq!(result.display().expect("display").to_string(), "150");
 
     let test_passes = response.results.get("test_passes").unwrap();
-    assert_eq!(test_passes.display.clone().expect("display"), "true");
+    assert_eq!(test_passes.display().expect("display").to_string(), "true");
 }
 
 #[test]
@@ -122,10 +122,13 @@ rule test_passes: final_price is expected
         .unwrap();
 
     let discount_amount = response.results.get("discount_amount").unwrap();
-    assert_eq!(discount_amount.display.clone().expect("display"), "50");
+    assert_eq!(
+        discount_amount.display().expect("display").to_string(),
+        "50"
+    );
 
     let final_price = response.results.get("final_price").unwrap();
-    assert_eq!(final_price.display.clone().expect("display"), "150");
+    assert_eq!(final_price.display().expect("display").to_string(), "150");
 }
 
 #[test]

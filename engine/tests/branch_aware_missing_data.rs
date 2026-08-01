@@ -220,9 +220,9 @@ rule gross_annual: gross * periods_per_year
         "gross_annual must veto when periods_per_year lacks pay_period (must not assume 12)"
     );
     assert!(
-        gross_annual.display.is_none(),
+        gross_annual.display().is_none(),
         "gross_annual must not produce a numeric value, got {:?}",
-        gross_annual.display
+        gross_annual.display()
     );
 }
 
@@ -253,9 +253,9 @@ fn net_salary_per_period_outputs_veto_when_pay_period_missing() {
             "rule '{name}' must veto when periods_per_year is missing pay_period"
         );
         assert!(
-            rr.display.is_none(),
+            rr.display().is_none(),
             "rule '{name}' must not emit a per-period amount without pay_period, got {:?}",
-            rr.display
+            rr.display()
         );
     }
 }

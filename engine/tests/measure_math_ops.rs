@@ -40,9 +40,9 @@ fn eval_display(code: &str, spec: &str, rule: &str, data: HashMap<String, String
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("rule '{rule}' missing"))
-        .display
-        .clone()
+        .display()
         .expect("rule must have display value")
+        .to_string()
 }
 
 #[test]

@@ -47,7 +47,7 @@ let response = engine.run(
 
 for (rule_name, rule_result) in &response.results {
     if !rule_result.vetoed {
-        println!("{rule_name}: {}", rule_result.display.as_deref().unwrap_or(""));
+        println!("{rule_name}: {}", rule_result.display().unwrap_or(""));
     }
 }
 ```
@@ -99,7 +99,7 @@ let response = engine.run(
 
 `Engine::show` returns the static planning interface: data used by the spec's rules, plus local rule result types.
 
-For requirements on a partial run, call `run` and inspect each rule's `missing_data` (`string[]` input keys). Types, prefilled literals, and `-> suggest` hints are on `Engine::show` (`Show.data`) only. Bound inputs (caller overlay or spec prefilled) are omitted from `missing_data`; suggestions do not bind until supplied in `run`'s data. Pass `explain: true` as the last `run` argument to attach per-rule explanation trees ([explanation.v1.json](../schemas/explanation.v1.json)).
+For requirements on a partial run, call `run` and inspect each rule's `missing_data` (`string[]` input keys). Types, prefilled literals, and `-> suggest` hints are on `Engine::show` (`Show.data` values are `ShowData`) only. Bound inputs (caller run bindings or spec prefilled) are omitted from `missing_data`; suggestions do not bind until supplied in `run`'s data. Non-veto rule results flatten `RuleResultValue` onto each result (`display()` / typed fields). Pass `explain: true` as the last `run` argument to attach per-rule explanation trees ([api.v1.json](../schemas/api.v1.json)).
 
 ```rust
 let response = engine.run(

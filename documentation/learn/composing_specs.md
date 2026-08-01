@@ -302,7 +302,7 @@ To inspect the static interface for that temporal slice (types, constraints, rul
 lemma show membership_benefits --effective 2025-03-01
 ```
 
-Overlay-aware discovery of what a concrete `run` still needs comes from each rule's `missing_data`, not from `show`.
+Run-data-aware discovery of what a concrete `run` still needs comes from each rule's `missing_data`, not from `show`.
 ## Quick decision guide
 
 | Goal | Pattern |

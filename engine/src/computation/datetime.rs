@@ -3,8 +3,8 @@
 //! Handles arithmetic and comparisons with dates and datetimes.
 //! Returns OperationResult with Veto for errors instead of Result.
 
+use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::computation::rational::{rational_new, BigInt, RationalInteger};
-use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::planning::semantics::{
     ArithmeticComputation, ComparisonComputation, LiteralValue, SemanticCalendarUnit,
     SemanticDateTime, SemanticTime, SemanticTimezone, ValueKind,

@@ -1,5 +1,8 @@
 use lemma::Error;
 use lemma::ErrorKind;
+use lemma::RegistryErrorKind;
+use lemma::RequestErrorKind;
+use lemma::Source;
 use rustler::{Encoder, Env, NifResult, Term};
 
 fn error_kind_string(kind: ErrorKind) -> &'static str {
@@ -14,6 +17,54 @@ fn error_kind_string(kind: ErrorKind) -> &'static str {
     }
 }
 
+fn registry_error_kind_string(kind: RegistryErrorKind) -> &'static str {
+    match kind {
+        RegistryErrorKind::NotFound => "not_found",
+        RegistryErrorKind::Unauthorized => "unauthorized",
+        RegistryErrorKind::NetworkError => "network_error",
+        RegistryErrorKind::ServerError => "server_error",
+        RegistryErrorKind::Other => "other",
+    }
+}
+
+fn request_error_kind_string(kind: RequestErrorKind) -> &'static str {
+    match kind {
+        RequestErrorKind::SpecNotFound => "spec_not_found",
+        RequestErrorKind::RuleNotFound => "rule_not_found",
+        RequestErrorKind::InvalidRequest => "invalid_request",
+    }
+}
+
+/// `EngineErrorSource` projection: same fields as the WASM/JS/Java/TS `source` shape
+/// (`attribute`, `line`, `column`, `length`), keyed by atoms for Elixir map access.
+fn encode_source<'a>(env: Env<'a>, source: &Source) -> NifResult<Term<'a>> {
+    let mut map = rustler::types::map::map_new(env);
+    map = map.map_put(
+        rustler::Atom::from_str(env, "attribute")?.encode(env),
+        source.source_type.to_string().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "line")?.encode(env),
+        source.span.line.encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "column")?.encode(env),
+        source.span.col.encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "length")?.encode(env),
+        source
+            .span
+            .end
+            .saturating_sub(source.span.start)
+            .encode(env),
+    )?;
+    Ok(map)
+}
+
+/// Mirrors the canonical `EngineError` wire shape (see `engine/src/lib.rs` `JsError`):
+/// every field below is always present in the returned map, `nil` when absent —
+/// never conditionally omitted. `kind`/`message`/`source` are handled inline above.
 pub fn encode_error<'a>(env: Env<'a>, err: &Error) -> NifResult<Term<'a>> {
     let mut map = rustler::types::map::map_new(env);
     map = map.map_put(
@@ -25,39 +76,59 @@ pub fn encode_error<'a>(env: Env<'a>, err: &Error) -> NifResult<Term<'a>> {
         err.message().encode(env),
     )?;
 
-    if let Some(location) = err.location() {
-        let mut loc_map = rustler::types::map::map_new(env);
-        loc_map = loc_map.map_put(
-            rustler::Atom::from_str(env, "file")?.encode(env),
-            location.source_type.to_string().encode(env),
-        )?;
-        loc_map = loc_map.map_put(
-            rustler::Atom::from_str(env, "line")?.encode(env),
-            location.span.line.encode(env),
-        )?;
-        loc_map = loc_map.map_put(
-            rustler::Atom::from_str(env, "column")?.encode(env),
-            location.span.col.encode(env),
-        )?;
-        map = map.map_put(
-            rustler::Atom::from_str(env, "location")?.encode(env),
-            loc_map,
-        )?;
-    }
+    let source = match err.source_location() {
+        Some(source) => Some(encode_source(env, source)?),
+        None => None,
+    };
+    map = map.map_put(
+        rustler::Atom::from_str(env, "source")?.encode(env),
+        source.encode(env),
+    )?;
 
-    if let Some(suggestion) = err.suggestion() {
-        map = map.map_put(
-            rustler::Atom::from_str(env, "suggestion")?.encode(env),
-            suggestion.encode(env),
-        )?;
-    }
-
-    if let Some(repository) = err.repository() {
-        map = map.map_put(
-            rustler::Atom::from_str(env, "repository")?.encode(env),
-            repository.encode(env),
-        )?;
-    }
+    map = map.map_put(
+        rustler::Atom::from_str(env, "suggestion")?.encode(env),
+        err.suggestion().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "repository")?.encode(env),
+        err.repository().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "related_data")?.encode(env),
+        err.related_data().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "spec")?.encode(env),
+        err.spec_context_name().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "related_spec")?.encode(env),
+        err.related_spec().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "registry_kind")?.encode(env),
+        err.registry_kind()
+            .map(registry_error_kind_string)
+            .encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "request_kind")?.encode(env),
+        err.request_kind()
+            .map(request_error_kind_string)
+            .encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "limit_name")?.encode(env),
+        err.limit_name().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "limit_value")?.encode(env),
+        err.limit_value().encode(env),
+    )?;
+    map = map.map_put(
+        rustler::Atom::from_str(env, "actual_value")?.encode(env),
+        err.actual_value().encode(env),
+    )?;
 
     Ok(map)
 }

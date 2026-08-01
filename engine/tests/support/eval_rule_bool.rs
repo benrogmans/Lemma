@@ -26,5 +26,10 @@ pub fn eval_rule_bool(
             rule_result.veto_reason.as_deref().unwrap_or("Vetoed")
         );
     }
-    rule_result.boolean.expect("boolean rule result")
+    rule_result
+        .value
+        .as_ref()
+        .expect("rule result value")
+        .boolean
+        .expect("boolean rule result")
 }

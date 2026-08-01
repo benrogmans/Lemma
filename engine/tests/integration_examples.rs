@@ -133,7 +133,15 @@ fn test_03_spec_references() {
     }
 
     let employee_summary = response.results.get("employee_summary").unwrap();
-    assert_eq!(employee_summary.text.as_deref(), Some("Alice Smith"));
+    assert_eq!(
+        employee_summary
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .text
+            .as_deref(),
+        Some("Alice Smith")
+    );
 }
 
 #[test]
@@ -159,8 +167,9 @@ fn test_04_unit_conversions() {
     assert!(!duration_hours.vetoed);
     assert_eq!(
         duration_hours
-            .measure
+            .value
             .as_ref()
+            .and_then(|v| v.measure.as_ref())
             .and_then(|m| m.get("hour"))
             .map(String::as_str),
         Some("1.5")
@@ -170,8 +179,9 @@ fn test_04_unit_conversions() {
     assert!(!duration_seconds.vetoed);
     assert_eq!(
         duration_seconds
-            .measure
+            .value
             .as_ref()
+            .and_then(|v| v.measure.as_ref())
             .and_then(|m| m.get("second"))
             .map(String::as_str),
         Some("5400")
@@ -179,7 +189,7 @@ fn test_04_unit_conversions() {
 
     let is_quick_processing = response.results.get("is_quick_processing").unwrap();
     assert_eq!(
-        is_quick_processing.display.clone().expect("display"),
+        is_quick_processing.display().expect("display").to_string(),
         lemma::LiteralValue::from_bool(true).to_string(),
     );
 }
@@ -199,14 +209,23 @@ fn test_05_date_handling() {
     assert_eq!(response.spec_name, "date_handling");
 
     let probation_end = response.results.get("probation_end_date").unwrap();
-    let date = probation_end.date.as_ref().expect("date");
+    let date = probation_end
+        .value
+        .as_ref()
+        .expect("rule result value")
+        .date
+        .as_ref()
+        .expect("date");
     assert_eq!(date.year, 2024);
     assert_eq!(date.month, 5);
     assert_eq!(date.day, 30);
 
     let is_probation_complete = response.results.get("is_probation_complete").unwrap();
     assert_eq!(
-        is_probation_complete.display.clone().expect("display"),
+        is_probation_complete
+            .display()
+            .expect("display")
+            .to_string(),
         lemma::LiteralValue::from_bool(true).to_string(),
     );
 }
@@ -230,12 +249,27 @@ fn test_08_rule_references() {
 
     assert_eq!(response.spec_name, "rule_references");
     assert_eq!(
-        response.results.get("can_drive_legally").unwrap().boolean,
+        response
+            .results
+            .get("can_drive_legally")
+            .unwrap()
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
         Some(true)
     );
 
     let driving_status = response.results.get("driving_status").unwrap();
-    assert_eq!(driving_status.text.as_deref(), Some("Can drive legally"));
+    assert_eq!(
+        driving_status
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .text
+            .as_deref(),
+        Some("Can drive legally")
+    );
 
     // Test examples/eligibility_check spec (also in the same file)
     let response = engine

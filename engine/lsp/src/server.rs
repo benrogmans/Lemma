@@ -509,7 +509,7 @@ fn build_uses_document_link(
         .ok()?;
 
     let dep_path = if is_embedded_stdlib {
-        materialize_embedded_stdlib_view(workspace_root)?
+        ensure_embedded_stdlib_view(workspace_root)?
     } else {
         match &shown.source_type {
             Some(lemma::SourceType::Path(path)) => path.as_ref().clone(),
@@ -547,7 +547,7 @@ fn embedded_stdlib_view_path(workspace_root: &Path) -> std::path::PathBuf {
 /// filesystem write failed -- callers then skip emitting the link rather than producing
 /// a link to a non-existent target.
 #[cfg(not(target_arch = "wasm32"))]
-fn materialize_embedded_stdlib_view(workspace_root: &Path) -> Option<std::path::PathBuf> {
+fn ensure_embedded_stdlib_view(workspace_root: &Path) -> Option<std::path::PathBuf> {
     let destination = embedded_stdlib_view_path(workspace_root);
     let expected = lemma::UNITS_LEMMA;
     match std::fs::read_to_string(&destination) {
@@ -735,24 +735,24 @@ mod tests {
     }
 
     #[test]
-    fn materialize_writes_units_lemma_when_missing() {
+    fn ensure_embedded_stdlib_writes_units_lemma_when_missing() {
         let workspace = test_workspace();
-        let materialized = materialize_embedded_stdlib_view(&workspace)
-            .expect("first materialization must succeed");
-        assert_eq!(materialized, embedded_stdlib_view_path(&workspace));
-        let written = std::fs::read_to_string(&materialized).expect("written file readable");
+        let view_path = ensure_embedded_stdlib_view(&workspace)
+            .expect("first ensure_embedded_stdlib_view must succeed");
+        assert_eq!(view_path, embedded_stdlib_view_path(&workspace));
+        let written = std::fs::read_to_string(&view_path).expect("written file readable");
         assert_eq!(written, lemma::UNITS_LEMMA);
     }
 
     #[test]
-    fn materialize_is_idempotent_when_content_already_matches() {
+    fn ensure_embedded_stdlib_is_idempotent_when_content_already_matches() {
         let workspace = test_workspace();
-        let first = materialize_embedded_stdlib_view(&workspace)
-            .expect("first materialization must succeed");
+        let first = ensure_embedded_stdlib_view(&workspace)
+            .expect("first ensure_embedded_stdlib_view must succeed");
         let metadata_before = std::fs::metadata(&first).expect("metadata before");
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let second = materialize_embedded_stdlib_view(&workspace)
-            .expect("second materialization must succeed");
+        let second = ensure_embedded_stdlib_view(&workspace)
+            .expect("second ensure_embedded_stdlib_view must succeed");
         assert_eq!(first, second);
         let metadata_after = std::fs::metadata(&second).expect("metadata after");
         assert_eq!(
@@ -763,15 +763,15 @@ mod tests {
     }
 
     #[test]
-    fn materialize_overwrites_stale_content() {
+    fn ensure_embedded_stdlib_overwrites_stale_content() {
         let workspace = test_workspace();
         let destination = embedded_stdlib_view_path(&workspace);
         std::fs::create_dir_all(destination.parent().expect("deps dir parent"))
             .expect("create lemma_deps dir");
         std::fs::write(&destination, "outdated stdlib snapshot").expect("seed stale content");
-        let materialized =
-            materialize_embedded_stdlib_view(&workspace).expect("materialize must succeed");
-        let written = std::fs::read_to_string(&materialized).expect("written file readable");
+        let view_path = ensure_embedded_stdlib_view(&workspace)
+            .expect("ensure_embedded_stdlib_view must succeed");
+        let written = std::fs::read_to_string(&view_path).expect("written file readable");
         assert_eq!(written, lemma::UNITS_LEMMA);
     }
 
@@ -822,16 +822,16 @@ mod tests {
             "lemma is the reserved embedded stdlib repository, not a registry id",
         );
 
-        let materialized = materialize_embedded_stdlib_view(workspace_root)
-            .expect("lazy materialization must succeed");
-        assert_eq!(materialized, embedded_stdlib_view_path(workspace_root));
+        let view_path = ensure_embedded_stdlib_view(workspace_root)
+            .expect("lazy ensure_embedded_stdlib_view must succeed");
+        assert_eq!(view_path, embedded_stdlib_view_path(workspace_root));
         assert!(
-            materialized.exists(),
-            "materialized file must exist on disk",
+            view_path.exists(),
+            "embedded stdlib view file must exist on disk",
         );
 
         let repository_link_target =
-            Url::from_file_path(&materialized).expect("file URL for repository span");
+            Url::from_file_path(&view_path).expect("file URL for repository span");
         assert_eq!(
             repository_link_target.scheme(),
             "file",
@@ -851,7 +851,7 @@ mod tests {
             shown.start_line,
         );
 
-        let mut target_link = Url::from_file_path(&materialized).expect("file URL for target span");
+        let mut target_link = Url::from_file_path(&view_path).expect("file URL for target span");
         target_link.set_fragment(Some(&format!("L{}", shown.start_line)));
         assert_eq!(
             target_link.fragment(),

@@ -51,12 +51,12 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
         );
     }
     assert_eq!(
-        result.display.as_deref(),
+        result.display(),
         Some(expected),
         "rule '{}': expected {}, got {:?}",
         rule,
         expected,
-        result.display
+        result.display()
     );
 }
 
@@ -530,7 +530,7 @@ rule doubled: price * 2
             // value using usd — that would mean the pin leaked v2's types.
             for (rule, r) in &resp.results {
                 if !r.vetoed {
-                    let s = r.display.as_deref().unwrap_or("");
+                    let s = r.display().unwrap_or("");
                     assert!(
                         !s.contains("usd"),
                         "rule '{rule}' produced {s} — usd must not be accepted when pinned to finance v1"

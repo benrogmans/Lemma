@@ -2,10 +2,10 @@
 //!
 //! The root `Explanation` (with `result: OperationResult`) is assembled at eval time.
 //! The tree types (`ExplanationNode`, `Cause`, `SerializedConversionTraceStep`) are
-//! factored into `planning::explanation` as the wire/evaluation model; evaluation
+//! factored into `planning::explanation` as the API/evaluation model; evaluation
 //! builds them while walking THE DAG.
 
-use crate::evaluation::operations::{OperationResult, VetoType};
+use crate::computation::{OperationResult, VetoType};
 use crate::planning::semantics::RulePath;
 use serde::Serialize;
 
@@ -109,10 +109,7 @@ impl<'a> FormatContext<'a> {
             } else {
                 Connector::Branch
             };
-            let value = cause
-                .value
-                .as_deref()
-                .expect("BUG: Cause.value not filled by eval");
+            let value = cause.value.as_str();
             let line = if value == "true" {
                 cause.condition.clone()
             } else {
@@ -259,9 +256,6 @@ impl<'a> FormatContext<'a> {
                     _ => "veto".to_string(),
                 };
                 self.push_line(connector, &text);
-            }
-            ExplanationNode::UnitEquivalence { text } => {
-                self.push_line(connector, text);
             }
             ExplanationNode::Piecewise { .. } => {
                 unreachable!("BUG: Piecewise must be lowered before format")

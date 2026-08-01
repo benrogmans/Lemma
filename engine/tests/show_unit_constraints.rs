@@ -144,9 +144,9 @@ rule out: price
         .values()
         .next()
         .expect("rule result")
-        .display
-        .clone()
-        .expect("display");
+        .display()
+        .expect("display")
+        .to_string();
     assert!(
         result.contains("10") && result.to_lowercase().contains("eur"),
         "expected 10 eur, got {result}"

@@ -741,7 +741,7 @@ fn measure_range_units_do_not_gain_lower_upper_fields() {
 
 #[test]
 fn date_range_temporal_width_uses_exact_rational_path() {
-    // Regression: temporal width bounds must not require Decimal materialization.
+    // Regression: temporal width bounds must not require Decimal conversion for RuleResultValue.
     let code = r#"
 spec s
 uses lemma units

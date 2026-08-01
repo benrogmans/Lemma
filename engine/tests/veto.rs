@@ -98,7 +98,14 @@ rule is_adult: age >= 18
         .unwrap();
 
     assert!(!rule_result.vetoed);
-    assert_eq!(rule_result.boolean, Some(true));
+    assert_eq!(
+        rule_result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(true)
+    );
 }
 
 #[test]
@@ -242,7 +249,14 @@ rule can_drive: age >= 16
         .unwrap();
 
     assert!(!rule_result.vetoed);
-    assert_eq!(rule_result.boolean, Some(false));
+    assert_eq!(
+        rule_result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(false)
+    );
 }
 
 #[test]
@@ -546,7 +560,14 @@ rule double_value: value * 2
         .find(|r| r.rule.name == "check_negative")
         .unwrap();
     assert!(!check_negative.vetoed);
-    assert_eq!(check_negative.boolean, Some(true));
+    assert_eq!(
+        check_negative
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(true)
+    );
 
     let double_value = response
         .results
@@ -554,7 +575,7 @@ rule double_value: value * 2
         .find(|r| r.rule.name == "double_value")
         .unwrap();
     assert_eq!(
-        double_value.display.clone().expect("display"),
+        double_value.display().expect("display").to_string(),
         LiteralValue::number_from_decimal(Decimal::from_str("-20.0").unwrap()).to_string(),
     );
 }
