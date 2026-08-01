@@ -96,6 +96,11 @@ pub struct ExecutionPlan {
     /// Prefill/suggestion [`RuleResultValue`]s for show, keyed by data path.
     /// Built once at plan time so show does not re-run unit expansion per request.
     pub(crate) data_display: IndexMap<DataPath, ShowDataCache>,
+
+    /// Every data-target [`DataDefinition::Reference`] path → its ultimate target.
+    /// `Some` = promptable (`Value` / `TypeDeclaration`); `None` = ends at rule or import.
+    /// Computed once in [`build_execution_plan`]. Missing key after planning is a bug.
+    pub(crate) ultimate_reference_targets: HashMap<DataPath, Option<DataPath>>,
 }
 
 /// Plan-time prefill/suggestion [`RuleResultValue`] for one data path (show cache).
@@ -244,7 +249,7 @@ pub(crate) fn build_execution_plan(
         rule.normal_form = remapped;
     }
 
-    let plan = ExecutionPlan {
+    let mut plan = ExecutionPlan {
         spec_name: main_spec.name.clone(),
         commentary: main_spec.commentary.clone(),
         data,
@@ -267,6 +272,8 @@ pub(crate) fn build_execution_plan(
         source_type: None,
         needed_by_rules: HashMap::new(),
         data_display: IndexMap::new(),
+        // Filled below after validation succeeds.
+        ultimate_reference_targets: HashMap::new(),
     };
 
     let mut plan_errors = validate_literal_data_against_types(&plan);
@@ -277,6 +284,7 @@ pub(crate) fn build_execution_plan(
         return Err(plan_errors);
     }
 
+    plan.ultimate_reference_targets = compute_ultimate_reference_targets(&plan.data);
     Ok(plan)
 }
 
@@ -299,6 +307,64 @@ pub(crate) fn attach_show_cache(
         .needed_by_rules_index()
         .expect("BUG: local_rule_names sourced from plan.rules");
     plan.data_display = build_data_display(plan);
+}
+
+/// Every data-target reference → `Some(ultimate promptable target)` or `None` (rule/import end).
+///
+/// Cycles and missing targets panic — planning already rejected cycles; absence is a bug.
+fn compute_ultimate_reference_targets(
+    data: &IndexMap<DataPath, DataDefinition>,
+) -> HashMap<DataPath, Option<DataPath>> {
+    let mut targets = HashMap::new();
+    for (path, definition) in data {
+        let DataDefinition::Reference {
+            target: ReferenceTarget::Data(_),
+            ..
+        } = definition
+        else {
+            continue;
+        };
+        let mut cursor = path.clone();
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(cursor.clone()) {
+                panic!(
+                    "BUG: cyclic data reference at '{cursor}'; should have been caught during planning"
+                );
+            }
+            match data.get(&cursor) {
+                Some(DataDefinition::Reference {
+                    target: ReferenceTarget::Data(next),
+                    ..
+                }) => {
+                    cursor = next.clone();
+                }
+                _ => break,
+            }
+        }
+        match data.get(&cursor) {
+            Some(DataDefinition::Value { .. } | DataDefinition::TypeDeclaration { .. }) => {
+                targets.insert(path.clone(), Some(cursor));
+            }
+            Some(DataDefinition::Reference {
+                target: ReferenceTarget::Rule(_),
+                ..
+            })
+            | Some(DataDefinition::Import { .. }) => {
+                targets.insert(path.clone(), None);
+            }
+            None => {
+                panic!(
+                    "BUG: data-target reference chain from '{path}' ends at missing data '{cursor}'"
+                );
+            }
+            Some(DataDefinition::Reference {
+                target: ReferenceTarget::Data(_),
+                ..
+            }) => unreachable!("BUG: data-target reference loop exited without advancing"),
+        }
+    }
+    targets
 }
 
 fn build_data_display(plan: &ExecutionPlan) -> IndexMap<DataPath, ShowDataCache> {
@@ -744,8 +810,11 @@ impl ExecutionPlan {
         for rule_name in self.local_rule_names() {
             let needed = self.collect_needed_data_paths(std::slice::from_ref(&rule_name))?;
             for path in needed {
+                let Some(target) = self.promptable_data_path(&path) else {
+                    continue;
+                };
                 index
-                    .entry(path.input_key())
+                    .entry(target.input_key())
                     .or_default()
                     .push(rule_name.clone());
             }
@@ -755,6 +824,35 @@ impl ExecutionPlan {
             rules.dedup();
         }
         Ok(index)
+    }
+
+    /// Promptable [`DataPath`] for a normal-form data leaf, following ultimate targets
+    /// for data-target references. `None` when the leaf is a rule-target or import
+    /// reference (not caller-promptable).
+    ///
+    /// Data-target references must appear in [`Self::ultimate_reference_targets`].
+    pub(crate) fn promptable_data_path<'a>(&'a self, path: &'a DataPath) -> Option<&'a DataPath> {
+        match self.data.get(path) {
+            Some(DataDefinition::Value { .. } | DataDefinition::TypeDeclaration { .. }) => {
+                Some(path)
+            }
+            Some(DataDefinition::Reference {
+                target: ReferenceTarget::Data(_),
+                ..
+            }) => match self.ultimate_reference_targets.get(path) {
+                Some(Some(target)) => Some(target),
+                Some(None) => None,
+                None => panic!(
+                    "BUG: data-target reference '{path}' missing from ultimate_reference_targets after planning"
+                ),
+            },
+            Some(DataDefinition::Reference {
+                target: ReferenceTarget::Rule(_),
+                ..
+            })
+            | Some(DataDefinition::Import { .. }) => None,
+            None => panic!("BUG: normal-form DataPath leaf absent from plan.data: {path}"),
+        }
     }
 
     /// Validate caller-requested rule names and return canonical local rule names.
@@ -810,7 +908,7 @@ impl ExecutionPlan {
     /// A path is promptable when it carries its own value slot: [`DataDefinition::Value`]
     /// (spec prefill, overridable) or [`DataDefinition::TypeDeclaration`] (typed input).
     /// [`DataDefinition::Reference`] paths are not promptable — a data target copies from
-    /// its ultimate target (see [`expand_data_reference_targets`]) and a rule target is
+    /// its ultimate target (see [`ExecutionPlan::ultimate_reference_targets`]) and a rule target is
     /// computed — and [`DataDefinition::Import`] paths are owned by the imported spec.
     ///
     /// This is the complete domain of `RuleResult.missing_data`: evaluation subtracts the
@@ -854,47 +952,6 @@ impl ExecutionPlan {
         }
         Ok(needed)
     }
-}
-
-/// Replace data-reference paths with the promptable paths they ultimately copy from.
-///
-/// A [`ReferenceTarget::Data`] chain collapses to its end. A [`ReferenceTarget::Rule`]
-/// target and a [`DataDefinition::Import`] are dropped: neither is promptable, and rule
-/// targets are covered by the embedded rule's own data.
-pub(crate) fn expand_data_reference_targets(
-    plan: &ExecutionPlan,
-    paths: HashSet<DataPath>,
-) -> HashSet<DataPath> {
-    let mut out = HashSet::new();
-    for path in paths {
-        let mut cursor = path;
-        let mut seen = HashSet::new();
-        loop {
-            if !seen.insert(cursor.clone()) {
-                panic!("BUG: cyclic data reference while expanding missing_data at '{cursor}'");
-            }
-            match plan.data.get(&cursor) {
-                Some(DataDefinition::Reference {
-                    target: ReferenceTarget::Data(next),
-                    ..
-                }) => {
-                    cursor = next.clone();
-                }
-                Some(DataDefinition::Reference {
-                    target: ReferenceTarget::Rule(_),
-                    ..
-                })
-                | Some(DataDefinition::Import { .. }) => {
-                    break;
-                }
-                Some(_) | None => {
-                    out.insert(cursor);
-                    break;
-                }
-            }
-        }
-    }
-    out
 }
 
 /// DataPath leaves reachable from `root`, skipping children recorded as dead by their
@@ -1976,6 +2033,7 @@ mod tests {
             source_type: None,
             needed_by_rules: HashMap::new(),
             data_display: IndexMap::new(),
+            ultimate_reference_targets: HashMap::new(),
         };
 
         let values = input_data(&[("x", "11")]);
@@ -2043,6 +2101,7 @@ mod tests {
             source_type: None,
             needed_by_rules: HashMap::new(),
             data_display: IndexMap::new(),
+            ultimate_reference_targets: HashMap::new(),
         };
 
         let values = input_data(&[("tier", "platinum")]);
@@ -2123,6 +2182,7 @@ mod tests {
             source_type: None,
             needed_by_rules: HashMap::new(),
             data_display: IndexMap::new(),
+            ultimate_reference_targets: HashMap::new(),
         };
 
         let values = input_data(&[("price", "1.234 eur")]);
@@ -2158,6 +2218,7 @@ mod tests {
             source_type: None,
             needed_by_rules: HashMap::new(),
             data_display: IndexMap::new(),
+            ultimate_reference_targets: HashMap::new(),
         }
     }
 

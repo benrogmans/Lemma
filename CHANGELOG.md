@@ -4,7 +4,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.9.1] - 2026-08-01
 
-0.9.1 consolidates the consumer API schema into a single `api.v1.json` document, completes the Java Maven SDK (typed Show/ExplanationNode/LemmaType, BigDecimal magnitudes, JDK 21, thread-safe Engine), and aligns the TypeScript and Elixir SDKs to the canonical wire format.
+0.9.1 consolidates the consumer API schema into a single `api.v1.json` document, completes the Java Maven SDK (typed Show/ExplanationNode/LemmaType, BigDecimal magnitudes, JDK 21, thread-safe Engine), aligns the TypeScript and Elixir SDKs to the canonical wire format, and hardens release quality gates.
 
 ### Changed
 
@@ -15,6 +15,11 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - **Native library loading**: Java SDK honors `lemma.native.library` system property and `LEMMA_JNI_LIBRARY` environment variable. Bundled natives are extracted to a version-keyed cache (`~/.lemma/native/{version}/{platform}/`) with atomic rename.
 - **ExplanationNode**: removed dead `UnitEquivalence` variant from Rust, schema, TypeScript, and Java.
 - **Performance**: engine evaluation ~10% faster, memory per evaluate call reduced ~15%, compile/plan up to 20% faster on complex specs.
+- **Release CI**: each release quality gate runs `cargo precommit --fuzz` — 30 minutes of fuzz testing total, split across `engine/fuzz` targets.
+
+### Fixed
+
+- **`with`-bound reference inputs in `show` / `missing_data`**: when a local promptable input is the ultimate target of a `with`-bound data reference (for example `with prev.code: code` and `rule name: prev.name`), `Engine::show().data` now lists that input and missing-data vetoes name its `input_key`, matching `RuleResult.missing_data`. Planning stores ultimate reference targets once; show and evaluation look them up — no reference-chain walk at request time.
 
 ## [0.9.0] - 2026-07-25
 
