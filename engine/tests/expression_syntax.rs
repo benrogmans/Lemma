@@ -29,16 +29,30 @@ rule with_spaces: not  (  x  )
         .unwrap();
 
     let not_x_rule = response.results.get("not_x").unwrap();
-    assert_eq!(not_x_rule.boolean, Some(false));
+    assert_eq!(
+        not_x_rule
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(false)
+    );
 
     let sqrt_rule = response.results.get("sqrt_num").unwrap();
-    assert_eq!(sqrt_rule.display.as_deref(), Some("4"));
+    assert_eq!(sqrt_rule.display(), Some("4"));
 
     let sin_rule = response.results.get("sin_zero").unwrap();
-    assert_eq!(sin_rule.display.as_deref(), Some("0"));
+    assert_eq!(sin_rule.display(), Some("0"));
 
     let combined_rule = response.results.get("combined").unwrap();
-    assert_eq!(combined_rule.boolean, Some(false));
+    assert_eq!(
+        combined_rule
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(false)
+    );
 }
 
 #[test]
@@ -59,7 +73,17 @@ rule reject: false
         .run(None, "test", Some(&now), HashMap::new(), None, false)
         .unwrap();
 
-    assert_eq!(response.results.get("reject").unwrap().boolean, Some(false));
+    assert_eq!(
+        response
+            .results
+            .get("reject")
+            .unwrap()
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(false)
+    );
 }
 
 #[test]
@@ -198,12 +222,16 @@ uses lemma units
         .run(None, "s", Some(&now), HashMap::new(), None, false)
         .expect("run b");
     assert_eq!(
-        a.results.get("doubled").and_then(|r| r.display.as_deref()),
+        a.results.get("doubled").and_then(|r| r.display()),
         Some("4")
     );
     assert_eq!(
-        a.results.get("doubled").and_then(|r| r.display.clone()),
-        b.results.get("doubled").and_then(|r| r.display.clone())
+        a.results
+            .get("doubled")
+            .and_then(|r| r.display().map(str::to_string)),
+        b.results
+            .get("doubled")
+            .and_then(|r| r.display().map(str::to_string))
     );
     let show_a = engine_a.show(None, "s", Some(&now)).expect("show a");
     let show_b = engine_b.show(None, "s", Some(&now)).expect("show b");
@@ -234,11 +262,12 @@ rule r: n * 2
         .run(None, "s", Some(&now), HashMap::new(), None, false)
         .expect("run b");
     assert_eq!(
-        a.results.get("r").and_then(|r| r.display.clone()),
-        b.results.get("r").and_then(|r| r.display.clone())
+        a.results
+            .get("r")
+            .and_then(|r| r.display().map(str::to_string)),
+        b.results
+            .get("r")
+            .and_then(|r| r.display().map(str::to_string))
     );
-    assert_eq!(
-        a.results.get("r").and_then(|r| r.display.as_deref()),
-        Some("6")
-    );
+    assert_eq!(a.results.get("r").and_then(|r| r.display()), Some("6"));
 }

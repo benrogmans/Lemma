@@ -8,14 +8,14 @@ use crate::parsing::source::Source;
 use crate::planning::discovery;
 use crate::planning::semantics::{
     self, calendar_decomposition, canonicalize_signature, combine_decompositions,
-    conversion_target_to_semantic, duration_decomposition, materialize_raw_suggestion,
-    number_with_unit_to_value_kind, parser_value_to_value_kind, primitive_boolean_arc,
-    primitive_date_arc, primitive_date_range_arc, primitive_number_arc, primitive_text_arc,
-    primitive_time_arc, range_type_specification_from_endpoints, value_kind_matches_spec,
-    value_to_semantic, ArithmeticComputation, BaseMeasureVector, ComparisonComputation,
-    DataDefinition, DataPath, Expression, ExpressionKind, LemmaType, LiteralValue, PathSegment,
-    RawSuggestion, ReferenceTarget, RulePath, SemanticConversionTarget, TypeDefiningSpec,
-    TypeExtends, TypeSpecification, ValueKind,
+    conversion_target_to_semantic, duration_decomposition, number_with_unit_to_value_kind,
+    parser_value_to_value_kind, primitive_boolean_arc, primitive_date_arc,
+    primitive_date_range_arc, primitive_number_arc, primitive_text_arc, primitive_time_arc,
+    range_type_specification_from_endpoints, value_kind_from_raw_suggestion,
+    value_kind_matches_spec, value_to_semantic, ArithmeticComputation, BaseMeasureVector,
+    ComparisonComputation, DataDefinition, DataPath, Expression, ExpressionKind, LemmaType,
+    LiteralValue, PathSegment, RawSuggestion, ReferenceTarget, RulePath, SemanticConversionTarget,
+    TypeDefiningSpec, TypeExtends, TypeSpecification, ValueKind,
 };
 use crate::Error;
 use ast::DataValue as ParsedDataValue;
@@ -469,7 +469,11 @@ impl<'a> Graph<'a> {
             let captured_suggestion = match raw_suggestion {
                 None => None,
                 Some(raw) => {
-                    match materialize_raw_suggestion(raw, &merged.specifications, &merged.name()) {
+                    match value_kind_from_raw_suggestion(
+                        raw,
+                        &merged.specifications,
+                        &merged.name(),
+                    ) {
                         Ok(vk) => Some(vk),
                         Err(message) => {
                             errors.push(reference_error(self.main_spec, &source, message));
@@ -574,7 +578,7 @@ impl<'a> Graph<'a> {
                 let captured_suggestion = match raw_suggestion {
                     None => None,
                     Some(raw) => {
-                        match materialize_raw_suggestion(
+                        match value_kind_from_raw_suggestion(
                             raw,
                             &merged.specifications,
                             &merged.name(),
@@ -641,7 +645,11 @@ impl<'a> Graph<'a> {
             let captured_suggestion = match raw_suggestion {
                 None => None,
                 Some(raw) => {
-                    match materialize_raw_suggestion(raw, &merged.specifications, &merged.name()) {
+                    match value_kind_from_raw_suggestion(
+                        raw,
+                        &merged.specifications,
+                        &merged.name(),
+                    ) {
                         Ok(vk) => Some(vk),
                         Err(message) => {
                             errors.push(reference_error(self.main_spec, source, message));
@@ -1157,25 +1165,6 @@ fn apply_constraints_to_spec(
     Ok(specs)
 }
 
-#[cfg(test)]
-thread_local! {
-    static TEXT_OPTION_CLONE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static TEXT_OPTION_CLONE_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-fn record_text_option_clone_bytes(specs: &TypeSpecification) {
-    TEXT_OPTION_CLONE_ENABLED.with(|enabled| {
-        if !enabled.get() {
-            return;
-        }
-        if let TypeSpecification::Text { options, .. } = specs {
-            let bytes: u64 = options.iter().map(|s| s.len() as u64).sum();
-            TEXT_OPTION_CLONE_BYTES.with(|count| count.set(count.get() + bytes));
-        }
-    });
-}
-
 /// Whether `expr` and every nested sub-expression carry a `source_location`.
 ///
 /// ASTs produced by the parser always carry locations; this guards the
@@ -1364,7 +1353,7 @@ impl<'a> Graph<'a> {
         // references by consulting `computed_rule_types` for the target rule.
         let inferred_types = infer_rule_types(self, &rule_order, resolved_types);
 
-        // Phase 4: Now that target rule types are known, materialize each
+        // Phase 4: Now that target rule types are known, build each
         // rule-target reference's `resolved_type` (LHS check + target type +
         // local constraints), so check_rule_types and downstream consumers
         // see a real type on the reference path.
@@ -6231,7 +6220,7 @@ fn apply_deferred_named_range_constraints(
                 updated.specifications = updated_specs;
                 let updated_arc = Arc::new(updated);
                 if let Some(raw) = declared_suggestion {
-                    match materialize_raw_suggestion(
+                    match value_kind_from_raw_suggestion(
                         raw,
                         &updated_arc.specifications,
                         type_name.as_str(),
@@ -7596,6 +7585,2184 @@ rule r: i.x
             errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
         );
     }
+
+    mod type_resolution {
+        use super::super::*;
+        use crate::computation::rational::rational_new;
+        use crate::parsing::ast::{
+            CommandArg, LemmaSpec, ParentType, PrimitiveKind, TypeConstraintCommand,
+        };
+        use crate::parsing::parse;
+        use crate::ResourceLimits;
+        use rust_decimal::Decimal;
+        use std::sync::Arc;
+
+        fn test_context_and_effective(
+            specs: &[&LemmaSpec],
+        ) -> (&'static Context, &'static EffectiveDate) {
+            use crate::engine::Context;
+            let mut ctx = Context::new();
+            let repository = ctx.workspace();
+            for s in specs {
+                ctx.insert_spec(Arc::clone(&repository), (*s).clone())
+                    .unwrap();
+            }
+            let ctx = Box::leak(Box::new(ctx));
+            let eff = Box::leak(Box::new(EffectiveDate::Origin));
+            (ctx, eff)
+        }
+
+        fn ordered_dependencies_and_spec() -> (
+            &'static [discovery::DependencySpec<'static>],
+            &'static LemmaSpec,
+        ) {
+            use crate::engine::Context;
+            let mut ctx = Context::new();
+            let repository = ctx.workspace();
+            let spec = LemmaSpec::new("test_spec".to_string());
+            ctx.insert_spec(Arc::clone(&repository), spec).unwrap();
+            let ctx = Box::leak(Box::new(ctx));
+            let repository = ctx.workspace();
+            let spec = ctx
+                .spec_set(&repository, "test_spec")
+                .and_then(|ss| ss.get_exact(None))
+                .expect("inserted");
+            let ordered_dependencies = Box::leak(Box::new(vec![discovery::DependencySpec {
+                repository: Arc::clone(&repository),
+                spec,
+            }]));
+            (ordered_dependencies.as_slice(), spec)
+        }
+
+        fn resolver_for_code(code: &str) -> (TypeResolver<'static>, Vec<&'static LemmaSpec>) {
+            use crate::engine::Context;
+            let owned = parse(
+                code,
+                crate::parsing::source::SourceType::Volatile,
+                &ResourceLimits::default(),
+            )
+            .unwrap()
+            .into_flattened_specs();
+            let mut ctx = Context::new();
+            let repository = ctx.workspace();
+            for s in owned {
+                ctx.insert_spec(Arc::clone(&repository), s).unwrap();
+            }
+            let ctx = Box::leak(Box::new(ctx));
+            let repository = ctx.workspace();
+            let mut spec_refs: Vec<&'static LemmaSpec> = Vec::new();
+            for ss in ctx.spec_sets_for(&repository) {
+                for s in ss.iter_specs() {
+                    spec_refs.push(s);
+                }
+            }
+            let mut resolver = TypeResolver::new(ctx);
+            for spec in &spec_refs {
+                resolver.register_all(&repository, spec);
+            }
+            (resolver, spec_refs)
+        }
+
+        fn resolver_single_spec(code: &str) -> (TypeResolver<'static>, &LemmaSpec) {
+            let (resolver, spec_arcs) = resolver_for_code(code);
+            let spec = spec_arcs.into_iter().next().expect("at least one spec");
+            (resolver, spec)
+        }
+
+        #[test]
+        fn test_type_spec_for_primitive_covers_all_variants() {
+            use crate::parsing::ast::PrimitiveKind;
+            use crate::planning::semantics::type_spec_for_primitive;
+
+            for kind in [
+                PrimitiveKind::Boolean,
+                PrimitiveKind::Measure,
+                PrimitiveKind::MeasureRange,
+                PrimitiveKind::Number,
+                PrimitiveKind::NumberRange,
+                PrimitiveKind::Ratio,
+                PrimitiveKind::RatioRange,
+                PrimitiveKind::Text,
+                PrimitiveKind::Date,
+                PrimitiveKind::DateRange,
+                PrimitiveKind::Time,
+                PrimitiveKind::TimeRange,
+            ] {
+                let spec = type_spec_for_primitive(kind);
+                assert!(
+                    !matches!(
+                        spec,
+                        crate::planning::semantics::TypeSpecification::Undetermined
+                    ),
+                    "type_spec_for_primitive({:?}) returned Undetermined",
+                    kind
+                );
+            }
+        }
+
+        #[test]
+        fn test_register_data_type_def() {
+            let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
+            let (ctx, _) = test_context_and_effective(&[spec]);
+            let mut resolver = TypeResolver::new(ctx);
+            let ftd = DataTypeDef {
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
+                constraints: Some(vec![
+                    (
+                        TypeConstraintCommand::Minimum,
+                        vec![CommandArg::Literal(crate::literals::Value::Number(
+                            Decimal::ZERO,
+                        ))],
+                    ),
+                    (
+                        TypeConstraintCommand::Maximum,
+                        vec![CommandArg::Literal(crate::literals::Value::Number(
+                            Decimal::from(150),
+                        ))],
+                    ),
+                ]),
+                source: crate::parsing::source::Source::new(
+                    crate::parsing::source::SourceType::Volatile,
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                ),
+                name: "age".to_string(),
+                bound_literal: None,
+            };
+
+            let result = resolver.register_type(spec, ftd);
+            assert!(result.is_ok());
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            assert!(resolved.resolved.contains_key("age"));
+        }
+
+        #[test]
+        fn test_register_duplicate_type_fails() {
+            let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
+            let (ctx, _) = test_context_and_effective(&[spec]);
+            let mut resolver = TypeResolver::new(ctx);
+            let ftd = DataTypeDef {
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
+                constraints: None,
+                source: crate::parsing::source::Source::new(
+                    crate::parsing::source::SourceType::Volatile,
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                ),
+                name: "money".to_string(),
+                bound_literal: None,
+            };
+            resolver.register_type(spec, ftd.clone()).unwrap();
+            let result = resolver.register_type(spec, ftd);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_resolve_custom_type_from_primitive() {
+            let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
+            let (ctx, _) = test_context_and_effective(&[spec]);
+            let mut resolver = TypeResolver::new(ctx);
+            let ftd = DataTypeDef {
+                parent: ParentType::Primitive {
+                    primitive: PrimitiveKind::Number,
+                },
+                constraints: None,
+                source: crate::parsing::source::Source::new(
+                    crate::parsing::source::SourceType::Volatile,
+                    crate::parsing::ast::Span {
+                        start: 0,
+                        end: 0,
+                        line: 1,
+                        col: 0,
+                    },
+                ),
+                name: "money".to_string(),
+                bound_literal: None,
+            };
+
+            resolver.register_type(spec, ftd).unwrap();
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+
+            assert!(resolved.resolved.contains_key("money"));
+            let money_type = resolved.resolved.get("money").unwrap();
+            assert_eq!(money_type.name, Some("money".to_string()));
+        }
+
+        #[test]
+        fn test_child_measure_type_keeps_declared_name_and_child_units() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data length: measure
+      -> unit meter 1
+    data road_length: length
+      -> unit kilometer 1000"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+
+            let road_length_type = resolved_types.resolved.get("road_length").unwrap();
+            assert_eq!(road_length_type.name.as_deref(), Some("road_length"));
+
+            match &road_length_type.specifications {
+                TypeSpecification::Measure { units, .. } => {
+                    assert!(units.iter().any(|unit| unit.name == "kilometer"));
+                }
+                _ => panic!("Expected Measure type specifications"),
+            }
+
+            let kilometer_owner = resolved_types.unit_index.get("kilometer").unwrap();
+            assert_eq!(kilometer_owner.name.as_deref(), Some("road_length"));
+        }
+
+        #[test]
+        fn test_type_definition_resolution() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data dice: number -> minimum 0 -> maximum 6"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let dice_type = resolved_types.resolved.get("dice").unwrap();
+
+            match &dice_type.specifications {
+                TypeSpecification::Number {
+                    minimum, maximum, ..
+                } => {
+                    assert_eq!(minimum, &Some(rational_new(0, 1)));
+                    assert_eq!(maximum, &Some(rational_new(6, 1)));
+                }
+                _ => panic!("Expected Number type specifications"),
+            }
+        }
+
+        #[test]
+        fn test_type_definition_with_multiple_commands() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let money_type = resolved_types.resolved.get("money").unwrap();
+
+            match &money_type.specifications {
+                TypeSpecification::Measure {
+                    decimals, units, ..
+                } => {
+                    assert_eq!(*decimals, Some(2));
+                    assert_eq!(units.len(), 2);
+                    assert!(units.iter().any(|u| u.name == "eur"));
+                    assert!(units.iter().any(|u| u.name == "usd"));
+                }
+                _ => panic!("Expected Measure type specifications"),
+            }
+        }
+
+        #[test]
+        fn test_number_type_with_decimals() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data price: number -> decimals 2 -> minimum 0"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let price_type = resolved_types.resolved.get("price").unwrap();
+
+            match &price_type.specifications {
+                TypeSpecification::Number {
+                    decimals, minimum, ..
+                } => {
+                    assert_eq!(*decimals, Some(2));
+                    assert_eq!(minimum, &Some(rational_new(0, 1)));
+                }
+                _ => panic!("Expected Number type specifications with decimals"),
+            }
+        }
+
+        #[test]
+        fn test_number_type_decimals_only() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data precise_number: number -> decimals 4"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let precise_type = resolved_types.resolved.get("precise_number").unwrap();
+
+            match &precise_type.specifications {
+                TypeSpecification::Number { decimals, .. } => {
+                    assert_eq!(*decimals, Some(4));
+                }
+                _ => panic!("Expected Number type with decimals 4"),
+            }
+        }
+
+        #[test]
+        fn test_measure_type_decimals_only() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data weight: measure -> unit kg 1 -> decimals 3"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let weight_type = resolved_types.resolved.get("weight").unwrap();
+
+            match &weight_type.specifications {
+                TypeSpecification::Measure { decimals, .. } => {
+                    assert_eq!(*decimals, Some(3));
+                }
+                _ => panic!("Expected Measure type with decimals 3"),
+            }
+        }
+
+        #[test]
+        fn test_ratio_type_accepts_optional_decimals_command() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data ratio_type: ratio -> decimals 2"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let ratio_type = resolved_types.resolved.get("ratio_type").unwrap();
+
+            match &ratio_type.specifications {
+                TypeSpecification::Ratio { decimals, .. } => {
+                    assert_eq!(
+                        *decimals,
+                        Some(2),
+                        "ratio type should accept decimals command"
+                    );
+                }
+                _ => panic!("Expected Ratio type with decimals 2"),
+            }
+        }
+
+        #[test]
+        fn typedef_default_inherits_through_extension_chain() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure -> unit eur 1 -> suggest 4 eur
+    data price: money
+    data final_price: price"#,
+            );
+
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("extension chain must resolve");
+
+            assert!(
+                resolved.declared_suggestions.contains_key("money"),
+                "base typedef default must convert to ValueKind"
+            );
+            assert!(
+                resolved.declared_suggestions.contains_key("final_price"),
+                "suggestion must inherit through extension chain (money → price → final_price)"
+            );
+        }
+
+        #[test]
+        fn test_ratio_type_with_default_command() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data percentage: ratio -> minimum 0% -> maximum 100% -> suggest 50%"#,
+            );
+
+            let resolved_types = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let percentage_type = resolved_types.resolved.get("percentage").unwrap();
+
+            match &percentage_type.specifications {
+                TypeSpecification::Ratio {
+                    minimum, maximum, ..
+                } => {
+                    assert_eq!(
+                        *minimum,
+                        Some(rational_new(0, 1)),
+                        "ratio type should have minimum 0"
+                    );
+                    assert_eq!(
+                        *maximum,
+                        Some(rational_new(1, 1)),
+                        "ratio type should have maximum 1"
+                    );
+                }
+                _ => panic!("Expected Ratio type with minimum and maximum"),
+            }
+
+            let declared = resolved_types
+                .declared_suggestions
+                .get("percentage")
+                .expect("declared default must be tracked for percentage");
+            match declared {
+                ValueKind::Ratio(v, unit) => {
+                    assert_eq!(v, &rational_new(1, 2));
+                    assert_eq!(unit.as_deref(), Some("percent"));
+                }
+                other => panic!("expected Ratio declared default, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn test_measure_extension_chain_same_family_units_allowed() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure -> unit eur 1
+    data money2: money -> unit usd 1.24"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_ok(),
+                "Measure extension chain should resolve: {:?}",
+                result.err()
+            );
+
+            let resolved = result.unwrap();
+            assert!(
+                resolved.unit_index.contains_key("eur"),
+                "eur should be in unit_index"
+            );
+            assert!(
+                resolved.unit_index.contains_key("usd"),
+                "usd should be in unit_index"
+            );
+            let eur_type = resolved.unit_index.get("eur").unwrap();
+            let usd_type = resolved.unit_index.get("usd").unwrap();
+            assert_eq!(
+                eur_type.name.as_deref(),
+                Some("money2"),
+                "more derived type (money2) should own inherited eur"
+            );
+            assert_eq!(
+                usd_type.name.as_deref(),
+                Some("money2"),
+                "usd defined on money2 should be owned by money2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_parent_type_in_named_type_should_error() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data invalid: nonexistent_type -> minimum 0"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(result.is_err(), "Should reject invalid parent type");
+
+            let errs = result.unwrap_err();
+            assert!(!errs.is_empty(), "expected at least one error");
+            let error_msg = errs[0].to_string();
+            assert!(
+                error_msg.contains("Unknown parent") && error_msg.contains("nonexistent_type"),
+                "Error should mention unknown type. Got: {}",
+                error_msg
+            );
+        }
+
+        #[test]
+        fn test_invalid_primitive_type_name_should_error() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data invalid: choice -> option "a""#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(result.is_err(), "Should reject invalid type base 'choice'");
+
+            let errs = result.unwrap_err();
+            assert!(!errs.is_empty(), "expected at least one error");
+            let error_msg = errs[0].to_string();
+            assert!(
+                error_msg.contains("Unknown parent") && error_msg.contains("choice"),
+                "Error should mention unknown type 'choice'. Got: {}",
+                error_msg
+            );
+        }
+
+        #[test]
+        fn extension_unit_factor_override_errors() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure
+      -> unit eur 1
+    data money2: money
+      -> unit eur 1.10"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "extension child must not override inherited unit factor"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("eur"),
+                "error must name unit eur, got: {error_msg}"
+            );
+            assert!(
+                error_msg.contains("inherited") || error_msg.contains("cannot change"),
+                "error must reject inherited unit redefinition, got: {error_msg}"
+            );
+        }
+
+        #[test]
+        fn inherited_unit_idempotent_redeclare_ok() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure
+      -> unit eur 1
+    data money2: money
+      -> unit eur 1"#,
+            );
+
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("idempotent inherited unit redeclare must resolve");
+            let money2 = resolved.resolved.get("money2").expect("money2");
+            match &money2.specifications {
+                TypeSpecification::Measure { units, .. } => {
+                    let eur = units.iter().find(|u| u.name == "eur").expect("eur");
+                    assert_eq!(
+                        eur.factor.try_to_decimal().unwrap(),
+                        Decimal::ONE,
+                        "eur factor must remain 1"
+                    );
+                }
+                other => panic!("expected Measure, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn extension_additive_unit_registers_in_unit_index() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure
+      -> unit eur 1
+    data money2: money
+      -> unit usd 1.24"#,
+            );
+
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("additive extension unit must resolve");
+            let money2 = resolved
+                .resolved
+                .get("money2")
+                .expect("money2 resolved")
+                .clone();
+            assert!(
+                resolved.unit_index.contains_key("eur"),
+                "eur must be in unit_index"
+            );
+            assert!(
+                resolved.unit_index.contains_key("usd"),
+                "usd must be in unit_index"
+            );
+            let eur_owner = resolved.unit_index.get("eur").expect("eur owner");
+            let usd_owner = resolved.unit_index.get("usd").expect("usd owner");
+            assert_eq!(
+                eur_owner.name.as_deref(),
+                Some("money2"),
+                "most-derived type must own inherited eur"
+            );
+            assert_eq!(
+                usd_owner.name.as_deref(),
+                Some("money2"),
+                "most-derived type must own new usd"
+            );
+            assert_eq!(eur_owner.as_ref(), money2.as_ref());
+            assert_eq!(usd_owner.as_ref(), money2.as_ref());
+        }
+
+        #[test]
+        fn find_unique_reports_multiple_families_with_same_decomposition() {
+            let code = r#"spec units
+    data money: measure
+      -> unit eur 1
+      -> unit usd 0.86
+    data mass: measure
+      -> unit kg 1
+    data price_eur_per_kg: measure
+      -> unit eur_per_kg eur/kg
+    data price_usd_per_kg: measure
+      -> unit usd_per_kg usd/kg
+    "#;
+            let (resolver, spec_arcs) = resolver_for_code(code);
+            let units_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "units")
+                .cloned()
+                .expect("units spec");
+            let (context, _) = test_context_and_effective(&spec_arcs);
+            let repository = context.workspace();
+            let resolved = resolver
+                .resolve_and_validate(units_arc, &EffectiveDate::Origin, &ResolvedTypesMap::new())
+                .expect("units resolves");
+            let eur_decomp = resolved
+                .unit_index
+                .get("eur_per_kg")
+                .expect("eur_per_kg")
+                .measure_type_decomposition()
+                .expect("eur_per_kg decomposition")
+                .clone();
+            let map = vec![(repository, units_arc, resolved)];
+
+            let unique = find_unique_measure_type_by_decomposition(&map, units_arc, &eur_decomp);
+            match unique {
+                DecompositionMatch::Multiple(families) => {
+                    assert_eq!(families.len(), 2);
+                    assert!(families.contains(&"price_eur_per_kg".to_string()));
+                    assert!(families.contains(&"price_usd_per_kg".to_string()));
+                }
+                other => panic!("expected Multiple families, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn unit_index_maps_family_root_not_binding_alias() {
+            let code = r#"spec units
+    data money: measure
+      -> unit eur 1
+    data mass: measure
+      -> unit kg 1
+    data price_per_weight: measure
+      -> unit eur_per_kg eur/kg
+
+    spec consumer
+    uses u: units
+    data starch_levy_per_kg: u.price_per_weight
+      -> suggest 0.1 eur_per_kg
+    data amortization_per_kg: u.price_per_weight
+      -> suggest 0.2 eur_per_kg
+    "#;
+            let (resolver, spec_arcs) = resolver_for_code(code);
+            let units_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "units")
+                .cloned()
+                .expect("units spec");
+            let consumer_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "consumer")
+                .cloned()
+                .expect("consumer spec");
+            let (context, _) = test_context_and_effective(&spec_arcs);
+            let repository = context.workspace();
+
+            let mut already_resolved = ResolvedTypesMap::new();
+            let units_types = resolver
+                .resolve_and_validate(units_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("units spec resolves");
+            let units_price_per_weight = units_types
+                .resolved
+                .get("price_per_weight")
+                .expect("units defines price_per_weight")
+                .clone();
+            already_resolved.push((Arc::clone(&repository), units_arc, units_types));
+
+            let consumer_types = resolver
+                .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("consumer spec resolves");
+
+            let eur_per_kg_owner = consumer_types
+                .unit_index
+                .get("eur_per_kg")
+                .expect("eur_per_kg in unit_index");
+            assert_eq!(
+                eur_per_kg_owner.name.as_deref(),
+                Some("price_per_weight"),
+                "unit must belong to family root, not binding alias row name"
+            );
+            assert_eq!(
+                eur_per_kg_owner.measure_family_name(),
+                Some("price_per_weight")
+            );
+            assert_eq!(eur_per_kg_owner.as_ref(), units_price_per_weight.as_ref());
+
+            let starch_alias = consumer_types
+                .resolved
+                .get("starch_levy_per_kg")
+                .expect("alias row in resolved");
+            assert!(
+                !std::ptr::eq(eur_per_kg_owner.as_ref(), starch_alias.as_ref()),
+                "unit_index must not store binding alias arc"
+            );
+        }
+
+        #[test]
+        fn import_merge_skips_locally_owned_family_root() {
+            let code = r#"spec std_units
+    data mass: measure
+      -> unit kilogram 1
+      -> unit kilograms 1
+      -> unit gram 0.001
+
+    spec s
+    uses u: std_units
+    data mass: measure
+      -> unit kg 1
+      -> unit tonne 1000
+    rule smoke: true
+    "#;
+            let (resolver, spec_arcs) = resolver_for_code(code);
+            let std_units_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "std_units")
+                .cloned()
+                .expect("std_units spec");
+            let consumer_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "s")
+                .cloned()
+                .expect("consumer spec");
+            let (context, _) = test_context_and_effective(&spec_arcs);
+            let repository = context.workspace();
+
+            let mut already_resolved = ResolvedTypesMap::new();
+            let std_units_types = resolver
+                .resolve_and_validate(std_units_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("std_units resolves");
+            already_resolved.push((Arc::clone(&repository), std_units_arc, std_units_types));
+
+            let consumer_types = resolver
+                .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("consumer resolves");
+
+            let local_mass = consumer_types
+                .resolved
+                .get("mass")
+                .expect("consumer defines mass")
+                .clone();
+
+            assert!(
+                consumer_types.unit_index.contains_key("kg"),
+                "local kg must be indexed"
+            );
+            assert!(
+                consumer_types.unit_index.contains_key("tonne"),
+                "local tonne must be indexed"
+            );
+            assert!(
+                !consumer_types.unit_index.contains_key("kilogram"),
+                "import kilogram must not leak after local shadow"
+            );
+            assert!(
+                !consumer_types.unit_index.contains_key("kilograms"),
+                "import kilograms must not leak after local shadow"
+            );
+            assert!(
+                !consumer_types.unit_index.contains_key("gram"),
+                "import gram must not leak after local shadow"
+            );
+
+            let kg_owner = consumer_types.unit_index.get("kg").expect("kg owner");
+            let tonne_owner = consumer_types.unit_index.get("tonne").expect("tonne owner");
+            assert_eq!(kg_owner.as_ref(), local_mass.as_ref());
+            assert_eq!(tonne_owner.as_ref(), local_mass.as_ref());
+        }
+
+        #[test]
+        fn same_family_same_unit_same_factor_is_idempotent() {
+            let code = r#"spec units_a
+    data duration: measure
+      -> unit hour 1
+
+    spec consumer
+    uses a: units_a
+    uses b: units_a
+    rule smoke: true
+    "#;
+            let (resolver, spec_arcs) = resolver_for_code(code);
+            let units_a_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "units_a")
+                .cloned()
+                .expect("units_a spec");
+            let consumer_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "consumer")
+                .cloned()
+                .expect("consumer spec");
+            let (context, _) = test_context_and_effective(&spec_arcs);
+            let repository = context.workspace();
+
+            let mut already_resolved = ResolvedTypesMap::new();
+            let units_a_types = resolver
+                .resolve_and_validate(units_a_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("units_a resolves");
+            already_resolved.push((Arc::clone(&repository), units_a_arc, units_a_types));
+
+            let consumer_types = resolver
+                .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
+                .expect("double import of same duration must be idempotent");
+
+            assert!(
+                consumer_types.unit_index.contains_key("hour"),
+                "hour must be indexed once"
+            );
+        }
+
+        #[test]
+        fn same_family_same_unit_different_factor_errors() {
+            let code = r#"spec units_a
+    data duration: measure
+      -> unit hour 1
+
+    spec units_b
+    data duration: measure
+      -> unit hour 60
+
+    spec consumer
+    uses a: units_a
+    uses b: units_b
+    rule smoke: true
+    "#;
+            let (resolver, spec_arcs) = resolver_for_code(code);
+            let units_a_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "units_a")
+                .cloned()
+                .expect("units_a spec");
+            let units_b_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "units_b")
+                .cloned()
+                .expect("units_b spec");
+            let consumer_arc = spec_arcs
+                .iter()
+                .find(|spec| spec.name == "consumer")
+                .cloned()
+                .expect("consumer spec");
+            let (context, _) = test_context_and_effective(&spec_arcs);
+            let repository = context.workspace();
+
+            let mut already_resolved = ResolvedTypesMap::new();
+            for units_arc in [units_a_arc, units_b_arc] {
+                let units_types = resolver
+                    .resolve_and_validate(units_arc, &EffectiveDate::Origin, &already_resolved)
+                    .expect("units spec resolves");
+                already_resolved.push((Arc::clone(&repository), units_arc, units_types));
+            }
+
+            let result = resolver.resolve_and_validate(
+                consumer_arc,
+                &EffectiveDate::Origin,
+                &already_resolved,
+            );
+            assert!(
+                result.is_err(),
+                "conflicting hour factors in same family must error"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("hour") && error_msg.contains("conflicting factors"),
+                "expected conflicting factor error for hour, got: {error_msg}"
+            );
+        }
+
+        #[test]
+        fn test_spec_level_unit_ambiguity_errors_are_reported() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money_a: measure
+      -> unit eur 1.00
+      -> unit usd 0.84
+
+    data money_b: measure
+      -> unit eur 1.00
+      -> unit usd 1.20
+
+    data length_a: measure
+      -> unit meter 1.0
+
+    data length_b: measure
+      -> unit meter 1.0"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "Expected ambiguous unit definitions to error"
+            );
+
+            let errs = result.unwrap_err();
+            assert!(!errs.is_empty(), "expected at least one error");
+            let error_msg = errs
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("eur")
+                    || error_msg.contains("usd")
+                    || error_msg.contains("meter"),
+                "Error should mention at least one ambiguous unit. Got: {}",
+                error_msg
+            );
+        }
+
+        #[test]
+        fn test_ratio_unit_cross_family_collision_errors() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data q: measure
+      -> unit foo 1
+
+    data r: ratio
+      -> unit foo 100"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "measure and ratio must not share a unit name"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("foo"),
+                "expected cross-family collision on 'foo', got: {}",
+                error_msg
+            );
+        }
+
+        #[test]
+        fn test_same_ratio_unit_same_factor_across_types_allowed() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data spread_a: ratio
+      -> unit basis_points 10000
+
+    data spread_b: ratio
+      -> unit basis_points 10000"#,
+            );
+
+            resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("same unit name and factor across ratio types must be allowed");
+        }
+
+        #[test]
+        fn test_different_ratio_unit_factor_across_types_errors() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data spread_a: ratio
+      -> unit basis_points 10000
+
+    data spread_b: ratio
+      -> unit basis_points 5000"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "unrelated ratio types with different factors for the same unit must error"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("spread_a") && error_msg.contains("spread_b"),
+                "expected ambiguous ratio unit between types, got: {}",
+                error_msg
+            );
+        }
+
+        #[test]
+        fn test_multiple_builtin_ratio_types_share_percent_in_unit_index() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec targets
+    data standard_margin_pct: ratio
+      -> minimum 0%
+      -> suggest 15%
+
+    data default_credit_insurance_pct: ratio
+      -> suggest 1.5%"#,
+            );
+
+            resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("multiple ratio types with built-in percent must not conflict");
+        }
+
+        #[test]
+        fn test_three_ratio_types_share_builtin_and_custom_unit() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data margin: ratio -> suggest 10%
+    data fee: ratio
+      -> unit tenths 10
+    data tax: ratio -> suggest 1%"#,
+            );
+
+            resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("builtin percent/permille plus custom tenths on second type must load");
+        }
+
+        #[test]
+        fn test_ratio_unit_index_allows_builtin_after_two_named_types() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data first_ratio: ratio -> suggest 5%
+    data second_ratio: ratio -> suggest 10%"#,
+            );
+
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .expect("two ratio types with only builtin units");
+
+            assert!(
+                resolved.unit_index.contains_key("percent"),
+                "percent must remain in unit index"
+            );
+            assert!(
+                resolved.unit_index.contains_key("permille"),
+                "permille must remain in unit index"
+            );
+        }
+
+        #[test]
+        fn test_number_type_cannot_have_units() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data price: number
+      -> unit eur 1.00"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(result.is_err(), "Number types must reject unit commands");
+
+            let errs = result.unwrap_err();
+            assert!(!errs.is_empty(), "expected at least one error");
+            let error_msg = errs[0].to_string();
+            assert!(
+                error_msg.contains("unit") && error_msg.contains("number"),
+                "Error should mention units are invalid on number. Got: {}",
+                error_msg
+            );
+        }
+
+        #[test]
+        fn test_extending_type_inherits_units() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure
+      -> unit eur 1.00
+      -> unit usd 0.84
+
+    data my_money: money
+      -> unit gbp 1.30"#,
+            );
+
+            let resolved = resolver
+                .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
+                .unwrap();
+            let my_money_type = resolved.resolved.get("my_money").unwrap();
+
+            match &my_money_type.specifications {
+                TypeSpecification::Measure { units, .. } => {
+                    assert_eq!(units.len(), 3);
+                    assert!(units.iter().any(|u| u.name == "eur"));
+                    assert!(units.iter().any(|u| u.name == "usd"));
+                    assert!(units.iter().any(|u| u.name == "gbp"));
+                }
+                other => panic!("Expected Measure type specifications, got {:?}", other),
+            }
+        }
+
+        #[test]
+        fn binding_unit_factor_override_errors() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data source_measure: measure
+      -> unit usd 1.00
+    data z: source_measure
+      -> unit usd 0.84"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "binding row must not override inherited unit factor"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("usd"),
+                "error must name unit usd, got: {error_msg}"
+            );
+        }
+
+        #[test]
+        fn ratio_extension_unit_factor_override_errors() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data parent: ratio
+      -> unit basis 1
+    data child: parent
+      -> unit basis 100"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "ratio extension must not override inherited unit factor"
+            );
+            let error_msg = result
+                .unwrap_err()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ");
+            assert!(
+                error_msg.contains("basis"),
+                "error must name unit basis, got: {error_msg}"
+            );
+        }
+
+        #[test]
+        fn test_duplicate_unit_name_in_same_type_is_error() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data money: measure
+      -> unit eur 1.00
+      -> unit eur 1.19"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(result.is_err(), "duplicate unit name must be rejected");
+            let errs = result.unwrap_err();
+            assert!(!errs.is_empty());
+            let msg = errs[0].to_string();
+            assert!(
+                msg.contains("eur"),
+                "error must name the duplicate unit; got: {msg}"
+            );
+        }
+
+        #[test]
+        fn test_duplicate_unit_name_compound_is_error() {
+            let (resolver, spec) = resolver_single_spec(
+                r#"spec test
+    data currency: measure
+      -> unit usd 1.00
+      -> unit eur 0.92
+
+    data time_period: measure
+      -> unit year 1
+
+    data run_rate: measure
+      -> unit arr usd/year
+      -> unit arr eur/year"#,
+            );
+
+            let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
+            assert!(
+                result.is_err(),
+                "duplicate compound unit name must be rejected"
+            );
+            let errs = result.unwrap_err();
+            assert!(!errs.is_empty());
+            let msg = errs[0].to_string();
+            assert!(
+                msg.contains("arr"),
+                "error must name the duplicate unit; got: {msg}"
+            );
+        }
+    }
+
+    mod validation {
+        use super::super::*;
+        use crate::computation::rational::rational_new;
+        use crate::parsing::ast::{CommandArg, TypeConstraintCommand};
+        use crate::planning::semantics::TypeSpecification;
+        use rust_decimal::Decimal;
+
+        fn test_source() -> Source {
+            Source::new(
+                crate::parsing::source::SourceType::Volatile,
+                crate::parsing::ast::Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+            )
+        }
+
+        fn apply(
+            mut specs: TypeSpecification,
+            command: TypeConstraintCommand,
+            args: &[CommandArg],
+        ) -> TypeSpecification {
+            let mut suggestion: Option<RawSuggestion> = None;
+            specs
+                .apply_constraint("test", command, args, &mut suggestion)
+                .unwrap();
+            specs
+        }
+
+        fn number_arg(n: i64) -> CommandArg {
+            CommandArg::Literal(crate::literals::Value::Number(Decimal::from(n)))
+        }
+
+        fn date_arg(s: &str) -> CommandArg {
+            let dt = s.parse::<crate::literals::DateTimeValue>().expect("date");
+            CommandArg::Literal(crate::literals::Value::Date(dt))
+        }
+
+        fn time_arg(s: &str) -> CommandArg {
+            let t = s.parse::<crate::literals::TimeValue>().expect("time");
+            CommandArg::Literal(crate::literals::Value::Time(t))
+        }
+
+        #[test]
+        fn validate_number_minimum_greater_than_maximum() {
+            let mut specs = TypeSpecification::number();
+            specs = apply(specs, TypeConstraintCommand::Minimum, &[number_arg(100)]);
+            specs = apply(specs, TypeConstraintCommand::Maximum, &[number_arg(50)]);
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0]
+                .to_string()
+                .contains("minimum 100 is greater than maximum 50"));
+        }
+
+        #[test]
+        fn validate_number_default_below_minimum() {
+            let specs = TypeSpecification::Number {
+                minimum: Some(rational_new(10, 1)),
+                maximum: None,
+                decimals: None,
+                help: String::new(),
+            };
+            let default = ValueKind::Number(rational_new(5, 1));
+
+            let src = test_source();
+            let errors = validate_type_specifications(
+                &specs,
+                Some(&default),
+                "test",
+                &src,
+                None,
+                &HashMap::new(),
+            );
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0]
+                .to_string()
+                .contains("suggestion value 5 is less than minimum 10"));
+        }
+
+        #[test]
+        fn validate_number_default_above_maximum() {
+            let specs = TypeSpecification::Number {
+                minimum: None,
+                maximum: Some(rational_new(100, 1)),
+                decimals: None,
+                help: String::new(),
+            };
+            let default = ValueKind::Number(rational_new(150, 1));
+
+            let src = test_source();
+            let errors = validate_type_specifications(
+                &specs,
+                Some(&default),
+                "test",
+                &src,
+                None,
+                &HashMap::new(),
+            );
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0]
+                .to_string()
+                .contains("suggestion value 150 is greater than maximum 100"));
+        }
+
+        #[test]
+        fn validate_number_default_valid() {
+            let specs = TypeSpecification::Number {
+                minimum: Some(rational_new(0, 1)),
+                maximum: Some(rational_new(100, 1)),
+                decimals: None,
+                help: String::new(),
+            };
+            let default = ValueKind::Number(rational_new(50, 1));
+
+            let src = test_source();
+            let errors = validate_type_specifications(
+                &specs,
+                Some(&default),
+                "test",
+                &src,
+                None,
+                &HashMap::new(),
+            );
+            assert!(errors.is_empty());
+        }
+
+        #[test]
+        fn text_minimum_command_is_rejected() {
+            let mut specs = TypeSpecification::text();
+            let res = specs.apply_constraint(
+                "test",
+                TypeConstraintCommand::Minimum,
+                &[number_arg(5)],
+                &mut None,
+            );
+            assert!(res.is_err());
+            assert!(res
+                .unwrap_err()
+                .contains("Invalid command 'minimum' for text type"));
+        }
+
+        #[test]
+        fn text_maximum_command_is_rejected() {
+            let mut specs = TypeSpecification::text();
+            let res = specs.apply_constraint(
+                "test",
+                TypeConstraintCommand::Maximum,
+                &[number_arg(5)],
+                &mut None,
+            );
+            assert!(res.is_err());
+            assert!(res
+                .unwrap_err()
+                .contains("Invalid command 'maximum' for text type"));
+        }
+
+        #[test]
+        fn validate_text_default_not_in_options() {
+            let specs = TypeSpecification::Text {
+                length: None,
+                options: vec!["red".to_string(), "blue".to_string()],
+                help: String::new(),
+            };
+            let default = ValueKind::Text("green".to_string());
+
+            let src = test_source();
+            let errors = validate_type_specifications(
+                &specs,
+                Some(&default),
+                "test",
+                &src,
+                None,
+                &HashMap::new(),
+            );
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0]
+                .to_string()
+                .contains("suggestion value 'green' is not in allowed options"));
+        }
+
+        #[test]
+        fn validate_ratio_minimum_greater_than_maximum() {
+            let specs = TypeSpecification::Ratio {
+                minimum: Some(rational_new(2, 1)),
+                maximum: Some(rational_new(1, 1)),
+                decimals: None,
+                units: crate::planning::semantics::RatioUnits::new(),
+                help: String::new(),
+            };
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+            assert_eq!(errors.len(), 1);
+            assert!(errors[0]
+                .to_string()
+                .contains("minimum 2 is greater than maximum 1"));
+        }
+
+        #[test]
+        fn validate_date_minimum_after_maximum() {
+            let mut specs = TypeSpecification::date();
+            specs = apply(
+                specs,
+                TypeConstraintCommand::Minimum,
+                &[date_arg("2024-12-31")],
+            );
+            specs = apply(
+                specs,
+                TypeConstraintCommand::Maximum,
+                &[date_arg("2024-01-01")],
+            );
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+            assert_eq!(errors.len(), 1);
+            assert!(
+                errors[0].to_string().contains("minimum")
+                    && errors[0].to_string().contains("is after maximum")
+            );
+        }
+
+        #[test]
+        fn validate_date_valid_range() {
+            let mut specs = TypeSpecification::date();
+            specs = apply(
+                specs,
+                TypeConstraintCommand::Minimum,
+                &[date_arg("2024-01-01")],
+            );
+            specs = apply(
+                specs,
+                TypeConstraintCommand::Maximum,
+                &[date_arg("2024-12-31")],
+            );
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+            assert!(errors.is_empty());
+        }
+
+        #[test]
+        fn validate_time_minimum_after_maximum() {
+            let mut specs = TypeSpecification::time();
+            specs = apply(
+                specs,
+                TypeConstraintCommand::Minimum,
+                &[time_arg("23:00:00")],
+            );
+            specs = apply(
+                specs,
+                TypeConstraintCommand::Maximum,
+                &[time_arg("10:00:00")],
+            );
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
+            assert_eq!(errors.len(), 1);
+            assert!(
+                errors[0].to_string().contains("minimum")
+                    && errors[0].to_string().contains("is after maximum")
+            );
+        }
+
+        #[test]
+        fn large_magnitude_minimum_does_not_fail_type_validation() {
+            use crate::computation::rational::{try_rational_new, BigInt};
+            use crate::literals::MeasureUnits;
+            use crate::planning::semantics::TypeSpecification;
+
+            let too_large = magnitude_beyond_decimal_max();
+            assert_eq!(
+                too_large.try_to_decimal().unwrap_err(),
+                crate::computation::rational::NumericFailure::Overflow,
+            );
+
+            let spec = TypeSpecification::Measure {
+                minimum: Some((too_large, "eur".to_string())),
+                maximum: None,
+                decimals: None,
+                units: MeasureUnits(vec![crate::literals::MeasureUnit {
+                    name: "eur".to_string(),
+                    factor: try_rational_new(BigInt::one(), BigInt::one())
+                        .expect("BUG: test rational"),
+                    derived_measure_factors: Default::default(),
+                    decomposition: Default::default(),
+                    minimum: None,
+                    maximum: None,
+                    suggestion_magnitude: None,
+                }]),
+                traits: vec![],
+                decomposition: None,
+                help: String::new(),
+            };
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+            assert!(
+                errors.is_empty(),
+                "internal Q bounds must not fail type validation; API decimal rounding: {:?}",
+                errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+            );
+        }
+
+        #[test]
+        fn large_magnitude_maximum_does_not_fail_type_validation() {
+            use crate::computation::rational::{try_rational_new, BigInt};
+            use crate::literals::MeasureUnits;
+            use crate::planning::semantics::TypeSpecification;
+
+            let too_large = magnitude_beyond_decimal_max();
+            assert_eq!(
+                too_large.try_to_decimal().unwrap_err(),
+                crate::computation::rational::NumericFailure::Overflow,
+            );
+
+            let spec = TypeSpecification::Measure {
+                minimum: None,
+                maximum: Some((too_large, "eur".to_string())),
+                decimals: None,
+                units: MeasureUnits(vec![crate::literals::MeasureUnit {
+                    name: "eur".to_string(),
+                    factor: try_rational_new(BigInt::one(), BigInt::one())
+                        .expect("BUG: test rational"),
+                    derived_measure_factors: Default::default(),
+                    decomposition: Default::default(),
+                    minimum: None,
+                    maximum: None,
+                    suggestion_magnitude: None,
+                }]),
+                traits: vec![],
+                decomposition: None,
+                help: String::new(),
+            };
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+            assert!(errors.is_empty(), "got: {:?}", errors);
+        }
+
+        #[test]
+        fn large_magnitude_default_does_not_fail_type_validation() {
+            use crate::computation::rational::{try_rational_new, BigInt};
+            use crate::literals::MeasureUnits;
+            use crate::planning::semantics::TypeSpecification;
+
+            let too_large = magnitude_beyond_decimal_max();
+            assert_eq!(
+                too_large.try_to_decimal().unwrap_err(),
+                crate::computation::rational::NumericFailure::Overflow,
+            );
+
+            let spec = TypeSpecification::Measure {
+                minimum: None,
+                maximum: None,
+                decimals: None,
+                units: MeasureUnits(vec![crate::literals::MeasureUnit {
+                    name: "eur".to_string(),
+                    factor: try_rational_new(BigInt::one(), BigInt::one())
+                        .expect("BUG: test rational"),
+                    derived_measure_factors: Default::default(),
+                    decomposition: Default::default(),
+                    minimum: None,
+                    maximum: None,
+                    suggestion_magnitude: Some(too_large),
+                }]),
+                traits: vec![],
+                decomposition: None,
+                help: String::new(),
+            };
+
+            let src = test_source();
+            let errors =
+                validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
+            assert!(errors.is_empty(), "got: {:?}", errors);
+        }
+
+        fn magnitude_beyond_decimal_max() -> crate::computation::rational::RationalInteger {
+            use crate::computation::rational::{decimal_to_rational, rational_new, try_mul};
+            use rust_decimal::Decimal;
+            let max = Decimal::MAX.normalize();
+            let max_rational = decimal_to_rational(max).expect("BUG: Decimal::MAX must lift to Q");
+            try_mul(&max_rational, &rational_new(2, 1))
+                .expect("BUG: test rational multiply must succeed")
+        }
+
+        #[test]
+        fn empty_measure_signature_unit_must_not_coerce_as_unknown_empty_string() {
+            use crate::computation::rational::rational_new;
+            use crate::literals::MeasureUnits;
+            use crate::planning::semantics::{
+                LemmaType, LiteralValue, TypeSpecification, ValueKind,
+            };
+
+            let schema_type = Arc::new(LemmaType {
+                name: Some("money".to_string()),
+                extends: TypeExtends::Primitive,
+                specifications: TypeSpecification::Measure {
+                    minimum: None,
+                    maximum: None,
+                    decimals: None,
+                    units: MeasureUnits(vec![crate::literals::MeasureUnit {
+                        name: "eur".to_string(),
+                        factor: rational_new(1, 1),
+                        derived_measure_factors: Default::default(),
+                        decomposition: Default::default(),
+                        minimum: None,
+                        maximum: None,
+                        suggestion_magnitude: None,
+                    }]),
+                    traits: vec![],
+                    decomposition: Default::default(),
+                    help: String::new(),
+                },
+            });
+
+            let literal = LiteralValue {
+                value: ValueKind::Measure(rational_new(1, 1), vec![("".to_string(), 1)]),
+                lemma_type: Arc::clone(&schema_type),
+            };
+
+            let result = Graph::coerce_literal_to_schema_type(&literal, &schema_type);
+
+            assert!(
+                result.is_err(),
+                "empty unit name in measure signature must not coerce successfully"
+            );
+            if let Err(message) = result {
+                assert!(
+                    !message.contains("unknown unit ''"),
+                    "must not treat missing unit as empty-string validation error, got: {message}"
+                );
+            }
+        }
+
+        #[test]
+        fn refresh_named_range_specs_missing_element_must_not_leave_unconverted_measure() {
+            use crate::engine::Context;
+            use crate::parsing::ast::{LemmaSpec, ParentType, Span};
+            use crate::parsing::source::{Source, SourceType};
+            use crate::planning::semantics::tests::primitive_measure_arc;
+
+            let ctx = Box::leak(Box::new(Context::new()));
+            let resolver = TypeResolver::new(ctx);
+            let spec = LemmaSpec::new("t".to_string());
+            let source = Source::new(
+                SourceType::Volatile,
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+            );
+            let mut data_defs = HashMap::new();
+            data_defs.insert(
+                "band".to_string(),
+                DataTypeDef {
+                    parent: ParentType::Ranged {
+                        inner: Box::new(ParentType::Custom {
+                            name: "ghost".to_string(),
+                        }),
+                    },
+                    constraints: None,
+                    source: source.clone(),
+                    name: "band".to_string(),
+                    bound_literal: None,
+                },
+            );
+            let mut resolved = HashMap::new();
+            resolved.insert("band".to_string(), primitive_measure_arc().clone());
+            let mut defaults = HashMap::new();
+            let already_resolved = ResolvedTypesMap::new();
+
+            let errors = refresh_named_range_specs(
+                &resolver,
+                &spec,
+                &data_defs,
+                &mut resolved,
+                &mut defaults,
+                &already_resolved,
+                &EffectiveDate::Origin,
+            );
+
+            assert!(
+                !errors.is_empty(),
+                "planning must error when ranged inner type is missing"
+            );
+            assert!(
+                errors[0]
+                    .to_string()
+                    .contains("references missing element type 'ghost'"),
+                "got: {}",
+                errors[0]
+            );
+        }
+
+        fn apply_n_text_options(option_count: usize) -> TypeSpecification {
+            let spec = LemmaSpec::new("wide_options".to_string());
+            let source = test_source();
+            let constraints: Vec<Constraint> = (0..option_count)
+                .map(|i| {
+                    (
+                        TypeConstraintCommand::Option,
+                        vec![CommandArg::Literal(crate::literals::Value::Text(
+                            i.to_string(),
+                        ))],
+                    )
+                })
+                .collect();
+            let mut suggestion = None;
+            apply_constraints_to_spec(
+                &spec,
+                "code",
+                TypeSpecification::text(),
+                &constraints,
+                &source,
+                &mut suggestion,
+            )
+            .expect("options must apply")
+        }
+
+        #[test]
+        fn apply_constraints_many_text_options_preserve_count() {
+            for count in [16_usize, 64] {
+                match apply_n_text_options(count) {
+                    TypeSpecification::Text { options, .. } => {
+                        assert_eq!(options.len(), count);
+                    }
+                    other => panic!("expected Text, got {other:?}"),
+                }
+            }
+        }
+    }
+
+    mod decomposition_promotion {
+        use super::super::*;
+        use crate::engine::Context;
+        use crate::parsing::parse;
+        use crate::ResourceLimits;
+        use std::sync::Arc;
+
+        fn insert_parsed_repos(ctx: &mut Context, code: &str) {
+            let result = parse(
+                code,
+                crate::parsing::source::SourceType::Volatile,
+                &ResourceLimits::default(),
+            )
+            .expect("parse");
+            for (repo_arc, specs) in result.repositories {
+                for spec in specs {
+                    ctx.insert_spec(Arc::clone(&repo_arc), spec)
+                        .expect("insert spec");
+                }
+            }
+        }
+
+        fn repo_by_name(ctx: &Context, name: &str) -> Arc<LemmaRepository> {
+            ctx.repositories()
+                .keys()
+                .find(|r| r.name.as_deref() == Some(name))
+                .cloned()
+                .expect("repository must exist after insert")
+        }
+
+        fn resolve_specs_in_order<'a>(
+            resolver: &TypeResolver<'a>,
+            repo: &Arc<LemmaRepository>,
+            specs: &[&'a LemmaSpec],
+            local_types: &mut ResolvedTypesMap<'a>,
+        ) {
+            for spec in specs {
+                let types = resolver
+                    .resolve_and_validate(spec, &EffectiveDate::Origin, local_types)
+                    .unwrap_or_else(|e| panic!("resolve {} failed: {:?}", spec.name, e));
+                local_types.push((Arc::clone(repo), *spec, types));
+            }
+        }
+
+        fn worker_torque_fixture() -> (
+            ResolvedTypesMap<'static>,
+            &'static LemmaSpec,
+            BaseMeasureVector,
+            Arc<LemmaType>,
+        ) {
+            let mut ctx = Context::new();
+            insert_parsed_repos(&mut ctx, crate::stdlib::UNITS_LEMMA);
+            let alpha_code = r#"repo alpha
+    spec units
+    data force: measure
+      -> unit newton 1
+    data length: measure
+      -> unit meter 1
+    data torque: measure
+      -> unit nm newton*meter
+
+    spec worker
+    uses u: alpha units
+    data f: 3 newton
+    data d: 4 meter
+    rule t: f * d
+    "#;
+            insert_parsed_repos(&mut ctx, alpha_code);
+            let ctx = Box::leak(Box::new(ctx));
+            let alpha_repo = repo_by_name(ctx, "alpha");
+            let worker = ctx
+                .spec_set(&alpha_repo, "worker")
+                .and_then(|ss| ss.get_exact(None))
+                .expect("worker spec");
+            let units = ctx
+                .spec_set(&alpha_repo, "units")
+                .and_then(|ss| ss.get_exact(None))
+                .expect("alpha units spec");
+            let lemma_repo = repo_by_name(ctx, crate::engine::EMBEDDED_STDLIB_REPOSITORY);
+            let lemma_units = ctx
+                .spec_set(&lemma_repo, "units")
+                .expect("lemma repo")
+                .get_exact(None)
+                .expect("lemma units spec");
+
+            let mut resolver = TypeResolver::new(ctx);
+            for spec in [units, worker] {
+                resolver
+                    .register_all(&alpha_repo, spec)
+                    .into_iter()
+                    .for_each(|e| panic!("register alpha: {e:?}"));
+            }
+            resolver
+                .register_all(&lemma_repo, lemma_units)
+                .into_iter()
+                .for_each(|e| panic!("register lemma units: {e:?}"));
+
+            let mut local_types = ResolvedTypesMap::new();
+            resolve_specs_in_order(
+                &resolver,
+                &lemma_repo,
+                std::slice::from_ref(&lemma_units),
+                &mut local_types,
+            );
+            resolve_specs_in_order(
+                &resolver,
+                &alpha_repo,
+                std::slice::from_ref(&units),
+                &mut local_types,
+            );
+            resolve_specs_in_order(
+                &resolver,
+                &alpha_repo,
+                std::slice::from_ref(&worker),
+                &mut local_types,
+            );
+
+            let alpha_torque = local_types
+                .iter()
+                .find(|(_, s, _)| discovery::same_loaded_spec(s, units))
+                .and_then(|(_, _, t)| t.resolved.get("torque"))
+                .expect("alpha torque type")
+                .clone();
+            let decomp = alpha_torque
+                .measure_type_decomposition()
+                .expect("torque decomposition")
+                .clone();
+
+            (local_types, worker, decomp, alpha_torque)
+        }
+
+        #[test]
+        fn unique_decomposition_carries_matching_arc() {
+            let (map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
+            let unique = find_unique_measure_type_by_decomposition(&map, worker_spec, &decomp);
+            match unique {
+                DecompositionMatch::Unique(arc) => {
+                    assert_eq!(*arc, *alpha_torque);
+                    assert_eq!(arc.name.as_deref(), Some("torque"));
+                }
+                other => panic!("expected Unique(Arc) torque match, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn find_unique_ignores_polluted_resolved_map() {
+            let (mut map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
+            map.iter_mut()
+                .find(|(_, s, _)| discovery::same_loaded_spec(s, worker_spec))
+                .expect("worker must be in resolved map")
+                .2
+                .resolved = HashMap::new();
+
+            let unique = find_unique_measure_type_by_decomposition(&map, worker_spec, &decomp);
+            match unique {
+                DecompositionMatch::Unique(arc) => {
+                    assert_eq!(*arc, *alpha_torque);
+                    assert_eq!(arc.name.as_deref(), Some("torque"));
+                }
+                other => panic!("expected Unique(alpha torque) via unit_index, got {other:?}"),
+            }
+        }
+
+        fn weight_measure_type() -> Arc<LemmaType> {
+            use crate::computation::rational::{decimal_to_rational, rational_one};
+            use rust_decimal::Decimal;
+            Arc::new(LemmaType::new(
+                "weight".to_string(),
+                TypeSpecification::Measure {
+                    minimum: None,
+                    maximum: None,
+                    decimals: None,
+                    units: MeasureUnits(vec![
+                        MeasureUnit {
+                            name: "gram".to_string(),
+                            factor: rational_one(),
+                            derived_measure_factors: Vec::new(),
+                            decomposition: Default::default(),
+                            minimum: None,
+                            maximum: None,
+                            suggestion_magnitude: None,
+                        },
+                        MeasureUnit {
+                            name: "kilogram".to_string(),
+                            factor: decimal_to_rational(Decimal::from(1000))
+                                .expect("BUG: kilogram factor must be rational"),
+                            derived_measure_factors: Vec::new(),
+                            decomposition: Default::default(),
+                            minimum: None,
+                            maximum: None,
+                            suggestion_magnitude: None,
+                        },
+                    ]),
+                    traits: Vec::new(),
+                    decomposition: None,
+                    help: String::new(),
+                },
+                TypeExtends::Primitive,
+            ))
+        }
+
+        fn weight_measure_range_type() -> Arc<LemmaType> {
+            let weight = weight_measure_type();
+            Arc::new(LemmaType {
+                name: weight.name.clone(),
+                specifications: weight
+                    .specifications
+                    .range_from_element()
+                    .expect("BUG: weight measure defines MeasureRange"),
+                extends: weight.extends.clone(),
+            })
+        }
+
+        fn duration_like_measure_type() -> Arc<LemmaType> {
+            Arc::new(LemmaType::anonymous_for_decomposition(
+                duration_decomposition(),
+            ))
+        }
+
+        fn calendar_like_measure_type() -> Arc<LemmaType> {
+            use crate::computation::rational::rational_one;
+            use crate::planning::semantics::MeasureTrait;
+            Arc::new(LemmaType::new(
+                "calendar".to_string(),
+                TypeSpecification::Measure {
+                    minimum: None,
+                    maximum: None,
+                    decimals: None,
+                    units: MeasureUnits(vec![MeasureUnit {
+                        name: "month".to_string(),
+                        factor: rational_one(),
+                        derived_measure_factors: Vec::new(),
+                        decomposition: calendar_decomposition(),
+                        minimum: None,
+                        maximum: None,
+                        suggestion_magnitude: None,
+                    }]),
+                    traits: vec![MeasureTrait::Calendar],
+                    decomposition: Some(calendar_decomposition()),
+                    help: String::new(),
+                },
+                TypeExtends::Primitive,
+            ))
+        }
+
+        #[test]
+        fn range_span_type_date_range_is_duration_span_not_date_range() {
+            let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
+            let span = range_span_type(&date_range);
+            assert!(span.is_duration_like_measure());
+            assert!(!span.is_date_range());
+            assert!(!span.is_date());
+        }
+
+        #[test]
+        fn range_span_type_time_range_is_duration_span() {
+            let time_range = Arc::new(LemmaType::primitive(TypeSpecification::time_range()));
+            let span = range_span_type(&time_range);
+            assert!(span.is_duration_like_measure());
+            assert!(!span.is_time_range());
+            assert!(!span.is_time());
+        }
+
+        #[test]
+        fn range_span_type_number_range_is_number() {
+            let number_range = Arc::new(LemmaType::primitive(TypeSpecification::number_range()));
+            let span = range_span_type(&number_range);
+            assert!(span.is_number());
+        }
+
+        #[test]
+        fn range_span_type_measure_range_preserves_name_and_extends() {
+            let weight_range = weight_measure_range_type();
+            let span = range_span_type(&weight_range);
+            assert!(span.is_measure());
+            assert!(!span.is_measure_range());
+            assert_eq!(span.name.as_deref(), Some("weight"));
+            assert_eq!(span.extends, weight_range.extends);
+            assert!(span.same_measure_family(weight_measure_type().as_ref()));
+        }
+
+        #[test]
+        fn range_span_type_anonymous_measure_range_preserves_units() {
+            use crate::computation::rational::{decimal_to_rational, rational_one};
+            use rust_decimal::Decimal;
+            let units = MeasureUnits(vec![
+                MeasureUnit {
+                    name: "gram".to_string(),
+                    factor: rational_one(),
+                    derived_measure_factors: Vec::new(),
+                    decomposition: Default::default(),
+                    minimum: None,
+                    maximum: None,
+                    suggestion_magnitude: None,
+                },
+                MeasureUnit {
+                    name: "kilogram".to_string(),
+                    factor: decimal_to_rational(Decimal::from(1000))
+                        .expect("BUG: kilogram factor must be rational"),
+                    derived_measure_factors: Vec::new(),
+                    decomposition: Default::default(),
+                    minimum: None,
+                    maximum: None,
+                    suggestion_magnitude: None,
+                },
+            ]);
+            let measure_range = Arc::new(LemmaType::without_name(
+                TypeSpecification::MeasureRange {
+                    lower: None,
+                    upper: None,
+                    minimum: None,
+                    maximum: None,
+                    units: units.clone(),
+                    decomposition: None,
+                    help: String::new(),
+                },
+                TypeExtends::Primitive,
+            ));
+            let span = range_span_type(&measure_range);
+            assert!(span.is_measure());
+            assert!(span.is_anonymous_measure());
+            match &span.specifications {
+                TypeSpecification::Measure {
+                    units: span_units, ..
+                } => {
+                    assert_eq!(span_units, &units);
+                }
+                other => panic!("expected Measure span, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn range_span_type_ratio_range_is_ratio() {
+            let ratio_range = Arc::new(LemmaType::primitive(TypeSpecification::ratio_range()));
+            let span = range_span_type(&ratio_range);
+            assert!(span.is_ratio());
+        }
+
+        #[test]
+        fn range_span_type_non_range_is_undetermined() {
+            let boolean = Arc::new(LemmaType::primitive(TypeSpecification::boolean()));
+            let span = range_span_type(&boolean);
+            assert!(span.is_undetermined());
+        }
+
+        #[test]
+        fn arithmetic_measure_range_plus_measure_yields_named_measure_span() {
+            let weight_range = weight_measure_range_type();
+            let gram = weight_measure_type();
+            let result =
+                compute_arithmetic_result_type(weight_range, &ArithmeticComputation::Add, gram);
+            assert!(result.is_measure());
+            assert!(!result.is_measure_range());
+            assert_eq!(result.name.as_deref(), Some("weight"));
+            assert!(result.same_measure_family(weight_measure_type().as_ref()));
+        }
+
+        #[test]
+        fn arithmetic_measure_range_minus_measure_yields_named_measure_span() {
+            let weight_range = weight_measure_range_type();
+            let gram = weight_measure_type();
+            let result = compute_arithmetic_result_type(
+                weight_range,
+                &ArithmeticComputation::Subtract,
+                gram,
+            );
+            assert!(result.is_measure());
+            assert!(!result.is_measure_range());
+            assert_eq!(result.name.as_deref(), Some("weight"));
+            assert!(result.same_measure_family(weight_measure_type().as_ref()));
+        }
+
+        #[test]
+        fn arithmetic_date_range_plus_duration_yields_duration_span_not_date_range() {
+            let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
+            let duration = duration_like_measure_type();
+            let result =
+                compute_arithmetic_result_type(date_range, &ArithmeticComputation::Add, duration);
+            assert!(result.is_duration_like_measure());
+            assert!(!result.is_date_range());
+            assert!(!result.is_date());
+        }
+
+        #[test]
+        fn arithmetic_date_range_plus_calendar_yields_date_range() {
+            let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
+            let calendar = calendar_like_measure_type();
+            let result =
+                compute_arithmetic_result_type(date_range, &ArithmeticComputation::Add, calendar);
+            assert!(result.is_date_range());
+        }
+    }
 }
 
 // ============================================================================
@@ -7614,13 +9781,13 @@ pub struct ResolvedSpecTypes {
     /// Only present for types that declared a `-> suggest ...` constraint anywhere
     /// in their extension chain; the inner-most `-> suggest` wins. Defaults live
     /// outside [`TypeSpecification`] so the type itself stays free of binding data.
-    /// Populated after [`RawSuggestion`] materialization (post-decomposition).
+    /// Populated after [`value_kind_from_raw_suggestion`] (post-decomposition).
     pub declared_suggestions: HashMap<String, ValueKind>,
 
     /// Defaults captured during type resolution, before measure unit factors are final.
     pub(crate) raw_suggestions: Vec<(String, RawSuggestion)>,
 
-    /// Raw defaults retained after materialization for cross-spec parent lookup during later specs.
+    /// Raw defaults retained after [`value_kind_from_raw_suggestion`] for cross-spec parent lookup during later specs.
     pub(crate) source_defaults: HashMap<String, RawSuggestion>,
 
     /// Unit index: unit_name -> family-root measure type for that unit's family.
@@ -7935,7 +10102,7 @@ impl<'a> TypeResolver<'a> {
                 .resolved
                 .get(&type_name)
                 .expect("BUG: raw default for type not in resolved");
-            match materialize_raw_suggestion(raw, &lemma_type.specifications, &type_name) {
+            match value_kind_from_raw_suggestion(raw, &lemma_type.specifications, &type_name) {
                 Ok(value_kind) => {
                     resolved_types
                         .declared_suggestions
@@ -8810,1241 +10977,6 @@ impl<'a> TypeResolver<'a> {
     }
 }
 
-#[cfg(test)]
-mod type_resolution_tests {
-    use super::*;
-    use crate::computation::rational::rational_new;
-    use crate::parsing::ast::{
-        CommandArg, LemmaSpec, ParentType, PrimitiveKind, TypeConstraintCommand,
-    };
-    use crate::parsing::parse;
-    use crate::ResourceLimits;
-    use rust_decimal::Decimal;
-    use std::sync::Arc;
-
-    fn test_context_and_effective(
-        specs: &[&LemmaSpec],
-    ) -> (&'static Context, &'static EffectiveDate) {
-        use crate::engine::Context;
-        let mut ctx = Context::new();
-        let repository = ctx.workspace();
-        for s in specs {
-            ctx.insert_spec(Arc::clone(&repository), (*s).clone())
-                .unwrap();
-        }
-        let ctx = Box::leak(Box::new(ctx));
-        let eff = Box::leak(Box::new(EffectiveDate::Origin));
-        (ctx, eff)
-    }
-
-    fn ordered_dependencies_and_spec() -> (
-        &'static [discovery::DependencySpec<'static>],
-        &'static LemmaSpec,
-    ) {
-        use crate::engine::Context;
-        let mut ctx = Context::new();
-        let repository = ctx.workspace();
-        let spec = LemmaSpec::new("test_spec".to_string());
-        ctx.insert_spec(Arc::clone(&repository), spec).unwrap();
-        let ctx = Box::leak(Box::new(ctx));
-        let repository = ctx.workspace();
-        let spec = ctx
-            .spec_set(&repository, "test_spec")
-            .and_then(|ss| ss.get_exact(None))
-            .expect("inserted");
-        let ordered_dependencies = Box::leak(Box::new(vec![discovery::DependencySpec {
-            repository: Arc::clone(&repository),
-            spec,
-        }]));
-        (ordered_dependencies.as_slice(), spec)
-    }
-
-    fn resolver_for_code(code: &str) -> (TypeResolver<'static>, Vec<&'static LemmaSpec>) {
-        use crate::engine::Context;
-        let owned = parse(
-            code,
-            crate::parsing::source::SourceType::Volatile,
-            &ResourceLimits::default(),
-        )
-        .unwrap()
-        .into_flattened_specs();
-        let mut ctx = Context::new();
-        let repository = ctx.workspace();
-        for s in owned {
-            ctx.insert_spec(Arc::clone(&repository), s).unwrap();
-        }
-        let ctx = Box::leak(Box::new(ctx));
-        let repository = ctx.workspace();
-        let mut spec_refs: Vec<&'static LemmaSpec> = Vec::new();
-        for ss in ctx.spec_sets_for(&repository) {
-            for s in ss.iter_specs() {
-                spec_refs.push(s);
-            }
-        }
-        let mut resolver = TypeResolver::new(ctx);
-        for spec in &spec_refs {
-            resolver.register_all(&repository, spec);
-        }
-        (resolver, spec_refs)
-    }
-
-    fn resolver_single_spec(code: &str) -> (TypeResolver<'static>, &LemmaSpec) {
-        let (resolver, spec_arcs) = resolver_for_code(code);
-        let spec = spec_arcs.into_iter().next().expect("at least one spec");
-        (resolver, spec)
-    }
-
-    #[test]
-    fn test_type_spec_for_primitive_covers_all_variants() {
-        use crate::parsing::ast::PrimitiveKind;
-        use crate::planning::semantics::type_spec_for_primitive;
-
-        for kind in [
-            PrimitiveKind::Boolean,
-            PrimitiveKind::Measure,
-            PrimitiveKind::MeasureRange,
-            PrimitiveKind::Number,
-            PrimitiveKind::NumberRange,
-            PrimitiveKind::Ratio,
-            PrimitiveKind::RatioRange,
-            PrimitiveKind::Text,
-            PrimitiveKind::Date,
-            PrimitiveKind::DateRange,
-            PrimitiveKind::Time,
-            PrimitiveKind::TimeRange,
-        ] {
-            let spec = type_spec_for_primitive(kind);
-            assert!(
-                !matches!(
-                    spec,
-                    crate::planning::semantics::TypeSpecification::Undetermined
-                ),
-                "type_spec_for_primitive({:?}) returned Undetermined",
-                kind
-            );
-        }
-    }
-
-    #[test]
-    fn test_register_data_type_def() {
-        let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
-        let (ctx, _) = test_context_and_effective(&[spec]);
-        let mut resolver = TypeResolver::new(ctx);
-        let ftd = DataTypeDef {
-            parent: ParentType::Primitive {
-                primitive: PrimitiveKind::Number,
-            },
-            constraints: Some(vec![
-                (
-                    TypeConstraintCommand::Minimum,
-                    vec![CommandArg::Literal(crate::literals::Value::Number(
-                        Decimal::ZERO,
-                    ))],
-                ),
-                (
-                    TypeConstraintCommand::Maximum,
-                    vec![CommandArg::Literal(crate::literals::Value::Number(
-                        Decimal::from(150),
-                    ))],
-                ),
-            ]),
-            source: crate::parsing::source::Source::new(
-                crate::parsing::source::SourceType::Volatile,
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-            ),
-            name: "age".to_string(),
-            bound_literal: None,
-        };
-
-        let result = resolver.register_type(spec, ftd);
-        assert!(result.is_ok());
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        assert!(resolved.resolved.contains_key("age"));
-    }
-
-    #[test]
-    fn test_register_duplicate_type_fails() {
-        let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
-        let (ctx, _) = test_context_and_effective(&[spec]);
-        let mut resolver = TypeResolver::new(ctx);
-        let ftd = DataTypeDef {
-            parent: ParentType::Primitive {
-                primitive: PrimitiveKind::Number,
-            },
-            constraints: None,
-            source: crate::parsing::source::Source::new(
-                crate::parsing::source::SourceType::Volatile,
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-            ),
-            name: "money".to_string(),
-            bound_literal: None,
-        };
-        resolver.register_type(spec, ftd.clone()).unwrap();
-        let result = resolver.register_type(spec, ftd);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_resolve_custom_type_from_primitive() {
-        let (_ordered_dependencies, spec) = ordered_dependencies_and_spec();
-        let (ctx, _) = test_context_and_effective(&[spec]);
-        let mut resolver = TypeResolver::new(ctx);
-        let ftd = DataTypeDef {
-            parent: ParentType::Primitive {
-                primitive: PrimitiveKind::Number,
-            },
-            constraints: None,
-            source: crate::parsing::source::Source::new(
-                crate::parsing::source::SourceType::Volatile,
-                crate::parsing::ast::Span {
-                    start: 0,
-                    end: 0,
-                    line: 1,
-                    col: 0,
-                },
-            ),
-            name: "money".to_string(),
-            bound_literal: None,
-        };
-
-        resolver.register_type(spec, ftd).unwrap();
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-
-        assert!(resolved.resolved.contains_key("money"));
-        let money_type = resolved.resolved.get("money").unwrap();
-        assert_eq!(money_type.name, Some("money".to_string()));
-    }
-
-    #[test]
-    fn test_child_measure_type_keeps_declared_name_and_child_units() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data length: measure
-  -> unit meter 1
-data road_length: length
-  -> unit kilometer 1000"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-
-        let road_length_type = resolved_types.resolved.get("road_length").unwrap();
-        assert_eq!(road_length_type.name.as_deref(), Some("road_length"));
-
-        match &road_length_type.specifications {
-            TypeSpecification::Measure { units, .. } => {
-                assert!(units.iter().any(|unit| unit.name == "kilometer"));
-            }
-            _ => panic!("Expected Measure type specifications"),
-        }
-
-        let kilometer_owner = resolved_types.unit_index.get("kilometer").unwrap();
-        assert_eq!(kilometer_owner.name.as_deref(), Some("road_length"));
-    }
-
-    #[test]
-    fn test_type_definition_resolution() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data dice: number -> minimum 0 -> maximum 6"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let dice_type = resolved_types.resolved.get("dice").unwrap();
-
-        match &dice_type.specifications {
-            TypeSpecification::Number {
-                minimum, maximum, ..
-            } => {
-                assert_eq!(minimum, &Some(rational_new(0, 1)));
-                assert_eq!(maximum, &Some(rational_new(6, 1)));
-            }
-            _ => panic!("Expected Number type specifications"),
-        }
-    }
-
-    #[test]
-    fn test_type_definition_with_multiple_commands() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure -> decimals 2 -> unit eur 1.0 -> unit usd 1.18"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let money_type = resolved_types.resolved.get("money").unwrap();
-
-        match &money_type.specifications {
-            TypeSpecification::Measure {
-                decimals, units, ..
-            } => {
-                assert_eq!(*decimals, Some(2));
-                assert_eq!(units.len(), 2);
-                assert!(units.iter().any(|u| u.name == "eur"));
-                assert!(units.iter().any(|u| u.name == "usd"));
-            }
-            _ => panic!("Expected Measure type specifications"),
-        }
-    }
-
-    #[test]
-    fn test_number_type_with_decimals() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data price: number -> decimals 2 -> minimum 0"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let price_type = resolved_types.resolved.get("price").unwrap();
-
-        match &price_type.specifications {
-            TypeSpecification::Number {
-                decimals, minimum, ..
-            } => {
-                assert_eq!(*decimals, Some(2));
-                assert_eq!(minimum, &Some(rational_new(0, 1)));
-            }
-            _ => panic!("Expected Number type specifications with decimals"),
-        }
-    }
-
-    #[test]
-    fn test_number_type_decimals_only() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data precise_number: number -> decimals 4"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let precise_type = resolved_types.resolved.get("precise_number").unwrap();
-
-        match &precise_type.specifications {
-            TypeSpecification::Number { decimals, .. } => {
-                assert_eq!(*decimals, Some(4));
-            }
-            _ => panic!("Expected Number type with decimals 4"),
-        }
-    }
-
-    #[test]
-    fn test_measure_type_decimals_only() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data weight: measure -> unit kg 1 -> decimals 3"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let weight_type = resolved_types.resolved.get("weight").unwrap();
-
-        match &weight_type.specifications {
-            TypeSpecification::Measure { decimals, .. } => {
-                assert_eq!(*decimals, Some(3));
-            }
-            _ => panic!("Expected Measure type with decimals 3"),
-        }
-    }
-
-    #[test]
-    fn test_ratio_type_accepts_optional_decimals_command() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data ratio_type: ratio -> decimals 2"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let ratio_type = resolved_types.resolved.get("ratio_type").unwrap();
-
-        match &ratio_type.specifications {
-            TypeSpecification::Ratio { decimals, .. } => {
-                assert_eq!(
-                    *decimals,
-                    Some(2),
-                    "ratio type should accept decimals command"
-                );
-            }
-            _ => panic!("Expected Ratio type with decimals 2"),
-        }
-    }
-
-    #[test]
-    fn typedef_default_inherits_through_extension_chain() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure -> unit eur 1 -> suggest 4 eur
-data price: money
-data final_price: price"#,
-        );
-
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("extension chain must resolve");
-
-        assert!(
-            resolved.declared_suggestions.contains_key("money"),
-            "base typedef default must materialize"
-        );
-        assert!(
-            resolved.declared_suggestions.contains_key("final_price"),
-            "suggestion must inherit through extension chain (money → price → final_price)"
-        );
-    }
-
-    #[test]
-    fn test_ratio_type_with_default_command() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data percentage: ratio -> minimum 0% -> maximum 100% -> suggest 50%"#,
-        );
-
-        let resolved_types = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let percentage_type = resolved_types.resolved.get("percentage").unwrap();
-
-        match &percentage_type.specifications {
-            TypeSpecification::Ratio {
-                minimum, maximum, ..
-            } => {
-                assert_eq!(
-                    *minimum,
-                    Some(rational_new(0, 1)),
-                    "ratio type should have minimum 0"
-                );
-                assert_eq!(
-                    *maximum,
-                    Some(rational_new(1, 1)),
-                    "ratio type should have maximum 1"
-                );
-            }
-            _ => panic!("Expected Ratio type with minimum and maximum"),
-        }
-
-        let declared = resolved_types
-            .declared_suggestions
-            .get("percentage")
-            .expect("declared default must be tracked for percentage");
-        match declared {
-            ValueKind::Ratio(v, unit) => {
-                assert_eq!(v, &rational_new(1, 2));
-                assert_eq!(unit.as_deref(), Some("percent"));
-            }
-            other => panic!("expected Ratio declared default, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_measure_extension_chain_same_family_units_allowed() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure -> unit eur 1
-data money2: money -> unit usd 1.24"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_ok(),
-            "Measure extension chain should resolve: {:?}",
-            result.err()
-        );
-
-        let resolved = result.unwrap();
-        assert!(
-            resolved.unit_index.contains_key("eur"),
-            "eur should be in unit_index"
-        );
-        assert!(
-            resolved.unit_index.contains_key("usd"),
-            "usd should be in unit_index"
-        );
-        let eur_type = resolved.unit_index.get("eur").unwrap();
-        let usd_type = resolved.unit_index.get("usd").unwrap();
-        assert_eq!(
-            eur_type.name.as_deref(),
-            Some("money2"),
-            "more derived type (money2) should own inherited eur"
-        );
-        assert_eq!(
-            usd_type.name.as_deref(),
-            Some("money2"),
-            "usd defined on money2 should be owned by money2"
-        );
-    }
-
-    #[test]
-    fn test_invalid_parent_type_in_named_type_should_error() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data invalid: nonexistent_type -> minimum 0"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(result.is_err(), "Should reject invalid parent type");
-
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty(), "expected at least one error");
-        let error_msg = errs[0].to_string();
-        assert!(
-            error_msg.contains("Unknown parent") && error_msg.contains("nonexistent_type"),
-            "Error should mention unknown type. Got: {}",
-            error_msg
-        );
-    }
-
-    #[test]
-    fn test_invalid_primitive_type_name_should_error() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data invalid: choice -> option "a""#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(result.is_err(), "Should reject invalid type base 'choice'");
-
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty(), "expected at least one error");
-        let error_msg = errs[0].to_string();
-        assert!(
-            error_msg.contains("Unknown parent") && error_msg.contains("choice"),
-            "Error should mention unknown type 'choice'. Got: {}",
-            error_msg
-        );
-    }
-
-    #[test]
-    fn extension_unit_factor_override_errors() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure
-  -> unit eur 1
-data money2: money
-  -> unit eur 1.10"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "extension child must not override inherited unit factor"
-        );
-        let error_msg = result
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("eur"),
-            "error must name unit eur, got: {error_msg}"
-        );
-        assert!(
-            error_msg.contains("inherited") || error_msg.contains("cannot change"),
-            "error must reject inherited unit redefinition, got: {error_msg}"
-        );
-    }
-
-    #[test]
-    fn inherited_unit_idempotent_redeclare_ok() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure
-  -> unit eur 1
-data money2: money
-  -> unit eur 1"#,
-        );
-
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("idempotent inherited unit redeclare must resolve");
-        let money2 = resolved.resolved.get("money2").expect("money2");
-        match &money2.specifications {
-            TypeSpecification::Measure { units, .. } => {
-                let eur = units.iter().find(|u| u.name == "eur").expect("eur");
-                assert_eq!(
-                    eur.factor.try_to_decimal().unwrap(),
-                    Decimal::ONE,
-                    "eur factor must remain 1"
-                );
-            }
-            other => panic!("expected Measure, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn extension_additive_unit_registers_in_unit_index() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure
-  -> unit eur 1
-data money2: money
-  -> unit usd 1.24"#,
-        );
-
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("additive extension unit must resolve");
-        let money2 = resolved
-            .resolved
-            .get("money2")
-            .expect("money2 resolved")
-            .clone();
-        assert!(
-            resolved.unit_index.contains_key("eur"),
-            "eur must be in unit_index"
-        );
-        assert!(
-            resolved.unit_index.contains_key("usd"),
-            "usd must be in unit_index"
-        );
-        let eur_owner = resolved.unit_index.get("eur").expect("eur owner");
-        let usd_owner = resolved.unit_index.get("usd").expect("usd owner");
-        assert_eq!(
-            eur_owner.name.as_deref(),
-            Some("money2"),
-            "most-derived type must own inherited eur"
-        );
-        assert_eq!(
-            usd_owner.name.as_deref(),
-            Some("money2"),
-            "most-derived type must own new usd"
-        );
-        assert_eq!(eur_owner.as_ref(), money2.as_ref());
-        assert_eq!(usd_owner.as_ref(), money2.as_ref());
-    }
-
-    #[test]
-    fn find_unique_reports_multiple_families_with_same_decomposition() {
-        let code = r#"spec units
-data money: measure
-  -> unit eur 1
-  -> unit usd 0.86
-data mass: measure
-  -> unit kg 1
-data price_eur_per_kg: measure
-  -> unit eur_per_kg eur/kg
-data price_usd_per_kg: measure
-  -> unit usd_per_kg usd/kg
-"#;
-        let (resolver, spec_arcs) = resolver_for_code(code);
-        let units_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "units")
-            .cloned()
-            .expect("units spec");
-        let (context, _) = test_context_and_effective(&spec_arcs);
-        let repository = context.workspace();
-        let resolved = resolver
-            .resolve_and_validate(units_arc, &EffectiveDate::Origin, &ResolvedTypesMap::new())
-            .expect("units resolves");
-        let eur_decomp = resolved
-            .unit_index
-            .get("eur_per_kg")
-            .expect("eur_per_kg")
-            .measure_type_decomposition()
-            .expect("eur_per_kg decomposition")
-            .clone();
-        let map = vec![(repository, units_arc, resolved)];
-
-        let unique = find_unique_measure_type_by_decomposition(&map, units_arc, &eur_decomp);
-        match unique {
-            DecompositionMatch::Multiple(families) => {
-                assert_eq!(families.len(), 2);
-                assert!(families.contains(&"price_eur_per_kg".to_string()));
-                assert!(families.contains(&"price_usd_per_kg".to_string()));
-            }
-            other => panic!("expected Multiple families, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unit_index_maps_family_root_not_binding_alias() {
-        let code = r#"spec units
-data money: measure
-  -> unit eur 1
-data mass: measure
-  -> unit kg 1
-data price_per_weight: measure
-  -> unit eur_per_kg eur/kg
-
-spec consumer
-uses u: units
-data starch_levy_per_kg: u.price_per_weight
-  -> suggest 0.1 eur_per_kg
-data amortization_per_kg: u.price_per_weight
-  -> suggest 0.2 eur_per_kg
-"#;
-        let (resolver, spec_arcs) = resolver_for_code(code);
-        let units_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "units")
-            .cloned()
-            .expect("units spec");
-        let consumer_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "consumer")
-            .cloned()
-            .expect("consumer spec");
-        let (context, _) = test_context_and_effective(&spec_arcs);
-        let repository = context.workspace();
-
-        let mut already_resolved = ResolvedTypesMap::new();
-        let units_types = resolver
-            .resolve_and_validate(units_arc, &EffectiveDate::Origin, &already_resolved)
-            .expect("units spec resolves");
-        let units_price_per_weight = units_types
-            .resolved
-            .get("price_per_weight")
-            .expect("units defines price_per_weight")
-            .clone();
-        already_resolved.push((Arc::clone(&repository), units_arc, units_types));
-
-        let consumer_types = resolver
-            .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
-            .expect("consumer spec resolves");
-
-        let eur_per_kg_owner = consumer_types
-            .unit_index
-            .get("eur_per_kg")
-            .expect("eur_per_kg in unit_index");
-        assert_eq!(
-            eur_per_kg_owner.name.as_deref(),
-            Some("price_per_weight"),
-            "unit must belong to family root, not binding alias row name"
-        );
-        assert_eq!(
-            eur_per_kg_owner.measure_family_name(),
-            Some("price_per_weight")
-        );
-        assert_eq!(eur_per_kg_owner.as_ref(), units_price_per_weight.as_ref());
-
-        let starch_alias = consumer_types
-            .resolved
-            .get("starch_levy_per_kg")
-            .expect("alias row in resolved");
-        assert!(
-            !std::ptr::eq(eur_per_kg_owner.as_ref(), starch_alias.as_ref()),
-            "unit_index must not store binding alias arc"
-        );
-    }
-
-    #[test]
-    fn import_merge_skips_locally_owned_family_root() {
-        let code = r#"spec std_units
-data mass: measure
-  -> unit kilogram 1
-  -> unit kilograms 1
-  -> unit gram 0.001
-
-spec s
-uses u: std_units
-data mass: measure
-  -> unit kg 1
-  -> unit tonne 1000
-rule smoke: true
-"#;
-        let (resolver, spec_arcs) = resolver_for_code(code);
-        let std_units_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "std_units")
-            .cloned()
-            .expect("std_units spec");
-        let consumer_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "s")
-            .cloned()
-            .expect("consumer spec");
-        let (context, _) = test_context_and_effective(&spec_arcs);
-        let repository = context.workspace();
-
-        let mut already_resolved = ResolvedTypesMap::new();
-        let std_units_types = resolver
-            .resolve_and_validate(std_units_arc, &EffectiveDate::Origin, &already_resolved)
-            .expect("std_units resolves");
-        already_resolved.push((Arc::clone(&repository), std_units_arc, std_units_types));
-
-        let consumer_types = resolver
-            .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
-            .expect("consumer resolves");
-
-        let local_mass = consumer_types
-            .resolved
-            .get("mass")
-            .expect("consumer defines mass")
-            .clone();
-
-        assert!(
-            consumer_types.unit_index.contains_key("kg"),
-            "local kg must be indexed"
-        );
-        assert!(
-            consumer_types.unit_index.contains_key("tonne"),
-            "local tonne must be indexed"
-        );
-        assert!(
-            !consumer_types.unit_index.contains_key("kilogram"),
-            "import kilogram must not leak after local shadow"
-        );
-        assert!(
-            !consumer_types.unit_index.contains_key("kilograms"),
-            "import kilograms must not leak after local shadow"
-        );
-        assert!(
-            !consumer_types.unit_index.contains_key("gram"),
-            "import gram must not leak after local shadow"
-        );
-
-        let kg_owner = consumer_types.unit_index.get("kg").expect("kg owner");
-        let tonne_owner = consumer_types.unit_index.get("tonne").expect("tonne owner");
-        assert_eq!(kg_owner.as_ref(), local_mass.as_ref());
-        assert_eq!(tonne_owner.as_ref(), local_mass.as_ref());
-    }
-
-    #[test]
-    fn same_family_same_unit_same_factor_is_idempotent() {
-        let code = r#"spec units_a
-data duration: measure
-  -> unit hour 1
-
-spec consumer
-uses a: units_a
-uses b: units_a
-rule smoke: true
-"#;
-        let (resolver, spec_arcs) = resolver_for_code(code);
-        let units_a_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "units_a")
-            .cloned()
-            .expect("units_a spec");
-        let consumer_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "consumer")
-            .cloned()
-            .expect("consumer spec");
-        let (context, _) = test_context_and_effective(&spec_arcs);
-        let repository = context.workspace();
-
-        let mut already_resolved = ResolvedTypesMap::new();
-        let units_a_types = resolver
-            .resolve_and_validate(units_a_arc, &EffectiveDate::Origin, &already_resolved)
-            .expect("units_a resolves");
-        already_resolved.push((Arc::clone(&repository), units_a_arc, units_a_types));
-
-        let consumer_types = resolver
-            .resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved)
-            .expect("double import of same duration must be idempotent");
-
-        assert!(
-            consumer_types.unit_index.contains_key("hour"),
-            "hour must be indexed once"
-        );
-    }
-
-    #[test]
-    fn same_family_same_unit_different_factor_errors() {
-        let code = r#"spec units_a
-data duration: measure
-  -> unit hour 1
-
-spec units_b
-data duration: measure
-  -> unit hour 60
-
-spec consumer
-uses a: units_a
-uses b: units_b
-rule smoke: true
-"#;
-        let (resolver, spec_arcs) = resolver_for_code(code);
-        let units_a_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "units_a")
-            .cloned()
-            .expect("units_a spec");
-        let units_b_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "units_b")
-            .cloned()
-            .expect("units_b spec");
-        let consumer_arc = spec_arcs
-            .iter()
-            .find(|spec| spec.name == "consumer")
-            .cloned()
-            .expect("consumer spec");
-        let (context, _) = test_context_and_effective(&spec_arcs);
-        let repository = context.workspace();
-
-        let mut already_resolved = ResolvedTypesMap::new();
-        for units_arc in [units_a_arc, units_b_arc] {
-            let units_types = resolver
-                .resolve_and_validate(units_arc, &EffectiveDate::Origin, &already_resolved)
-                .expect("units spec resolves");
-            already_resolved.push((Arc::clone(&repository), units_arc, units_types));
-        }
-
-        let result =
-            resolver.resolve_and_validate(consumer_arc, &EffectiveDate::Origin, &already_resolved);
-        assert!(
-            result.is_err(),
-            "conflicting hour factors in same family must error"
-        );
-        let error_msg = result
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("hour") && error_msg.contains("conflicting factors"),
-            "expected conflicting factor error for hour, got: {error_msg}"
-        );
-    }
-
-    #[test]
-    fn test_spec_level_unit_ambiguity_errors_are_reported() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money_a: measure
-  -> unit eur 1.00
-  -> unit usd 0.84
-
-data money_b: measure
-  -> unit eur 1.00
-  -> unit usd 1.20
-
-data length_a: measure
-  -> unit meter 1.0
-
-data length_b: measure
-  -> unit meter 1.0"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "Expected ambiguous unit definitions to error"
-        );
-
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty(), "expected at least one error");
-        let error_msg = errs
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("eur") || error_msg.contains("usd") || error_msg.contains("meter"),
-            "Error should mention at least one ambiguous unit. Got: {}",
-            error_msg
-        );
-    }
-
-    #[test]
-    fn test_ratio_unit_cross_family_collision_errors() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data q: measure
-  -> unit foo 1
-
-data r: ratio
-  -> unit foo 100"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "measure and ratio must not share a unit name"
-        );
-        let error_msg = result
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("foo"),
-            "expected cross-family collision on 'foo', got: {}",
-            error_msg
-        );
-    }
-
-    #[test]
-    fn test_same_ratio_unit_same_factor_across_types_allowed() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data spread_a: ratio
-  -> unit basis_points 10000
-
-data spread_b: ratio
-  -> unit basis_points 10000"#,
-        );
-
-        resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("same unit name and factor across ratio types must be allowed");
-    }
-
-    #[test]
-    fn test_different_ratio_unit_factor_across_types_errors() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data spread_a: ratio
-  -> unit basis_points 10000
-
-data spread_b: ratio
-  -> unit basis_points 5000"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "unrelated ratio types with different factors for the same unit must error"
-        );
-        let error_msg = result
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("spread_a") && error_msg.contains("spread_b"),
-            "expected ambiguous ratio unit between types, got: {}",
-            error_msg
-        );
-    }
-
-    #[test]
-    fn test_multiple_builtin_ratio_types_share_percent_in_unit_index() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec targets
-data standard_margin_pct: ratio
-  -> minimum 0%
-  -> suggest 15%
-
-data default_credit_insurance_pct: ratio
-  -> suggest 1.5%"#,
-        );
-
-        resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("multiple ratio types with built-in percent must not conflict");
-    }
-
-    #[test]
-    fn test_three_ratio_types_share_builtin_and_custom_unit() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data margin: ratio -> suggest 10%
-data fee: ratio
-  -> unit tenths 10
-data tax: ratio -> suggest 1%"#,
-        );
-
-        resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("builtin percent/permille plus custom tenths on second type must load");
-    }
-
-    #[test]
-    fn test_ratio_unit_index_allows_builtin_after_two_named_types() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data first_ratio: ratio -> suggest 5%
-data second_ratio: ratio -> suggest 10%"#,
-        );
-
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .expect("two ratio types with only builtin units");
-
-        assert!(
-            resolved.unit_index.contains_key("percent"),
-            "percent must remain in unit index"
-        );
-        assert!(
-            resolved.unit_index.contains_key("permille"),
-            "permille must remain in unit index"
-        );
-    }
-
-    #[test]
-    fn test_number_type_cannot_have_units() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data price: number
-  -> unit eur 1.00"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(result.is_err(), "Number types must reject unit commands");
-
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty(), "expected at least one error");
-        let error_msg = errs[0].to_string();
-        assert!(
-            error_msg.contains("unit") && error_msg.contains("number"),
-            "Error should mention units are invalid on number. Got: {}",
-            error_msg
-        );
-    }
-
-    #[test]
-    fn test_extending_type_inherits_units() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.84
-
-data my_money: money
-  -> unit gbp 1.30"#,
-        );
-
-        let resolved = resolver
-            .resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new())
-            .unwrap();
-        let my_money_type = resolved.resolved.get("my_money").unwrap();
-
-        match &my_money_type.specifications {
-            TypeSpecification::Measure { units, .. } => {
-                assert_eq!(units.len(), 3);
-                assert!(units.iter().any(|u| u.name == "eur"));
-                assert!(units.iter().any(|u| u.name == "usd"));
-                assert!(units.iter().any(|u| u.name == "gbp"));
-            }
-            other => panic!("Expected Measure type specifications, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn binding_unit_factor_override_errors() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data source_measure: measure
-  -> unit usd 1.00
-data z: source_measure
-  -> unit usd 0.84"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "binding row must not override inherited unit factor"
-        );
-        let error_msg = result
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("usd"),
-            "error must name unit usd, got: {error_msg}"
-        );
-    }
-
-    #[test]
-    fn ratio_extension_unit_factor_override_errors() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data parent: ratio
-  -> unit basis 1
-data child: parent
-  -> unit basis 100"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "ratio extension must not override inherited unit factor"
-        );
-        let error_msg = result
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
-        assert!(
-            error_msg.contains("basis"),
-            "error must name unit basis, got: {error_msg}"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_unit_name_in_same_type_is_error() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data money: measure
-  -> unit eur 1.00
-  -> unit eur 1.19"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(result.is_err(), "duplicate unit name must be rejected");
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty());
-        let msg = errs[0].to_string();
-        assert!(
-            msg.contains("eur"),
-            "error must name the duplicate unit; got: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_unit_name_compound_is_error() {
-        let (resolver, spec) = resolver_single_spec(
-            r#"spec test
-data currency: measure
-  -> unit usd 1.00
-  -> unit eur 0.92
-
-data time_period: measure
-  -> unit year 1
-
-data run_rate: measure
-  -> unit arr usd/year
-  -> unit arr eur/year"#,
-        );
-
-        let result = resolver.resolve_and_validate(spec, &EffectiveDate::Origin, &Vec::new());
-        assert!(
-            result.is_err(),
-            "duplicate compound unit name must be rejected"
-        );
-        let errs = result.unwrap_err();
-        assert!(!errs.is_empty());
-        let msg = errs[0].to_string();
-        assert!(
-            msg.contains("arr"),
-            "error must name the duplicate unit; got: {msg}"
-        );
-    }
-}
-
 // ============================================================================
 // Validation (formerly validation.rs)
 // ============================================================================
@@ -10586,970 +11518,4 @@ pub fn validate_type_specifications(
     }
 
     errors
-}
-
-#[cfg(test)]
-mod validation_tests {
-    use super::*;
-    use crate::computation::rational::rational_new;
-    use crate::parsing::ast::{CommandArg, TypeConstraintCommand};
-    use crate::planning::semantics::TypeSpecification;
-    use rust_decimal::Decimal;
-
-    fn test_source() -> Source {
-        Source::new(
-            crate::parsing::source::SourceType::Volatile,
-            crate::parsing::ast::Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-        )
-    }
-
-    fn apply(
-        mut specs: TypeSpecification,
-        command: TypeConstraintCommand,
-        args: &[CommandArg],
-    ) -> TypeSpecification {
-        let mut suggestion: Option<RawSuggestion> = None;
-        specs
-            .apply_constraint("test", command, args, &mut suggestion)
-            .unwrap();
-        specs
-    }
-
-    fn number_arg(n: i64) -> CommandArg {
-        CommandArg::Literal(crate::literals::Value::Number(Decimal::from(n)))
-    }
-
-    fn date_arg(s: &str) -> CommandArg {
-        let dt = s.parse::<crate::literals::DateTimeValue>().expect("date");
-        CommandArg::Literal(crate::literals::Value::Date(dt))
-    }
-
-    fn time_arg(s: &str) -> CommandArg {
-        let t = s.parse::<crate::literals::TimeValue>().expect("time");
-        CommandArg::Literal(crate::literals::Value::Time(t))
-    }
-
-    #[test]
-    fn validate_number_minimum_greater_than_maximum() {
-        let mut specs = TypeSpecification::number();
-        specs = apply(specs, TypeConstraintCommand::Minimum, &[number_arg(100)]);
-        specs = apply(specs, TypeConstraintCommand::Maximum, &[number_arg(50)]);
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0]
-            .to_string()
-            .contains("minimum 100 is greater than maximum 50"));
-    }
-
-    #[test]
-    fn validate_number_default_below_minimum() {
-        let specs = TypeSpecification::Number {
-            minimum: Some(rational_new(10, 1)),
-            maximum: None,
-            decimals: None,
-            help: String::new(),
-        };
-        let default = ValueKind::Number(rational_new(5, 1));
-
-        let src = test_source();
-        let errors = validate_type_specifications(
-            &specs,
-            Some(&default),
-            "test",
-            &src,
-            None,
-            &HashMap::new(),
-        );
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0]
-            .to_string()
-            .contains("suggestion value 5 is less than minimum 10"));
-    }
-
-    #[test]
-    fn validate_number_default_above_maximum() {
-        let specs = TypeSpecification::Number {
-            minimum: None,
-            maximum: Some(rational_new(100, 1)),
-            decimals: None,
-            help: String::new(),
-        };
-        let default = ValueKind::Number(rational_new(150, 1));
-
-        let src = test_source();
-        let errors = validate_type_specifications(
-            &specs,
-            Some(&default),
-            "test",
-            &src,
-            None,
-            &HashMap::new(),
-        );
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0]
-            .to_string()
-            .contains("suggestion value 150 is greater than maximum 100"));
-    }
-
-    #[test]
-    fn validate_number_default_valid() {
-        let specs = TypeSpecification::Number {
-            minimum: Some(rational_new(0, 1)),
-            maximum: Some(rational_new(100, 1)),
-            decimals: None,
-            help: String::new(),
-        };
-        let default = ValueKind::Number(rational_new(50, 1));
-
-        let src = test_source();
-        let errors = validate_type_specifications(
-            &specs,
-            Some(&default),
-            "test",
-            &src,
-            None,
-            &HashMap::new(),
-        );
-        assert!(errors.is_empty());
-    }
-
-    #[test]
-    fn text_minimum_command_is_rejected() {
-        let mut specs = TypeSpecification::text();
-        let res = specs.apply_constraint(
-            "test",
-            TypeConstraintCommand::Minimum,
-            &[number_arg(5)],
-            &mut None,
-        );
-        assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .contains("Invalid command 'minimum' for text type"));
-    }
-
-    #[test]
-    fn text_maximum_command_is_rejected() {
-        let mut specs = TypeSpecification::text();
-        let res = specs.apply_constraint(
-            "test",
-            TypeConstraintCommand::Maximum,
-            &[number_arg(5)],
-            &mut None,
-        );
-        assert!(res.is_err());
-        assert!(res
-            .unwrap_err()
-            .contains("Invalid command 'maximum' for text type"));
-    }
-
-    #[test]
-    fn validate_text_default_not_in_options() {
-        let specs = TypeSpecification::Text {
-            length: None,
-            options: vec!["red".to_string(), "blue".to_string()],
-            help: String::new(),
-        };
-        let default = ValueKind::Text("green".to_string());
-
-        let src = test_source();
-        let errors = validate_type_specifications(
-            &specs,
-            Some(&default),
-            "test",
-            &src,
-            None,
-            &HashMap::new(),
-        );
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0]
-            .to_string()
-            .contains("suggestion value 'green' is not in allowed options"));
-    }
-
-    #[test]
-    fn validate_ratio_minimum_greater_than_maximum() {
-        let specs = TypeSpecification::Ratio {
-            minimum: Some(rational_new(2, 1)),
-            maximum: Some(rational_new(1, 1)),
-            decimals: None,
-            units: crate::planning::semantics::RatioUnits::new(),
-            help: String::new(),
-        };
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0]
-            .to_string()
-            .contains("minimum 2 is greater than maximum 1"));
-    }
-
-    #[test]
-    fn validate_date_minimum_after_maximum() {
-        let mut specs = TypeSpecification::date();
-        specs = apply(
-            specs,
-            TypeConstraintCommand::Minimum,
-            &[date_arg("2024-12-31")],
-        );
-        specs = apply(
-            specs,
-            TypeConstraintCommand::Maximum,
-            &[date_arg("2024-01-01")],
-        );
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].to_string().contains("minimum")
-                && errors[0].to_string().contains("is after maximum")
-        );
-    }
-
-    #[test]
-    fn validate_date_valid_range() {
-        let mut specs = TypeSpecification::date();
-        specs = apply(
-            specs,
-            TypeConstraintCommand::Minimum,
-            &[date_arg("2024-01-01")],
-        );
-        specs = apply(
-            specs,
-            TypeConstraintCommand::Maximum,
-            &[date_arg("2024-12-31")],
-        );
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
-        assert!(errors.is_empty());
-    }
-
-    #[test]
-    fn validate_time_minimum_after_maximum() {
-        let mut specs = TypeSpecification::time();
-        specs = apply(
-            specs,
-            TypeConstraintCommand::Minimum,
-            &[time_arg("23:00:00")],
-        );
-        specs = apply(
-            specs,
-            TypeConstraintCommand::Maximum,
-            &[time_arg("10:00:00")],
-        );
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&specs, None, "test", &src, None, &HashMap::new());
-        assert_eq!(errors.len(), 1);
-        assert!(
-            errors[0].to_string().contains("minimum")
-                && errors[0].to_string().contains("is after maximum")
-        );
-    }
-
-    #[test]
-    fn large_magnitude_minimum_does_not_fail_type_validation() {
-        use crate::computation::rational::{try_rational_new, BigInt};
-        use crate::literals::MeasureUnits;
-        use crate::planning::semantics::TypeSpecification;
-
-        let too_large = magnitude_beyond_decimal_max();
-        assert_eq!(
-            too_large.try_to_decimal().unwrap_err(),
-            crate::computation::rational::NumericFailure::Overflow,
-        );
-
-        let spec = TypeSpecification::Measure {
-            minimum: Some((too_large, "eur".to_string())),
-            maximum: None,
-            decimals: None,
-            units: MeasureUnits(vec![crate::literals::MeasureUnit {
-                name: "eur".to_string(),
-                factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
-                derived_measure_factors: Default::default(),
-                decomposition: Default::default(),
-                minimum: None,
-                maximum: None,
-                suggestion_magnitude: None,
-            }]),
-            traits: vec![],
-            decomposition: None,
-            help: String::new(),
-        };
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
-        assert!(
-            errors.is_empty(),
-            "internal Q bounds must not fail type validation; output materialization rounds: {:?}",
-            errors.iter().map(|e| e.to_string()).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn large_magnitude_maximum_does_not_fail_type_validation() {
-        use crate::computation::rational::{try_rational_new, BigInt};
-        use crate::literals::MeasureUnits;
-        use crate::planning::semantics::TypeSpecification;
-
-        let too_large = magnitude_beyond_decimal_max();
-        assert_eq!(
-            too_large.try_to_decimal().unwrap_err(),
-            crate::computation::rational::NumericFailure::Overflow,
-        );
-
-        let spec = TypeSpecification::Measure {
-            minimum: None,
-            maximum: Some((too_large, "eur".to_string())),
-            decimals: None,
-            units: MeasureUnits(vec![crate::literals::MeasureUnit {
-                name: "eur".to_string(),
-                factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
-                derived_measure_factors: Default::default(),
-                decomposition: Default::default(),
-                minimum: None,
-                maximum: None,
-                suggestion_magnitude: None,
-            }]),
-            traits: vec![],
-            decomposition: None,
-            help: String::new(),
-        };
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
-        assert!(errors.is_empty(), "got: {:?}", errors);
-    }
-
-    #[test]
-    fn large_magnitude_default_does_not_fail_type_validation() {
-        use crate::computation::rational::{try_rational_new, BigInt};
-        use crate::literals::MeasureUnits;
-        use crate::planning::semantics::TypeSpecification;
-
-        let too_large = magnitude_beyond_decimal_max();
-        assert_eq!(
-            too_large.try_to_decimal().unwrap_err(),
-            crate::computation::rational::NumericFailure::Overflow,
-        );
-
-        let spec = TypeSpecification::Measure {
-            minimum: None,
-            maximum: None,
-            decimals: None,
-            units: MeasureUnits(vec![crate::literals::MeasureUnit {
-                name: "eur".to_string(),
-                factor: try_rational_new(BigInt::one(), BigInt::one()).expect("BUG: test rational"),
-                derived_measure_factors: Default::default(),
-                decomposition: Default::default(),
-                minimum: None,
-                maximum: None,
-                suggestion_magnitude: Some(too_large),
-            }]),
-            traits: vec![],
-            decomposition: None,
-            help: String::new(),
-        };
-
-        let src = test_source();
-        let errors =
-            validate_type_specifications(&spec, None, "money", &src, None, &HashMap::new());
-        assert!(errors.is_empty(), "got: {:?}", errors);
-    }
-
-    fn magnitude_beyond_decimal_max() -> crate::computation::rational::RationalInteger {
-        use crate::computation::rational::{decimal_to_rational, rational_new, try_mul};
-        use rust_decimal::Decimal;
-        let max = Decimal::MAX.normalize();
-        let max_rational = decimal_to_rational(max).expect("BUG: Decimal::MAX must lift to Q");
-        try_mul(&max_rational, &rational_new(2, 1))
-            .expect("BUG: test rational multiply must succeed")
-    }
-
-    #[test]
-    fn empty_measure_signature_unit_must_not_coerce_as_unknown_empty_string() {
-        use crate::computation::rational::rational_new;
-        use crate::literals::MeasureUnits;
-        use crate::planning::semantics::{LemmaType, LiteralValue, TypeSpecification, ValueKind};
-
-        let schema_type = Arc::new(LemmaType {
-            name: Some("money".to_string()),
-            extends: TypeExtends::Primitive,
-            specifications: TypeSpecification::Measure {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: MeasureUnits(vec![crate::literals::MeasureUnit {
-                    name: "eur".to_string(),
-                    factor: rational_new(1, 1),
-                    derived_measure_factors: Default::default(),
-                    decomposition: Default::default(),
-                    minimum: None,
-                    maximum: None,
-                    suggestion_magnitude: None,
-                }]),
-                traits: vec![],
-                decomposition: Default::default(),
-                help: String::new(),
-            },
-        });
-
-        let literal = LiteralValue {
-            value: ValueKind::Measure(rational_new(1, 1), vec![("".to_string(), 1)]),
-            lemma_type: Arc::clone(&schema_type),
-        };
-
-        let result = Graph::coerce_literal_to_schema_type(&literal, &schema_type);
-
-        assert!(
-            result.is_err(),
-            "empty unit name in measure signature must not coerce successfully"
-        );
-        if let Err(message) = result {
-            assert!(
-                !message.contains("unknown unit ''"),
-                "must not treat missing unit as empty-string validation error, got: {message}"
-            );
-        }
-    }
-
-    #[test]
-    fn refresh_named_range_specs_missing_element_must_not_leave_unconverted_measure() {
-        use crate::engine::Context;
-        use crate::parsing::ast::{LemmaSpec, ParentType, Span};
-        use crate::parsing::source::{Source, SourceType};
-        use crate::planning::semantics::primitive_measure_arc;
-
-        let ctx = Box::leak(Box::new(Context::new()));
-        let resolver = TypeResolver::new(ctx);
-        let spec = LemmaSpec::new("t".to_string());
-        let source = Source::new(
-            SourceType::Volatile,
-            Span {
-                start: 0,
-                end: 0,
-                line: 1,
-                col: 0,
-            },
-        );
-        let mut data_defs = HashMap::new();
-        data_defs.insert(
-            "band".to_string(),
-            DataTypeDef {
-                parent: ParentType::Ranged {
-                    inner: Box::new(ParentType::Custom {
-                        name: "ghost".to_string(),
-                    }),
-                },
-                constraints: None,
-                source: source.clone(),
-                name: "band".to_string(),
-                bound_literal: None,
-            },
-        );
-        let mut resolved = HashMap::new();
-        resolved.insert("band".to_string(), primitive_measure_arc().clone());
-        let mut defaults = HashMap::new();
-        let already_resolved = ResolvedTypesMap::new();
-
-        let errors = refresh_named_range_specs(
-            &resolver,
-            &spec,
-            &data_defs,
-            &mut resolved,
-            &mut defaults,
-            &already_resolved,
-            &EffectiveDate::Origin,
-        );
-
-        assert!(
-            !errors.is_empty(),
-            "planning must error when ranged inner type is missing"
-        );
-        assert!(
-            errors[0]
-                .to_string()
-                .contains("references missing element type 'ghost'"),
-            "got: {}",
-            errors[0]
-        );
-    }
-
-    fn apply_n_text_options_counting_clones(option_count: usize) -> (TypeSpecification, u64) {
-        let spec = LemmaSpec::new("wide_options".to_string());
-        let source = test_source();
-        let constraints: Vec<Constraint> = (0..option_count)
-            .map(|i| {
-                (
-                    TypeConstraintCommand::Option,
-                    vec![CommandArg::Literal(crate::literals::Value::Text(
-                        i.to_string(),
-                    ))],
-                )
-            })
-            .collect();
-
-        TEXT_OPTION_CLONE_BYTES.with(|count| count.set(0));
-        TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(true));
-        let mut suggestion = None;
-        let result = apply_constraints_to_spec(
-            &spec,
-            "code",
-            TypeSpecification::text(),
-            &constraints,
-            &source,
-            &mut suggestion,
-        );
-        let copies = TEXT_OPTION_CLONE_BYTES.with(|count| count.get());
-        TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(false));
-        let specs = result.expect("options must apply");
-        (specs, copies)
-    }
-
-    #[test]
-    fn apply_constraints_option_string_copies_scale_near_linear() {
-        let (specs_16, copies_16) = apply_n_text_options_counting_clones(16);
-        let (specs_64, copies_64) = apply_n_text_options_counting_clones(64);
-
-        match &specs_16 {
-            TypeSpecification::Text { options, .. } => {
-                assert_eq!(options.len(), 16);
-            }
-            other => panic!("expected Text, got {other:?}"),
-        }
-        match &specs_64 {
-            TypeSpecification::Text { options, .. } => {
-                assert_eq!(options.len(), 64);
-            }
-            other => panic!("expected Text, got {other:?}"),
-        }
-
-        // In-place apply: success path must not clone Text options (0 bytes).
-        // Quadratic success-path clones yield copies(64)/copies(16) ≈ 16.
-        if copies_16 == 0 && copies_64 == 0 {
-            TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(true));
-            TEXT_OPTION_CLONE_BYTES.with(|count| count.set(0));
-            record_text_option_clone_bytes(&specs_64);
-            TEXT_OPTION_CLONE_ENABLED.with(|enabled| enabled.set(false));
-            let probe = TEXT_OPTION_CLONE_BYTES.with(|count| count.get());
-            assert!(
-                probe > 0,
-                "instrumentation must still observe Text option bytes when recording"
-            );
-            return;
-        }
-        let ratio = copies_64 as f64 / copies_16 as f64;
-        assert!(
-            ratio < 8.0,
-            "option constraint apply must scale near-linear; copies(16)={copies_16} copies(64)={copies_64} ratio={ratio} (quadratic ≈ 16)"
-        );
-    }
-}
-
-#[cfg(test)]
-mod decomposition_promotion_tests {
-    use super::*;
-    use crate::engine::Context;
-    use crate::parsing::parse;
-    use crate::ResourceLimits;
-    use std::sync::Arc;
-
-    fn insert_parsed_repos(ctx: &mut Context, code: &str) {
-        let result = parse(
-            code,
-            crate::parsing::source::SourceType::Volatile,
-            &ResourceLimits::default(),
-        )
-        .expect("parse");
-        for (repo_arc, specs) in result.repositories {
-            for spec in specs {
-                ctx.insert_spec(Arc::clone(&repo_arc), spec)
-                    .expect("insert spec");
-            }
-        }
-    }
-
-    fn repo_by_name(ctx: &Context, name: &str) -> Arc<LemmaRepository> {
-        ctx.repositories()
-            .keys()
-            .find(|r| r.name.as_deref() == Some(name))
-            .cloned()
-            .expect("repository must exist after insert")
-    }
-
-    fn resolve_specs_in_order<'a>(
-        resolver: &TypeResolver<'a>,
-        repo: &Arc<LemmaRepository>,
-        specs: &[&'a LemmaSpec],
-        local_types: &mut ResolvedTypesMap<'a>,
-    ) {
-        for spec in specs {
-            let types = resolver
-                .resolve_and_validate(spec, &EffectiveDate::Origin, local_types)
-                .unwrap_or_else(|e| panic!("resolve {} failed: {:?}", spec.name, e));
-            local_types.push((Arc::clone(repo), *spec, types));
-        }
-    }
-
-    fn worker_torque_fixture() -> (
-        ResolvedTypesMap<'static>,
-        &'static LemmaSpec,
-        BaseMeasureVector,
-        Arc<LemmaType>,
-    ) {
-        let mut ctx = Context::new();
-        insert_parsed_repos(&mut ctx, crate::stdlib::UNITS_LEMMA);
-        let alpha_code = r#"repo alpha
-spec units
-data force: measure
-  -> unit newton 1
-data length: measure
-  -> unit meter 1
-data torque: measure
-  -> unit nm newton*meter
-
-spec worker
-uses u: alpha units
-data f: 3 newton
-data d: 4 meter
-rule t: f * d
-"#;
-        insert_parsed_repos(&mut ctx, alpha_code);
-        let ctx = Box::leak(Box::new(ctx));
-        let alpha_repo = repo_by_name(ctx, "alpha");
-        let worker = ctx
-            .spec_set(&alpha_repo, "worker")
-            .and_then(|ss| ss.get_exact(None))
-            .expect("worker spec");
-        let units = ctx
-            .spec_set(&alpha_repo, "units")
-            .and_then(|ss| ss.get_exact(None))
-            .expect("alpha units spec");
-        let lemma_repo = repo_by_name(ctx, crate::engine::EMBEDDED_STDLIB_REPOSITORY);
-        let lemma_units = ctx
-            .spec_set(&lemma_repo, "units")
-            .expect("lemma repo")
-            .get_exact(None)
-            .expect("lemma units spec");
-
-        let mut resolver = TypeResolver::new(ctx);
-        for spec in [units, worker] {
-            resolver
-                .register_all(&alpha_repo, spec)
-                .into_iter()
-                .for_each(|e| panic!("register alpha: {e:?}"));
-        }
-        resolver
-            .register_all(&lemma_repo, lemma_units)
-            .into_iter()
-            .for_each(|e| panic!("register lemma units: {e:?}"));
-
-        let mut local_types = ResolvedTypesMap::new();
-        resolve_specs_in_order(
-            &resolver,
-            &lemma_repo,
-            std::slice::from_ref(&lemma_units),
-            &mut local_types,
-        );
-        resolve_specs_in_order(
-            &resolver,
-            &alpha_repo,
-            std::slice::from_ref(&units),
-            &mut local_types,
-        );
-        resolve_specs_in_order(
-            &resolver,
-            &alpha_repo,
-            std::slice::from_ref(&worker),
-            &mut local_types,
-        );
-
-        let alpha_torque = local_types
-            .iter()
-            .find(|(_, s, _)| discovery::same_loaded_spec(s, units))
-            .and_then(|(_, _, t)| t.resolved.get("torque"))
-            .expect("alpha torque type")
-            .clone();
-        let decomp = alpha_torque
-            .measure_type_decomposition()
-            .expect("torque decomposition")
-            .clone();
-
-        (local_types, worker, decomp, alpha_torque)
-    }
-
-    #[test]
-    fn unique_decomposition_carries_matching_arc() {
-        let (map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
-        let unique = find_unique_measure_type_by_decomposition(&map, worker_spec, &decomp);
-        match unique {
-            DecompositionMatch::Unique(arc) => {
-                assert_eq!(*arc, *alpha_torque);
-                assert_eq!(arc.name.as_deref(), Some("torque"));
-            }
-            other => panic!("expected Unique(Arc) torque match, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn find_unique_ignores_polluted_resolved_map() {
-        let (mut map, worker_spec, decomp, alpha_torque) = worker_torque_fixture();
-        map.iter_mut()
-            .find(|(_, s, _)| discovery::same_loaded_spec(s, worker_spec))
-            .expect("worker must be in resolved map")
-            .2
-            .resolved = HashMap::new();
-
-        let unique = find_unique_measure_type_by_decomposition(&map, worker_spec, &decomp);
-        match unique {
-            DecompositionMatch::Unique(arc) => {
-                assert_eq!(*arc, *alpha_torque);
-                assert_eq!(arc.name.as_deref(), Some("torque"));
-            }
-            other => panic!("expected Unique(alpha torque) via unit_index, got {other:?}"),
-        }
-    }
-
-    fn weight_measure_type() -> Arc<LemmaType> {
-        use crate::computation::rational::{decimal_to_rational, rational_one};
-        use rust_decimal::Decimal;
-        Arc::new(LemmaType::new(
-            "weight".to_string(),
-            TypeSpecification::Measure {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: MeasureUnits(vec![
-                    MeasureUnit {
-                        name: "gram".to_string(),
-                        factor: rational_one(),
-                        derived_measure_factors: Vec::new(),
-                        decomposition: Default::default(),
-                        minimum: None,
-                        maximum: None,
-                        suggestion_magnitude: None,
-                    },
-                    MeasureUnit {
-                        name: "kilogram".to_string(),
-                        factor: decimal_to_rational(Decimal::from(1000))
-                            .expect("BUG: kilogram factor must be rational"),
-                        derived_measure_factors: Vec::new(),
-                        decomposition: Default::default(),
-                        minimum: None,
-                        maximum: None,
-                        suggestion_magnitude: None,
-                    },
-                ]),
-                traits: Vec::new(),
-                decomposition: None,
-                help: String::new(),
-            },
-            TypeExtends::Primitive,
-        ))
-    }
-
-    fn weight_measure_range_type() -> Arc<LemmaType> {
-        let weight = weight_measure_type();
-        Arc::new(LemmaType {
-            name: weight.name.clone(),
-            specifications: weight
-                .specifications
-                .range_from_element()
-                .expect("BUG: weight measure defines MeasureRange"),
-            extends: weight.extends.clone(),
-        })
-    }
-
-    fn duration_like_measure_type() -> Arc<LemmaType> {
-        Arc::new(LemmaType::anonymous_for_decomposition(
-            duration_decomposition(),
-        ))
-    }
-
-    fn calendar_like_measure_type() -> Arc<LemmaType> {
-        use crate::computation::rational::rational_one;
-        use crate::planning::semantics::MeasureTrait;
-        Arc::new(LemmaType::new(
-            "calendar".to_string(),
-            TypeSpecification::Measure {
-                minimum: None,
-                maximum: None,
-                decimals: None,
-                units: MeasureUnits(vec![MeasureUnit {
-                    name: "month".to_string(),
-                    factor: rational_one(),
-                    derived_measure_factors: Vec::new(),
-                    decomposition: calendar_decomposition(),
-                    minimum: None,
-                    maximum: None,
-                    suggestion_magnitude: None,
-                }]),
-                traits: vec![MeasureTrait::Calendar],
-                decomposition: Some(calendar_decomposition()),
-                help: String::new(),
-            },
-            TypeExtends::Primitive,
-        ))
-    }
-
-    #[test]
-    fn range_span_type_date_range_is_duration_span_not_date_range() {
-        let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
-        let span = range_span_type(&date_range);
-        assert!(span.is_duration_like_measure());
-        assert!(!span.is_date_range());
-        assert!(!span.is_date());
-    }
-
-    #[test]
-    fn range_span_type_time_range_is_duration_span() {
-        let time_range = Arc::new(LemmaType::primitive(TypeSpecification::time_range()));
-        let span = range_span_type(&time_range);
-        assert!(span.is_duration_like_measure());
-        assert!(!span.is_time_range());
-        assert!(!span.is_time());
-    }
-
-    #[test]
-    fn range_span_type_number_range_is_number() {
-        let number_range = Arc::new(LemmaType::primitive(TypeSpecification::number_range()));
-        let span = range_span_type(&number_range);
-        assert!(span.is_number());
-    }
-
-    #[test]
-    fn range_span_type_measure_range_preserves_name_and_extends() {
-        let weight_range = weight_measure_range_type();
-        let span = range_span_type(&weight_range);
-        assert!(span.is_measure());
-        assert!(!span.is_measure_range());
-        assert_eq!(span.name.as_deref(), Some("weight"));
-        assert_eq!(span.extends, weight_range.extends);
-        assert!(span.same_measure_family(weight_measure_type().as_ref()));
-    }
-
-    #[test]
-    fn range_span_type_anonymous_measure_range_preserves_units() {
-        use crate::computation::rational::{decimal_to_rational, rational_one};
-        use rust_decimal::Decimal;
-        let units = MeasureUnits(vec![
-            MeasureUnit {
-                name: "gram".to_string(),
-                factor: rational_one(),
-                derived_measure_factors: Vec::new(),
-                decomposition: Default::default(),
-                minimum: None,
-                maximum: None,
-                suggestion_magnitude: None,
-            },
-            MeasureUnit {
-                name: "kilogram".to_string(),
-                factor: decimal_to_rational(Decimal::from(1000))
-                    .expect("BUG: kilogram factor must be rational"),
-                derived_measure_factors: Vec::new(),
-                decomposition: Default::default(),
-                minimum: None,
-                maximum: None,
-                suggestion_magnitude: None,
-            },
-        ]);
-        let measure_range = Arc::new(LemmaType::without_name(
-            TypeSpecification::MeasureRange {
-                lower: None,
-                upper: None,
-                minimum: None,
-                maximum: None,
-                units: units.clone(),
-                decomposition: None,
-                help: String::new(),
-            },
-            TypeExtends::Primitive,
-        ));
-        let span = range_span_type(&measure_range);
-        assert!(span.is_measure());
-        assert!(span.is_anonymous_measure());
-        match &span.specifications {
-            TypeSpecification::Measure {
-                units: span_units, ..
-            } => {
-                assert_eq!(span_units, &units);
-            }
-            other => panic!("expected Measure span, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn range_span_type_ratio_range_is_ratio() {
-        let ratio_range = Arc::new(LemmaType::primitive(TypeSpecification::ratio_range()));
-        let span = range_span_type(&ratio_range);
-        assert!(span.is_ratio());
-    }
-
-    #[test]
-    fn range_span_type_non_range_is_undetermined() {
-        let boolean = Arc::new(LemmaType::primitive(TypeSpecification::boolean()));
-        let span = range_span_type(&boolean);
-        assert!(span.is_undetermined());
-    }
-
-    #[test]
-    fn arithmetic_measure_range_plus_measure_yields_named_measure_span() {
-        let weight_range = weight_measure_range_type();
-        let gram = weight_measure_type();
-        let result =
-            compute_arithmetic_result_type(weight_range, &ArithmeticComputation::Add, gram);
-        assert!(result.is_measure());
-        assert!(!result.is_measure_range());
-        assert_eq!(result.name.as_deref(), Some("weight"));
-        assert!(result.same_measure_family(weight_measure_type().as_ref()));
-    }
-
-    #[test]
-    fn arithmetic_measure_range_minus_measure_yields_named_measure_span() {
-        let weight_range = weight_measure_range_type();
-        let gram = weight_measure_type();
-        let result =
-            compute_arithmetic_result_type(weight_range, &ArithmeticComputation::Subtract, gram);
-        assert!(result.is_measure());
-        assert!(!result.is_measure_range());
-        assert_eq!(result.name.as_deref(), Some("weight"));
-        assert!(result.same_measure_family(weight_measure_type().as_ref()));
-    }
-
-    #[test]
-    fn arithmetic_date_range_plus_duration_yields_duration_span_not_date_range() {
-        let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
-        let duration = duration_like_measure_type();
-        let result =
-            compute_arithmetic_result_type(date_range, &ArithmeticComputation::Add, duration);
-        assert!(result.is_duration_like_measure());
-        assert!(!result.is_date_range());
-        assert!(!result.is_date());
-    }
-
-    #[test]
-    fn arithmetic_date_range_plus_calendar_yields_date_range() {
-        let date_range = Arc::new(LemmaType::primitive(TypeSpecification::date_range()));
-        let calendar = calendar_like_measure_type();
-        let result =
-            compute_arithmetic_result_type(date_range, &ArithmeticComputation::Add, calendar);
-        assert!(result.is_date_range());
-    }
 }

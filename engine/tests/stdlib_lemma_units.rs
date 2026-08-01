@@ -21,9 +21,9 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule {rule_name:?} missing"))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 fn expect_plan_error(code: &str, source_file: &str) -> String {
@@ -58,8 +58,9 @@ rule hour: age as hour"#;
             .results
             .get("hour")
             .expect("hour rule")
-            .measure
+            .value
             .as_ref()
+            .and_then(|v| v.measure.as_ref())
             .and_then(|m| m.get("hour"))
             .map(String::as_str),
         Some("1.5")

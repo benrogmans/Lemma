@@ -174,18 +174,12 @@ rule out: r
     let show = engine.show(None, "s", Some(&now)).expect("show");
     let entry = show.data.get("r").expect("data r");
     let default = entry.suggestion.as_ref().expect("declared default");
-    match &default.value {
-        ValueKind::Ratio(n, u) => {
-            assert_eq!(
-                lemma::ValueKind::Number(n.clone())
-                    .as_decimal_magnitude()
-                    .unwrap(),
-                decimal_lit("0.015")
-            );
-            assert_eq!(u.as_deref(), Some("percent"));
-        }
-        other => panic!("expected Ratio default, got {:?}", other),
-    }
+    let percent = default
+        .ratio
+        .as_ref()
+        .and_then(|m| m.get("percent"))
+        .expect("percent magnitude");
+    assert_eq!(decimal_lit(percent), decimal_lit("1.5"));
 }
 
 #[test]
@@ -256,18 +250,12 @@ rule out: r
     let show = engine.show(None, "s", Some(&now)).expect("show");
     let entry = show.data.get("r").expect("data r");
     let default = entry.suggestion.as_ref().expect("declared default");
-    match &default.value {
-        ValueKind::Ratio(n, u) => {
-            assert_eq!(
-                lemma::ValueKind::Number(n.clone())
-                    .as_decimal_magnitude()
-                    .unwrap(),
-                decimal_lit("0.05")
-            );
-            assert_eq!(u.as_deref(), Some("basis_points"));
-        }
-        other => panic!("expected Ratio default, got {:?}", other),
-    }
+    let basis_points = default
+        .ratio
+        .as_ref()
+        .and_then(|m| m.get("basis_points"))
+        .expect("basis_points magnitude");
+    assert_eq!(decimal_lit(basis_points), decimal_lit("500"));
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! Explanation wire types built during evaluation.
+//! Explanation API types built during evaluation.
 //!
 //! Planning ships THE DAG (`NormalForm` nodes with optional fold `origin`).
 //! Evaluation walks that DAG — following non-piecewise origins for structure;
@@ -10,7 +10,7 @@
 //! (no display field) — distinct from a Missing-data veto on a live leaf walk.
 //!
 //! `Piecewise` is eval-internal only. It must be lowered to Rule causes +
-//! winner children before any wire serialize.
+//! winner children before any API serialize.
 
 use crate::planning::semantics::{DataPath, RulePath};
 use serde::{Serialize, Serializer};
@@ -74,10 +74,7 @@ pub enum ExplanationNode {
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
-    UnitEquivalence {
-        text: String,
-    },
-    /// Planning/eval only. Never reaches wire — lowered to causes + winner first.
+    /// Planning/eval only. Never reaches the API — lowered to causes + winner first.
     Piecewise {
         #[serde(serialize_with = "forbid_piecewise_serialize")]
         arms: Vec<PiecewiseArm>,
@@ -116,8 +113,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cause {
     pub condition: String,
-    #[serde(serialize_with = "serialize_option_string")]
-    pub value: Option<String>,
+    pub value: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ExplanationNode>,
 }

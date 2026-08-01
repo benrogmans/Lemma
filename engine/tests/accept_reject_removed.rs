@@ -62,5 +62,5 @@ rule reject: accept
         .expect("run");
     let reject = response.results.get("reject").expect("reject rule");
     assert!(!reject.vetoed);
-    assert_eq!(reject.display.as_deref(), Some("1"));
+    assert_eq!(reject.display(), Some("1"));
 }

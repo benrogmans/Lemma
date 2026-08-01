@@ -1,6 +1,7 @@
-use crate::evaluation::operations::OperationResult;
+use crate::computation::OperationResult;
 use crate::evaluation::response::{EvaluatedRule, Response, RuleResult};
-use crate::planning::semantics::{LiteralValue, RulePath, Source, Span};
+use crate::parsing::ast::Span;
+use crate::planning::semantics::{LiteralValue, RulePath, Source};
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
 
@@ -21,7 +22,9 @@ fn dummy_rule(name: &str) -> EvaluatedRule {
         name: name.to_string(),
         path: RulePath::new(vec![], name.to_string()),
         source_location: dummy_source(),
-        rule_type: crate::planning::semantics::primitive_boolean().clone(),
+        rule_type: crate::planning::semantics::primitive_boolean_arc()
+            .as_ref()
+            .clone(),
     }
 }
 
@@ -29,7 +32,7 @@ fn number_rule_result(name: &str, value: Decimal) -> RuleResult {
     RuleResult::from_operation_result(
         dummy_rule(name),
         &OperationResult::from_literal(LiteralValue::number_from_decimal(value)),
-        crate::planning::semantics::primitive_number(),
+        crate::planning::semantics::primitive_number_arc().as_ref(),
         None,
         Vec::new(),
     )
@@ -45,7 +48,6 @@ fn test_response_serialization() {
     let response = Response {
         spec_name: "test_spec".to_string(),
         effective: "2026-01-01".to_string(),
-        spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
         results,
@@ -73,7 +75,6 @@ fn response_number_json_is_scalar() {
     let response = Response {
         spec_name: "test_spec".to_string(),
         effective: "2026-01-01".to_string(),
-        spec_hash: None,
         spec_effective_from: None,
         spec_effective_to: None,
         results,

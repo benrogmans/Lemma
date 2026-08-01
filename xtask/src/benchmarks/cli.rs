@@ -5,8 +5,8 @@
 //! `cli/benches/engine_profile.rs`.
 
 use super::common::{
-    capture_environment, format_latency_ns, push_environment_block, read_latency_estimate,
-    run_criterion_bench, write_report, EnvironmentInfo, LatencyRow,
+    capture_environment, format_latency_ns, github_source_link, push_environment_block,
+    read_latency_estimate, run_criterion_bench, write_report, EnvironmentInfo, LatencyRow,
 };
 use std::path::Path;
 
@@ -114,9 +114,10 @@ fn compose_report(
         "- Each iteration: blocking `reqwest` POST with `application/x-www-form-urlencoded` body \
          (coffee order, library fees, Dutch net salary) or GET for show-only retrieval.\n",
     );
-    out.push_str(
-        "- Examples loaded from [`../../documentation/examples/`](../../documentation/examples/).\n",
-    );
+    out.push_str(&format!(
+        "- Examples loaded from {}.\n",
+        github_source_link(&env.git_sha, "documentation/examples", true),
+    ));
     out.push_str(
         "- Latency: Criterion (3s warmup, 10s measurement for evaluate group, 5s for show). Median and standard deviation reported.\n\n",
     );
@@ -192,5 +193,9 @@ mod tests {
         assert!(report.contains("POST `/coffee_order`"));
         assert!(report.contains("Envelope JSON serialize"));
         assert!(report.contains("| 1.000 ms |"));
+        assert!(report.contains(
+            "[`documentation/examples`](https://github.com/lemma/lemma/tree/abc123/documentation/examples)"
+        ));
+        assert!(!report.contains("](../../"));
     }
 }

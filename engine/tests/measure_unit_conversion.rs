@@ -26,7 +26,7 @@ fn run_override_veto_message(
     assert!(
         rr.vetoed,
         "rule '{rule_name}' must veto on invalid override, got {:?}",
-        rr.display
+        rr.display()
     );
     rr.veto_reason.clone().expect("veto reason")
 }
@@ -196,7 +196,13 @@ rule taxable: gross - pension
         .unwrap();
 
     assert!(!rule_result.vetoed);
-    let measure = rule_result.measure.as_ref().expect("measure map");
+    let measure = rule_result
+        .value
+        .as_ref()
+        .expect("rule result value")
+        .measure
+        .as_ref()
+        .expect("measure map");
     assert_eq!(measure.get("eur"), Some(&"6384".to_string()));
     assert_eq!(measure.get("usd"), Some(&"7600".to_string()));
 }
@@ -523,7 +529,13 @@ rule total: a + b
         .unwrap();
 
     assert!(!rule.vetoed);
-    let measure = rule.measure.as_ref().expect("measure map");
+    let measure = rule
+        .value
+        .as_ref()
+        .expect("rule result value")
+        .measure
+        .as_ref()
+        .expect("measure map");
     assert_eq!(measure.get("kilogram"), Some(&"1.5".to_string()));
     assert_eq!(measure.get("gram"), Some(&"1500".to_string()));
 }
@@ -555,7 +567,10 @@ rule heavy: package > 1 kilogram
         .find(|r| r.rule.name == "heavy")
         .unwrap();
 
-    assert_eq!(rule.boolean, Some(true));
+    assert_eq!(
+        rule.value.as_ref().expect("rule result value").boolean,
+        Some(true)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -968,7 +983,7 @@ fn reference_named_unit_conversion(
     let in_unit = checked_div(&canonical, &to).expect("reference divide");
     in_unit
         .try_to_decimal()
-        .expect("reference conversion must materialize to decimal")
+        .expect("reference conversion must convert to decimal")
 }
 
 fn eval_rule_measure_magnitude(
@@ -990,7 +1005,7 @@ fn eval_rule_measure_magnitude(
         "rule '{rule_name}' must not Veto, got {:?}",
         rule.veto_reason
     );
-    if let Some(measure) = &rule.measure {
+    if let Some(measure) = rule.value.as_ref().and_then(|v| v.measure.as_ref()) {
         let lit = rule
             .explanation
             .as_ref()
@@ -1219,13 +1234,13 @@ fn precision_many_prime_cycles_explain_tip_only() {
             true,
         )
         .expect("second tip-only explain must complete");
-    let first_display = final_step.display.clone();
+    let first_display = final_step.display().map(str::to_string);
     let second_display = again
         .results
         .get("final_step")
         .expect("final_step")
-        .display
-        .clone();
+        .display()
+        .map(str::to_string);
     assert_eq!(
         first_display, second_display,
         "repeated tip-only explain must be deterministic"
@@ -1286,7 +1301,7 @@ rule step5: step4 as base
         canonical = checked_div(&canonical, &rational_new(2, 1)).expect("divide by two");
         canonical
             .try_to_decimal()
-            .expect("reference must materialize to decimal")
+            .expect("reference must convert to decimal")
     };
 
     let (lemma_amount, unit) = eval_rule_measure_magnitude(&engine, "mixed_arith", "step5");
@@ -1324,7 +1339,7 @@ fn precision_api_display_ping_pong_twenty_unit_toggles() {
     assert_eq!(
         in_spec_amount,
         reference_named_unit_conversion(in_spec_amount, in_spec_factor, in_spec_factor),
-        "step20 in-spec display must match canonical materialization in its own unit"
+        "step20 in-spec display must match canonical RuleResultValue decimal in its own unit"
     );
 
     for index in 0..20 {
@@ -1420,8 +1435,7 @@ rule r: x as minute
         .results
         .get("r")
         .expect("rule r")
-        .display
-        .as_deref()
+        .display()
         .expect("display");
     assert_eq!(display, "5 minute");
 }

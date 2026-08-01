@@ -67,25 +67,34 @@ fn run_calc(data: HashMap<String, String>) -> lemma::Response {
 fn rule_number(response: &lemma::Response, rule: &str) -> Decimal {
     let result = response.get(rule).unwrap_or_else(|_| panic!("rule {rule}"));
     assert!(!result.vetoed, "rule {rule} vetoed");
-    Decimal::from_str(result.number.as_ref().expect("number payload")).expect("decimal")
+    Decimal::from_str(
+        result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .number
+            .as_ref()
+            .expect("number payload"),
+    )
+    .expect("decimal")
 }
 
 fn rule_display(response: &lemma::Response, rule: &str) -> String {
     response
         .get(rule)
         .unwrap_or_else(|_| panic!("rule {rule}"))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 fn rule_measure_display(response: &lemma::Response, rule: &str) -> String {
     response
         .get(rule)
         .unwrap_or_else(|_| panic!("rule {rule}"))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 #[test]

@@ -6,6 +6,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::str::FromStr;
 
 use crate::computation::rational::{self, RationalInteger};
 
@@ -211,7 +212,7 @@ impl MeasureUnit {
     /// Conversion factor as decimal (schema unit factors always commit).
     pub fn factor_decimal(&self) -> Decimal {
         rational::RationalInteger::try_to_decimal(&self.factor)
-            .expect("BUG: measure unit factor must materialize to decimal")
+            .expect("BUG: measure unit factor must convert to decimal")
     }
 
     #[must_use]
@@ -219,7 +220,7 @@ impl MeasureUnit {
         self.minimum.as_ref().map(|bound| {
             bound
                 .try_to_decimal()
-                .expect("BUG: planned measure unit minimum must materialize to decimal")
+                .expect("BUG: planned measure unit minimum must convert to decimal")
         })
     }
 
@@ -228,7 +229,7 @@ impl MeasureUnit {
         self.maximum.as_ref().map(|bound| {
             bound
                 .try_to_decimal()
-                .expect("BUG: planned measure unit maximum must materialize to decimal")
+                .expect("BUG: planned measure unit maximum must convert to decimal")
         })
     }
 
@@ -237,7 +238,7 @@ impl MeasureUnit {
         self.suggestion_magnitude.as_ref().map(|bound| {
             bound
                 .try_to_decimal()
-                .expect("BUG: planned measure unit default must materialize to decimal")
+                .expect("BUG: planned measure unit default must convert to decimal")
         })
     }
 
@@ -249,7 +250,7 @@ impl MeasureUnit {
                 .expect("BUG: planned measure unit maximum canonical multiply must succeed");
             canonical
                 .try_to_decimal()
-                .expect("BUG: planned measure unit maximum canonical must materialize to decimal")
+                .expect("BUG: planned measure unit maximum canonical must convert to decimal")
         })
     }
 }
@@ -462,7 +463,7 @@ impl RatioUnit {
     pub fn value_decimal(&self) -> Decimal {
         self.value
             .try_to_decimal()
-            .expect("BUG: ratio unit value must materialize to decimal")
+            .expect("BUG: ratio unit value must convert to decimal")
     }
 
     #[must_use]
@@ -470,7 +471,7 @@ impl RatioUnit {
         self.minimum.as_ref().map(|bound| {
             bound
                 .try_to_decimal()
-                .expect("BUG: planned ratio unit minimum must materialize to decimal")
+                .expect("BUG: planned ratio unit minimum must convert to decimal")
         })
     }
 
@@ -479,7 +480,7 @@ impl RatioUnit {
         self.maximum.as_ref().map(|bound| {
             bound
                 .try_to_decimal()
-                .expect("BUG: planned ratio unit maximum must materialize to decimal")
+                .expect("BUG: planned ratio unit maximum must convert to decimal")
         })
     }
 
@@ -488,7 +489,7 @@ impl RatioUnit {
         self.suggestion_magnitude.as_ref().map(|bound| {
             bound
                 .try_to_decimal()
-                .expect("BUG: planned ratio unit default must materialize to decimal")
+                .expect("BUG: planned ratio unit default must convert to decimal")
         })
     }
 
@@ -500,7 +501,7 @@ impl RatioUnit {
                 .expect("BUG: planned ratio unit maximum canonical multiply must succeed");
             canonical
                 .try_to_decimal()
-                .expect("BUG: planned ratio unit maximum canonical must materialize to decimal")
+                .expect("BUG: planned ratio unit maximum canonical must convert to decimal")
         })
     }
 }
@@ -649,7 +650,7 @@ impl fmt::Display for BooleanValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TimezoneValue {
     pub offset_hours: i8,
     pub offset_minutes: u8,
@@ -667,14 +668,77 @@ impl fmt::Display for TimezoneValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+impl Serialize for TimezoneValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TimezoneValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl FromStr for TimezoneValue {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let trimmed = s.trim();
+        if trimmed == "Z" || trimmed == "z" {
+            return Ok(Self {
+                offset_hours: 0,
+                offset_minutes: 0,
+            });
+        }
+        if trimmed.len() == 6
+            && (trimmed.starts_with('+') || trimmed.starts_with('-'))
+            && trimmed.as_bytes()[3] == b':'
+        {
+            let offset_hours: i8 = trimmed[1..3]
+                .parse()
+                .map_err(|_| format!("Invalid timezone format: '{s}'"))?;
+            let offset_minutes: u8 = trimmed[4..6]
+                .parse()
+                .map_err(|_| format!("Invalid timezone format: '{s}'"))?;
+            if offset_hours > 23 || offset_minutes >= 60 {
+                return Err(format!("Invalid timezone format: '{s}'"));
+            }
+            let signed_hours = if trimmed.starts_with('-') {
+                -offset_hours
+            } else {
+                offset_hours
+            };
+            return Ok(Self {
+                offset_hours: signed_hours,
+                offset_minutes,
+            });
+        }
+        Err(format!("Invalid timezone format: '{s}'"))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct TimeValue {
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
-    #[serde(default)]
     pub microsecond: u32,
     pub timezone: Option<TimezoneValue>,
+}
+
+impl Serialize for TimeValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TimeValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl fmt::Display for TimeValue {
@@ -709,7 +773,7 @@ pub enum DateGranularity {
     DateTime,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DateTimeValue {
     pub year: i32,
     pub month: u32,
@@ -717,11 +781,22 @@ pub struct DateTimeValue {
     pub hour: u32,
     pub minute: u32,
     pub second: u32,
-    #[serde(default)]
     pub microsecond: u32,
     pub timezone: Option<TimezoneValue>,
-    #[serde(default)]
     pub granularity: DateGranularity,
+}
+
+impl Serialize for DateTimeValue {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for DateTimeValue {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        Self::from_str(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl PartialEq for DateTimeValue {
@@ -1013,24 +1088,9 @@ impl std::str::FromStr for TimeValue {
                     && (timezone_text.starts_with('+') || timezone_text.starts_with('-'))
                     && timezone_text.as_bytes()[3] == b':'
                 {
-                    let offset_hours: i8 = timezone_text[1..3]
-                        .parse()
-                        .map_err(|_| format!("Invalid time format: '{}'", s))?;
-                    let offset_minutes: u8 = timezone_text[4..6]
-                        .parse()
-                        .map_err(|_| format!("Invalid time format: '{}'", s))?;
-                    let signed_hours = if timezone_text.starts_with('-') {
-                        -offset_hours
-                    } else {
-                        offset_hours
-                    };
-                    (
-                        &trimmed[..sign_index],
-                        Some(TimezoneValue {
-                            offset_hours: signed_hours,
-                            offset_minutes,
-                        }),
-                    )
+                    let timezone = TimezoneValue::from_str(timezone_text)
+                        .map_err(|_| format!("Invalid time format: '{s}'"))?;
+                    (&trimmed[..sign_index], Some(timezone))
                 } else {
                     (trimmed, None)
                 }

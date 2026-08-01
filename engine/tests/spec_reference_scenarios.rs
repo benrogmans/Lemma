@@ -50,12 +50,12 @@ fn assert_rule_value(response: &lemma::Response, rule: &str, expected: &str) {
         );
     }
     assert_eq!(
-        result.display.as_deref(),
+        result.display(),
         Some(expected),
         "rule '{}': expected {}, got {:?}",
         rule,
         expected,
-        result.display
+        result.display()
     );
 }
 

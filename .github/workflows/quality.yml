@@ -18,38 +18,43 @@ env:
   WASM_PACK_VERSION: 0.14.0
 
 jobs:
-  test:
-    name: Test
+  precommit:
+    name: cargo precommit --fuzz
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        rust: [stable]
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust == 'stable' && '1.92.0' || matrix.rust }}
+          toolchain: 1.92.0
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Default toolchain is stable
+        run: rustup default 1.92.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: ~/.cargo/registry
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo index
         uses: actions/cache@v4
         with:
           path: ~/.cargo/git
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache cargo build
         uses: actions/cache@v4
         with:
           path: target
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Cache wasm-pack binary
         uses: actions/cache@v4
@@ -68,119 +73,25 @@ jobs:
       - name: Install nextest
         uses: taiki-e/install-action@nextest
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.19.0
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
       - name: Install Elixir
         uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18"
           otp-version: "27"
 
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
-
-      - name: Run tests
-        run: cargo nextest run --workspace --all-features --run-ignored all
-
-      - name: Test Hex package
-        working-directory: engine/packages/hex
-        run: mix precommit
-        env:
-          MIX_ENV: test
-
-      - name: Build and test WASM npm package
-        working-directory: engine/packages/npm
-        run: |
-          node build.js
-          node test.js
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
         with:
-          toolchain: 1.92.0
-          components: clippy, rustfmt
+          distribution: temurin
+          java-version: '21'
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Verify workspace release versions
-        run: cargo run -p xtask -- versions-verify
-
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.92.0
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build release
-        run: cargo build --release --workspace --verbose
-
-      - name: Check engine without registry feature
-        run: cargo check -p lemma-engine --no-default-features
-
-  security:
-    name: Security & Dependencies
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: 1.92.0
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny@0.19.0
-
-      - name: Run cargo-deny
-        run: cargo deny check --config .cargo/deny.toml
+      - name: cargo precommit --fuzz
+        run: cargo precommit --fuzz

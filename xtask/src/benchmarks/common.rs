@@ -179,6 +179,25 @@ pub fn push_environment_block(
     out.push_str("\n```\n\n");
 }
 
+/// GitHub blob/tree URL for a workspace-relative path at `git_sha`.
+///
+/// Documentation is published on lemma.run without the repo tree, so benchmark
+/// reports must link to github.com/lemma/lemma at the measured commit rather
+/// than using relative paths into this checkout.
+pub fn github_source_url(git_sha: &str, path: &str, is_directory: bool) -> String {
+    let trimmed = path.trim_start_matches("./").trim_end_matches('/');
+    let kind = if is_directory { "tree" } else { "blob" };
+    format!("https://github.com/lemma/lemma/{kind}/{git_sha}/{trimmed}")
+}
+
+/// Markdown link whose label is the workspace-relative path and whose target is
+/// the GitHub URL for that path at `git_sha`.
+pub fn github_source_link(git_sha: &str, path: &str, is_directory: bool) -> String {
+    let label = path.trim_start_matches("./").trim_end_matches('/');
+    let url = github_source_url(git_sha, label, is_directory);
+    format!("[`{label}`]({url})")
+}
+
 pub fn write_report(root: &Path, relative: &str, report: &str) -> Result<(), String> {
     let out = root.join(relative);
     if let Some(parent) = out.parent() {
@@ -215,5 +234,17 @@ mod tests {
     #[test]
     fn format_latency_ns_uses_microseconds() {
         assert_eq!(format_latency_ns(22_580.0), "22.58 us");
+    }
+
+    #[test]
+    fn github_source_link_pins_blob_and_tree_to_sha() {
+        assert_eq!(
+            github_source_link("abc123", "engine/benches/specs/shipping.lemma", false),
+            "[`engine/benches/specs/shipping.lemma`](https://github.com/lemma/lemma/blob/abc123/engine/benches/specs/shipping.lemma)"
+        );
+        assert_eq!(
+            github_source_link("abc123", "engine/benches/python/business_rules/", true),
+            "[`engine/benches/python/business_rules`](https://github.com/lemma/lemma/tree/abc123/engine/benches/python/business_rules)"
+        );
     }
 }

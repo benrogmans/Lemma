@@ -93,7 +93,7 @@ rule r: age
         .expect("run");
     let r = response.results.get("r").expect("r");
     assert!(!r.vetoed, "age bound");
-    assert_eq!(r.display.as_deref(), Some("1"));
+    assert_eq!(r.display(), Some("1"));
 }
 
 #[test]
@@ -147,7 +147,7 @@ rule uses_y: y * 2
     );
     let uses_y = response.results.get("uses_y").expect("uses_y");
     assert!(!uses_y.vetoed);
-    assert_eq!(uses_y.display.as_deref(), Some("6"));
+    assert_eq!(uses_y.display(), Some("6"));
 }
 
 #[test]
@@ -195,7 +195,7 @@ rule r: age
         reason.contains("Missing data") && reason.contains("age"),
         "got: {reason}"
     );
-    assert_ne!(r.display.as_deref(), Some("18"));
+    assert_ne!(r.display(), Some("18"));
 }
 
 #[test]

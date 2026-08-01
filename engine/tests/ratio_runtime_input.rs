@@ -86,7 +86,7 @@ fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
     assert!(
         rr.vetoed,
         "expected '{raw}' to be rejected via veto, got value {:?}",
-        rr.display
+        rr.display()
     );
     rr.veto_reason.clone().expect("veto reason")
 }

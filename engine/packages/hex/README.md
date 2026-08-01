@@ -110,7 +110,7 @@ Lemma.run(engine, %{spec: "pricing"}, %{data: %{"quantity" => 42}, explain: fals
 Lemma.run(engine, %{spec: "pricing"}, %{data: %{"rate" => 0.075}, explain: false})      # raises — use string
 ```
 
-With `explain: true`, each rule result may include an `explanation` object matching [`explanation.v1.json`](../../../documentation/schemas/explanation.v1.json).
+With `explain: true`, each rule result may include an `explanation` object matching [`api.v1.json`](../../../documentation/schemas/api.v1.json) (`RuleResult.explanation`).
 
 ## Engine lifecycle
 

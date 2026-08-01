@@ -1,9 +1,9 @@
 //! Type casts (`as number`, `as text`, `as eur`, …).
 
+use crate::computation::operation_result::OperationResult;
 use crate::computation::rational::{
     checked_div, checked_mul, rational_new, rational_one, RationalInteger,
 };
-use crate::evaluation::operations::OperationResult;
 use crate::parsing::ast::PrimitiveKind;
 use crate::planning::semantics::{
     calendar_unit_factor, primitive_number_arc, primitive_text_arc, LiteralValue,
@@ -140,9 +140,9 @@ fn cast_number_to_unit(
     let canonical = match checked_mul(&magnitude, &factor) {
         Ok(v) => v,
         Err(failure) => {
-            return OperationResult::Veto(crate::evaluation::operations::VetoType::computation(
-                failure.to_string(),
-            ))
+            return OperationResult::Veto(
+                crate::computation::operation_result::VetoType::computation(failure.to_string()),
+            )
         }
     };
     OperationResult::from_literal(LiteralValue::measure_with_type(

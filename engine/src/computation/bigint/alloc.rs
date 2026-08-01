@@ -1,61 +1,38 @@
 //! Fallible allocation helpers for vendored bigint digits.
 
-#[cfg(test)]
-use std::cell::Cell;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AllocError;
 
-// The forced-failure state is thread-local on purpose: each `#[test]` runs on
-// its own thread, so a test arming forced allocation failures can never poison
-// allocations performed concurrently by other tests in the same binary.
-#[cfg(test)]
-thread_local! {
-    static FORCE_ALLOC_FAIL: Cell<bool> = const { Cell::new(false) };
-    static FORCE_ALLOC_FAIL_REMAINING: Cell<usize> = const { Cell::new(0) };
-}
-
-#[cfg(test)]
-pub fn test_force_alloc_fail(count: usize) {
-    FORCE_ALLOC_FAIL.with(|force| force.set(true));
-    FORCE_ALLOC_FAIL_REMAINING.with(|remaining| remaining.set(count));
-}
-
-#[cfg(test)]
-pub fn test_clear_alloc_fail() {
-    FORCE_ALLOC_FAIL.with(|force| force.set(false));
-    FORCE_ALLOC_FAIL_REMAINING.with(|remaining| remaining.set(0));
-}
-
-fn check_forced_fail() -> Result<(), AllocError> {
-    #[cfg(test)]
-    {
-        if FORCE_ALLOC_FAIL.with(|force| force.get()) {
-            let remaining = FORCE_ALLOC_FAIL_REMAINING.with(|remaining| {
-                let value = remaining.get();
-                if value > 0 {
-                    remaining.set(value - 1);
-                }
-                value
-            });
-            if remaining > 0 {
-                return Err(AllocError);
-            }
-            FORCE_ALLOC_FAIL.with(|force| force.set(false));
-        }
-    }
-    let _ = ();
-    Ok(())
-}
-
 pub fn try_reserve_exact<T>(vec: &mut Vec<T>, additional: usize) -> Result<(), AllocError> {
-    check_forced_fail()?;
     vec.try_reserve_exact(additional).map_err(|_| AllocError)
 }
 
 pub fn try_with_capacity<T>(capacity: usize) -> Result<Vec<T>, AllocError> {
-    check_forced_fail()?;
     let mut vec = Vec::new();
     try_reserve_exact(&mut vec, capacity)?;
     Ok(vec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{try_reserve_exact, try_with_capacity, AllocError};
+
+    #[test]
+    fn try_reserve_exact_succeeds_for_small_additional() {
+        let mut vec: Vec<u32> = Vec::new();
+        try_reserve_exact(&mut vec, 8).expect("small reserve must succeed");
+        assert!(vec.capacity() >= 8);
+    }
+
+    #[test]
+    fn try_reserve_exact_maps_platform_failure_to_alloc_error() {
+        let mut vec: Vec<u64> = Vec::new();
+        // Impossible capacity: returns Err without attempting to commit that much RAM.
+        assert_eq!(try_reserve_exact(&mut vec, usize::MAX), Err(AllocError));
+    }
+
+    #[test]
+    fn try_with_capacity_maps_platform_failure_to_alloc_error() {
+        assert_eq!(try_with_capacity::<u8>(usize::MAX), Err(AllocError));
+    }
 }

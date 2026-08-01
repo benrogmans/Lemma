@@ -4,12 +4,12 @@
 //! from Kind. Values always come from Kind.
 
 use crate::computation::{
-    arithmetic_operation, comparison_operation, convert_unit_operand, UnitResolutionContext,
+    arithmetic_operation, comparison_operation, convert_unit_operand, OperationResult,
+    UnitResolutionContext, VetoType,
 };
 use crate::evaluation::branch_semantics::{condition_outcome, BranchOutcome};
 use crate::evaluation::explanations::{format_operation_result, Explanation};
 use crate::evaluation::expression::{evaluate_mathematical_operator, resolve_data_path_value};
-use crate::evaluation::operations::{OperationResult, VetoType};
 use crate::evaluation::EvaluationContext;
 use crate::planning::execution_plan::{ExecutableRule, ExecutionPlan};
 use crate::planning::explanation::{Cause, ExplanationNode};
@@ -210,10 +210,10 @@ fn ensure_rule_explained(rule_path: &RulePath, plan: &ExecutionPlan, ctx: &mut E
         }
 
         let (result, explanation) = {
-            let previous = ctx.record_releases;
-            ctx.record_releases = false;
+            let previous = ctx.record_control_decisions;
+            ctx.record_control_decisions = false;
             let out = evaluate_rule_explained(rule, plan, ctx);
-            ctx.record_releases = previous;
+            ctx.record_control_decisions = previous;
             out
         };
         if explanation.name != current {
@@ -314,10 +314,10 @@ fn eval_uncached(
                 return explain_with_piecewise_origin(id, origin, plan, ctx);
             }
             let value = eval(id, plan, ctx, false);
-            let previous = ctx.record_releases;
-            ctx.record_releases = false;
+            let previous = ctx.record_control_decisions;
+            ctx.record_control_decisions = false;
             let mut explained = eval(origin, plan, ctx, true);
-            ctx.record_releases = previous;
+            ctx.record_control_decisions = previous;
             explained.result = value.result;
             return explained;
         }
@@ -330,9 +330,9 @@ fn eval_uncached(
         if let Some(cached) = ctx.rule_results.get(&path) {
             return Explained::value_only(cached.clone());
         }
-        // Evaluate this use-site cell (same Kind as bare body). Control ids for
-        // data_releases are the use-site ids fill_data_releases recorded under
-        // the outer release_rule — not the bare rule.normal_form id.
+        // Evaluate this use-site cell (same Kind as bare body). Dead control edges
+        // accumulated so far carry over: use-site NormalFormIds are the same shared
+        // nodes that dead-edge recording uses.
         let explained = eval_use_site_algebra(id, plan, ctx, false);
         ctx.rule_results.insert(path, explained.result.clone());
         return explained;
@@ -365,15 +365,15 @@ fn explain_with_piecewise_origin(
         panic!("BUG: explain_with_piecewise_origin requires Piecewise origin");
     };
     let recorded = recorded.clone();
-    let previous = ctx.record_releases;
-    ctx.record_releases = false;
+    let previous = ctx.record_control_decisions;
+    ctx.record_control_decisions = false;
     let causes = piecewise_causes_from_record(&recorded, plan, ctx);
 
     let mut body = match &plan.normal_form(current_id).kind {
         NormalFormKind::Piecewise(kept) => evaluate_piecewise(current_id, kept, plan, ctx, true),
         _ => eval_kind(current_id, plan, ctx, true),
     };
-    ctx.record_releases = previous;
+    ctx.record_control_decisions = previous;
     body.result = value.result;
     body.causes = causes;
     body
@@ -495,7 +495,6 @@ fn collect_evaluated_data(node: &ExplanationNode, out: &mut HashMap<DataPath, Ex
         }
         ExplanationNode::DataUnused { .. }
         | ExplanationNode::Veto { .. }
-        | ExplanationNode::UnitEquivalence { .. }
         | ExplanationNode::Piecewise { .. } => {}
     }
 }
@@ -574,7 +573,7 @@ fn cause_from_record_condition(
     };
     Cause {
         condition: condition_text,
-        value: Some(value),
+        value,
         children,
     }
 }
@@ -670,20 +669,20 @@ fn evaluate_piecewise(
                 };
             }
             BranchOutcome::Taken => {
-                ctx.apply_releases(plan, id, |releases| match releases {
-                    crate::planning::execution_plan::ControlDataReleases::Piecewise {
-                        on_arm_taken,
-                        ..
-                    } => on_arm_taken
-                        .get(i)
-                        .unwrap_or_else(|| {
-                            panic!("BUG: on_arm_taken missing index {i} for piecewise {id:?}")
-                        })
-                        .as_slice(),
-                    other => panic!(
-                        "BUG: expected Piecewise ControlDataReleases for {id:?}, got {other:?}"
-                    ),
-                });
+                // Arm i taken: default body + all other arm bodies + lower conditions are dead.
+                if ctx.record_control_decisions {
+                    let mut dead: Vec<NormalFormId> = Vec::with_capacity(arms.len() * 2);
+                    dead.push(arms[0].1); // default body always dead
+                    for (k, (k_cond, k_body)) in arms.iter().enumerate().skip(1) {
+                        if k != i {
+                            dead.push(*k_body);
+                        }
+                        if k < i {
+                            dead.push(*k_cond);
+                        }
+                    }
+                    ctx.record_dead_control_edges(id, dead);
+                }
                 let body_e = eval(body, plan, ctx, explain);
                 if !explain {
                     return Explained::value_only(body_e.result);
@@ -699,20 +698,8 @@ fn evaluate_piecewise(
                 return finish_piecewise(body_e, causes, true);
             }
             BranchOutcome::NotTaken => {
-                ctx.apply_releases(plan, id, |releases| match releases {
-                    crate::planning::execution_plan::ControlDataReleases::Piecewise {
-                        on_arm_not_taken,
-                        ..
-                    } => on_arm_not_taken
-                        .get(i)
-                        .unwrap_or_else(|| {
-                            panic!("BUG: on_arm_not_taken missing index {i} for piecewise {id:?}")
-                        })
-                        .as_slice(),
-                    other => panic!(
-                        "BUG: expected Piecewise ControlDataReleases for {id:?}, got {other:?}"
-                    ),
-                });
+                // Arm i not taken: condition was false → arm body dead.
+                ctx.record_dead_control_edges(id, [arms[i].1]);
                 if explain {
                     not_taken.push((
                         i,
@@ -723,12 +710,8 @@ fn evaluate_piecewise(
         }
     }
 
-    ctx.apply_releases(plan, id, |releases| match releases {
-        crate::planning::execution_plan::ControlDataReleases::Piecewise {
-            on_default_wins, ..
-        } => on_default_wins.as_slice(),
-        other => panic!("BUG: expected Piecewise ControlDataReleases for {id:?}, got {other:?}"),
-    });
+    // Default wins: all arm bodies were already recorded as dead (one NotTaken entry per
+    // arm in the loop above). No additional dead_control_edges entry needed here.
     let body_e = eval(arms[0].1, plan, ctx, explain);
     if !explain {
         return Explained::value_only(body_e.result);
@@ -812,7 +795,7 @@ fn cause_from_condition_id(
     };
     Cause {
         condition: condition_text,
-        value: Some(value),
+        value,
         children,
     }
 }
@@ -1374,16 +1357,15 @@ fn evaluate_and(
                 BranchOutcome::NotTaken => {
                     assert!(
                         i == 0,
-                        "BUG: And on_left_false applies only to left conjunct (index 0); got index {i}"
+                        "BUG: And short-circuit applies only to left conjunct (index 0); got index {i}"
                     );
-                    ctx.apply_releases(plan, id, |releases| match releases {
-                        crate::planning::execution_plan::ControlDataReleases::And {
-                            on_left_false,
-                        } => on_left_false.as_slice(),
-                        other => panic!(
-                            "BUG: expected And ControlDataReleases for {id:?}, got {other:?}"
-                        ),
-                    });
+                    assert!(
+                        children.len() == 2,
+                        "BUG: And must be binary after lowering, got {} children",
+                        children.len()
+                    );
+                    // Left conjunct is false → right child edge dead.
+                    ctx.record_dead_control_edges(id, [children[1]]);
                     let result = OperationResult::from_literal(LiteralValue::from_bool(false));
                     return finish_nary(id, result, operands, explain, plan);
                 }

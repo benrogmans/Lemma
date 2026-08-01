@@ -1,0 +1,26 @@
+{
+  "type": "rule",
+  "name": "total",
+  "result": "125.00 eur",
+  "body": "subtotal + fee",
+  "causes": [{ "condition": "is_member is true", "value": "true" }],
+  "children": [
+    { "type": "data", "name": "subtotal", "display": "100.00 eur" },
+    { "type": "data_unused", "name": "discount" },
+    {
+      "type": "conversion",
+      "expression": "fee_usd + subtotal",
+      "steps": [
+        { "role": "source", "text": "27.00 usd" },
+        { "role": "rule", "text": "1 usd is 0.91 eur" },
+        { "role": "outcome", "text": "24.57 eur" }
+      ],
+      "operands": [{ "type": "data", "name": "fee_usd", "display": "27.00 usd" }]
+    },
+    {
+      "type": "compose",
+      "expression": "surcharge * multiplier",
+      "operands": [{ "type": "veto", "message": "surcharge unavailable" }]
+    }
+  ]
+}

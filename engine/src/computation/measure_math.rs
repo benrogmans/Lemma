@@ -1,4 +1,4 @@
-use crate::evaluation::operations::{OperationResult, VetoType};
+use crate::computation::operation_result::{OperationResult, VetoType};
 use crate::planning::semantics::{LiteralValue, MathematicalComputation, ValueKind};
 
 pub fn mathematical_computation_preserves_measure_magnitude(op: &MathematicalComputation) -> bool {

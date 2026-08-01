@@ -1,6 +1,6 @@
 //! Expression normalization: algebraic simplification for drift-free evaluation.
 //!
-//! Internal [`NormalForm`] IR; public API is [`normalize_expression`].
+//! Internal [`NormalForm`] IR used by planning; sealed into [`ExecutionPlan`] tables.
 
 use crate::computation::comparison::comparison_operation;
 use crate::computation::rational::{
@@ -41,25 +41,6 @@ fn literal_from_folded_rational(
         rational,
         primitive_number_arc().clone(),
     ))
-}
-
-/// Normalize a semantic expression to canonical form (drift-free, single pass).
-#[cfg(test)]
-pub(crate) fn normalize_expression(
-    expr: &Expression,
-    unit_ctx: Option<&UnitResolutionContext<'_>>,
-) -> Result<Expression, Error> {
-    let source = expr.source_location.clone();
-    let mut interner = NormalFormInterner::new();
-    let completed_rules = HashMap::new();
-    let rule_target_data = HashMap::new();
-    let lower = LowerCtx {
-        completed_rules: &completed_rules,
-        rule_target_data: &rule_target_data,
-    };
-    let root = to_normal_form(expr, &mut interner, &lower);
-    let nf = normalize_once(root, &mut interner, unit_ctx, source.clone())?;
-    Ok(to_expression(interner.as_slice(), nf, source))
 }
 
 /// Build unless branches as a single expression (`Piecewise` or lone result).
@@ -113,17 +94,6 @@ pub(crate) struct NormalizeContext<'a> {
 struct LowerCtx<'a> {
     completed_rules: &'a HashMap<RulePath, NormalFormId>,
     rule_target_data: &'a HashMap<DataPath, RulePath>,
-}
-
-#[cfg(test)]
-fn to_normal_form_empty(expr: &Expression, interner: &mut NormalFormInterner) -> NormalFormId {
-    let completed_rules = HashMap::new();
-    let rule_target_data = HashMap::new();
-    let lower = LowerCtx {
-        completed_rules: &completed_rules,
-        rule_target_data: &rule_target_data,
-    };
-    to_normal_form(expr, interner, &lower)
 }
 
 pub(crate) fn build_normalized_rule(
@@ -460,11 +430,6 @@ impl NormalFormInterner {
                 self.forms.len()
             )
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn as_slice(&self) -> &[NormalForm] {
-        &self.forms
     }
 
     /// Ship only cells reachable from `roots`. Dense-remap ids in ascending
@@ -1409,213 +1374,6 @@ fn to_normal_form_node(
                 ));
             }
             intern_empty(interner, NormalFormKind::Piecewise(mapped))
-        }
-    }
-}
-
-#[cfg(test)]
-use crate::planning::semantics::NegationType;
-
-fn cell(forms: &[NormalForm], id: NormalFormId) -> &NormalForm {
-    forms.get(id.index()).unwrap_or_else(|| {
-        panic!(
-            "BUG: NormalFormId {} out of range (table len {})",
-            id.0,
-            forms.len()
-        )
-    })
-}
-
-#[cfg(test)]
-fn to_expression(forms: &[NormalForm], id: NormalFormId, source: Option<Source>) -> Expression {
-    let kind = nf_to_kind(forms, id, source.clone());
-    Expression::with_source(kind, source)
-}
-
-#[cfg(test)]
-fn nf_to_kind(forms: &[NormalForm], id: NormalFormId, source: Option<Source>) -> ExpressionKind {
-    let nf = cell(forms, id);
-    if let Some(path) = &nf.rule_embed {
-        return ExpressionKind::RulePath(path.clone());
-    }
-    match &nf.kind {
-        NormalFormKind::Leaf(LeafKind::Literal(lit)) => {
-            ExpressionKind::Literal(Box::new((**lit).clone()))
-        }
-        NormalFormKind::Leaf(LeafKind::DataPath(p)) => ExpressionKind::DataPath(p.clone()),
-        NormalFormKind::Sum(children) => sum_to_kind(forms, children, source),
-        NormalFormKind::Product(children) => product_to_kind(forms, children, source),
-        NormalFormKind::Subtract(a, b) => ExpressionKind::Arithmetic(
-            Arc::new(to_expression(forms, *a, source.clone())),
-            ArithmeticComputation::Subtract,
-            Arc::new(to_expression(forms, *b, source)),
-        ),
-        NormalFormKind::Divide(a, b) => ExpressionKind::Arithmetic(
-            Arc::new(to_expression(forms, *a, source.clone())),
-            ArithmeticComputation::Divide,
-            Arc::new(to_expression(forms, *b, source)),
-        ),
-        NormalFormKind::Power(base, exp) => ExpressionKind::Arithmetic(
-            Arc::new(to_expression(forms, *base, source.clone())),
-            ArithmeticComputation::Power,
-            Arc::new(to_expression(forms, *exp, source.clone())),
-        ),
-        NormalFormKind::Modulo(a, b) => ExpressionKind::Arithmetic(
-            Arc::new(to_expression(forms, *a, source.clone())),
-            ArithmeticComputation::Modulo,
-            Arc::new(to_expression(forms, *b, source.clone())),
-        ),
-        NormalFormKind::Negate(x) => {
-            let zero = Expression::with_source(
-                ExpressionKind::Literal(Box::new(LiteralValue::number(rational_zero()))),
-                source.clone(),
-            );
-            ExpressionKind::Arithmetic(
-                Arc::new(zero),
-                ArithmeticComputation::Subtract,
-                Arc::new(to_expression(forms, *x, source)),
-            )
-        }
-        NormalFormKind::Reciprocal(x) => {
-            let one = Expression::with_source(
-                ExpressionKind::Literal(Box::new(LiteralValue::number(rational_one()))),
-                source.clone(),
-            );
-            ExpressionKind::Arithmetic(
-                Arc::new(one),
-                ArithmeticComputation::Divide,
-                Arc::new(to_expression(forms, *x, source)),
-            )
-        }
-        NormalFormKind::Comparison(a, op, b) => ExpressionKind::Comparison(
-            Arc::new(to_expression(forms, *a, source.clone())),
-            op.clone(),
-            Arc::new(to_expression(forms, *b, source)),
-        ),
-        NormalFormKind::And(children) => and_to_kind(forms, children, source),
-        NormalFormKind::Not(x) => ExpressionKind::LogicalNegation(
-            Arc::new(to_expression(forms, *x, source)),
-            NegationType::Not,
-        ),
-        NormalFormKind::MathOp(op, x) => ExpressionKind::MathematicalComputation(
-            op.clone(),
-            Arc::new(to_expression(forms, *x, source)),
-        ),
-        NormalFormKind::UnitConversion(x, target) => ExpressionKind::UnitConversion(
-            Arc::new(to_expression(forms, *x, source)),
-            target.clone(),
-        ),
-        NormalFormKind::Veto(v) => ExpressionKind::Veto(v.clone()),
-        NormalFormKind::Now => ExpressionKind::Now,
-        NormalFormKind::DateRelative(kind, x) => {
-            ExpressionKind::DateRelative(*kind, Arc::new(to_expression(forms, *x, source)))
-        }
-        NormalFormKind::DateCalendar(kind, unit, x) => {
-            ExpressionKind::DateCalendar(*kind, *unit, Arc::new(to_expression(forms, *x, source)))
-        }
-        NormalFormKind::RangeLiteral(a, b) => ExpressionKind::RangeLiteral(
-            Arc::new(to_expression(forms, *a, source.clone())),
-            Arc::new(to_expression(forms, *b, source)),
-        ),
-        NormalFormKind::PastFutureRange(kind, x) => {
-            ExpressionKind::PastFutureRange(*kind, Arc::new(to_expression(forms, *x, source)))
-        }
-        NormalFormKind::RangeContainment(a, b) => ExpressionKind::RangeContainment(
-            Arc::new(to_expression(forms, *a, source.clone())),
-            Arc::new(to_expression(forms, *b, source)),
-        ),
-        NormalFormKind::ResultIsVeto(operand) => {
-            ExpressionKind::ResultIsVeto(Arc::new(to_expression(forms, *operand, source)))
-        }
-        NormalFormKind::Piecewise(arms) => ExpressionKind::Piecewise(
-            arms.iter()
-                .map(|(condition, result)| {
-                    (
-                        Arc::new(to_expression(forms, *condition, source.clone())),
-                        Arc::new(to_expression(forms, *result, source.clone())),
-                    )
-                })
-                .collect(),
-        ),
-    }
-}
-
-#[cfg(test)]
-fn sum_to_kind(
-    forms: &[NormalForm],
-    children: &[NormalFormId],
-    source: Option<Source>,
-) -> ExpressionKind {
-    match children {
-        [] => ExpressionKind::Literal(Box::new(LiteralValue::number(rational_zero()))),
-        [one] => nf_to_kind(forms, *one, source),
-        [first, rest @ ..] => {
-            let mut acc =
-                Expression::with_source(nf_to_kind(forms, *first, source.clone()), source.clone());
-            for c in rest {
-                acc = Expression::with_source(
-                    ExpressionKind::Arithmetic(
-                        Arc::new(acc),
-                        ArithmeticComputation::Add,
-                        Arc::new(to_expression(forms, *c, source.clone())),
-                    ),
-                    source.clone(),
-                );
-            }
-            acc.kind
-        }
-    }
-}
-
-#[cfg(test)]
-fn product_to_kind(
-    forms: &[NormalForm],
-    children: &[NormalFormId],
-    source: Option<Source>,
-) -> ExpressionKind {
-    match children {
-        [] => ExpressionKind::Literal(Box::new(LiteralValue::number(rational_one()))),
-        [one] => nf_to_kind(forms, *one, source),
-        [first, rest @ ..] => {
-            let mut acc =
-                Expression::with_source(nf_to_kind(forms, *first, source.clone()), source.clone());
-            for c in rest {
-                acc = Expression::with_source(
-                    ExpressionKind::Arithmetic(
-                        Arc::new(acc),
-                        ArithmeticComputation::Multiply,
-                        Arc::new(to_expression(forms, *c, source.clone())),
-                    ),
-                    source.clone(),
-                );
-            }
-            acc.kind
-        }
-    }
-}
-
-#[cfg(test)]
-fn and_to_kind(
-    forms: &[NormalForm],
-    children: &[NormalFormId],
-    source: Option<Source>,
-) -> ExpressionKind {
-    match children {
-        [] => ExpressionKind::Literal(Box::new(LiteralValue::from_bool(true))),
-        [one] => nf_to_kind(forms, *one, source),
-        [first, rest @ ..] => {
-            let mut acc =
-                Expression::with_source(nf_to_kind(forms, *first, source.clone()), source.clone());
-            for c in rest {
-                acc = Expression::with_source(
-                    ExpressionKind::LogicalAnd(
-                        Arc::new(acc),
-                        Arc::new(to_expression(forms, *c, source.clone())),
-                    ),
-                    source.clone(),
-                );
-            }
-            acc.kind
         }
     }
 }
@@ -3117,6 +2875,16 @@ fn explain_binary(
     )
 }
 
+fn cell(forms: &[NormalForm], id: NormalFormId) -> &NormalForm {
+    forms.get(id.index()).unwrap_or_else(|| {
+        panic!(
+            "BUG: NormalFormId {} out of range (table len {})",
+            id.0,
+            forms.len()
+        )
+    })
+}
+
 /// Expression text for a DAG node. Follows origin when present so folded
 /// nodes display their pre-image.
 pub(crate) fn explanation_display(forms: &[NormalForm], id: NormalFormId) -> String {
@@ -3304,6 +3072,239 @@ mod tests {
         ComparisonComputation, DataPath, ExpressionKind, NegationType, SemanticConversionTarget,
         ValueKind,
     };
+
+    fn interner_forms(interner: &NormalFormInterner) -> &[NormalForm] {
+        &interner.forms
+    }
+
+    /// Normalize a semantic expression to canonical form (drift-free, single pass).
+    fn normalize_expression(
+        expr: &Expression,
+        unit_ctx: Option<&UnitResolutionContext<'_>>,
+    ) -> Result<Expression, Error> {
+        let source = expr.source_location.clone();
+        let mut interner = NormalFormInterner::new();
+        let completed_rules = HashMap::new();
+        let rule_target_data = HashMap::new();
+        let lower = LowerCtx {
+            completed_rules: &completed_rules,
+            rule_target_data: &rule_target_data,
+        };
+        let root = to_normal_form(expr, &mut interner, &lower);
+        let nf = normalize_once(root, &mut interner, unit_ctx, source.clone())?;
+        Ok(to_expression(interner_forms(&interner), nf, source))
+    }
+
+    fn to_normal_form_empty(expr: &Expression, interner: &mut NormalFormInterner) -> NormalFormId {
+        let completed_rules = HashMap::new();
+        let rule_target_data = HashMap::new();
+        let lower = LowerCtx {
+            completed_rules: &completed_rules,
+            rule_target_data: &rule_target_data,
+        };
+        to_normal_form(expr, interner, &lower)
+    }
+
+    fn to_expression(forms: &[NormalForm], id: NormalFormId, source: Option<Source>) -> Expression {
+        let kind = nf_to_kind(forms, id, source.clone());
+        Expression::with_source(kind, source)
+    }
+
+    fn nf_to_kind(
+        forms: &[NormalForm],
+        id: NormalFormId,
+        source: Option<Source>,
+    ) -> ExpressionKind {
+        let nf = cell(forms, id);
+        if let Some(path) = &nf.rule_embed {
+            return ExpressionKind::RulePath(path.clone());
+        }
+        match &nf.kind {
+            NormalFormKind::Leaf(LeafKind::Literal(lit)) => {
+                ExpressionKind::Literal(Box::new((**lit).clone()))
+            }
+            NormalFormKind::Leaf(LeafKind::DataPath(p)) => ExpressionKind::DataPath(p.clone()),
+            NormalFormKind::Sum(children) => sum_to_kind(forms, children, source),
+            NormalFormKind::Product(children) => product_to_kind(forms, children, source),
+            NormalFormKind::Subtract(a, b) => ExpressionKind::Arithmetic(
+                Arc::new(to_expression(forms, *a, source.clone())),
+                ArithmeticComputation::Subtract,
+                Arc::new(to_expression(forms, *b, source)),
+            ),
+            NormalFormKind::Divide(a, b) => ExpressionKind::Arithmetic(
+                Arc::new(to_expression(forms, *a, source.clone())),
+                ArithmeticComputation::Divide,
+                Arc::new(to_expression(forms, *b, source)),
+            ),
+            NormalFormKind::Power(base, exp) => ExpressionKind::Arithmetic(
+                Arc::new(to_expression(forms, *base, source.clone())),
+                ArithmeticComputation::Power,
+                Arc::new(to_expression(forms, *exp, source.clone())),
+            ),
+            NormalFormKind::Modulo(a, b) => ExpressionKind::Arithmetic(
+                Arc::new(to_expression(forms, *a, source.clone())),
+                ArithmeticComputation::Modulo,
+                Arc::new(to_expression(forms, *b, source.clone())),
+            ),
+            NormalFormKind::Negate(x) => {
+                let zero = Expression::with_source(
+                    ExpressionKind::Literal(Box::new(LiteralValue::number(rational_zero()))),
+                    source.clone(),
+                );
+                ExpressionKind::Arithmetic(
+                    Arc::new(zero),
+                    ArithmeticComputation::Subtract,
+                    Arc::new(to_expression(forms, *x, source)),
+                )
+            }
+            NormalFormKind::Reciprocal(x) => {
+                let one = Expression::with_source(
+                    ExpressionKind::Literal(Box::new(LiteralValue::number(rational_one()))),
+                    source.clone(),
+                );
+                ExpressionKind::Arithmetic(
+                    Arc::new(one),
+                    ArithmeticComputation::Divide,
+                    Arc::new(to_expression(forms, *x, source)),
+                )
+            }
+            NormalFormKind::Comparison(a, op, b) => ExpressionKind::Comparison(
+                Arc::new(to_expression(forms, *a, source.clone())),
+                op.clone(),
+                Arc::new(to_expression(forms, *b, source)),
+            ),
+            NormalFormKind::And(children) => and_to_kind(forms, children, source),
+            NormalFormKind::Not(x) => ExpressionKind::LogicalNegation(
+                Arc::new(to_expression(forms, *x, source)),
+                NegationType::Not,
+            ),
+            NormalFormKind::MathOp(op, x) => ExpressionKind::MathematicalComputation(
+                op.clone(),
+                Arc::new(to_expression(forms, *x, source)),
+            ),
+            NormalFormKind::UnitConversion(x, target) => ExpressionKind::UnitConversion(
+                Arc::new(to_expression(forms, *x, source)),
+                target.clone(),
+            ),
+            NormalFormKind::Veto(v) => ExpressionKind::Veto(v.clone()),
+            NormalFormKind::Now => ExpressionKind::Now,
+            NormalFormKind::DateRelative(kind, x) => {
+                ExpressionKind::DateRelative(*kind, Arc::new(to_expression(forms, *x, source)))
+            }
+            NormalFormKind::DateCalendar(kind, unit, x) => ExpressionKind::DateCalendar(
+                *kind,
+                *unit,
+                Arc::new(to_expression(forms, *x, source)),
+            ),
+            NormalFormKind::RangeLiteral(a, b) => ExpressionKind::RangeLiteral(
+                Arc::new(to_expression(forms, *a, source.clone())),
+                Arc::new(to_expression(forms, *b, source)),
+            ),
+            NormalFormKind::PastFutureRange(kind, x) => {
+                ExpressionKind::PastFutureRange(*kind, Arc::new(to_expression(forms, *x, source)))
+            }
+            NormalFormKind::RangeContainment(a, b) => ExpressionKind::RangeContainment(
+                Arc::new(to_expression(forms, *a, source.clone())),
+                Arc::new(to_expression(forms, *b, source)),
+            ),
+            NormalFormKind::ResultIsVeto(operand) => {
+                ExpressionKind::ResultIsVeto(Arc::new(to_expression(forms, *operand, source)))
+            }
+            NormalFormKind::Piecewise(arms) => ExpressionKind::Piecewise(
+                arms.iter()
+                    .map(|(condition, result)| {
+                        (
+                            Arc::new(to_expression(forms, *condition, source.clone())),
+                            Arc::new(to_expression(forms, *result, source.clone())),
+                        )
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    fn sum_to_kind(
+        forms: &[NormalForm],
+        children: &[NormalFormId],
+        source: Option<Source>,
+    ) -> ExpressionKind {
+        match children {
+            [] => ExpressionKind::Literal(Box::new(LiteralValue::number(rational_zero()))),
+            [one] => nf_to_kind(forms, *one, source),
+            [first, rest @ ..] => {
+                let mut acc = Expression::with_source(
+                    nf_to_kind(forms, *first, source.clone()),
+                    source.clone(),
+                );
+                for c in rest {
+                    acc = Expression::with_source(
+                        ExpressionKind::Arithmetic(
+                            Arc::new(acc),
+                            ArithmeticComputation::Add,
+                            Arc::new(to_expression(forms, *c, source.clone())),
+                        ),
+                        source.clone(),
+                    );
+                }
+                acc.kind
+            }
+        }
+    }
+
+    fn product_to_kind(
+        forms: &[NormalForm],
+        children: &[NormalFormId],
+        source: Option<Source>,
+    ) -> ExpressionKind {
+        match children {
+            [] => ExpressionKind::Literal(Box::new(LiteralValue::number(rational_one()))),
+            [one] => nf_to_kind(forms, *one, source),
+            [first, rest @ ..] => {
+                let mut acc = Expression::with_source(
+                    nf_to_kind(forms, *first, source.clone()),
+                    source.clone(),
+                );
+                for c in rest {
+                    acc = Expression::with_source(
+                        ExpressionKind::Arithmetic(
+                            Arc::new(acc),
+                            ArithmeticComputation::Multiply,
+                            Arc::new(to_expression(forms, *c, source.clone())),
+                        ),
+                        source.clone(),
+                    );
+                }
+                acc.kind
+            }
+        }
+    }
+
+    fn and_to_kind(
+        forms: &[NormalForm],
+        children: &[NormalFormId],
+        source: Option<Source>,
+    ) -> ExpressionKind {
+        match children {
+            [] => ExpressionKind::Literal(Box::new(LiteralValue::from_bool(true))),
+            [one] => nf_to_kind(forms, *one, source),
+            [first, rest @ ..] => {
+                let mut acc = Expression::with_source(
+                    nf_to_kind(forms, *first, source.clone()),
+                    source.clone(),
+                );
+                for c in rest {
+                    acc = Expression::with_source(
+                        ExpressionKind::LogicalAnd(
+                            Arc::new(acc),
+                            Arc::new(to_expression(forms, *c, source.clone())),
+                        ),
+                        source.clone(),
+                    );
+                }
+                acc.kind
+            }
+        }
+    }
 
     fn num_expr(n: i64) -> Expression {
         Expression::with_source(

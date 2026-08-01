@@ -11,7 +11,7 @@ fn rule_value(result: &lemma::Response, rule_name: &str) -> String {
     if rr.vetoed {
         return format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
-    rr.display.clone().expect("display")
+    rr.display().expect("display").to_string()
 }
 
 fn load_err_joined(engine_res: Result<(), lemma::Errors>) -> String {
@@ -280,7 +280,7 @@ rule r: i.limited
                             "expected max-constraint veto, got: {s}"
                         );
                     } else {
-                        panic!("expected constraint-violation veto; got {:?}", rr.display);
+                        panic!("expected constraint-violation veto; got {:?}", rr.display());
                     }
                 }
                 Err(err) => {

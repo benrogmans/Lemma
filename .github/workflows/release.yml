@@ -476,11 +476,11 @@ jobs:
           cp -a /tmp/lemma-jni/native "${DEST}/"
           find "${DEST}/native" -type f | sort
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
           server-id: central
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
@@ -489,7 +489,7 @@ jobs:
 
       - name: Deploy to Maven Central
         working-directory: engine/packages/maven
-        run: ./mvnw -B -Pcentral clean deploy -DskipTests
+        run: ./mvnw -B -Pcentral clean deploy -DskipTests -Dlemma.natives.skip=true
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}

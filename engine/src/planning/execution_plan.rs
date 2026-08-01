@@ -10,8 +10,8 @@
 //!   IO compatibility is the consumer-facing guarantee.
 
 use crate::computation::UnitResolutionContext;
-use crate::parsing::ast::{EffectiveDate, MetaValue};
-use crate::parsing::source::Source;
+use crate::parsing::ast::{DateTimeValue, EffectiveDate, LemmaSpec, MetaValue};
+use crate::parsing::source::{Source, SourceType};
 use crate::planning::graph::Graph;
 use crate::planning::graph::ResolvedSpecTypes;
 use crate::planning::normalize::{
@@ -21,27 +21,13 @@ use crate::planning::semantics::{
     value_kind_matches_spec, ComparisonComputation, DataDefinition, DataPath, LemmaType,
     LiteralValue, ReferenceTarget, RulePath, TypeSpecification, ValueKind,
 };
+use crate::planning::spec_set::LemmaSpecSet;
+use crate::result_value::RuleResultValue;
 use crate::Error;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
-
-#[cfg(test)]
-thread_local! {
-    /// Test-only: NormalFormId entries during exclusivity / structural DAG walks.
-    static STRUCTURAL_DAG_VISIT_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    static STRUCTURAL_DAG_VISIT_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-#[cfg(test)]
-fn record_structural_dag_visit() {
-    STRUCTURAL_DAG_VISIT_ENABLED.with(|enabled| {
-        if enabled.get() {
-            STRUCTURAL_DAG_VISIT_COUNT.with(|count| count.set(count.get() + 1));
-        }
-    });
-}
 
 /// A complete execution plan ready for the evaluator
 ///
@@ -71,8 +57,8 @@ pub struct ExecutionPlan {
     /// plan has none. Rule-target references are not included.
     pub data_reference_order: Vec<DataPath>,
 
-    /// Spec metadata
-    pub meta: HashMap<String, MetaValue>,
+    /// Spec metadata, in declaration order.
+    pub meta: IndexMap<String, MetaValue>,
 
     /// Main-spec types from planning. [`ResolvedSpecTypes::unit_index`] is expression-scope
     /// units (local types plus direct `uses` imports). Rule-result units live on each
@@ -88,32 +74,35 @@ pub struct ExecutionPlan {
 
     pub effective: EffectiveDate,
 
-    /// Per local rule, per And/Piecewise node: DataPaths certainly unused when a
-    /// control outcome holds (rule-root exclusivity). Filled after the sealed DAG.
-    pub(crate) data_releases: HashMap<RulePath, HashMap<NormalFormId, ControlDataReleases>>,
+    /// Declared temporal window `[effective_from, effective_to)` of the LemmaSpec
+    /// version this plan was built from. Filled by [`attach_show_cache`].
+    pub effective_from: Option<DateTimeValue>,
+    pub effective_to: Option<DateTimeValue>,
 
-    /// Local rule root [`NormalFormId`] → unrestricted structural [`DataPath`] leaves
-    /// (`structural_needed(rule.root)`). Filled once after the sealed DAG; used by
-    /// exclusivity fill, Show, and eval `missing_data`.
-    pub(crate) structural_needed: HashMap<NormalFormId, HashSet<DataPath>>,
+    /// All loaded temporal versions for this spec name (same list on every slice).
+    /// Filled by [`attach_show_cache`].
+    pub versions: Vec<ShowVersion>,
+
+    /// Source start line of the LemmaSpec version this plan was built from.
+    pub start_line: usize,
+
+    /// Source type of the LemmaSpec version this plan was built from.
+    pub source_type: Option<SourceType>,
+
+    /// For each typed data input key, local rule names that transitively need it.
+    /// Built once at plan time; [`Engine::show`] reads it instead of re-walking the DAG.
+    pub(crate) needed_by_rules: HashMap<String, Vec<String>>,
+
+    /// Prefill/suggestion [`RuleResultValue`]s for show, keyed by data path.
+    /// Built once at plan time so show does not re-run unit expansion per request.
+    pub(crate) data_display: IndexMap<DataPath, ShowDataCache>,
 }
 
-/// Release lists for one And or Piecewise under one rule root.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ControlDataReleases {
-    And {
-        /// Left conjunct is boolean false → right child edge dead.
-        on_left_false: Vec<DataPath>,
-    },
-    Piecewise {
-        /// Index aligned with arms; index 0 unused. Condition false → that arm body dead.
-        on_arm_not_taken: Vec<Vec<DataPath>>,
-        /// Condition true and this unless arm wins → multi-edge kill (default body,
-        /// other unless bodies, skipped lower unless conditions).
-        on_arm_taken: Vec<Vec<DataPath>>,
-        /// All unless conditions false → default wins → all unless bodies dead.
-        on_default_wins: Vec<DataPath>,
-    },
+/// Plan-time prefill/suggestion [`RuleResultValue`] for one data path (show cache).
+#[derive(Debug, Clone)]
+pub(crate) struct ShowDataCache {
+    pub prefilled: Option<RuleResultValue>,
+    pub suggestion: Option<RuleResultValue>,
 }
 
 /// A named rule's root in the normal-form table, plus declaration metadata.
@@ -255,7 +244,7 @@ pub(crate) fn build_execution_plan(
         rule.normal_form = remapped;
     }
 
-    let mut plan = ExecutionPlan {
+    let plan = ExecutionPlan {
         spec_name: main_spec.name.clone(),
         commentary: main_spec.commentary.clone(),
         data,
@@ -270,11 +259,15 @@ pub(crate) fn build_execution_plan(
         resolved_types,
         signature_index,
         effective: effective.clone(),
-        data_releases: HashMap::new(),
-        structural_needed: HashMap::new(),
+        // Filled by attach_show_cache after this returns.
+        effective_from: None,
+        effective_to: None,
+        versions: Vec::new(),
+        start_line: 1,
+        source_type: None,
+        needed_by_rules: HashMap::new(),
+        data_display: IndexMap::new(),
     };
-    fill_structural_needed(&mut plan);
-    fill_data_releases(&mut plan);
 
     let mut plan_errors = validate_literal_data_against_types(&plan);
     if let Err(error) = validate_unit_conversion_targets(&plan) {
@@ -287,29 +280,83 @@ pub(crate) fn build_execution_plan(
     Ok(plan)
 }
 
+/// Fill show/response cache fields that are pure functions of the plan and its
+/// owning LemmaSpec / LemmaSpecSet. Called once after [`build_execution_plan`]
+/// succeeds so [`Engine::show`] / [`Engine::run`] only look up the plan.
+pub(crate) fn attach_show_cache(
+    plan: &mut ExecutionPlan,
+    lemma_spec_set: &LemmaSpecSet,
+    spec: &LemmaSpec,
+    versions: &[ShowVersion],
+) {
+    let (effective_from, effective_to) = lemma_spec_set.effective_range(spec);
+    plan.effective_from = effective_from;
+    plan.effective_to = effective_to;
+    plan.versions = versions.to_vec();
+    plan.start_line = spec.start_line;
+    plan.source_type = spec.source_type.clone();
+    plan.needed_by_rules = plan
+        .needed_by_rules_index()
+        .expect("BUG: local_rule_names sourced from plan.rules");
+    plan.data_display = build_data_display(plan);
+}
+
+fn build_data_display(plan: &ExecutionPlan) -> IndexMap<DataPath, ShowDataCache> {
+    let mut out = IndexMap::new();
+    for (path, data) in &plan.data {
+        if data.schema_type().is_none() || matches!(data, DataDefinition::Reference { .. }) {
+            continue;
+        }
+        let lemma_type = data
+            .schema_type()
+            .expect("BUG: filter above ensured lemma_type is Some");
+        let input_key = path.input_key();
+        let prefilled = data.prefilled_value().map(|literal| {
+            crate::result_value::rule_result_value_from_literal(literal, lemma_type).unwrap_or_else(
+                |failure| {
+                    panic!(
+                        "BUG: show prefilled value for '{input_key}' failed rule_result_value_from_literal: {}",
+                        crate::result_value::rule_result_value_failure_message(failure)
+                    )
+                },
+            )
+        });
+        let suggestion = data.suggestion().map(|literal| {
+            crate::result_value::rule_result_value_from_literal(&literal, lemma_type).unwrap_or_else(
+                |failure| {
+                    panic!(
+                        "BUG: show suggestion value for '{input_key}' failed rule_result_value_from_literal: {}",
+                        crate::result_value::rule_result_value_failure_message(failure)
+                    )
+                },
+            )
+        });
+        if prefilled.is_some() || suggestion.is_some() {
+            out.insert(
+                path.clone(),
+                ShowDataCache {
+                    prefilled,
+                    suggestion,
+                },
+            );
+        }
+    }
+    out
+}
+
 /// One data entry in a [`Show`].
 ///
 /// A named struct instead of a tuple so JSON-native consumers (TypeScript, Python, ...)
 /// get stable field names. `prefilled` is a spec literal or literal `with` binding;
 /// `suggestion` is a `-> suggest ...` hint only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DataEntry {
+pub struct ShowData {
     #[serde(rename = "type")]
     pub lemma_type: LemmaType,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        default,
-        serialize_with = "crate::planning::semantics::api_wire_literal::serialize_option",
-        deserialize_with = "crate::planning::semantics::api_wire_literal::deserialize_option"
-    )]
-    pub prefilled: Option<LiteralValue>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        default,
-        serialize_with = "crate::planning::semantics::api_wire_literal::serialize_option",
-        deserialize_with = "crate::planning::semantics::api_wire_literal::deserialize_option"
-    )]
-    pub suggestion: Option<LiteralValue>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub prefilled: Option<RuleResultValue>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub suggestion: Option<RuleResultValue>,
     pub needed_by_rules: Vec<String>,
 }
 
@@ -349,9 +396,10 @@ pub struct Show {
     pub start_line: usize,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_type: Option<crate::parsing::source::SourceType>,
-    pub data: indexmap::IndexMap<String, DataEntry>,
+    pub data: indexmap::IndexMap<String, ShowData>,
     pub rules: indexmap::IndexMap<String, LemmaType>,
-    pub meta: HashMap<String, MetaValue>,
+    /// Spec metadata, in declaration order.
+    pub meta: IndexMap<String, MetaValue>,
 }
 
 impl std::fmt::Display for Show {
@@ -676,7 +724,7 @@ pub fn type_detail_lines(spec: &TypeSpecification) -> Vec<String> {
 impl ExecutionPlan {
     /// Expression-scope unit index (local types plus direct `uses` imports).
     /// Rule-result units outside this scope are resolved from [`ExecutableRule::rule_type`]
-    /// at materialization time.
+    /// when building RuleResultValue.
     pub(crate) fn expression_unit_index(&self) -> &HashMap<String, Arc<LemmaType>> {
         &self.resolved_types.unit_index
     }
@@ -757,6 +805,25 @@ impl ExecutionPlan {
         })
     }
 
+    /// Data paths a caller can be prompted for, in declaration order.
+    ///
+    /// A path is promptable when it carries its own value slot: [`DataDefinition::Value`]
+    /// (spec prefill, overridable) or [`DataDefinition::TypeDeclaration`] (typed input).
+    /// [`DataDefinition::Reference`] paths are not promptable — a data target copies from
+    /// its ultimate target (see [`expand_data_reference_targets`]) and a rule target is
+    /// computed — and [`DataDefinition::Import`] paths are owned by the imported spec.
+    ///
+    /// This is the complete domain of `RuleResult.missing_data`: evaluation subtracts the
+    /// run data from it, and never classifies data definitions itself.
+    pub(crate) fn promptable_data_paths(&self) -> impl Iterator<Item = &DataPath> {
+        self.data
+            .iter()
+            .filter_map(|(path, definition)| match definition {
+                DataDefinition::Value { .. } | DataDefinition::TypeDeclaration { .. } => Some(path),
+                DataDefinition::Reference { .. } | DataDefinition::Import { .. } => None,
+            })
+    }
+
     /// Statically-needed data paths for a set of rules (Show).
     ///
     /// Every DataPath leaf in the rules' normalized bodies, walking the shared
@@ -779,276 +846,95 @@ impl ExecutionPlan {
                     None::<String>,
                 )
             })?;
-            collect_structural_data_paths(self, rule.normal_form, &mut needed);
+            needed.extend(reachable_data_paths(
+                self,
+                rule.normal_form,
+                &HashMap::new(),
+            ));
         }
         Ok(needed)
     }
 }
 
-/// Append every DataPath leaf reachable from `id` to `out`.
+/// Replace data-reference paths with the promptable paths they ultimately copy from.
 ///
-/// Local rule roots use [`ExecutionPlan::structural_needed`] when present.
-/// Other ids walk the NormalForm DAG (each `NormalFormId` at most once).
-pub(crate) fn collect_structural_data_paths(
-    plan: &ExecutionPlan,
-    id: NormalFormId,
-    out: &mut HashSet<DataPath>,
-) {
-    if let Some(needed) = plan.structural_needed.get(&id) {
-        out.extend(needed.iter().cloned());
-        return;
-    }
-    let mut visited = HashSet::new();
-    collect_structural_data_paths_dag(plan, id, out, &mut visited);
-}
-
-fn collect_structural_data_paths_dag(
-    plan: &ExecutionPlan,
-    id: NormalFormId,
-    out: &mut HashSet<DataPath>,
-    visited: &mut HashSet<NormalFormId>,
-) {
-    use crate::planning::normalize::LeafKind;
-    use crate::planning::normalize::NormalFormKind;
-    if !visited.insert(id) {
-        return;
-    }
-    #[cfg(test)]
-    record_structural_dag_visit();
-    let nf = plan.normal_form(id);
-    match &nf.kind {
-        NormalFormKind::Leaf(LeafKind::DataPath(path)) => {
-            out.insert(path.clone());
-        }
-        NormalFormKind::Sum(children)
-        | NormalFormKind::Product(children)
-        | NormalFormKind::And(children) => {
-            for child in children {
-                collect_structural_data_paths_dag(plan, *child, out, visited);
-            }
-        }
-        NormalFormKind::Subtract(a, b)
-        | NormalFormKind::Divide(a, b)
-        | NormalFormKind::Power(a, b)
-        | NormalFormKind::Modulo(a, b)
-        | NormalFormKind::Comparison(a, _, b)
-        | NormalFormKind::RangeLiteral(a, b)
-        | NormalFormKind::RangeContainment(a, b) => {
-            collect_structural_data_paths_dag(plan, *a, out, visited);
-            collect_structural_data_paths_dag(plan, *b, out, visited);
-        }
-        NormalFormKind::Negate(x)
-        | NormalFormKind::Reciprocal(x)
-        | NormalFormKind::Not(x)
-        | NormalFormKind::MathOp(_, x)
-        | NormalFormKind::UnitConversion(x, _)
-        | NormalFormKind::DateRelative(_, x)
-        | NormalFormKind::DateCalendar(_, _, x)
-        | NormalFormKind::PastFutureRange(_, x)
-        | NormalFormKind::ResultIsVeto(x) => {
-            collect_structural_data_paths_dag(plan, *x, out, visited);
-        }
-        NormalFormKind::Piecewise(arms) => {
-            for (cond, body) in arms {
-                collect_structural_data_paths_dag(plan, *cond, out, visited);
-                collect_structural_data_paths_dag(plan, *body, out, visited);
-            }
-        }
-        NormalFormKind::Now | NormalFormKind::Veto(_) => {}
-        NormalFormKind::Leaf(LeafKind::Literal(_)) => {}
-    }
-}
-
-fn order_paths_by_plan_data(plan: &ExecutionPlan, paths: HashSet<DataPath>) -> Vec<DataPath> {
-    plan.data
-        .keys()
-        .filter(|path| paths.contains(*path))
-        .cloned()
-        .collect()
-}
-
-/// Order a set of data paths by [`ExecutionPlan::data`] declaration order.
-pub(crate) fn order_data_paths_by_plan(
+/// A [`ReferenceTarget::Data`] chain collapses to its end. A [`ReferenceTarget::Rule`]
+/// target and a [`DataDefinition::Import`] are dropped: neither is promptable, and rule
+/// targets are covered by the embedded rule's own data.
+pub(crate) fn expand_data_reference_targets(
     plan: &ExecutionPlan,
     paths: HashSet<DataPath>,
-) -> Vec<DataPath> {
-    order_paths_by_plan_data(plan, paths)
-}
-
-/// Unrestricted structural DataPath leaves for every local rule root.
-fn fill_structural_needed(plan: &mut ExecutionPlan) {
-    let roots: Vec<NormalFormId> = plan
-        .rules
-        .values()
-        .filter(|rule| rule.path.segments.is_empty())
-        .map(|rule| rule.normal_form)
-        .collect();
-
-    for root in roots {
-        if plan.structural_needed.contains_key(&root) {
-            continue;
-        }
-        let mut needed = HashSet::new();
-        let mut visited = HashSet::new();
-        collect_structural_data_paths_dag(plan, root, &mut needed, &mut visited);
-        plan.structural_needed.insert(root, needed);
-    }
-}
-
-fn collect_control_node_ids(
-    plan: &ExecutionPlan,
-    id: NormalFormId,
-    out: &mut Vec<NormalFormId>,
-    visited: &mut HashSet<NormalFormId>,
-) {
-    use crate::planning::normalize::NormalFormKind;
-    if !visited.insert(id) {
-        return;
-    }
-    let nf = plan.normal_form(id);
-    match &nf.kind {
-        NormalFormKind::And(_) | NormalFormKind::Piecewise(_) => {
-            out.push(id);
-        }
-        _ => {}
-    }
-    match &nf.kind {
-        NormalFormKind::Leaf(_) | NormalFormKind::Veto(_) | NormalFormKind::Now => {}
-        NormalFormKind::Sum(children)
-        | NormalFormKind::Product(children)
-        | NormalFormKind::And(children) => {
-            for child in children {
-                collect_control_node_ids(plan, *child, out, visited);
+) -> HashSet<DataPath> {
+    let mut out = HashSet::new();
+    for path in paths {
+        let mut cursor = path;
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(cursor.clone()) {
+                panic!("BUG: cyclic data reference while expanding missing_data at '{cursor}'");
             }
-        }
-        NormalFormKind::Subtract(a, b)
-        | NormalFormKind::Divide(a, b)
-        | NormalFormKind::Power(a, b)
-        | NormalFormKind::Modulo(a, b)
-        | NormalFormKind::Comparison(a, _, b)
-        | NormalFormKind::RangeLiteral(a, b)
-        | NormalFormKind::RangeContainment(a, b) => {
-            collect_control_node_ids(plan, *a, out, visited);
-            collect_control_node_ids(plan, *b, out, visited);
-        }
-        NormalFormKind::Negate(x)
-        | NormalFormKind::Reciprocal(x)
-        | NormalFormKind::Not(x)
-        | NormalFormKind::MathOp(_, x)
-        | NormalFormKind::UnitConversion(x, _)
-        | NormalFormKind::DateRelative(_, x)
-        | NormalFormKind::DateCalendar(_, _, x)
-        | NormalFormKind::PastFutureRange(_, x)
-        | NormalFormKind::ResultIsVeto(x) => {
-            collect_control_node_ids(plan, *x, out, visited);
-        }
-        NormalFormKind::Piecewise(arms) => {
-            for (cond, body) in arms {
-                collect_control_node_ids(plan, *cond, out, visited);
-                collect_control_node_ids(plan, *body, out, visited);
+            match plan.data.get(&cursor) {
+                Some(DataDefinition::Reference {
+                    target: ReferenceTarget::Data(next),
+                    ..
+                }) => {
+                    cursor = next.clone();
+                }
+                Some(DataDefinition::Reference {
+                    target: ReferenceTarget::Rule(_),
+                    ..
+                })
+                | Some(DataDefinition::Import { .. }) => {
+                    break;
+                }
+                Some(_) | None => {
+                    out.insert(cursor);
+                    break;
+                }
             }
         }
     }
+    out
 }
 
-/// Memoized DataPath leaves under every node reachable from `root`.
-fn build_leaf_sets(
+/// DataPath leaves reachable from `root`, skipping children recorded as dead by their
+/// parent control node in `dead_control_edges`.
+///
+/// `dead_control_edges[parent]` = set of immediate child [`NormalFormId`]s that are dead
+/// given the control decisions recorded during this evaluation. Each child not in that set
+/// is live and will be traversed.
+pub(crate) fn reachable_data_paths(
     plan: &ExecutionPlan,
     root: NormalFormId,
-) -> HashMap<NormalFormId, HashSet<DataPath>> {
-    use crate::planning::normalize::LeafKind;
-    use crate::planning::normalize::NormalFormKind;
-
-    let mut memo: HashMap<NormalFormId, HashSet<DataPath>> = HashMap::new();
-
-    fn leaf_set(
-        plan: &ExecutionPlan,
-        id: NormalFormId,
-        memo: &mut HashMap<NormalFormId, HashSet<DataPath>>,
-    ) -> HashSet<DataPath> {
-        if let Some(cached) = memo.get(&id) {
-            return cached.clone();
-        }
-        #[cfg(test)]
-        record_structural_dag_visit();
-        let nf = plan.normal_form(id);
-        let result = match &nf.kind {
-            NormalFormKind::Leaf(LeafKind::DataPath(path)) => {
-                let mut set = HashSet::new();
-                set.insert(path.clone());
-                set
-            }
-            NormalFormKind::Leaf(LeafKind::Literal(_))
-            | NormalFormKind::Now
-            | NormalFormKind::Veto(_) => HashSet::new(),
-            NormalFormKind::Sum(children)
-            | NormalFormKind::Product(children)
-            | NormalFormKind::And(children) => {
-                let mut set = HashSet::new();
-                for child in children {
-                    set.extend(leaf_set(plan, *child, memo));
-                }
-                set
-            }
-            NormalFormKind::Subtract(a, b)
-            | NormalFormKind::Divide(a, b)
-            | NormalFormKind::Power(a, b)
-            | NormalFormKind::Modulo(a, b)
-            | NormalFormKind::Comparison(a, _, b)
-            | NormalFormKind::RangeLiteral(a, b)
-            | NormalFormKind::RangeContainment(a, b) => {
-                let mut set = leaf_set(plan, *a, memo);
-                set.extend(leaf_set(plan, *b, memo));
-                set
-            }
-            NormalFormKind::Negate(x)
-            | NormalFormKind::Reciprocal(x)
-            | NormalFormKind::Not(x)
-            | NormalFormKind::MathOp(_, x)
-            | NormalFormKind::UnitConversion(x, _)
-            | NormalFormKind::DateRelative(_, x)
-            | NormalFormKind::DateCalendar(_, _, x)
-            | NormalFormKind::PastFutureRange(_, x)
-            | NormalFormKind::ResultIsVeto(x) => leaf_set(plan, *x, memo),
-            NormalFormKind::Piecewise(arms) => {
-                let mut set = HashSet::new();
-                for (cond, body) in arms {
-                    set.extend(leaf_set(plan, *cond, memo));
-                    set.extend(leaf_set(plan, *body, memo));
-                }
-                set
-            }
-        };
-        memo.insert(id, result.clone());
-        result
-    }
-
-    leaf_set(plan, root, &mut memo);
-    memo
-}
-
-/// DataPaths reachable from `root` without entering `skip`.
-fn bypass_leaves(
-    plan: &ExecutionPlan,
-    root: NormalFormId,
-    skip: NormalFormId,
+    dead_control_edges: &HashMap<NormalFormId, HashSet<NormalFormId>>,
 ) -> HashSet<DataPath> {
     use crate::planning::normalize::LeafKind;
     use crate::planning::normalize::NormalFormKind;
 
+    fn push_live_child(
+        child: NormalFormId,
+        parent_dead: Option<&HashSet<NormalFormId>>,
+        visited: &HashSet<NormalFormId>,
+        stack: &mut Vec<NormalFormId>,
+    ) {
+        if parent_dead.is_some_and(|d| d.contains(&child)) {
+            return;
+        }
+        if !visited.contains(&child) {
+            stack.push(child);
+        }
+    }
+
     let mut out = HashSet::new();
     let mut visited = HashSet::new();
     let mut stack = vec![root];
+
     while let Some(id) = stack.pop() {
-        if id == skip {
-            continue;
-        }
         if !visited.insert(id) {
             continue;
         }
-        #[cfg(test)]
-        record_structural_dag_visit();
         let nf = plan.normal_form(id);
+        let dead_here = dead_control_edges.get(&id);
         match &nf.kind {
             NormalFormKind::Leaf(LeafKind::DataPath(path)) => {
                 out.insert(path.clone());
@@ -1059,7 +945,9 @@ fn bypass_leaves(
             NormalFormKind::Sum(children)
             | NormalFormKind::Product(children)
             | NormalFormKind::And(children) => {
-                stack.extend(children.iter().copied());
+                for child in children {
+                    push_live_child(*child, dead_here, &visited, &mut stack);
+                }
             }
             NormalFormKind::Subtract(a, b)
             | NormalFormKind::Divide(a, b)
@@ -1068,8 +956,8 @@ fn bypass_leaves(
             | NormalFormKind::Comparison(a, _, b)
             | NormalFormKind::RangeLiteral(a, b)
             | NormalFormKind::RangeContainment(a, b) => {
-                stack.push(*a);
-                stack.push(*b);
+                push_live_child(*a, dead_here, &visited, &mut stack);
+                push_live_child(*b, dead_here, &visited, &mut stack);
             }
             NormalFormKind::Negate(x)
             | NormalFormKind::Reciprocal(x)
@@ -1080,159 +968,17 @@ fn bypass_leaves(
             | NormalFormKind::DateCalendar(_, _, x)
             | NormalFormKind::PastFutureRange(_, x)
             | NormalFormKind::ResultIsVeto(x) => {
-                stack.push(*x);
+                push_live_child(*x, dead_here, &visited, &mut stack);
             }
             NormalFormKind::Piecewise(arms) => {
                 for (cond, body) in arms {
-                    stack.push(*cond);
-                    stack.push(*body);
+                    push_live_child(*cond, dead_here, &visited, &mut stack);
+                    push_live_child(*body, dead_here, &visited, &mut stack);
                 }
             }
         }
     }
     out
-}
-
-/// Paths exclusive to `dead_children` under rule-root exclusivity.
-fn released_for_dead_children(
-    plan: &ExecutionPlan,
-    bypass: &HashSet<DataPath>,
-    slots: &HashMap<DataPath, HashSet<NormalFormId>>,
-    dead_children: &HashSet<NormalFormId>,
-) -> Vec<DataPath> {
-    let mut released = HashSet::new();
-    for (path, path_slots) in slots {
-        if bypass.contains(path) {
-            continue;
-        }
-        if path_slots.is_empty() {
-            continue;
-        }
-        if path_slots.is_subset(dead_children) {
-            released.insert(path.clone());
-        }
-    }
-    order_paths_by_plan_data(plan, released)
-}
-
-fn fill_data_releases(plan: &mut ExecutionPlan) {
-    use crate::planning::normalize::NormalFormKind;
-
-    let local_rules: Vec<(RulePath, NormalFormId)> = plan
-        .rules
-        .values()
-        .filter(|rule| rule.path.segments.is_empty())
-        .map(|rule| (rule.path.clone(), rule.normal_form))
-        .collect();
-
-    for (rule_path, root) in local_rules {
-        if !plan.structural_needed.contains_key(&root) {
-            panic!(
-                "BUG: structural_needed missing for local rule root {root:?} (rule '{}')",
-                rule_path.rule
-            );
-        }
-
-        let leaf_sets = build_leaf_sets(plan, root);
-
-        let mut control_ids = Vec::new();
-        let mut visited = HashSet::new();
-        collect_control_node_ids(plan, root, &mut control_ids, &mut visited);
-
-        let mut rule_releases: HashMap<NormalFormId, ControlDataReleases> = HashMap::new();
-
-        for control_id in control_ids {
-            let bypass = bypass_leaves(plan, root, control_id);
-
-            // Owned child ids only — do not clone NormalFormKind (wide Piecewise).
-            let (and_right, piecewise_arms, children): (
-                Option<NormalFormId>,
-                Vec<(NormalFormId, NormalFormId)>,
-                Vec<NormalFormId>,
-            ) = match &plan.normal_form(control_id).kind {
-                NormalFormKind::And(and_children) => {
-                    assert!(
-                        and_children.len() == 2,
-                        "BUG: And must be binary after lower (got {} children)",
-                        and_children.len()
-                    );
-                    (Some(and_children[1]), Vec::new(), and_children.clone())
-                }
-                NormalFormKind::Piecewise(arms) => {
-                    assert!(!arms.is_empty(), "BUG: empty Piecewise");
-                    let arms = arms.clone();
-                    let mut children = Vec::with_capacity(arms.len() * 2);
-                    for (cond, body) in &arms {
-                        children.push(*cond);
-                        children.push(*body);
-                    }
-                    (None, arms, children)
-                }
-                other => panic!(
-                    "BUG: control id {:?} is not And or Piecewise: {other:?}",
-                    control_id
-                ),
-            };
-
-            let mut slots: HashMap<DataPath, HashSet<NormalFormId>> = HashMap::new();
-            for child in &children {
-                let leaves = leaf_sets.get(child).unwrap_or_else(|| {
-                    panic!("BUG: leaf set missing for control child {child:?} under {control_id:?}")
-                });
-                for path in leaves {
-                    slots.entry(path.clone()).or_default().insert(*child);
-                }
-            }
-
-            let releases = if let Some(right) = and_right {
-                let mut dead = HashSet::new();
-                dead.insert(right);
-                ControlDataReleases::And {
-                    on_left_false: released_for_dead_children(plan, &bypass, &slots, &dead),
-                }
-            } else {
-                let arms = &piecewise_arms;
-                let mut on_arm_not_taken = vec![Vec::new(); arms.len()];
-                let mut on_arm_taken = vec![Vec::new(); arms.len()];
-                for i in 1..arms.len() {
-                    let mut not_taken_dead = HashSet::new();
-                    not_taken_dead.insert(arms[i].1);
-                    on_arm_not_taken[i] =
-                        released_for_dead_children(plan, &bypass, &slots, &not_taken_dead);
-
-                    let mut taken_dead = HashSet::new();
-                    taken_dead.insert(arms[0].1);
-                    for (k, (cond, body)) in arms.iter().enumerate().skip(1) {
-                        if k != i {
-                            taken_dead.insert(*body);
-                        }
-                        if k < i {
-                            taken_dead.insert(*cond);
-                        }
-                    }
-                    on_arm_taken[i] =
-                        released_for_dead_children(plan, &bypass, &slots, &taken_dead);
-                }
-                let mut default_wins_dead = HashSet::new();
-                for (_, body) in arms.iter().skip(1) {
-                    default_wins_dead.insert(*body);
-                }
-                ControlDataReleases::Piecewise {
-                    on_arm_not_taken,
-                    on_arm_taken,
-                    on_default_wins: released_for_dead_children(
-                        plan,
-                        &bypass,
-                        &slots,
-                        &default_wins_dead,
-                    ),
-                }
-            };
-            rule_releases.insert(control_id, releases);
-        }
-
-        plan.data_releases.insert(rule_path, rule_releases);
-    }
 }
 
 pub(crate) fn validate_value_against_type(
@@ -1265,7 +1011,7 @@ pub(crate) fn validate_value_against_type(
         magnitude: &RationalInteger,
     ) -> String {
         expected_type
-            .try_materialize_rational_as_decimal_string(magnitude)
+            .try_rational_as_decimal_string(magnitude)
             .unwrap_or_else(|_| magnitude.display_str())
     }
 
@@ -1621,9 +1367,7 @@ fn validate_range_literal(
     right: &LiteralValue,
     unit_index: &HashMap<String, Arc<LemmaType>>,
 ) -> Result<(), String> {
-    use crate::computation::comparison_operation;
-    use crate::computation::UnitResolutionContext;
-    use crate::evaluation::operations::OperationResult;
+    use crate::computation::{comparison_operation, OperationResult, UnitResolutionContext};
     use crate::planning::semantics::{
         compare_semantic_dates, compare_semantic_times, measure_declared_bound_to_canonical,
         ValueKind,
@@ -1992,14 +1736,14 @@ fn validate_unit_conversion_targets(plan: &ExecutionPlan) -> Result<(), Error> {
 mod tests {
     use super::*;
     use crate::computation::rational::{rational_new, rational_zero};
-    use crate::evaluation::data_input::DataOverlay;
-    use crate::evaluation::operations::{OperationResult, VetoType};
+    use crate::computation::{OperationResult, VetoType};
+    use crate::evaluation::run_data::RunData;
     use crate::literals::DateGranularity;
     use crate::literals::TimezoneValue;
     use crate::parsing::ast::DateTimeValue;
     use crate::planning::semantics::{DataDefinition, DataPath, PathSegment, TypeSpecification};
     use crate::Engine;
-    use crate::{DataValueInput, ResourceLimits};
+    use crate::{ResourceLimits, RunDataValue};
     use serde_json;
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -2009,15 +1753,12 @@ mod tests {
         ResourceLimits::default()
     }
 
-    fn resolve_overlay(
-        plan: &ExecutionPlan,
-        values: HashMap<String, DataValueInput>,
-    ) -> DataOverlay {
-        DataOverlay::resolve(plan, values, &default_limits()).expect("resolve")
+    fn resolve_run_data(plan: &ExecutionPlan, values: HashMap<String, RunDataValue>) -> RunData {
+        RunData::resolve(plan, values, &default_limits()).expect("resolve")
     }
 
-    fn veto_reason<'a>(overlay: &'a DataOverlay, path: &DataPath) -> Option<&'a str> {
-        match overlay.bindings.get(path) {
+    fn veto_reason<'a>(run_data: &'a RunData, path: &DataPath) -> Option<&'a str> {
+        match run_data.bindings.get(path) {
             Some(OperationResult::Veto(veto)) => Some(match veto {
                 VetoType::Computation { message } => message.as_str(),
                 other => panic!("expected Computation veto, got {other:?}"),
@@ -2026,14 +1767,14 @@ mod tests {
         }
     }
 
-    fn bound_value<'a>(overlay: &'a DataOverlay, path: &DataPath) -> Option<&'a LiteralValue> {
-        overlay.bindings.get(path).and_then(OperationResult::value)
+    fn bound_value<'a>(run_data: &'a RunData, path: &DataPath) -> Option<&'a LiteralValue> {
+        run_data.bindings.get(path).and_then(OperationResult::value)
     }
 
-    fn input_data(pairs: &[(&str, &str)]) -> HashMap<String, DataValueInput> {
+    fn input_data(pairs: &[(&str, &str)]) -> HashMap<String, RunDataValue> {
         pairs
             .iter()
-            .map(|(k, v)| (k.to_string(), DataValueInput::convenience(*v)))
+            .map(|(k, v)| (k.to_string(), RunDataValue::string(*v)))
             .collect()
     }
 
@@ -2062,8 +1803,8 @@ mod tests {
 
         let values = input_data(&[("age", "30")]);
 
-        let overlay = resolve_overlay(plan, values);
-        let updated_value = bound_value(&overlay, &data_path).expect("bound value");
+        let run_data = resolve_run_data(plan, values);
+        let updated_value = bound_value(&run_data, &data_path).expect("bound value");
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
                 assert_eq!(n, &rational_new(30, 1));
@@ -2096,9 +1837,9 @@ mod tests {
 
         let values = input_data(&[("age", "thirty")]);
 
-        let overlay = resolve_overlay(plan, values);
+        let run_data = resolve_run_data(plan, values);
         let data_path = DataPath::new(vec![], "age".to_string());
-        match veto_reason(&overlay, &data_path) {
+        match veto_reason(&run_data, &data_path) {
             Some(reason) => {
                 assert!(
                     reason.contains("number"),
@@ -2133,9 +1874,9 @@ mod tests {
 
         let values = input_data(&[("unknown", "30")]);
 
-        let overlay = resolve_overlay(plan, values);
-        assert!(overlay.bindings.is_empty());
-        assert!(overlay.ignored_unknown.iter().any(|k| k == "unknown"));
+        let run_data = resolve_run_data(plan, values);
+        assert!(run_data.bindings.is_empty());
+        assert!(run_data.ignored_unknown.iter().any(|k| k == "unknown"));
     }
 
     #[test]
@@ -2165,7 +1906,7 @@ mod tests {
 
         let values = input_data(&[("rules.base_price", "100")]);
 
-        let overlay = resolve_overlay(plan, values);
+        let run_data = resolve_run_data(plan, values);
         let data_path = DataPath {
             segments: vec![PathSegment {
                 data: "rules".to_string(),
@@ -2173,7 +1914,7 @@ mod tests {
             }],
             data: "base_price".to_string(),
         };
-        let updated_value = bound_value(&overlay, &data_path).expect("bound value");
+        let updated_value = bound_value(&run_data, &data_path).expect("bound value");
         match &updated_value.value {
             crate::planning::semantics::ValueKind::Number(n) => {
                 assert_eq!(n, &rational_new(100, 1));
@@ -2183,7 +1924,7 @@ mod tests {
     }
 
     #[test]
-    fn with_values_should_enforce_number_maximum_constraint() {
+    fn run_data_should_enforce_number_maximum_constraint() {
         // Higher-standard requirement: user input must be validated against type constraints.
         // If this test fails, Lemma accepts invalid values and gives false reassurance.
         let data_path = DataPath::new(vec![], "x".to_string());
@@ -2224,18 +1965,23 @@ mod tests {
             normal_forms: Vec::new(),
             rules: IndexMap::new(),
             data_reference_order: Vec::new(),
-            meta: HashMap::new(),
+            meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
             signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
-            data_releases: HashMap::new(),
-            structural_needed: HashMap::new(),
+            effective_from: None,
+            effective_to: None,
+            versions: Vec::new(),
+            start_line: 1,
+            source_type: None,
+            needed_by_rules: HashMap::new(),
+            data_display: IndexMap::new(),
         };
 
         let values = input_data(&[("x", "11")]);
 
-        let overlay = resolve_overlay(&plan, values);
-        match veto_reason(&overlay, &data_path) {
+        let run_data = resolve_run_data(&plan, values);
+        match veto_reason(&run_data, &data_path) {
             Some(reason) => {
                 assert!(
                     reason.contains("maximum") || reason.contains("10"),
@@ -2247,7 +1993,7 @@ mod tests {
     }
 
     #[test]
-    fn with_values_should_enforce_text_enum_options() {
+    fn run_data_should_enforce_text_enum_options() {
         // Higher-standard requirement: enum options must be enforced for text types.
         let data_path = DataPath::new(vec![], "tier".to_string());
 
@@ -2286,18 +2032,23 @@ mod tests {
             normal_forms: Vec::new(),
             rules: IndexMap::new(),
             data_reference_order: Vec::new(),
-            meta: HashMap::new(),
+            meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
             signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
-            data_releases: HashMap::new(),
-            structural_needed: HashMap::new(),
+            effective_from: None,
+            effective_to: None,
+            versions: Vec::new(),
+            start_line: 1,
+            source_type: None,
+            needed_by_rules: HashMap::new(),
+            data_display: IndexMap::new(),
         };
 
         let values = input_data(&[("tier", "platinum")]);
 
-        let overlay = resolve_overlay(&plan, values);
-        match veto_reason(&overlay, &data_path) {
+        let run_data = resolve_run_data(&plan, values);
+        match veto_reason(&run_data, &data_path) {
             Some(reason) => {
                 assert!(
                     reason.contains("allowed options") || reason.contains("platinum"),
@@ -2309,7 +2060,7 @@ mod tests {
     }
 
     #[test]
-    fn with_values_should_enforce_measure_decimals() {
+    fn run_data_should_enforce_measure_decimals() {
         // Higher-standard requirement: decimals should be enforced on measure inputs,
         // unless the language explicitly defines rounding semantics.
         let data_path = DataPath::new(vec![], "price".to_string());
@@ -2361,18 +2112,23 @@ mod tests {
             normal_forms: Vec::new(),
             rules: IndexMap::new(),
             data_reference_order: Vec::new(),
-            meta: HashMap::new(),
+            meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
             signature_index: HashMap::new(),
             effective: EffectiveDate::Origin,
-            data_releases: HashMap::new(),
-            structural_needed: HashMap::new(),
+            effective_from: None,
+            effective_to: None,
+            versions: Vec::new(),
+            start_line: 1,
+            source_type: None,
+            needed_by_rules: HashMap::new(),
+            data_display: IndexMap::new(),
         };
 
         let values = input_data(&[("price", "1.234 eur")]);
 
-        let overlay = resolve_overlay(&plan, values);
-        match veto_reason(&overlay, &data_path) {
+        let run_data = resolve_run_data(&plan, values);
+        match veto_reason(&run_data, &data_path) {
             Some(reason) => {
                 assert!(
                     reason.contains("decimals") || reason.contains("decimal"),
@@ -2391,12 +2147,17 @@ mod tests {
             normal_forms: Vec::new(),
             rules: IndexMap::new(),
             data_reference_order: Vec::new(),
-            meta: HashMap::new(),
+            meta: IndexMap::new(),
             resolved_types: ResolvedSpecTypes::default(),
             signature_index: HashMap::new(),
             effective,
-            data_releases: HashMap::new(),
-            structural_needed: HashMap::new(),
+            effective_from: None,
+            effective_to: None,
+            versions: Vec::new(),
+            start_line: 1,
+            source_type: None,
+            needed_by_rules: HashMap::new(),
+            data_display: IndexMap::new(),
         }
     }
 
@@ -2787,20 +2548,11 @@ data throughput: measure
 rule cost_price: product_cost + labor_cost / throughput
 "#;
 
-    fn cost_price_inputs() -> HashMap<String, DataValueInput> {
+    fn cost_price_inputs() -> HashMap<String, RunDataValue> {
         let mut data = HashMap::new();
-        data.insert(
-            "product_cost".into(),
-            DataValueInput::convenience("4 eur_per_kg"),
-        );
-        data.insert(
-            "labor_cost".into(),
-            DataValueInput::convenience("25 eur_per_hour"),
-        );
-        data.insert(
-            "throughput".into(),
-            DataValueInput::convenience("12 kg_per_hour"),
-        );
+        data.insert("product_cost".into(), RunDataValue::string("4 eur_per_kg"));
+        data.insert("labor_cost".into(), RunDataValue::string("25 eur_per_hour"));
+        data.insert("throughput".into(), RunDataValue::string("12 kg_per_hour"));
         data
     }
 
@@ -2844,7 +2596,7 @@ rule can_view: no
     }
 
     #[test]
-    fn overlay_accepts_per_unit_measure_equivalent_to_canonical_magnitude() {
+    fn run_data_accepts_per_unit_measure_equivalent_to_canonical_magnitude() {
         let mut engine = Engine::new();
         engine
             .load([(
@@ -2860,31 +2612,28 @@ rule can_view: no
             .expect("plans for cost_price");
         let plan = plans.values().next().expect("plan");
         let mut data = HashMap::new();
-        data.insert(
-            "product_cost".into(),
-            DataValueInput::convenience("4 eur_per_kg"),
-        );
+        data.insert("product_cost".into(), RunDataValue::string("4 eur_per_kg"));
         data.insert(
             "labor_cost".into(),
-            DataValueInput::convenience("0.0069444444444444444444444444 eur_per_hour"),
+            RunDataValue::string("0.0069444444444444444444444444 eur_per_hour"),
         );
         data.insert(
             "throughput".into(),
-            DataValueInput::convenience("0.0033333333333333333333333333 kg_per_hour"),
+            RunDataValue::string("0.0033333333333333333333333333 kg_per_hour"),
         );
-        let overlay = resolve_overlay(plan, data);
+        let run_data = resolve_run_data(plan, data);
         assert!(
-            !overlay
+            !run_data
                 .bindings
                 .values()
                 .any(|b| matches!(b, OperationResult::Veto(_))),
-            "parsed decimal overlay values must not be veto-bound after input boundary: {:?}",
-            overlay.bindings
+            "parsed decimal run data values must not be veto-bound after input boundary: {:?}",
+            run_data.bindings
         );
     }
 
     #[test]
-    fn overlay_accepts_per_unit_measure() {
+    fn run_data_accepts_per_unit_measure() {
         let mut engine = Engine::new();
         engine
             .load([(
@@ -2899,15 +2648,15 @@ rule can_view: no
             .get_plans(None, "cost_price")
             .expect("plans for cost_price");
         let plan = plans.values().next().expect("plan");
-        let overlay = resolve_overlay(plan, cost_price_inputs());
-        assert!(!overlay
+        let run_data = resolve_run_data(plan, cost_price_inputs());
+        assert!(!run_data
             .bindings
             .values()
             .any(|b| matches!(b, OperationResult::Veto(_))));
     }
 
     #[test]
-    fn overlay_rejects_oversize_input() {
+    fn run_data_rejects_oversize_input() {
         let mut engine = Engine::new();
         engine
             .load([(
@@ -2925,13 +2674,13 @@ rule can_view: no
         let mut data = cost_price_inputs();
         data.insert(
             "labor_cost".into(),
-            DataValueInput::convenience(
+            RunDataValue::string(
                 "1000000000000000000000000000000000000000000000000000000000000 eur_per_hour",
             ),
         );
-        let overlay = resolve_overlay(plan, data);
+        let run_data = resolve_run_data(plan, data);
         assert!(matches!(
-            overlay.bindings.get(&DataPath::local("labor_cost".into())),
+            run_data.bindings.get(&DataPath::local("labor_cost".into())),
             Some(OperationResult::Veto(_))
         ));
     }
@@ -3263,9 +3012,9 @@ rule total: wh.total_logistics_per_ce
             .results
             .get("total")
             .expect("rule total must be present")
-            .display
-            .clone()
-            .expect("total must have display");
+            .display()
+            .expect("total must have display")
+            .to_string();
         assert_eq!(
             display, "20.00 eur",
             "10 eur/week * ceil(10 day as week) / 1 CE must be 20.00 eur, got: {display}"
@@ -3360,290 +3109,5 @@ rule band_slot: allowed_band
             }
             other => panic!("allowed_band must be RatioRange, got {other:?}"),
         }
-    }
-
-    fn plan_from_code(code: &str, spec_name: &str) -> ExecutionPlan {
-        let mut engine = Engine::new();
-        engine
-            .load([(crate::SourceType::Volatile, code.to_string())])
-            .expect("spec must load");
-        let plans = engine
-            .plans
-            .get_plans(None, spec_name)
-            .expect("plans for spec");
-        plans.values().next().expect("plan").clone()
-    }
-
-    fn local_rule_path(plan: &ExecutionPlan, rule_name: &str) -> RulePath {
-        plan.get_rule(rule_name).expect("local rule").path.clone()
-    }
-
-    fn path_keys(paths: &[DataPath]) -> Vec<String> {
-        paths.iter().map(|p| p.input_key()).collect()
-    }
-
-    fn and_releases<'a>(plan: &'a ExecutionPlan, rule: &str) -> Vec<&'a ControlDataReleases> {
-        let path = local_rule_path(plan, rule);
-        plan.data_releases
-            .get(&path)
-            .expect("data_releases for rule")
-            .values()
-            .filter(|r| matches!(r, ControlDataReleases::And { .. }))
-            .collect()
-    }
-
-    fn piecewise_releases<'a>(plan: &'a ExecutionPlan, rule: &str) -> &'a ControlDataReleases {
-        let path = local_rule_path(plan, rule);
-        plan.data_releases
-            .get(&path)
-            .expect("data_releases for rule")
-            .values()
-            .find(|r| matches!(r, ControlDataReleases::Piecewise { .. }))
-            .expect("Piecewise ControlDataReleases")
-    }
-
-    #[test]
-    fn data_releases_and_left_false_releases_exclusive_right() {
-        let plan = plan_from_code(
-            r#"
-spec demo
-data flag: boolean
-data expensive: number
-rule main: flag and (expensive > 0)
-"#,
-            "demo",
-        );
-        let ands = and_releases(&plan, "main");
-        assert_eq!(ands.len(), 1, "expected one And: {ands:?}");
-        match ands[0] {
-            ControlDataReleases::And { on_left_false } => {
-                let keys = path_keys(on_left_false);
-                assert!(
-                    keys.contains(&"expensive".to_string()),
-                    "expected expensive in on_left_false: {keys:?}"
-                );
-                assert!(
-                    !keys.contains(&"flag".to_string()),
-                    "flag must not be released: {keys:?}"
-                );
-            }
-            other => panic!("expected And releases, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn data_releases_and_does_not_release_path_still_reachable_outside() {
-        let plan = plan_from_code(
-            r#"
-spec demo
-data flag: boolean
-data expensive: number
-rule main: expensive
-  unless flag and (expensive > 100) then 0
-"#,
-            "demo",
-        );
-        let ands = and_releases(&plan, "main");
-        assert_eq!(ands.len(), 1, "expected one And: {ands:?}");
-        match ands[0] {
-            ControlDataReleases::And { on_left_false } => {
-                let keys = path_keys(on_left_false);
-                assert!(
-                    !keys.contains(&"expensive".to_string()),
-                    "expensive still reachable via default body: {keys:?}"
-                );
-            }
-            other => panic!("expected And releases, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn data_releases_nested_and_each_node_has_own_entry() {
-        let plan = plan_from_code(
-            r#"
-spec demo
-data a: boolean
-data b: boolean
-data c: boolean
-rule main: a and b and c
-"#,
-            "demo",
-        );
-        let ands = and_releases(&plan, "main");
-        assert_eq!(
-            ands.len(),
-            2,
-            "nested binary And must yield two control entries: {ands:?}"
-        );
-        let mut released_rights: Vec<Vec<String>> = ands
-            .iter()
-            .map(|r| match r {
-                ControlDataReleases::And { on_left_false } => path_keys(on_left_false),
-                other => panic!("expected And, got {other:?}"),
-            })
-            .collect();
-        released_rights.sort();
-        assert!(
-            released_rights
-                .iter()
-                .any(|k: &Vec<String>| k.contains(&"b".to_string())),
-            "one And must release b (exclusive to its right): {released_rights:?}"
-        );
-        assert!(
-            released_rights
-                .iter()
-                .any(|k: &Vec<String>| k.contains(&"c".to_string())),
-            "one And must release c: {released_rights:?}"
-        );
-    }
-
-    #[test]
-    fn data_releases_piecewise_not_taken_releases_arm_body() {
-        let plan = plan_from_code(
-            r#"
-spec demo
-data flag: boolean
-data expensive: number
-rule main: 1
-  unless flag then expensive
-"#,
-            "demo",
-        );
-        match piecewise_releases(&plan, "main") {
-            ControlDataReleases::Piecewise {
-                on_arm_not_taken, ..
-            } => {
-                assert_eq!(on_arm_not_taken.len(), 2);
-                let keys = path_keys(&on_arm_not_taken[1]);
-                assert!(
-                    keys.contains(&"expensive".to_string()),
-                    "NotTaken must release expensive: {keys:?}"
-                );
-                assert!(
-                    !keys.contains(&"flag".to_string()),
-                    "flag was evaluated: {keys:?}"
-                );
-            }
-            other => panic!("expected Piecewise, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn data_releases_piecewise_default_wins_releases_unless_bodies() {
-        let plan = plan_from_code(
-            r#"
-spec demo
-data flag: boolean
-data expensive: number
-rule main: 1
-  unless flag then expensive
-"#,
-            "demo",
-        );
-        match piecewise_releases(&plan, "main") {
-            ControlDataReleases::Piecewise {
-                on_default_wins, ..
-            } => {
-                let keys = path_keys(on_default_wins);
-                assert!(
-                    keys.contains(&"expensive".to_string()),
-                    "default_wins must release expensive: {keys:?}"
-                );
-            }
-            other => panic!("expected Piecewise, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn data_releases_piecewise_taken_multi_edge_releases_shared_body() {
-        let plan = plan_from_code(
-            r#"
-spec demo
-data shared: number
-data flag_a: boolean
-data flag_b: boolean
-rule main: shared
-  unless flag_a then shared
-  unless flag_b then 0
-"#,
-            "demo",
-        );
-        match piecewise_releases(&plan, "main") {
-            ControlDataReleases::Piecewise { on_arm_taken, .. } => {
-                assert_eq!(on_arm_taken.len(), 3);
-                let keys = path_keys(&on_arm_taken[2]);
-                assert!(
-                    keys.contains(&"shared".to_string()),
-                    "flag_b Taken must multi-edge-release shared: {keys:?}"
-                );
-            }
-            other => panic!("expected Piecewise, got {other:?}"),
-        }
-    }
-
-    fn wide_iso_style_spec(unless_count: usize) -> String {
-        let mut code = String::from(
-            r#"
-spec wide
-data code: text
-"#,
-        );
-        for i in 0..unless_count {
-            code.push_str(&format!("  -> option \"{i}\"\n"));
-        }
-        code.push_str("rule name: veto \"x\"\n");
-        for i in 0..unless_count {
-            code.push_str(&format!("  unless code is \"{i}\" then \"{i}\"\n"));
-        }
-        code
-    }
-
-    fn plan_wide_counting_visits(unless_count: usize) -> (ExecutionPlan, u64) {
-        STRUCTURAL_DAG_VISIT_COUNT.with(|count| count.set(0));
-        STRUCTURAL_DAG_VISIT_ENABLED.with(|enabled| enabled.set(true));
-        let plan = plan_from_code(&wide_iso_style_spec(unless_count), "wide");
-        STRUCTURAL_DAG_VISIT_ENABLED.with(|enabled| enabled.set(false));
-        let visits = STRUCTURAL_DAG_VISIT_COUNT.with(|count| count.get());
-        (plan, visits)
-    }
-
-    #[test]
-    fn data_releases_wide_piecewise_fill_visits_scale_near_linear() {
-        let (plan_16, visits_16) = plan_wide_counting_visits(16);
-        let (plan_64, visits_64) = plan_wide_counting_visits(64);
-
-        match piecewise_releases(&plan_16, "name") {
-            ControlDataReleases::Piecewise {
-                on_arm_not_taken,
-                on_arm_taken,
-                on_default_wins,
-            } => {
-                assert_eq!(on_arm_not_taken.len(), 17, "default + 16 unless arms");
-                assert_eq!(on_arm_taken.len(), 17);
-                assert!(
-                    !path_keys(on_default_wins).contains(&"code".to_string()),
-                    "iso-style: code must not release on default_wins"
-                );
-            }
-            other => panic!("expected Piecewise, got {other:?}"),
-        }
-        match piecewise_releases(&plan_64, "name") {
-            ControlDataReleases::Piecewise {
-                on_arm_not_taken, ..
-            } => {
-                assert_eq!(on_arm_not_taken.len(), 65, "default + 64 unless arms");
-            }
-            other => panic!("expected Piecewise, got {other:?}"),
-        }
-
-        assert!(
-            visits_16 > 0,
-            "visit counter must observe fill walks, got 0"
-        );
-        let ratio = visits_64 as f64 / visits_16 as f64;
-        assert!(
-            ratio < 8.0,
-            "exclusivity fill must scale near-linear in unless arms; visits(16)={visits_16} visits(64)={visits_64} ratio={ratio} (quadratic ≈ 16)"
-        );
     }
 }

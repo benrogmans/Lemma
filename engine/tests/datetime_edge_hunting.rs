@@ -54,7 +54,11 @@ fn eval_bool_with_datas(
         .values()
         .find(|r| r.rule.name == rule)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule));
-    rr.boolean.expect("boolean rule result")
+    rr.value
+        .as_ref()
+        .expect("rule result value")
+        .boolean
+        .expect("boolean rule result")
 }
 
 fn eval_value(

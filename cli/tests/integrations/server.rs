@@ -248,7 +248,7 @@ rule result: x
 /// repositories with listed spec rows (name, optional effective_from/effective_to).
 /// Temporal show failures belong on GET `/{spec}`, not on the list route.
 #[test]
-fn list_returns_engine_list_wire() {
+fn list_returns_engine_list_api() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("specs.lemma"),
@@ -498,12 +498,14 @@ fn evaluation_timeout_returns_503() {
     );
 }
 
+/// Parse the `YYYY-MM-DD` prefix of an ISO-8601 date string API field.
+/// Temporal fields in the public API are always ISO strings, never objects
+/// (see `engine/tests/temporal_api_shape.rs`).
 fn json_date_ymd(v: &serde_json::Value) -> Option<(i64, u64, u64)> {
-    Some((
-        v["year"].as_i64()?,
-        v["month"].as_u64()?,
-        v["day"].as_u64()?,
-    ))
+    let s = v.as_str()?;
+    let (year, rest) = s.split_once('-')?;
+    let (month, day) = rest.split_once('-')?;
+    Some((year.parse().ok()?, month.parse().ok()?, day.parse().ok()?))
 }
 
 /// GET `/{spec}` must expose each temporal version's half-open
@@ -588,6 +590,86 @@ rule total: base
     assert!(
         latest["effective_to"].is_null(),
         "latest version effective_to must be null (no successor): {latest}"
+    );
+}
+
+/// POST evaluate must report the resolved spec version's declared temporal window,
+/// both in the JSON body (`spec_effective_from`/`spec_effective_to`) and as the
+/// Memento `Memento-Datetime` response header (RFC 7089), scoped to whichever
+/// version `?effective=` (or now) resolved to — not the request's own instant.
+#[test]
+fn post_evaluate_reports_resolved_spec_version_window_in_body_and_memento_header() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        temp_dir.path().join("temporal.lemma"),
+        r#"spec pricing 2025-01-01
+data base: 10
+rule total: base
+
+spec pricing 2026-01-01
+data base: 99
+rule total: base
+"#,
+    )
+    .unwrap();
+
+    let port = SERVER_TEST_PORT + 12;
+    let bin = env!("CARGO_BIN_EXE_lemma");
+    let mut child = std::process::Command::new(bin)
+        .arg("server")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("--port")
+        .arg(port.to_string())
+        .spawn()
+        .unwrap();
+
+    let ok = wait_for_port(port, SERVER_STARTUP_TIMEOUT);
+    if !ok {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("server did not start within timeout");
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("http://127.0.0.1:{}/pricing", port);
+    let resp = client
+        .post(&url)
+        .header("Accept-Datetime", "2025-06-01")
+        .send()
+        .expect("POST request");
+    let status = resp.status();
+    let memento_header = resp
+        .headers()
+        .get("memento-datetime")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let body_text = resp.text().expect("response body");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    assert!(
+        status.is_success(),
+        "POST /pricing should return 2xx, got {status}: {body_text}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&body_text)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}; {body_text}"));
+
+    assert_eq!(
+        json_date_ymd(&body["spec_effective_from"]),
+        Some((2025, 1, 1)),
+        "resolved spec version's effective_from (2025 slice, not the 2026 successor): {body}"
+    );
+    assert_eq!(
+        json_date_ymd(&body["spec_effective_to"]),
+        Some((2026, 1, 1)),
+        "resolved spec version's effective_to equals the next version's effective_from: {body}"
+    );
+
+    let memento = memento_header.expect("Memento-Datetime header must be present");
+    assert!(
+        memento.starts_with("2025-01-01"),
+        "Memento-Datetime must reflect the resolved version's effective_from, got '{memento}'"
     );
 }
 

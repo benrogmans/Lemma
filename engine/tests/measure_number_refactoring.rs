@@ -16,7 +16,7 @@ fn rule_value_str(response: &Response, name: &str) -> String {
         "rule '{name}' must not veto, got {:?}",
         r.veto_reason
     );
-    r.display.clone().expect("display")
+    r.display().expect("display").to_string()
 }
 
 #[test]
@@ -84,9 +84,9 @@ rule quotient: price1 / price2"#;
         .results
         .get("total")
         .unwrap()
-        .display
-        .clone()
-        .expect("display");
+        .display()
+        .expect("display")
+        .to_string();
     assert!(
         total_s.contains("15") && total_s.to_lowercase().contains("eur"),
         "10 eur + 5 eur => ~15 eur, got {total_s}"
@@ -95,9 +95,9 @@ rule quotient: price1 / price2"#;
         .results
         .get("difference")
         .unwrap()
-        .display
-        .clone()
-        .expect("display");
+        .display()
+        .expect("display")
+        .to_string();
     assert!(
         diff_s.contains("5") && diff_s.to_lowercase().contains("eur"),
         "10 eur - 5 eur => ~5 eur, got {diff_s}"
@@ -106,9 +106,9 @@ rule quotient: price1 / price2"#;
         .results
         .get("quotient")
         .unwrap()
-        .display
-        .clone()
-        .expect("display");
+        .display()
+        .expect("display")
+        .to_string();
     assert!(
         quot_s.contains("2"),
         "10 eur / 5 eur => ratio 2 in display, got {quot_s}"

@@ -26,7 +26,7 @@ const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false
 // response.results.total      → 800 eur
 ```
 
-`Lemma()` initializes the engine once and returns an `Engine`. The response carries each rule's value (or veto), per-rule `missing_data` when inputs are still unbound, and optional explanation trees when the last `run` argument is `true` ([explanation.v1.json](../schemas/explanation.v1.json)). Types and suggestions are on `engine.show(...)`.
+`Lemma()` initializes the engine once and returns an `Engine`. The response carries each rule's value (or veto), per-rule `missing_data` when inputs are still unbound, and optional explanation trees when the last `run` argument is `true` ([api.v1.json](../schemas/api.v1.json)). Types and suggestions are on `engine.show(...)` (`Show.data` values are `ShowData`). Non-veto results flatten `RuleResultValue` (`display` + typed field) onto each `RuleResult`.
 
 ## Browser
 
@@ -93,14 +93,14 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs`. |
 | `show(repo?, spec, effective?)` | `Show`: interface + temporal window (no Lemma text) |
 | `source(repo?, spec?, effective?)` | Formatted Lemma source (omit `spec` for whole repo) |
-| `run(repo?, spec, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [explanation.v1.json](../schemas/explanation.v1.json). |
+| `run(repo?, spec, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [api.v1.json](../schemas/api.v1.json). |
 | `remove(repo?, name, effective?)` | Remove a temporal spec slice. |
 | `limits()` | Resource limits for this engine. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled (see `lemma.d.ts`).
 
-**API-wire unit maps on literals:** besides `value` (magnitude in the declared unit) and `lemma_type`, API-wire literals may include optional `measure` or `ratio` maps with every declared unit name → magnitude string (same shape as rule results). Interactive prompts use these maps when the user picks a different unit. These maps are not `-> suggest` and not the removed `-> default` commit path.
+**API values (`RuleResultValue`):** when present, always `display`, plus exactly one typed field (`measure` / `ratio` / `number` / …) or `range` instead. Same shape on `ShowData.prefilled` / `ShowData.suggestion`; non-veto rule results flatten those fields onto `RuleResult` (no `value` wrapper). Measure and ratio maps hold every declared unit name → magnitude string so interactive prompts can switch units. These maps are not `-> suggest` and not the removed `-> default` commit path.
 
 ## Registry dependencies
 

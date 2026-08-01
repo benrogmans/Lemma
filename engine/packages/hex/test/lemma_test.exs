@@ -35,9 +35,7 @@ defmodule LemmaTest do
 
   defp date_iso(nil), do: nil
 
-  defp date_iso(%{"year" => year, "month" => month, "day" => day}) do
-    :io_lib.format("~4..0w-~2..0w-~2..0w", [year, month, day]) |> List.to_string()
-  end
+  defp date_iso(iso) when is_binary(iso), do: iso
 
   # Explanation trees embed source paths (e.g. original vs formatted); compare evaluation payloads only.
   defp comparable_rule_result(rule) when is_map(rule) do
@@ -113,6 +111,9 @@ defmodule LemmaTest do
       error = hd(errors)
       assert error[:kind] == "resource_limit"
       assert error[:message] =~ "expression nodes" or error[:message] =~ "normal-form"
+      assert is_binary(error[:limit_name])
+      assert is_binary(error[:limit_value])
+      assert is_binary(error[:actual_value])
     end
   end
 
@@ -131,6 +132,15 @@ defmodule LemmaTest do
       assert is_map(first)
       assert Map.has_key?(first, :message)
       assert first[:kind] == "parsing"
+      # Unified error API: `source` (not Hex-only `location`), with attribute + length.
+      assert Map.has_key?(first, :source), "error must use source key, not location"
+      refute Map.has_key?(first, :location)
+      assert is_map(first[:source])
+      assert is_binary(first[:source][:attribute])
+      assert is_integer(first[:source][:length])
+      assert Map.has_key?(first, :related_data)
+      assert Map.has_key?(first, :spec)
+      assert Map.has_key?(first, :related_spec)
     end
   end
 
@@ -276,7 +286,7 @@ defmodule LemmaTest do
   end
 
   describe "show/4" do
-    test "returns show for loaded spec with DataEntry + kind-tagged types" do
+    test "returns show for loaded spec with ShowData + kind-tagged types" do
       {:ok, engine} = Lemma.new()
       :ok = Lemma.load(engine, %{"pricing.lemma" => @simple_spec})
       assert {:ok, show} = Lemma.show(engine, nil, "pricing")
@@ -289,7 +299,7 @@ defmodule LemmaTest do
       assert Map.has_key?(show["rules"], "discount")
 
       quantity = show["data"]["quantity"]
-      assert is_map(quantity), "DataEntry is a named object, not a tuple"
+      assert is_map(quantity), "ShowData is a named object, not a tuple"
       assert is_map(quantity["type"])
       assert is_binary(quantity["type"]["kind"]), "type carries `kind` discriminator"
     end
@@ -317,6 +327,12 @@ defmodule LemmaTest do
       assert total["display"] == "50"
       assert total["number"] == "50"
       refute Map.has_key?(total, "missing_data")
+
+      typed = Lemma.Response.from_map(response)
+      assert %Lemma.Response{spec: "pricing"} = typed
+
+      assert %Lemma.RuleResult{display: "50", number: "50", vetoed: false} =
+               Map.fetch!(typed.results, "total")
     end
 
     test "exposes per-rule missing_data when inputs unbound" do
@@ -407,6 +423,33 @@ defmodule LemmaTest do
       assert is_map(err)
       assert Map.has_key?(err, :message)
       assert err[:kind] == "parsing"
+      typed = Lemma.EngineError.from_map(err)
+      assert %Lemma.EngineError{kind: "parsing"} = typed
+      assert is_binary(typed.message)
+    end
+
+    test "parses api fixtures into typed show shape" do
+      fixture_path =
+        Path.expand("../../../tests/fixtures/api/show_minimal.json", __DIR__)
+
+      assert {:ok, raw} = File.read(fixture_path)
+      assert {:ok, show_map} = Jason.decode(raw)
+      assert is_binary(show_map["spec"])
+      assert is_binary(show_map["effective_from"])
+      assert is_map(show_map["data"])
+      assert is_map(show_map["rules"])
+
+      show = Lemma.Show.from_map(show_map)
+      assert %Lemma.Show{} = show
+      assert show.spec == show_map["spec"]
+      assert show.effective_from == show_map["effective_from"]
+      assert %Lemma.ShowVersion{effective_from: "2024-01-01"} = hd(show.versions)
+
+      amount = Map.fetch!(show.data, "amount")
+      assert %Lemma.ShowData{} = amount
+      assert amount.type["kind"] == "number"
+      assert amount.suggestion == %{"number" => "1"}
+      assert amount.needed_by_rules == ["ok"]
     end
 
     test "preserves semantics after formatting" do

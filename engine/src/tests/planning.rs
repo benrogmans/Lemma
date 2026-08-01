@@ -43,7 +43,7 @@ fn plan_single(
             format!("No execution plan produced for spec '{}'", main_spec.name),
             Some(crate::planning::semantics::Source::new(
                 crate::parsing::source::SourceType::Volatile,
-                crate::planning::semantics::Span {
+                crate::parsing::ast::Span {
                     start: 0,
                     end: 0,
                     line: 1,
@@ -58,7 +58,7 @@ fn plan_single(
             format!("No execution plan produced for spec '{}'", main_spec.name),
             Some(crate::planning::semantics::Source::new(
                 crate::parsing::source::SourceType::Volatile,
-                crate::planning::semantics::Span {
+                crate::parsing::ast::Span {
                     start: 0,
                     end: 0,
                     line: 1,

@@ -122,9 +122,9 @@ fn warehousing_plans_alone() {
         .results
         .get("storage_cost_per_pallet")
         .expect("storage_cost_per_pallet must be present")
-        .display
-        .clone()
-        .expect("storage_cost_per_pallet must have display");
+        .display()
+        .expect("storage_cost_per_pallet must have display")
+        .to_string();
     assert_eq!(
         display, "20.00 eur",
         "10 eur/week * ceil(10 day as week) must be 20.00 eur, got: {display}"
@@ -153,9 +153,9 @@ fn quotation_evaluates_cross_spec_duration_conversion() {
         .results
         .get("total")
         .expect("rule total must be present")
-        .display
-        .clone()
-        .expect("total must have display");
+        .display()
+        .expect("total must have display")
+        .to_string();
     assert_eq!(
         display, "20.00 eur",
         "10 eur/week * ceil(10 day as week) / 1 CE must be 20.00 eur, got: {display}"

@@ -6,7 +6,7 @@ use crate::parsing::ast::{
 use crate::parsing::source::Source;
 use crate::planning::semantics::{DataDefinition, LemmaType};
 use crate::Error;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 /// A spec together with its owning repository, as produced by dependency discovery.
@@ -408,6 +408,174 @@ pub(crate) fn dependency_edges(
     } else {
         Err(errors)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Temporal slice breakpoints
+// ---------------------------------------------------------------------------
+
+/// Compute the temporal slice boundaries for `spec` by walking its transitive name-level
+/// dependency closure and collecting every version `effective_from` of every closure member.
+///
+/// # Soundness precondition
+///
+/// Breakpoints derived from the closure are sound because type and unit resolution in
+/// `Graph::build` are closure-scoped: `TypeResolver` learns types only from specs passed in
+/// `ordered_dependencies`, and `unit_index` comes from the resulting `ResolvedSpecTypes`. Any
+/// change that widens type or unit resolution beyond the closure would invalidate these results.
+///
+/// # Seeding and pin pruning
+///
+/// The closure is seeded from `spec`'s own `uses` lines only — not from every version of its
+/// name. The plan being built is for this one version, so only this version's imports matter.
+/// Pinned edges (`uses dep 2025-06-01`) prune their entire subtree: the pin instant is fixed, so
+/// nothing beneath it can shift as the consumer's evaluation instant moves.
+///
+/// # Missing dependencies and cycles
+///
+/// When a dependency name is not found in the context, it is silently skipped; the error will
+/// surface per slice through `discover_dependency_order`. Cycles are terminated by the visited set
+/// without producing an error here; `discover_dependency_order` reports them per slice.
+pub(crate) fn plan_breakpoints(
+    context: &Context,
+    spec_set: &crate::planning::spec_set::LemmaSpecSet,
+    spec: &LemmaSpec,
+    limits: &crate::limits::ResourceLimits,
+) -> Result<Vec<EffectiveDate>, Vec<Error>> {
+    use crate::parsing::ast::ascii_lowercase_logical_name;
+
+    let (from, to) = spec_set.effective_range(spec);
+    let from_key = EffectiveDate::from_option(from);
+
+    let mut candidate_dates: BTreeSet<EffectiveDate> = BTreeSet::new();
+    candidate_dates.insert(spec.effective_from.clone());
+
+    // (repository, canonical_name) pairs already admitted to the closure.
+    // The root spec is pre-inserted so its other versions are not treated as closure members.
+    let mut visited: HashSet<(Arc<LemmaRepository>, String)> = HashSet::new();
+    visited.insert((
+        Arc::clone(&spec_set.repository),
+        ascii_lowercase_logical_name(spec.name.clone()),
+    ));
+
+    // Worklist entries: (repository, canonical_name, depth).
+    let mut worklist: VecDeque<(Arc<LemmaRepository>, String, usize)> = VecDeque::new();
+
+    // Seed using only this spec version's dependency edges.
+    match dependency_edges(spec, &spec_set.repository, context) {
+        Ok(edges) => {
+            for edge in edges {
+                if edge.explicit_effective.is_none() {
+                    let canonical = ascii_lowercase_logical_name(edge.dep_name.clone());
+                    worklist.push_back((edge.dep_repository, canonical, 1));
+                }
+                // Pinned edges (explicit_effective.is_some()) prune their entire subtree.
+            }
+        }
+        Err(errors) => return Err(errors),
+    }
+
+    let mut closure_errors: Vec<Error> = Vec::new();
+
+    while let Some((repository, canonical_name, depth)) = worklist.pop_front() {
+        let identity = (Arc::clone(&repository), canonical_name.clone());
+        if visited.contains(&identity) {
+            continue;
+        }
+
+        if depth > limits.max_spec_dependency_depth {
+            closure_errors.push(Error::resource_limit_exceeded(
+                "max_spec_dependency_depth",
+                limits.max_spec_dependency_depth.to_string(),
+                depth.to_string(),
+                format!(
+                    "Spec '{}' exceeds the maximum dependency nesting depth; flatten the import chain",
+                    canonical_name
+                ),
+                None,
+                None,
+                None,
+            ));
+            continue;
+        }
+
+        // visited.len() equals the number of already-admitted members (root + previously processed).
+        // Refusing to admit the current member when this count already meets the limit
+        // matches dfs_discover's `nodes.len() >= limits.max_dag_specs` check.
+        if visited.len() >= limits.max_dag_specs {
+            closure_errors.push(Error::resource_limit_exceeded(
+                "max_dag_specs",
+                limits.max_dag_specs.to_string(),
+                visited.len().to_string(),
+                format!(
+                    "Dependency graph of the root spec grew past {} specs at '{}'; \
+                     reduce the number of transitive imports",
+                    limits.max_dag_specs, canonical_name
+                ),
+                None,
+                None,
+                None,
+            ));
+            continue;
+        }
+
+        visited.insert(identity);
+
+        let member_spec_set = match context.spec_set(&repository, &canonical_name) {
+            Some(ss) => ss,
+            // Not loaded; per-slice discover_dependency_order will report the missing dependency.
+            None => continue,
+        };
+
+        for version in member_spec_set.iter_specs() {
+            candidate_dates.insert(version.effective_from.clone());
+
+            match dependency_edges(version, &repository, context) {
+                Ok(edges) => {
+                    for edge in edges {
+                        if edge.explicit_effective.is_none() {
+                            let next_canonical =
+                                ascii_lowercase_logical_name(edge.dep_name.clone());
+                            let next_identity =
+                                (Arc::clone(&edge.dep_repository), next_canonical.clone());
+                            if !visited.contains(&next_identity) {
+                                worklist.push_back((
+                                    edge.dep_repository,
+                                    next_canonical,
+                                    depth + 1,
+                                ));
+                            }
+                        }
+                        // Pinned edges prune their subtree.
+                    }
+                }
+                Err(errors) => closure_errors.extend(errors),
+            }
+        }
+    }
+
+    if !closure_errors.is_empty() {
+        return Err(closure_errors);
+    }
+
+    // Clip to [from_key, effective_to), matching the range logic of the deleted effective_dates.
+    let clipped: Vec<EffectiveDate> = match to {
+        Some(dt) => candidate_dates
+            .range(from_key..EffectiveDate::DateTimeValue(dt))
+            .cloned()
+            .collect(),
+        None => candidate_dates.range(from_key..).cloned().collect(),
+    };
+
+    assert!(
+        !clipped.is_empty(),
+        "BUG: plan_breakpoints produced no dates for spec '{}' effective from {:?}; \
+         spec.effective_from is always within [from_key, effective_to)",
+        spec.name,
+        spec.effective_from
+    );
+
+    Ok(clipped)
 }
 
 // ---------------------------------------------------------------------------
@@ -1456,5 +1624,143 @@ data money: measure
         assert!(names.contains(&"child"));
         assert!(names.contains(&"dep"));
         assert!(!names.contains(&"c"));
+    }
+
+    // --- plan_breakpoints unit tests ---
+
+    fn breakpoints_for(
+        source: &str,
+        spec_name: &str,
+        eff: Option<DateTimeValue>,
+    ) -> Vec<EffectiveDate> {
+        let specs = crate::parse(
+            source,
+            crate::parsing::source::SourceType::Volatile,
+            &crate::ResourceLimits::default(),
+        )
+        .expect("parse")
+        .into_flattened_specs();
+        let mut ctx = Context::new();
+        let workspace = ctx.workspace();
+        for spec in specs {
+            ctx.insert_spec(Arc::clone(&workspace), spec).unwrap();
+        }
+        let spec_set = ctx.spec_set(&workspace, spec_name).expect("spec set");
+        let effective_key = EffectiveDate::from_option(eff.clone());
+        let spec = spec_set.spec_at(&effective_key).expect("spec at effective");
+        plan_breakpoints(&ctx, spec_set, spec, &crate::ResourceLimits::default())
+            .expect("plan_breakpoints must succeed")
+    }
+
+    #[test]
+    fn plan_breakpoints_no_deps_returns_own_effective_from() {
+        let dates = breakpoints_for("spec root\ndata v: 1\nrule r: v\n", "root", None);
+        assert_eq!(dates, vec![EffectiveDate::Origin]);
+    }
+
+    #[test]
+    fn plan_breakpoints_unpinned_dep_includes_dep_version_dates() {
+        let source = r#"
+spec dep
+data v: 1
+
+spec dep 2025-06-01
+data v: 2
+
+spec root
+uses d: dep
+data v: 1
+"#;
+        let dates = breakpoints_for(source, "root", None);
+        assert_eq!(
+            dates,
+            vec![
+                EffectiveDate::Origin,
+                EffectiveDate::DateTimeValue(date(2025, 6, 1)),
+            ],
+            "unpinned dep: must include dep's version boundaries"
+        );
+    }
+
+    #[test]
+    fn plan_breakpoints_pinned_dep_excludes_dep_version_dates() {
+        let source = r#"
+spec dep
+data v: 1
+
+spec dep 2025-06-01
+data v: 2
+
+spec root
+uses d: dep 2025-01-01
+data v: 1
+"#;
+        let dates = breakpoints_for(source, "root", None);
+        assert_eq!(
+            dates,
+            vec![EffectiveDate::Origin],
+            "pinned dep: dep's version boundaries must not appear"
+        );
+    }
+
+    #[test]
+    fn plan_breakpoints_transitive_dep_dates_included() {
+        let source = r#"
+spec base
+data v: 1
+
+spec base 2025-06-01
+data v: 2
+
+spec mid
+uses b: base
+data v: 1
+
+spec root
+uses m: mid
+data v: 1
+"#;
+        let dates = breakpoints_for(source, "root", None);
+        assert_eq!(
+            dates,
+            vec![
+                EffectiveDate::Origin,
+                EffectiveDate::DateTimeValue(date(2025, 6, 1)),
+            ],
+            "transitive dep: base's version boundary must appear in root's breakpoints"
+        );
+    }
+
+    #[test]
+    fn plan_breakpoints_clipped_to_validity_range() {
+        let source = r#"
+spec dep
+data v: 1
+
+spec dep 2025-01-01
+data v: 2
+
+spec dep 2025-12-01
+data v: 3
+
+spec root 2025-03-01
+uses d: dep
+data v: 1
+
+spec root 2026-01-01
+data v: 99
+"#;
+        // root version at 2025-03-01 is valid until 2026-01-01.
+        // dep dates: Origin, 2025-01-01, 2025-12-01.
+        // After clipping to [2025-03-01, 2026-01-01): only 2025-03-01 and 2025-12-01 remain.
+        let dates = breakpoints_for(source, "root", Some(date(2025, 3, 1)));
+        assert_eq!(
+            dates,
+            vec![
+                EffectiveDate::DateTimeValue(date(2025, 3, 1)),
+                EffectiveDate::DateTimeValue(date(2025, 12, 1)),
+            ],
+            "breakpoints must be clipped to this spec version's validity range"
+        );
     }
 }

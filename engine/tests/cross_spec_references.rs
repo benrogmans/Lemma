@@ -36,7 +36,7 @@ rule total: base_data.price * base_data.quantity
         .find(|r| r.rule.name == "total")
         .unwrap();
 
-    assert_eq!(total.display.clone().expect("display"), "500");
+    assert_eq!(total.display().expect("display").to_string(), "500");
 }
 
 /// Test cross-spec rule reference
@@ -73,7 +73,7 @@ rule derived_value: base_data.doubled + 10
         .find(|r| r.rule.name == "derived_value")
         .unwrap();
 
-    assert_eq!(derived_value.display.clone().expect("display"), "110");
+    assert_eq!(derived_value.display().expect("display").to_string(), "110");
 }
 
 /// Test cross-spec rule reference with dependencies
@@ -111,7 +111,7 @@ rule manager_bonus: employee.annual_salary * 0.15
         .find(|r| r.rule.name == "manager_bonus")
         .unwrap();
 
-    assert_eq!(bonus.display.clone().expect("display"), "9000");
+    assert_eq!(bonus.display().expect("display").to_string(), "9000");
 }
 
 /// Test data binding with cross-spec rule reference
@@ -151,7 +151,7 @@ rule derived_total: config.total
         .find(|r| r.rule.name == "derived_total")
         .unwrap();
 
-    assert_eq!(total.display.clone().expect("display"), "600");
+    assert_eq!(total.display().expect("display").to_string(), "600");
 }
 
 /// Test nested cross-spec rule references
@@ -199,7 +199,7 @@ rule total_days: settings.standard_processing_days + order_info.processing_days
         .find(|r| r.rule.name == "total_days")
         .unwrap();
 
-    assert_eq!(total.display.clone().expect("display"), "8");
+    assert_eq!(total.display().expect("display").to_string(), "8");
 }
 
 /// Test cross-spec rule reference in unless clause
@@ -238,7 +238,7 @@ rule status: "invalid"
         .find(|r| r.rule.name == "status")
         .unwrap();
 
-    assert_eq!(status.display.clone().expect("display"), "valid");
+    assert_eq!(status.display().expect("display").to_string(), "valid");
 }
 
 /// Test that we can mix cross-spec data and rule references
@@ -275,7 +275,7 @@ rule combined: base_data.input + base_data.calculated
         .find(|r| r.rule.name == "combined")
         .unwrap();
 
-    assert_eq!(combined.display.clone().expect("display"), "150");
+    assert_eq!(combined.display().expect("display").to_string(), "150");
 }
 
 /// Test cross-spec data binding with multiple levels (should work)
@@ -317,7 +317,7 @@ rule sum: b.x + b.y + b.z
 
     // x=100 (overridden), y=200 (overridden), z=30 (original)
     // 100 + 200 + 30 = 330
-    assert_eq!(sum.display.clone().expect("display"), "330");
+    assert_eq!(sum.display().expect("display").to_string(), "330");
 }
 
 /// Test simple data binding without rule references (should work)
@@ -357,7 +357,7 @@ rule total: config.price * config.quantity
         .unwrap();
 
     // Should be 200 * 3 = 600 (using overridden data values)
-    assert_eq!(total.display.clone().expect("display"), "600");
+    assert_eq!(total.display().expect("display").to_string(), "600");
 }
 
 /// Test that different data paths to the same rule produce different results
@@ -415,10 +415,10 @@ rule total2: base2.base.total
         .unwrap();
 
     // total1 uses original price: 99 * 1.21 = 119.79
-    assert_eq!(total1.display.clone().expect("display"), "119.79");
+    assert_eq!(total1.display().expect("display").to_string(), "119.79");
 
     // total2 uses overridden price: 79 * 1.21 = 95.59
-    assert_eq!(total2.display.clone().expect("display"), "95.59");
+    assert_eq!(total2.display().expect("display").to_string(), "95.59");
 }
 
 #[test]
@@ -449,7 +449,7 @@ rule total: p.base_price
         .unwrap();
 
     assert_eq!(
-        total.display.clone().expect("display"),
+        total.display().expect("display").to_string(),
         "200",
         "Spec ref should evaluate against the referenced pricing spec"
     );
@@ -506,12 +506,7 @@ rule employee_summary: employee.monthly_salary
     );
 
     assert_eq!(
-        response
-            .results
-            .get("salary_with_bonus")
-            .unwrap()
-            .display
-            .as_deref(),
+        response.results.get("salary_with_bonus").unwrap().display(),
         Some("66000")
     );
 }
@@ -544,7 +539,7 @@ rule total: p.base_price
         .unwrap();
 
     assert_eq!(
-        total.display.clone().expect("display"),
+        total.display().expect("display").to_string(),
         "150",
         "Spec ref should evaluate against the referenced pricing spec"
     );
@@ -580,7 +575,7 @@ rule short: yes
             short.veto_reason.as_deref().unwrap_or("Vetoed")
         );
     }
-    let out = short.display.clone().expect("display");
+    let out = short.display().expect("display").to_string();
     assert!(
         out == "yes" || out == "true",
         "expected short = yes when units.duration is 1 hour, got: {out}"
@@ -617,7 +612,7 @@ rule short: yes
             short.veto_reason.as_deref().unwrap_or("Vetoed")
         );
     }
-    let out = short.display.clone().expect("display");
+    let out = short.display().expect("display").to_string();
     assert!(
         out == "no" || out == "false",
         "expected short = no when units.duration is 3 hour, got: {out}"

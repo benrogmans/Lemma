@@ -1,6 +1,6 @@
 //! WASM-shaped `EngineError` JSON for the Java package.
 
-use lemma::{Error, ErrorKind, Source};
+use lemma::{Error, ErrorKind, RegistryErrorKind, RequestErrorKind, Source};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -32,6 +32,11 @@ struct EngineErrorJson<'a> {
     source: Option<EngineErrorSource>,
     suggestion: Option<&'a str>,
     repository: Option<&'a str>,
+    registry_kind: Option<RegistryErrorKind>,
+    request_kind: Option<RequestErrorKind>,
+    limit_name: Option<&'a str>,
+    limit_value: Option<&'a str>,
+    actual_value: Option<&'a str>,
 }
 
 impl<'a> From<&'a Error> for EngineErrorJson<'a> {
@@ -45,6 +50,11 @@ impl<'a> From<&'a Error> for EngineErrorJson<'a> {
             source: e.source_location().map(EngineErrorSource::from),
             suggestion: e.suggestion(),
             repository: e.repository(),
+            registry_kind: e.registry_kind(),
+            request_kind: e.request_kind(),
+            limit_name: e.limit_name(),
+            limit_value: e.limit_value(),
+            actual_value: e.actual_value(),
         }
     }
 }

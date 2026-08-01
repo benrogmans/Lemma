@@ -1,4 +1,4 @@
-//! Operation types and result handling for evaluation
+//! Result envelope for computation operations: a produced value or a domain veto.
 
 use std::fmt;
 use std::sync::Arc;

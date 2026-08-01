@@ -120,7 +120,15 @@ rule message: "Order processed"
         !message_rule.vetoed,
         "message rule should evaluate successfully"
     );
-    assert_eq!(message_rule.text.as_deref(), Some("Order processed"));
+    assert_eq!(
+        message_rule
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .text
+            .as_deref(),
+        Some("Order processed")
+    );
 }
 
 /// A reference whose target has no value at eval time must surface as a

@@ -115,13 +115,13 @@ Machine-readable output.
 lemma run shipping -x
 ```
 
-Show how each Rule was evaluated (human reasoning table; with `--json`, per-rule `explanation` objects per [explanation.v1.json](../schemas/explanation.v1.json)).
+Show how each Rule was evaluated (human reasoning table; with `--json`, per-rule `explanation` objects per [api.v1.json](../schemas/api.v1.json)).
 
 ```bash
 lemma show shipping
 ```
 
-Show the static interface (data types, constraints, and rules reachable after normalize). Overlay-aware needs for a concrete `run` come from each rule's `missing_data`; static types and suggestions are on `lemma show` only.
+Show the static interface (data types, constraints, and rules reachable after normalize). Run-data-aware needs for a concrete `run` come from each rule's `missing_data`; static types and suggestions are on `lemma show` only.
 
 See [CLI reference](../reference/cli.md) for all commands and flags.
 

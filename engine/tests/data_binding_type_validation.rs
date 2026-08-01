@@ -22,7 +22,7 @@ fn assert_run_completes_with_veto_on_rule(
     assert!(
         rule.vetoed,
         "rule '{rule_name}' must veto on invalid override, got {:?}",
-        rule.display
+        rule.display()
     );
     if !reason_contains.is_empty() {
         let reason = rule.veto_reason.as_deref().expect("veto reason");
@@ -113,7 +113,7 @@ rule flagged: active
         .run(None, "test", Some(&now), data, None, true)
         .expect("valid data must evaluate");
     let total = response.results.get("total").expect("total rule");
-    assert_eq!(total.display.as_deref(), Some("500"));
+    assert_eq!(total.display(), Some("500"));
 }
 
 #[test]
@@ -145,7 +145,7 @@ rule total: base_price * 1.2
         .run(None, "test", Some(&now), data, None, true)
         .expect("valid base_price must evaluate");
     let total = response.results.get("total").expect("total rule");
-    let display = total.display.as_deref().expect("display");
+    let display = total.display().expect("display");
     assert!(display.starts_with("72"), "60 * 1.2 = 72, got {}", display);
 }
 
@@ -171,7 +171,7 @@ rule total: price * 1.1
         .run(None, "test", Some(&now), data, None, true)
         .expect("unknown keys must not abort evaluation");
     let total = response.results.get("total").expect("total rule");
-    assert_eq!(total.display.as_deref(), Some("110"));
+    assert_eq!(total.display(), Some("110"));
 }
 
 /// Matrix: primitive × applicable constraint × violating user value.
@@ -392,7 +392,7 @@ rule r: n
                     "rejection must reference the decimals constraint, got: {reason}"
                 );
             } else {
-                let s = rr.display.as_deref().expect("display");
+                let s = rr.display().expect("display");
                 assert!(
                     !s.contains("3.14159"),
                     "decimals 2 must not preserve 5 decimals; got: {s}"
@@ -427,7 +427,14 @@ rule r: msg
         .expect("5-char string must be accepted");
     let rr = resp.results.get("r").expect("rule 'r'");
     assert!(!rr.vetoed, "expected value, got veto: {:?}", rr.veto_reason);
-    assert_eq!(rr.text.as_deref(), Some("exact"));
+    assert_eq!(
+        rr.value
+            .as_ref()
+            .expect("rule result value")
+            .text
+            .as_deref(),
+        Some("exact")
+    );
 }
 
 #[test]

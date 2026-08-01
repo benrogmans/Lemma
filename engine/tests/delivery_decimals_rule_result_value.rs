@@ -2,7 +2,7 @@ use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
 
 #[test]
-fn delivery_cost_materializes_converted_unit_with_show_decimals() {
+fn delivery_cost_converts_unit_with_show_decimals() {
     let code = r#"
 spec delivery 2026-01-01
 
@@ -56,6 +56,9 @@ rule delivery_cost: 0.26 eur_per_km * distance
 
     assert!(!delivery_cost.vetoed);
     let measure = delivery_cost
+        .value
+        .as_ref()
+        .expect("rule result value")
         .measure
         .as_ref()
         .expect("measure map on delivery_cost");

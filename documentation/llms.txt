@@ -2,7 +2,7 @@
 
 > Lemma is a declarative business rule language. Translate natural-language policy into readable, deterministic `.lemma` specs. Lemma derives required inputs from rules — declare `data` with type constraints; do not invent runtime values.
 
-When a user describes business logic, your job is to produce Lemma source that humans can read and systems can evaluate. Prefer named pipeline rules over clever one-liners. Split unrelated policies into separate specs. Use `lemma show` to inspect the static interface (types, constraints, rules after normalize). Overlay-aware needs for a concrete evaluation come from each rule's `missing_data` on `run`, not from `show`. Explanations are opt-in (`explain: true` / `lemma run -x`); JSON shape is `documentation/schemas/explanation.v1.json`. For syntax not covered here, read the linked documentation.
+When a user describes business logic, your job is to produce Lemma source that humans can read and systems can evaluate. Prefer named pipeline rules over clever one-liners. Split unrelated policies into separate specs. Use `lemma show` to inspect the static interface (types, constraints, rules after normalize). Run-data-aware needs for a concrete evaluation come from each rule's `missing_data` on `run`, not from `show`. Explanations are opt-in (`explain: true` / `lemma run -x`); wire shape is `documentation/schemas/api.v1.json` (`RuleResult.explanation` is a `RuleNode`; nested nodes under `ExplanationNode`). For syntax not covered here, read the linked documentation.
 
 **Do not write inline comments.** Lemma has no `#`, `//`, or `--` comment syntax. Anything after `#` on a line is a parse error, not a comment. Do not annotate `data` or `rule` lines with trailing remarks.
 
@@ -185,7 +185,7 @@ rule can_checkout: yes
 
 **Data: constraint definitions, not placeholders**
 
-`data` declares values rules may use. Constraints define validity. Type-only `data` (no literal value) is an input slot. `lemma show` lists statically reachable data after normalize; what a concrete evaluation still needs is overlay-aware and comes from each rule's `missing_data` on `run`. Use real domain values; never `"TODO"` or dummy placeholders.
+`data` declares values rules may use. Constraints define validity. Type-only `data` (no literal value) is an input slot. `lemma show` lists statically reachable data after normalize; what a concrete evaluation still needs is run-data-aware and comes from each rule's `missing_data` on `run`. Use real domain values; never `"TODO"` or dummy placeholders.
 
 **Example D — typed data (coffee order)**
 
@@ -669,7 +669,7 @@ If `validated_score` vetoes but `use_default` is true, `result = 50` because the
 4. **Factor rules** — intermediate calculations as named rules in a pipeline.
 5. **Unless chains** — default first, general to specific, vetoes last.
 6. **No inline comments** — no `#`, `//`, or trailing annotations. Commentary (`"""..."""`) only as the first block after `spec <name> [<effective>]`, never after `uses` or `data`.
-7. **Validate** — would `lemma show` list the right static interface (types, constraints, reachable data)? Does a sample `run` report the expected overlay-aware needs in each rule's `missing_data`? Do overlapping unless cases resolve to the intended bottommost value?
+7. **Validate** — would `lemma show` list the right static interface (types, constraints, reachable data)? Does a sample `run` report the expected run-data-aware needs in each rule's `missing_data`? Do overlapping unless cases resolve to the intended bottommost value?
 8. **Defer advanced features** — registry imports from LemmaBase, temporal pins → read linked docs. Use `uses lemma units`, ranges, and compound units when the domain needs them.
 
 ---
@@ -856,11 +856,12 @@ rule discount: 0%
 
 Lemma computes in exact rationals (ℚ) for `+`, `−`, `×`, `÷`, comparisons, and unit conversions. `^`, `sqrt`, trig, and `log` use ~28-significant-digit Decimal semantics. `floor`/`ceil`/`round` on measures operate at Decimal precision.
 
-**Boundary number contract:** all API surfaces (WASM, HTTP JSON, Elixir NIF) accept integers as native numbers and reject non-integer (decimal/float) numbers — pass decimals as strings to preserve exactness. Example: `{ "quantity": 42, "rate": "0.075" }`.
+**Boundary number contract:** all API surfaces (WASM, HTTP JSON, Elixir NIF) accept integers as native numbers and reject non-integer (decimal/float) numbers — pass decimals as strings to preserve exactness. Example: `{ "quantity": 42, "rate": "0.075" }`. On Maven (JDK 21+), pass `BigDecimal` or decimal strings via `RunRequest.data(...)`; response magnitudes are `BigDecimal`.
 
 ## Optional
 
 - [LemmaBase](https://lemmabase.com): registry hosting and search
 - [Numeric precision](https://github.com/lemma/lemma/blob/main/documentation/learn/precision.md): exact rational arithmetic, full boundary contract
 - [JavaScript / TypeScript (WASM)](https://github.com/lemma/lemma/blob/main/documentation/tools/javascript.md): Lemma in the browser and Node
+- [Maven (Java / Kotlin)](https://github.com/lemma/lemma/blob/main/documentation/tools/maven.md): JNI package on Maven Central
 - [README](https://github.com/lemma/lemma/blob/main/README.md): install, quick start

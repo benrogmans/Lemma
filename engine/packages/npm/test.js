@@ -27,7 +27,13 @@ function ruleMeasureUnit(rr, unit) {
 
 function runEx(engine, spec, rules, data, effective, explain = false) {
   try {
-    return engine.run(null, spec, effective ?? null, data, rules ?? null, explain);
+    return engine.run({
+      spec,
+      data,
+      rules: rules ?? undefined,
+      effective: effective ?? undefined,
+      explain,
+    });
   } catch (e) {
     throw new Error(formatReject(e));
   }
@@ -230,7 +236,7 @@ rule y: x * 3`],
       assert(Object.keys(show.data).includes('x'));
     });
 
-    await run('show → spec/data/rules with DataEntry + flat type', () => {
+    await run('show → spec/data/rules with ShowData + flat type', () => {
       const show = engine.show(null, 'test', null);
       assert(show.spec === 'test');
       assert(show.data && typeof show.data === 'object');
@@ -238,7 +244,7 @@ rule y: x * 3`],
       assert(Object.keys(show.data).includes('x'));
       assert(Object.keys(show.rules).includes('double'));
       const x = show.data.x;
-      assert(x && typeof x === 'object' && !Array.isArray(x), 'DataEntry is a named object');
+      assert(x && typeof x === 'object' && !Array.isArray(x), 'ShowData is a named object');
       assert(x.type && typeof x.type.kind === 'string', 'type carries `kind` discriminator');
       const doubleRule = show.rules.double;
       assert(typeof doubleRule.kind === 'string', 'rule types expose `kind` at the top level');
@@ -390,10 +396,10 @@ rule span: bridge_height` });
       assert(threw);
     });
 
-    await run('data_values not object', () => {
+    await run('data not object', () => {
       let threw = false;
       try {
-        engine.run(null, 'test', null, 'not-an-object', null, false);
+        engine.run({ spec: 'test', data: 'not-an-object' });
       } catch {
         threw = true;
       }
@@ -466,10 +472,6 @@ rule cost_price: product_cost + labor_cost / throughput` });
       const laborDefault = show.data.labor_cost.suggestion;
       assert(laborDefault != null, 'labor_cost default must exist');
       assert(
-        laborDefault.value.measure.value === '25',
-        `labor_cost default measure.value must be per-unit 25, got ${laborDefault.value.measure.value}`
-      );
-      assert(
         laborDefault.measure?.eur_per_hour === '25',
         `labor_cost default measure.eur_per_hour must be 25, got ${laborDefault.measure?.eur_per_hour}`
       );
@@ -480,8 +482,8 @@ rule cost_price: product_cost + labor_cost / throughput` });
       );
       const throughputDefault = show.data.throughput.suggestion;
       assert(
-        throughputDefault.value.measure.value === '12',
-        `throughput default measure.value must be 12, got ${throughputDefault.value.measure.value}`
+        throughputDefault.measure?.kg_per_hour === '12',
+        `throughput default measure.kg_per_hour must be 12, got ${throughputDefault.measure?.kg_per_hour}`
       );
       const r = runEx(
         engine,
@@ -506,8 +508,8 @@ rule m: margin` });
       const marginDefault = show.data.margin.suggestion;
       assert(marginDefault != null, 'margin default must exist');
       assert(
-        marginDefault.value.ratio.value === '15',
-        `margin default ratio.value must be per-unit 15, got ${marginDefault.value.ratio.value}`
+        marginDefault.ratio?.percent === '15',
+        `margin default ratio.percent must be 15, got ${marginDefault.ratio?.percent}`
       );
       const r = runEx(engine, 'policy', null, { margin: '15%' }, null);
       assertResponseShape(r, 'policy');
@@ -524,12 +526,8 @@ rule m: bps` });
       const bpsDefault = show.data.bps.suggestion;
       assert(bpsDefault != null, 'bps default must exist');
       assert(
-        bpsDefault.value.ratio.value === '500',
-        `bps default ratio.value must be per-unit 500, got ${bpsDefault.value.ratio.value}`
-      );
-      assert(
-        bpsDefault.value.ratio.unit === 'basis_points',
-        `bps default ratio.unit must be basis_points, got ${bpsDefault.value.ratio.unit}`
+        bpsDefault.ratio?.basis_points === '500',
+        `bps default ratio.basis_points must be 500, got ${bpsDefault.ratio?.basis_points}`
       );
       const r = runEx(
         engine,

@@ -380,14 +380,14 @@ pub mod http {
     // -----------------------------------------------------------------------
 
     fn data_values_for_run(
-        data: std::collections::HashMap<String, lemma::DataValueInput>,
+        data: std::collections::HashMap<String, lemma::RunDataValue>,
     ) -> Result<std::collections::HashMap<String, String>, (StatusCode, Json<ErrorResponse>)> {
         data.into_iter()
             .map(|(key, value)| {
                 let string_value = match value {
-                    lemma::DataValueInput::Convenience(s) => s,
-                    lemma::DataValueInput::Boolean(b) => b.to_string(),
-                    lemma::DataValueInput::MeasureMap(map) | lemma::DataValueInput::RatioMap(map) => {
+                    lemma::RunDataValue::String(s) => s,
+                    lemma::RunDataValue::Boolean(b) => b.to_string(),
+                    lemma::RunDataValue::MeasureMap(map) | lemma::RunDataValue::RatioMap(map) => {
                         if map.len() == 1 {
                             let (unit, magnitude) = map.into_iter().next().expect("BUG: map len checked");
                             format!("{magnitude} {unit}")
@@ -456,7 +456,7 @@ pub mod http {
         headers: &HeaderMap,
         body: &[u8],
     ) -> Result<
-        std::collections::HashMap<String, lemma::DataValueInput>,
+        std::collections::HashMap<String, lemma::RunDataValue>,
         (StatusCode, Json<ErrorResponse>),
     > {
         if body.is_empty() {
@@ -483,7 +483,7 @@ pub mod http {
                 map.into_iter()
                     .filter(|(_, v)| !v.is_null())
                     .map(|(k, v)| {
-                        crate::data_json::json_value_to_data_input(v).map(|input| (k, input))
+                        crate::data_json::json_value_to_run_data_value(v).map(|input| (k, input))
                     })
                     .collect::<Result<_, _>>()
                     .map_err(|e| (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))?

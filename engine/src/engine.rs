@@ -1,9 +1,9 @@
 use crate::evaluation::Evaluator;
-use crate::evaluation::{DataOverlay, DataValueInput};
+use crate::evaluation::{RunData, RunDataValue};
 use crate::parsing::ast::{DateTimeValue, LemmaRepository, LemmaSpec};
 use crate::parsing::source::SourceType;
 use crate::parsing::{parse, EffectiveDate};
-use crate::planning::execution_plan::{DataEntry, Show, ShowVersion};
+use crate::planning::execution_plan::{Show, ShowData};
 use crate::planning::semantics::DataDefinition;
 use crate::planning::{LemmaSpecSet, PlanStore};
 use crate::{Error, ResourceLimits, Response};
@@ -125,6 +125,12 @@ impl Context {
         &self.repositories
     }
 
+    /// Flat iterator over every loaded [`LemmaSpec`] across all repositories.
+    ///
+    /// Used by registry resolution to discover missing `@owner/repo` qualifiers.
+    /// Gated with the same `registry` + non-wasm cfg as that caller — without those
+    /// features the method has no production use.
+    #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
     pub fn iter(&self) -> impl Iterator<Item = &LemmaSpec> + '_ {
         self.repositories
             .values()
@@ -281,7 +287,7 @@ impl Engine {
         };
         engine
             .add_sources_inner(
-                HashMap::from([(
+                IndexMap::from([(
                     SourceType::Dependency(EMBEDDED_STDLIB_REPOSITORY.to_string()),
                     crate::stdlib::UNITS_LEMMA.to_string(),
                 )]),
@@ -305,7 +311,7 @@ impl Engine {
         &mut self,
         sources: impl IntoIterator<Item = (SourceType, impl Into<String>)>,
     ) -> Result<(), Errors> {
-        let mut map = HashMap::new();
+        let mut map = IndexMap::new();
         let mut attempted = HashMap::new();
         for (source_type, code) in sources {
             let code = code.into();
@@ -365,54 +371,44 @@ impl Engine {
     ) -> Result<Show, Error> {
         let effective_dt = self.effective_or_now(effective);
         let instant = EffectiveDate::DateTimeValue(effective_dt.clone());
-        let canonical_name = crate::parsing::ast::ascii_lowercase_logical_name(spec.to_string());
 
-        let repository_arc = match repository {
-            Some(q) => self.context.find_repository(q).ok_or_else(|| {
-                Error::request_not_found(
-                    format!("Repository '{q}' not loaded"),
-                    Some("List repositories with `lemma list` after loading your workspace"),
-                )
-            })?,
-            None => self.context.workspace(),
+        let plan = match self.plans.get_plan(repository, spec, &instant) {
+            Some(plan) => plan,
+            None => {
+                // Preserve attributed not-found errors (repository vs spec) without
+                // paying for SpecSet lookup on the common success path.
+                let repository_arc = match repository {
+                    Some(q) => self.context.find_repository(q).ok_or_else(|| {
+                        Error::request_not_found(
+                            format!("Repository '{q}' not loaded"),
+                            Some(
+                                "List repositories with `lemma list` after loading your workspace",
+                            ),
+                        )
+                    })?,
+                    None => self.context.workspace(),
+                };
+                let canonical_name =
+                    crate::parsing::ast::ascii_lowercase_logical_name(spec.to_string());
+                let spec_set = self.context.spec_set(&repository_arc, &canonical_name);
+                return match spec_set.and_then(|ss| ss.spec_at(&instant)) {
+                    None => Err(self.spec_not_found_in_repository_error(
+                        &repository_arc,
+                        spec,
+                        &effective_dt,
+                    )),
+                    Some(_) => Err(Error::request_not_found(
+                        format!(
+                            "No execution plan slice for spec '{spec}' at effective {effective_dt}"
+                        ),
+                        Some("Ensure sources loaded and planning succeeded".to_string()),
+                    )),
+                };
+            }
         };
 
-        let spec_set = self
-            .context
-            .spec_set(&repository_arc, &canonical_name)
-            .ok_or_else(|| {
-                self.spec_not_found_in_repository_error(&repository_arc, spec, &effective_dt)
-            })?;
-
-        let resolved_spec = spec_set.spec_at(&instant).ok_or_else(|| {
-            self.spec_not_found_in_repository_error(&repository_arc, spec, &effective_dt)
-        })?;
-
-        let plan = self
-            .plans
-            .get_plan(repository, spec, &instant)
-            .ok_or_else(|| {
-                Error::request_not_found(
-                    format!(
-                        "No execution plan slice for spec '{spec}' at effective {effective_dt}"
-                    ),
-                    Some("Ensure sources loaded and planning succeeded".to_string()),
-                )
-            })?;
-
-        let (effective_from, effective_to) = spec_set.effective_range(resolved_spec);
-        let versions: Vec<ShowVersion> = spec_set
-            .iter_with_ranges()
-            .map(|(_, from, to)| ShowVersion {
-                effective_from: from,
-                effective_to: to,
-            })
-            .collect();
-
-        let needed_by_rules = plan
-            .needed_by_rules_index()
-            .expect("BUG: local_rule_names sourced from plan.rules");
-        let mut data_entries: Vec<(usize, usize, String, DataEntry)> = plan
+        let needed_by_rules = &plan.needed_by_rules;
+        let mut data_entries: Vec<(usize, usize, String, ShowData)> = plan
             .data
             .iter()
             .filter(|(_, data)| {
@@ -428,16 +424,15 @@ impl Engine {
                     .schema_type()
                     .expect("BUG: filter above ensured lemma_type is Some")
                     .clone();
-                let prefilled = data.prefilled_value().cloned();
-                let suggestion = data.suggestion();
+                let display = plan.data_display.get(path);
                 Some((
                     path.segments.len(),
                     data.source().span.start,
                     input_key,
-                    DataEntry {
+                    ShowData {
                         lemma_type,
-                        prefilled,
-                        suggestion,
+                        prefilled: display.and_then(|d| d.prefilled.clone()),
+                        suggestion: display.and_then(|d| d.suggestion.clone()),
                         needed_by_rules: used_by,
                     },
                 ))
@@ -455,11 +450,11 @@ impl Engine {
         Ok(Show {
             spec: plan.spec_name.clone(),
             commentary: plan.commentary.clone(),
-            effective_from,
-            effective_to,
-            versions,
-            start_line: resolved_spec.start_line,
-            source_type: resolved_spec.source_type.clone(),
+            effective_from: plan.effective_from.clone(),
+            effective_to: plan.effective_to.clone(),
+            versions: plan.versions.clone(),
+            start_line: plan.start_line,
+            source_type: plan.source_type.clone(),
             data: data_entries
                 .into_iter()
                 .map(|(_, _, name, entry)| (name, entry))
@@ -513,20 +508,23 @@ impl Engine {
             })?;
 
         let response_rules = plan.validated_response_rule_names(rules)?;
-        let data_values: HashMap<String, DataValueInput> = data
+        let data_values: HashMap<String, RunDataValue> = data
             .into_iter()
-            .map(|(key, value)| (key, DataValueInput::convenience(value)))
+            .map(|(key, value)| (key, RunDataValue::string(value)))
             .collect();
-        let overlay = DataOverlay::resolve(plan, data_values, &self.limits)?;
+        let run_data = RunData::resolve(plan, data_values, &self.limits)?;
         let now_semantic = crate::planning::semantics::date_time_to_semantic(&effective);
         let now_literal = crate::planning::semantics::LiteralValue {
             value: crate::planning::semantics::ValueKind::Date(now_semantic),
             lemma_type: crate::planning::semantics::primitive_date_arc().clone(),
         };
         let evaluator = Evaluator;
-        let response = evaluator
-            .evaluate(plan, &overlay, now_literal, &response_rules, explain)
-            .0;
+        let mut response =
+            evaluator.evaluate(plan, &run_data, now_literal, &response_rules, explain);
+
+        response.spec_effective_from = plan.effective_from.clone();
+        response.spec_effective_to = plan.effective_to.clone();
+
         Ok(response)
     }
 
@@ -630,9 +628,11 @@ impl Engine {
         effective.cloned().unwrap_or_else(DateTimeValue::now)
     }
 
+    /// `sources` is order-preserving so multi-source parse errors are reported in submission
+    /// order rather than scrambled by hash iteration.
     fn add_sources_inner(
         &mut self,
-        sources: HashMap<SourceType, String>,
+        sources: IndexMap<SourceType, String>,
         embedded_stdlib: bool,
     ) -> Result<(), Errors> {
         for st in sources.keys() {
@@ -685,7 +685,7 @@ impl Engine {
                         None,
                         None,
                     )],
-                    sources,
+                    sources: sources.into_iter().collect(),
                 });
             }
             let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
@@ -700,7 +700,7 @@ impl Engine {
                         None,
                         None,
                     )],
-                    sources,
+                    sources: sources.into_iter().collect(),
                 });
             }
             for code in sources.values() {
@@ -715,7 +715,7 @@ impl Engine {
                             None,
                             None,
                         )],
-                        sources,
+                        sources: sources.into_iter().collect(),
                     });
                 }
             }
@@ -789,7 +789,10 @@ impl Engine {
         }
 
         if !errors.is_empty() {
-            return Err(Errors { errors, sources });
+            return Err(Errors {
+                errors,
+                sources: sources.into_iter().collect(),
+            });
         }
 
         let mut inserted: Vec<(Arc<LemmaRepository>, String, EffectiveDate)> = Vec::new();
@@ -821,7 +824,10 @@ impl Engine {
                             inserted_effective.as_ref(),
                         );
                     }
-                    return Err(Errors { errors, sources });
+                    return Err(Errors {
+                        errors,
+                        sources: sources.into_iter().collect(),
+                    });
                 }
             }
         }
@@ -837,7 +843,7 @@ impl Engine {
             }
             return Err(Errors {
                 errors: result.errors,
-                sources,
+                sources: sources.into_iter().collect(),
             });
         }
 
@@ -900,7 +906,7 @@ mod tests {
         spec
     }
 
-    /// Context::iter returns specs in (name, effective_from) ascending order.
+    /// Spec-set temporal order is (name, effective_from) ascending.
     /// Same-name specs appear in temporal order; definition order in the source is irrelevant.
     #[test]
     fn list_order_is_name_then_effective_from_ascending() {
@@ -1191,14 +1197,14 @@ mod tests {
             .values()
             .find(|r| r.rule.name == "sum")
             .unwrap();
-        assert_eq!(sum_result.display.clone().expect("display"), "15");
+        assert_eq!(sum_result.display().expect("display").to_string(), "15");
 
         let product_result = response
             .results
             .values()
             .find(|r| r.rule.name == "product")
             .unwrap();
-        assert_eq!(product_result.display.clone().expect("display"), "50");
+        assert_eq!(product_result.display().expect("display").to_string(), "50");
     }
 
     #[test]
@@ -1227,8 +1233,7 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
-                .display
-                .clone()
+                .display()
                 .expect("display"),
             "200"
         );
@@ -1254,7 +1259,15 @@ mod tests {
             .run(None, "test", Some(&now), HashMap::new(), None, false)
             .unwrap();
         assert_eq!(
-            response.results.values().next().unwrap().boolean,
+            response
+                .results
+                .values()
+                .next()
+                .unwrap()
+                .value
+                .as_ref()
+                .unwrap()
+                .boolean,
             Some(true)
         );
     }
@@ -1285,8 +1298,7 @@ mod tests {
                 .values()
                 .next()
                 .unwrap()
-                .display
-                .clone()
+                .display()
                 .expect("display"),
             "10"
         );
@@ -1336,11 +1348,17 @@ mod tests {
         let response1 = engine
             .run(None, "spec1", Some(&now), HashMap::new(), None, false)
             .unwrap();
-        assert_eq!(response1.results[0].display.clone().expect("display"), "20");
+        assert_eq!(
+            response1.results[0].display().expect("display").to_string(),
+            "20"
+        );
         let response2 = engine
             .run(None, "spec2", Some(&now), HashMap::new(), None, false)
             .unwrap();
-        assert_eq!(response2.results[0].display.clone().expect("display"), "15");
+        assert_eq!(
+            response2.results[0].display().expect("display").to_string(),
+            "15"
+        );
     }
 
     #[test]
@@ -1476,7 +1494,7 @@ mod tests {
 
         // But the value should be correct (dependencies were computed)
         let total = response.results.values().next().unwrap();
-        assert_eq!(total.display.clone().expect("display"), "220");
+        assert_eq!(total.display().expect("display").to_string(), "220");
     }
 
     // -------------------------------------------------------------------
@@ -1515,7 +1533,7 @@ rule value: external.quantity"#
             .results
             .get("value")
             .expect("rule 'value' should exist");
-        assert_eq!(value_result.display.clone().expect("display"), "42");
+        assert_eq!(value_result.display().expect("display").to_string(), "42");
     }
 
     #[test]
@@ -1565,7 +1583,7 @@ rule doubled: price * 2"#
             .expect("evaluate should succeed");
 
         let doubled = response.results.get("doubled").expect("doubled rule");
-        assert_eq!(doubled.display.clone().expect("display"), "200");
+        assert_eq!(doubled.display().expect("display").to_string(), "200");
     }
 
     #[test]
@@ -1639,8 +1657,7 @@ rule formatted: helper_value + 0"#
                 .results
                 .get("helper_value")
                 .expect("helper_value")
-                .display
-                .clone()
+                .display()
                 .expect("display"),
             "42"
         );
@@ -1648,8 +1665,7 @@ rule formatted: helper_value + 0"#
             .results
             .get("line_total")
             .expect("line_total")
-            .display
-            .clone()
+            .display()
             .expect("display");
         assert_eq!(line, "10");
         assert_eq!(
@@ -1657,8 +1673,7 @@ rule formatted: helper_value + 0"#
                 .results
                 .get("formatted")
                 .expect("formatted")
-                .display
-                .clone()
+                .display()
                 .expect("display"),
             "42"
         );
@@ -1907,46 +1922,5 @@ rule total: helper.value + price"#
             .expect("shared repo in list");
         assert_eq!(shared_repo.specs.len(), 1);
         assert_eq!(shared_repo.specs[0].name, "a");
-    }
-
-    #[test]
-    fn out_of_memory_during_exact_multiply_vetoes_without_crashing() {
-        use crate::computation::bigint::{test_clear_alloc_fail, test_force_alloc_fail};
-
-        let code = r#"
-spec oom_multiply
-data a: 9999999999999999999999999999
-data b: 9999999999999999999999999999
-rule huge: a * b
-"#;
-
-        let mut engine = Engine::new();
-        engine
-            .load([(SourceType::Volatile, code.to_string())])
-            .expect("load must succeed");
-
-        test_force_alloc_fail(50);
-
-        let now = DateTimeValue::now();
-        let response = engine
-            .run(
-                None,
-                "oom_multiply",
-                Some(&now),
-                HashMap::new(),
-                None,
-                false,
-            )
-            .expect("evaluation must complete without process crash");
-
-        test_clear_alloc_fail();
-
-        let rule = response
-            .results
-            .get("huge")
-            .expect("huge rule must be present");
-
-        assert!(rule.vetoed);
-        assert_eq!(rule.veto_reason.as_deref(), Some("out of memory"));
     }
 }

@@ -96,6 +96,9 @@ fn eval_bool_with_data(
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .value
+        .as_ref()
+        .expect("rule result value")
         .boolean
         .expect("boolean rule result")
 }

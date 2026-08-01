@@ -49,7 +49,7 @@ fn rule_value(result: &lemma::Response, rule_name: &str) -> String {
     if rr.vetoed {
         return format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
-    rr.display.clone().expect("display")
+    rr.display().expect("display").to_string()
 }
 
 fn rule_measure_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> String {
@@ -58,8 +58,9 @@ fn rule_measure_unit(result: &lemma::Response, rule_name: &str, unit: &str) -> S
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule_name));
     assert!(!rr.vetoed, "rule '{}' vetoed", rule_name);
-    rr.measure
+    rr.value
         .as_ref()
+        .and_then(|v| v.measure.as_ref())
         .and_then(|map| map.get(unit))
         .cloned()
         .unwrap_or_else(|| panic!("measure map missing unit '{unit}' for rule '{rule_name}'"))

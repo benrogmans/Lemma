@@ -28,7 +28,7 @@ fn assert_rule_vetoed(
     assert!(
         rr.vetoed,
         "rule '{rule_name}' must veto on invalid override, got {:?}",
-        rr.display
+        rr.display()
     );
     let reason = rr.veto_reason.clone().expect("veto reason");
     if !reason_contains.is_empty() {
@@ -48,7 +48,7 @@ fn rule_value(result: &lemma::Response, name: &str) -> String {
     if rr.vetoed {
         return format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"));
     }
-    rr.display.clone().expect("display")
+    rr.display().expect("display").to_string()
 }
 
 #[test]

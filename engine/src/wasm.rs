@@ -1,8 +1,8 @@
 use crate::error::ErrorKind;
-use crate::evaluation::DataValueInput;
+use crate::evaluation::RunDataValue;
 use crate::parsing::source::Source;
 use crate::{Engine, Error, SourceType};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -80,37 +80,35 @@ impl WasmEngine {
     }
 
     /// Evaluate spec. Returns [`crate::evaluation::Response`] as a JS object. Throws on planning/runtime error.
+    ///
+    /// Accepts an options object: `{ spec, repository?, effective?, data?, rules?, explain? }`.
     #[wasm_bindgen(js_name = run)]
-    pub fn run(
-        &self,
-        repository: Option<String>,
-        spec: &str,
-        effective: Option<String>,
-        data_values: JsValue,
-        rule_names: JsValue,
-        explain: Option<bool>,
-    ) -> Result<JsValue, JsValue> {
+    pub fn run(&self, options: JsValue) -> Result<JsValue, JsValue> {
+        let opts: RunOptions = serde_wasm_bindgen::from_value(options)
+            .map_err(|e| js_err(format!("invalid run options: {e}")))?;
+
         let effective_dt =
-            crate::resolve_effective(effective.as_deref()).map_err(|e| error_to_js(&e))?;
+            crate::resolve_effective(opts.effective.as_deref()).map_err(|e| error_to_js(&e))?;
 
-        let data = parse_data_values_to_strings(&data_values).map_err(js_err)?;
+        let data = parse_run_data(&opts.data).map_err(js_err)?;
 
-        let repo = repository
+        let repo = opts
+            .repository
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty());
 
-        let response_rules = resolve_wasm_response_rules(&rule_names).map_err(js_err)?;
+        let response_rules = resolve_run_rules(&opts.rules).map_err(js_err)?;
 
         let response = self
             .engine
             .run(
                 repo,
-                spec,
+                &opts.spec,
                 Some(&effective_dt),
                 data,
                 response_rules.as_deref(),
-                explain.unwrap_or(false),
+                opts.explain.unwrap_or(false),
             )
             .map_err(|e| error_to_js(&e))?;
 
@@ -216,6 +214,89 @@ impl WasmEngine {
             Err(e) => Err(error_to_js(&e)),
         }
     }
+}
+
+/// Options for [`WasmEngine::run`].
+#[derive(Deserialize)]
+struct RunOptions {
+    spec: String,
+    repository: Option<String>,
+    effective: Option<String>,
+    data: Option<serde_json::Value>,
+    rules: Option<serde_json::Value>,
+    explain: Option<bool>,
+}
+
+fn parse_run_data(data: &Option<serde_json::Value>) -> Result<HashMap<String, String>, String> {
+    let Some(value) = data else {
+        return Ok(HashMap::new());
+    };
+    if value.is_null() {
+        return Ok(HashMap::new());
+    }
+    let map: HashMap<String, serde_json::Value> = serde_json::from_value(value.clone())
+        .map_err(|e| format!("data must be a plain object: {e}"))?;
+    map.into_iter()
+        .filter(|(_, v)| !v.is_null())
+        .map(|(k, v)| {
+            let input = run_data_value_from_json_value(v)?;
+            match input {
+                RunDataValue::String(s) => Ok((k, s)),
+                RunDataValue::Boolean(b) => Ok((k, b.to_string())),
+                RunDataValue::MeasureMap(m) => {
+                    if m.len() == 1 {
+                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
+                        Ok((k, format!("{mag} {unit}")))
+                    } else {
+                        Err(format!(
+                            "data value '{k}' must be a convenience string for WASM run"
+                        ))
+                    }
+                }
+                RunDataValue::RatioMap(m) => {
+                    if m.len() == 1 {
+                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
+                        Ok((k, format!("{mag} {unit}")))
+                    } else {
+                        Err(format!(
+                            "data value '{k}' must be a convenience string for WASM run"
+                        ))
+                    }
+                }
+            }
+        })
+        .collect()
+}
+
+fn resolve_run_rules(rules: &Option<serde_json::Value>) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = rules else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(s) = value.as_str() {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return Err("rules must not be empty".to_string());
+        }
+        return Ok(Some(vec![trimmed.to_string()]));
+    }
+    if let Some(arr) = value.as_array() {
+        if arr.is_empty() {
+            return Err("rules must not be empty".to_string());
+        }
+        let names: Vec<String> = arr
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(|s| s.to_string())
+                    .ok_or_else(|| "rules must be an array of strings".to_string())
+            })
+            .collect::<Result<_, _>>()?;
+        return Ok(Some(names));
+    }
+    Err("rules must be a string or array of strings".to_string())
 }
 
 #[derive(Serialize)]
@@ -332,6 +413,14 @@ struct JsError<'a> {
     suggestion: Option<&'a str>,
     /// Set for [`Error::MissingRepository`] and [`Error::Registry`] (registry `@` id).
     repository: Option<&'a str>,
+    /// Set only for [`Error::Registry`].
+    registry_kind: Option<crate::registry::RegistryErrorKind>,
+    /// Set only for [`Error::Request`].
+    request_kind: Option<crate::error::RequestErrorKind>,
+    /// Set only for [`Error::ResourceLimitExceeded`].
+    limit_name: Option<&'a str>,
+    limit_value: Option<&'a str>,
+    actual_value: Option<&'a str>,
 }
 
 impl<'a> From<&'a Error> for JsError<'a> {
@@ -345,6 +434,11 @@ impl<'a> From<&'a Error> for JsError<'a> {
             source: e.source_location().map(JsSource::from),
             suggestion: e.suggestion(),
             repository: e.repository(),
+            registry_kind: e.registry_kind(),
+            request_kind: e.request_kind(),
+            limit_name: e.limit_name(),
+            limit_value: e.limit_value(),
+            actual_value: e.actual_value(),
         }
     }
 }
@@ -362,48 +456,14 @@ fn error_to_js(e: &Error) -> JsValue {
         .expect("BUG: serialize JsError")
 }
 
-fn resolve_wasm_response_rules(rule_names: &JsValue) -> Result<Option<Vec<String>>, String> {
-    if rule_names.is_undefined() || rule_names.is_null() {
-        return Ok(None);
-    }
-    let parsed = parse_rule_names(rule_names)?;
-    if parsed.is_empty() {
-        return Err("rule_names must not be empty".to_string());
-    }
-    Ok(Some(parsed))
-}
-
-fn parse_rule_names(v: &JsValue) -> Result<Vec<String>, String> {
-    if v.is_undefined() || v.is_null() {
-        return Ok(Vec::new());
-    }
-    if js_sys::Array::is_array(v) {
-        return serde_wasm_bindgen::from_value(v.clone())
-            .map_err(|e| format!("rule_names must be an array of strings: {}", e));
-    }
-    if let Some(s) = v.as_string() {
-        let trimmed = s.trim();
-        if trimmed.is_empty() || trimmed == "[]" {
-            return Ok(Vec::new());
-        }
-        return serde_json::from_str::<Vec<String>>(trimmed).map_err(|e| {
-            format!(
-                "rule_names must be an array of strings (or JSON array string): {}",
-                e
-            )
-        });
-    }
-    Err("rule_names must be an array of strings".into())
-}
-
-fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput, String> {
+fn run_data_value_from_json_value(value: serde_json::Value) -> Result<RunDataValue, String> {
     use std::collections::BTreeMap;
     match value {
-        serde_json::Value::String(s) => Ok(DataValueInput::Convenience(s)),
-        serde_json::Value::Bool(b) => Ok(DataValueInput::Boolean(b)),
+        serde_json::Value::String(s) => Ok(RunDataValue::String(s)),
+        serde_json::Value::Bool(b) => Ok(RunDataValue::Boolean(b)),
         serde_json::Value::Number(n) => {
             if n.is_i64() || n.is_u64() {
-                Ok(DataValueInput::Convenience(n.to_string()))
+                Ok(RunDataValue::String(n.to_string()))
             } else {
                 Err("decimal values must be passed as strings to preserve exactness".to_string())
             }
@@ -430,7 +490,7 @@ fn data_input_from_json_value(value: serde_json::Value) -> Result<DataValueInput
                         )
                     })
                     .collect();
-                return Ok(DataValueInput::MeasureMap(map));
+                return Ok(RunDataValue::MeasureMap(map));
             }
             Err("data value object must be a unit map with string magnitudes".to_string())
         }
@@ -501,44 +561,6 @@ fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsV
             SourceType::from_binding_label(&label)
                 .map(|source_type| (source_type, code))
                 .map_err(|e| request_error_js(format!("load: label '{label}': {e}")))
-        })
-        .collect()
-}
-
-fn parse_data_values_to_strings(v: &JsValue) -> Result<HashMap<String, String>, String> {
-    if v.is_undefined() || v.is_null() {
-        return Ok(HashMap::new());
-    }
-    let map: HashMap<String, serde_json::Value> = serde_wasm_bindgen::from_value(v.clone())
-        .map_err(|e| format!("data_values must be a plain object: {}", e))?;
-    map.into_iter()
-        .filter(|(_, v)| !v.is_null())
-        .map(|(k, v)| {
-            let input = data_input_from_json_value(v)?;
-            match input {
-                DataValueInput::Convenience(s) => Ok((k, s)),
-                DataValueInput::Boolean(b) => Ok((k, b.to_string())),
-                DataValueInput::MeasureMap(m) => {
-                    if m.len() == 1 {
-                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
-                        Ok((k, format!("{mag} {unit}")))
-                    } else {
-                        Err(format!(
-                            "data value '{k}' must be a convenience string for WASM run"
-                        ))
-                    }
-                }
-                DataValueInput::RatioMap(m) => {
-                    if m.len() == 1 {
-                        let (unit, mag) = m.into_iter().next().expect("BUG: single entry map");
-                        Ok((k, format!("{mag} {unit}")))
-                    } else {
-                        Err(format!(
-                            "data value '{k}' must be a convenience string for WASM run"
-                        ))
-                    }
-                }
-            }
         })
         .collect()
 }

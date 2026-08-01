@@ -30,9 +30,9 @@ fn eval_display(code: &str, repository: Option<&str>, spec_name: &str, rule_name
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{rule_name}' missing"))
-        .display
-        .clone()
+        .display()
         .expect("display")
+        .to_string()
 }
 
 const AREA_CALC_SPEC: &str = r#"repo alpha

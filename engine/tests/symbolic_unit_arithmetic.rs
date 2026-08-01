@@ -50,7 +50,7 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("rule '{}' missing", rule_name));
-    if let Some(measure) = &rule.measure {
+    if let Some(measure) = rule.value.as_ref().and_then(|v| v.measure.as_ref()) {
         let value = rule
             .explanation
             .as_ref()
@@ -73,7 +73,7 @@ fn eval_decimal(code: &str, spec_name: &str, rule_name: &str) -> rust_decimal::D
                 panic!("invalid decimal in measure map for '{unit}': {error}")
             });
     }
-    if let Some(calendar) = &rule.calendar {
+    if let Some(calendar) = rule.value.as_ref().and_then(|v| v.calendar.as_ref()) {
         return calendar
             .value
             .parse()

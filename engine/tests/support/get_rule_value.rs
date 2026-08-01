@@ -23,5 +23,5 @@ pub fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> Lite
             rule_result.veto_reason.as_deref().unwrap_or("Vetoed")
         );
     }
-    rule_result.materialized_literal()
+    rule_result.to_literal()
 }

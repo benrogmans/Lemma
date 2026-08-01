@@ -103,7 +103,7 @@ cargo nextest run -p lemma-engine --tests
 | `data_type_declarations_coverage.rs` | Type declarations on data |
 | `data_nested_bindings_coverage.rs` | Nested bindings |
 | `data_references.rs` | Cross-data references |
-| `data_with_values_contract.rs` | Data-with-values contract |
+| `data_with_values_contract.rs` | Run data contract |
 | `typed_values.rs` | Typed value handling |
 | `show_suggestion_distinction.rs` | Show vs suggestions (`-> suggest` never commits) |
 | `show_only_rule_used_data.rs` | Show lists only data reachable from rules |
@@ -112,7 +112,7 @@ cargo nextest run -p lemma-engine --tests
 | `show_unit_constraints.rs` | Show unit / suggest magnitudes |
 | `show_uncommittable_bounds.rs` | Show bounds that cannot commit |
 | `accept_reject_removed.rs` | `accept` / `reject` keywords removed |
-| `overlay_veto_as_value.rs` | Overlay veto as value |
+| `overlay_veto_as_value.rs` | Run data veto as value |
 | `meta_fields.rs` | Meta fields on specs |
 
 ### Explanation / NormalForm eval
@@ -230,7 +230,7 @@ Prefer adding **unit** tests beside the module when testing private helpers; add
 |-----|--------|------|
 | `Engine::load` | most | Parse + plan workspace sources |
 | `Engine::run` | many | Evaluate rules |
-| `Engine::show` | many (`show_*`, response/data contracts) | Spec interface wire without full eval |
+| `Engine::show` | many (`show_*`, response/data contracts) | Spec interface API without full eval |
 | `Engine::load` (batch) | few | Dependency bundles (multi-source load) |
 | `Engine::invert` | few | Inversion only in dedicated files |
 | `parse` / `format_source` | 2 | `formatter.rs`, `format_weather_clothing_integration.rs` (no `Engine`) |

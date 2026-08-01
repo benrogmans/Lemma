@@ -67,8 +67,14 @@ rule is_above_30: savings_ratio > 30%
 
     let above_20 = response.results.get("is_above_20").expect("is_above_20");
     let above_30 = response.results.get("is_above_30").expect("is_above_30");
-    assert_eq!(above_20.boolean, Some(true));
-    assert_eq!(above_30.boolean, Some(false));
+    assert_eq!(
+        above_20.value.as_ref().expect("rule result value").boolean,
+        Some(true)
+    );
+    assert_eq!(
+        above_30.value.as_ref().expect("rule result value").boolean,
+        Some(false)
+    );
 }
 
 #[test]
@@ -94,7 +100,14 @@ rule tier: "low"
         .run(None, "summary", Some(&now), HashMap::new(), None, true)
         .unwrap();
     let tier = response.results.get("tier").expect("tier");
-    assert_eq!(tier.text.as_deref(), Some("mid"));
+    assert_eq!(
+        tier.value
+            .as_ref()
+            .expect("rule result value")
+            .text
+            .as_deref(),
+        Some("mid")
+    );
 }
 
 #[test]
@@ -139,7 +152,10 @@ rule above_20_permille: as_permille > 20 permille
     }
 
     let above = response.results.get("above_20_permille").expect("above");
-    assert_eq!(above.boolean, Some(true));
+    assert_eq!(
+        above.value.as_ref().expect("rule result value").boolean,
+        Some(true)
+    );
 }
 
 #[test]
@@ -254,7 +270,10 @@ rule compared: plus_five > 25%
     } else {
         panic!("plus_five must be Ratio");
     }
-    assert_eq!(compared.boolean, Some(true));
+    assert_eq!(
+        compared.value.as_ref().expect("rule result value").boolean,
+        Some(true)
+    );
 }
 
 #[test]
@@ -314,5 +333,12 @@ rule share_above_20: share_pct > 20%
     } else {
         panic!("share_pct must be Ratio");
     }
-    assert_eq!(share_above_20.boolean, Some(true));
+    assert_eq!(
+        share_above_20
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
+        Some(true)
+    );
 }

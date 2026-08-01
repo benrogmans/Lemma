@@ -2,8 +2,8 @@ use crate::computation::rational::rational_new;
 use crate::literals::DateGranularity;
 use crate::parsing::ast::*;
 use crate::planning::semantics::{
-    date_time_to_semantic, primitive_time, time_to_semantic, BaseMeasureVector, LemmaType,
-    LiteralValue, MeasureTrait, MeasureUnit, MeasureUnits, TypeExtends, TypeSpecification,
+    date_time_to_semantic, time_to_semantic, BaseMeasureVector, LemmaType, LiteralValue,
+    MeasureTrait, MeasureUnit, MeasureUnits, TypeExtends, TypeSpecification,
 };
 use rust_decimal::Decimal;
 
@@ -114,30 +114,51 @@ fn test_conversion_target_display() {
 #[test]
 fn test_spec_type_display() {
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_text()),
+        format!(
+            "{}",
+            crate::planning::semantics::primitive_text_arc().as_ref()
+        ),
         "text"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_number()),
+        format!(
+            "{}",
+            crate::planning::semantics::primitive_number_arc().as_ref()
+        ),
         "number"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_date()),
+        format!(
+            "{}",
+            crate::planning::semantics::primitive_date_arc().as_ref()
+        ),
         "date"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_boolean()),
+        format!(
+            "{}",
+            crate::planning::semantics::primitive_boolean_arc().as_ref()
+        ),
         "boolean"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_ratio()),
+        format!(
+            "{}",
+            crate::planning::semantics::primitive_ratio_arc().as_ref()
+        ),
         "ratio"
     );
     assert_eq!(
-        format!("{}", crate::planning::semantics::primitive_measure()),
+        format!("{}", crate::planning::semantics::tests::primitive_measure()),
         "measure"
     );
-    assert_eq!(format!("{}", primitive_time()), "time");
+    assert_eq!(
+        format!(
+            "{}",
+            crate::planning::semantics::primitive_time_arc().as_ref()
+        ),
+        "time"
+    );
 }
 
 #[test]

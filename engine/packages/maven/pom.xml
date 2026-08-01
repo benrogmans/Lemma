@@ -6,7 +6,7 @@
 
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.0</version>
+  <version>0.9.1</version>
   <packaging>jar</packaging>
 
   <name>Lemma Engine</name>
@@ -35,10 +35,11 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven.compiler.release>17</maven.compiler.release>
+    <maven.compiler.release>21</maven.compiler.release>
     <junit.version>5.11.4</junit.version>
     <jackson.version>2.18.2</jackson.version>
     <jspecify.version>1.0.0</jspecify.version>
+    <lemma.natives.skip>false</lemma.natives.skip>
   </properties>
 
   <dependencies>
@@ -46,10 +47,11 @@
       <groupId>org.jspecify</groupId>
       <artifactId>jspecify</artifactId>
       <version>${jspecify.version}</version>
+      <scope>provided</scope>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
+      <artifactId>jackson-core</artifactId>
       <version>${jackson.version}</version>
     </dependency>
     <dependency>
@@ -74,9 +76,15 @@
               <goal>exec</goal>
             </goals>
             <configuration>
-              <executable>bash</executable>
+              <skip>${lemma.natives.skip}</skip>
+              <executable>cargo</executable>
+              <workingDirectory>${project.basedir}/../../..</workingDirectory>
               <arguments>
-                <argument>${project.basedir}/scripts/copy-native.sh</argument>
+                <argument>run</argument>
+                <argument>-p</argument>
+                <argument>xtask</argument>
+                <argument>--</argument>
+                <argument>maven-natives</argument>
               </arguments>
             </configuration>
           </execution>
@@ -103,6 +111,13 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-jar-plugin</artifactId>
         <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+            </manifest>
+          </archive>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -130,6 +145,52 @@
             <goals>
               <goal>jar</goal>
             </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>true</createDependencyReducedPom>
+              <relocations>
+                <relocation>
+                  <pattern>com.fasterxml.jackson.core</pattern>
+                  <shadedPattern>com.lemmabase.lemma.internal.jackson</shadedPattern>
+                </relocation>
+              </relocations>
+              <artifactSet>
+                <includes>
+                  <include>com.fasterxml.jackson.core:jackson-core</include>
+                </includes>
+              </artifactSet>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <id>ban-transitive-deps</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <banTransitiveDependencies/>
+              </rules>
+            </configuration>
           </execution>
         </executions>
       </plugin>

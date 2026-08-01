@@ -97,6 +97,9 @@ fn eval_rule_number(code: &str, spec_name: &str, rule_name: &str) -> String {
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
+        .value
+        .as_ref()
+        .expect("rule result value")
         .number
         .clone()
         .expect("number result")

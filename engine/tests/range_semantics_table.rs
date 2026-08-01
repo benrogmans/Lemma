@@ -77,8 +77,9 @@ fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &s
         .results
         .get(rule_name)
         .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .measure
+        .value
         .as_ref()
+        .and_then(|v| v.measure.as_ref())
         .and_then(|m| m.get(unit))
         .cloned()
         .unwrap_or_else(|| panic!("measure map missing unit '{unit}' for rule '{rule_name}'"))

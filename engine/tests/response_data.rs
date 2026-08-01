@@ -211,7 +211,7 @@ rule main: prefilled + suggested + required
     assert!(suggested
         .suggestion
         .as_ref()
-        .is_some_and(|s| s.display_value() == "5"));
+        .is_some_and(|s| s.number.as_deref() == Some("5")));
     assert!(suggested.prefilled.is_none());
 
     let main = response.results.get("main").expect("main rule");
@@ -358,7 +358,7 @@ rule main: n
     assert!(show_n
         .suggestion
         .as_ref()
-        .is_some_and(|s| s.display_value() == "42"));
+        .is_some_and(|s| s.number.as_deref() == Some("42")));
 
     let response = engine
         .run(None, "demo", Some(&now), HashMap::new(), None, false)

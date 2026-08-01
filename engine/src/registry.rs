@@ -50,7 +50,8 @@ pub struct RegistryBundle {
 /// Registry implementations classify their errors into these kinds so that
 /// the engine (and ultimately the user) can distinguish between a missing
 /// spec, an authorization failure, a network outage, etc.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RegistryErrorKind {
     /// The requested spec or type was not found (e.g. HTTP 404).
     NotFound,
@@ -355,12 +356,6 @@ impl LemmaBase {
         Self {
             fetcher: Box::new(FixtureDirFetcher::from_dir(dir.as_ref())),
         }
-    }
-
-    /// Create a LemmaBase registry with a custom HTTP fetcher (for unit tests in this crate).
-    #[cfg(test)]
-    fn with_fetcher(fetcher: Box<dyn HttpFetcher>) -> Self {
-        Self { fetcher }
     }
 
     /// Base URL for the spec; when effective is set, appends ?effective=... for temporal resolution.
@@ -1285,6 +1280,10 @@ data code: text
 
     #[cfg(feature = "registry")]
     mod lemmabase_tests {
+        fn lemma_base_with_fetcher(fetcher: Box<dyn HttpFetcher>) -> LemmaBase {
+            LemmaBase { fetcher }
+        }
+
         use super::super::*;
         use crate::literals::DateGranularity;
         use std::sync::{Arc, Mutex};
@@ -1490,7 +1489,7 @@ data code: text
 
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_returns_bundle_on_success() {
-            let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
+            let registry = lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec org/my_spec\ndata x: 1",
             )));
 
@@ -1508,7 +1507,7 @@ data code: text
                 *captured.lock().unwrap() = url.to_string();
                 Ok("spec test/spec\ndata x: 1".to_string())
             });
-            let registry = LemmaBase::with_fetcher(Box::new(mock));
+            let registry = lemma_base_with_fetcher(Box::new(mock));
 
             let _ = registry.fetch_source("@user/workspace/somespec").await;
 
@@ -1521,7 +1520,7 @@ data code: text
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_404_to_not_found() {
             let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
+                lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(404)));
 
             let err = registry.fetch_source("@org/missing").await.unwrap_err();
 
@@ -1541,7 +1540,7 @@ data code: text
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_500_to_server_error() {
             let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(500)));
+                lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(500)));
 
             let err = registry.fetch_source("@org/broken").await.unwrap_err();
 
@@ -1556,7 +1555,7 @@ data code: text
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_401_to_unauthorized() {
             let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(401)));
+                lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(401)));
 
             let err = registry.fetch_source("@org/secret").await.unwrap_err();
 
@@ -1567,7 +1566,7 @@ data code: text
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_http_403_to_unauthorized() {
             let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(403)));
+                lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(403)));
 
             let err = registry.fetch_source("@org/private").await.unwrap_err();
 
@@ -1582,7 +1581,7 @@ data code: text
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_unexpected_status_to_other() {
             let registry =
-                LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(418)));
+                lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_failing_with_status(418)));
 
             let err = registry.fetch_source("@org/teapot").await.unwrap_err();
 
@@ -1592,7 +1591,7 @@ data code: text
 
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_network_error_to_network_error_kind() {
-            let registry = LemmaBase::with_fetcher(Box::new(
+            let registry = lemma_base_with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error("connection refused"),
             ));
 
@@ -1613,7 +1612,7 @@ data code: text
 
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_maps_dns_error_to_network_error_kind() {
-            let registry = LemmaBase::with_fetcher(Box::new(
+            let registry = lemma_base_with_fetcher(Box::new(
                 MockHttpFetcher::always_failing_with_network_error(
                     "dns error: failed to lookup address",
                 ),
@@ -1640,7 +1639,7 @@ data code: text
 
         #[tokio::test(flavor = "current_thread")]
         async fn get_delegates_to_fetch_source() {
-            let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning(
+            let registry = lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_returning(
                 "spec org/resolved\ndata a: 1",
             )));
 
@@ -1652,7 +1651,7 @@ data code: text
 
         #[tokio::test(flavor = "current_thread")]
         async fn fetch_source_returns_empty_body_as_valid_bundle() {
-            let registry = LemmaBase::with_fetcher(Box::new(MockHttpFetcher::always_returning("")));
+            let registry = lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_returning("")));
 
             let bundle = registry.fetch_source("@org/empty").await.unwrap();
 

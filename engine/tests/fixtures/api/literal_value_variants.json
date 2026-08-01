@@ -1,0 +1,12 @@
+{
+  "number": { "number": "42.5" },
+  "number_with_unit": { "number_with_unit": ["10", "eur"] },
+  "text": { "text": "hello" },
+  "date": { "date": "2024-01-01" },
+  "time": { "time": "10:30:00" },
+  "boolean_true": { "boolean": "true" },
+  "boolean_false": { "boolean": "false" },
+  "boolean_yes": { "boolean": "yes" },
+  "boolean_no": { "boolean": "no" },
+  "range": { "range": [{ "number": "1" }, { "number": "10" }] }
+}

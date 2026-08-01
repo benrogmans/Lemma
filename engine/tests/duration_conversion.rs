@@ -40,8 +40,9 @@ rule to_hours: duration as hour
     if let ValueKind::Measure(_, _) = &val.value {
         assert_eq!(
             rule_result
-                .measure
+                .value
                 .as_ref()
+                .and_then(|v| v.measure.as_ref())
                 .and_then(|m| m.get("hour"))
                 .map(String::as_str),
             Some("1"),

@@ -46,7 +46,7 @@ fn rule_value(result: &lemma::Response, name: &str) -> String {
     if rr.vetoed {
         format!("VETO({})", rr.veto_reason.as_deref().unwrap_or("Vetoed"))
     } else {
-        rr.display.clone().expect("display")
+        rr.display().expect("display").to_string()
     }
 }
 
@@ -204,7 +204,7 @@ rule r: i.x
     );
 }
 
-// ─── User override via DataOverlay::resolve uses dotted input_key ────────
+// ─── User override via RunData::resolve uses dotted input_key ────────
 
 #[test]
 fn user_override_of_nested_binding_via_dotted_key() {

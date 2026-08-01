@@ -36,7 +36,7 @@ fn eval_rule(code: &str, spec_name: &str, rule_name: &str) -> String {
             rule_name, result.veto_reason
         );
     }
-    result.display.clone().expect("display")
+    result.display().expect("display").to_string()
 }
 
 fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &str) -> Decimal {
@@ -58,7 +58,8 @@ fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &s
             rule_name, result.veto_reason
         );
     }
-    if let Some(calendar) = &result.calendar {
+    let value = result.value.as_ref().expect("rule result value");
+    if let Some(calendar) = &value.calendar {
         assert_eq!(
             calendar.unit, unit,
             "expected calendar unit '{unit}', got '{}'",
@@ -66,7 +67,7 @@ fn eval_rule_measure_unit(code: &str, spec_name: &str, rule_name: &str, unit: &s
         );
         return Decimal::from_str(&calendar.value).expect("calendar value decimal");
     }
-    let measure = result.measure.as_ref().expect("measure map");
+    let measure = value.measure.as_ref().expect("measure map");
     Decimal::from_str(
         measure
             .get(unit)
@@ -414,9 +415,9 @@ rule runway_months: (balance / burn_rate) as month"#;
         .results
         .get("runway_months")
         .expect("runway_months rule")
-        .display
-        .clone()
-        .expect("display");
+        .display()
+        .expect("display")
+        .to_string();
     assert!(
         display.contains("15"),
         "120000 eur / 8000 eur_month = 15 month runway, got: {display}"

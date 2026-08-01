@@ -16,7 +16,7 @@ def parse_rational(text: str) -> Rational:
 
 
 def rational_to_decimal_string(value: Rational) -> str:
-    """Materialize a rational to a decimal display string (Lemma API decimal string format)."""
+    """Convert a rational to a decimal display string (Lemma API decimal string format)."""
     if value.denominator == 0:
         raise ZeroDivisionError("BUG: rational with zero denominator")
     if value.numerator == 0:

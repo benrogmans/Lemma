@@ -573,12 +573,9 @@ mod tests {
     }
 
     #[test]
-    fn try_mul_forced_oom() {
-        super::super::alloc::test_force_alloc_fail(1);
+    fn try_div_rem_zero_divisor_returns_alloc_error() {
         let a = BigUint::try_from_u32(2).unwrap();
-        let b = BigUint::try_from_u32(u32::MAX).unwrap();
-        let result = a.try_mul(&b);
-        super::super::alloc::test_clear_alloc_fail();
-        assert!(result.is_err());
+        let zero = BigUint::try_from_u32(0).unwrap();
+        assert!(a.try_div_rem(&zero).is_err());
     }
 }

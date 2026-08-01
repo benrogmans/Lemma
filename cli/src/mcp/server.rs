@@ -542,7 +542,7 @@ mod imp {
                         output.push_str(reason);
                     }
                 } else {
-                    let display = result.display.as_deref().ok_or_else(|| {
+                    let display = result.display().ok_or_else(|| {
                         McpError::internal_error(format!(
                             "Rule '{}' evaluated without display after evaluation",
                             result.rule.name

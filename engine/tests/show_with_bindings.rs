@@ -221,7 +221,7 @@ rule r: i.v
         .run(None, "outer", Some(&now), HashMap::new(), None, false)
         .unwrap();
     let r = resp.results.values().find(|x| x.rule.name == "r").unwrap();
-    assert_eq!(r.display.as_deref(), Some("10"));
+    assert_eq!(r.display(), Some("10"));
 }
 
 /// Spec that has genuinely different data requirements per branch — used to

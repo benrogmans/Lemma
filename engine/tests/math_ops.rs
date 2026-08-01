@@ -22,7 +22,7 @@ fn run(code: &str, rule: &str) -> Result<String, lemma::Errors> {
         .results
         .values()
         .find(|r| r.rule.name == rule)
-        .and_then(|r| r.display.clone())
+        .and_then(|r| r.display().map(str::to_string))
         .expect("rule value");
     Ok(v.to_string())
 }
@@ -55,7 +55,7 @@ fn run_literal(code: &str, rule: &str) -> Result<lemma::LiteralValue, lemma::Err
     if rule_result.vetoed {
         panic!("rule {rule} vetoed");
     }
-    Ok(rule_result.materialized_literal())
+    Ok(rule_result.to_literal())
 }
 
 fn run_authoritative_decimal(code: &str, rule: &str) -> Decimal {
@@ -85,7 +85,10 @@ fn run_authoritative_decimal(code: &str, rule: &str) -> Decimal {
         "rule '{rule}' must not veto; reason={:?}",
         rule_result.veto_reason
     );
-    let display = rule_result.display.clone().expect("authoritative display");
+    let display = rule_result
+        .display()
+        .expect("authoritative display")
+        .to_string();
     display.parse().unwrap_or_else(|_| {
         panic!("authoritative display for '{rule}' must be decimal, got '{display}'")
     })

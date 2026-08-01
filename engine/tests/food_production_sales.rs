@@ -45,13 +45,16 @@ fn result<'a>(resp: &'a lemma::Response, rule: &str) -> &'a lemma::RuleResult {
 
 fn display(resp: &lemma::Response, rule: &str) -> String {
     result(resp, rule)
-        .display
-        .clone()
+        .display()
         .unwrap_or_else(|| panic!("rule '{}' has no display", rule))
+        .to_string()
 }
 
 fn quantity_unit(resp: &lemma::Response, rule: &str, unit: &str) -> String {
     result(resp, rule)
+        .value
+        .as_ref()
+        .expect("rule result value")
         .measure
         .as_ref()
         .unwrap_or_else(|| panic!("rule '{}' is not a measure", rule))

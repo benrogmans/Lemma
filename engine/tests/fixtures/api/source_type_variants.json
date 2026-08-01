@@ -1,0 +1,9 @@
+{
+  "path": {
+    "path": "sample.lemma"
+  },
+  "dependency": {
+    "dependency": "@iso/countries"
+  },
+  "volatile": "volatile"
+}

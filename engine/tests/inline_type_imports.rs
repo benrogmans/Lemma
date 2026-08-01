@@ -45,7 +45,11 @@ rule is_adult: user_age >= 18
         .expect("is_adult rule not found");
 
     assert_eq!(
-        is_adult_result.boolean,
+        is_adult_result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
         Some(true),
         "25 >= 18 should be true"
     );
@@ -94,7 +98,11 @@ rule is_senior: user_age >= 65
         .expect("is_senior rule not found");
 
     assert_eq!(
-        is_senior_result.boolean,
+        is_senior_result
+            .value
+            .as_ref()
+            .expect("rule result value")
+            .boolean,
         Some(true),
         "70 >= 65 should be true"
     );

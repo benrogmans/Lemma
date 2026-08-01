@@ -167,9 +167,9 @@ impl Formatter {
                 .expect("BUG: vetoed rule result must have veto_reason");
         }
         result
-            .display
-            .clone()
-            .expect("BUG: non-veto rule result must have display after materialization")
+            .display()
+            .expect("BUG: non-veto rule result must have display")
+            .to_string()
     }
 
     fn gray(&self, text: &str) -> String {

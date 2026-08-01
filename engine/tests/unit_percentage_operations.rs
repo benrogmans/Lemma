@@ -101,7 +101,7 @@ fn test_unit_multiply_percentage() -> Result<(), lemma::Errors> {
     } else {
         panic!(
             "Expected number for scaled, got {:?}",
-            scaled_result.display
+            scaled_result.display()
         );
     }
 
@@ -183,7 +183,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
     } else {
         panic!(
             "Expected percentage for combined_discount, got {:?}",
-            combined_result.display
+            combined_result.display()
         );
     }
 
@@ -213,7 +213,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
     } else {
         panic!(
             "Expected percentage for net_rate, got {:?}",
-            net_rate_result.display
+            net_rate_result.display()
         );
     }
 
@@ -243,7 +243,7 @@ fn test_percentage_arithmetic() -> Result<(), lemma::Errors> {
     } else {
         panic!(
             "Expected percentage for compound, got {:?}",
-            compound_result.display
+            compound_result.display()
         );
     }
 
