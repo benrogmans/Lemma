@@ -92,8 +92,11 @@ pub(crate) fn resolve_data_path_value(
             data_path, rule_path.rule
         );
     }
+    let target = plan.promptable_data_path(data_path).expect(
+        "BUG: missing-data veto on non-promptable path; planning must not leave this unbound",
+    );
     OperationResult::Veto(VetoType::missing_data(
-        data_path.clone(),
-        context.missing_data_suggestion(data_path),
+        target.clone(),
+        context.missing_data_suggestion(target),
     ))
 }

@@ -16,7 +16,7 @@ pub use crate::computation::OperationResult;
 use crate::computation::VetoType;
 use crate::evaluation::response::EvaluatedRule;
 use crate::planning::execution_plan::{
-    expand_data_reference_targets, reachable_data_paths, validate_value_against_type, ExecutionPlan,
+    reachable_data_paths, validate_value_against_type, ExecutionPlan,
 };
 use crate::planning::normalize::NormalFormId;
 use crate::planning::semantics::{
@@ -261,9 +261,12 @@ impl EvaluationContext {
             return Vec::new();
         }
         let reachable = reachable_data_paths(plan, rule_root, &self.dead_control_edges);
-        let reachable = expand_data_reference_targets(plan, reachable);
+        let promptable: HashSet<&DataPath> = reachable
+            .iter()
+            .filter_map(|path| plan.promptable_data_path(path))
+            .collect();
         plan.promptable_data_paths()
-            .filter(|path| reachable.contains(*path) && !self.is_data_bound(path))
+            .filter(|path| promptable.contains(path) && !self.is_data_bound(path))
             .map(|path| path.input_key())
             .collect()
     }

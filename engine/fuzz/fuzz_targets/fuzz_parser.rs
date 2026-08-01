@@ -16,7 +16,7 @@ fuzz_target!(|data: &[u8]| {
             let spec_names: Vec<String> = engine
                 .list()
                 .iter()
-                .find(|r| r.repository.name.is_none())
+                .find(|r| r.repository.is_none())
                 .map(|r| r.specs.iter().map(|ls| ls.name.clone()).collect())
                 .unwrap_or_default();
             for name in spec_names {

@@ -41,14 +41,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 32458 | 38238 | 84.88% |
-| Functions | 2457 | 2818 | 87.19% |
-| Regions | 48218 | 57644 | 83.65% |
+| Lines | 32464 | 38272 | 84.82% |
+| Functions | 2458 | 2820 | 87.16% |
+| Regions | 48245 | 57699 | 83.61% |
 
 ## Test run
 
-- Total: 2297
-- Passed: 2297
+- Total: 2298
+- Passed: 2298
 - Skipped: 2
 - Failed: 0
 
@@ -69,12 +69,12 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `planning/explanation.rs` | 78.57 | 75.00 | 77.27 | 22/28 |
 | `error.rs` | 79.41 | 78.85 | 73.36 | 428/539 |
 | `parsing/ast.rs` | 79.68 | 85.71 | 71.42 | 984/1235 |
+| `planning/execution_plan.rs` | 80.58 | 82.41 | 76.65 | 1847/2292 |
 | `computation/units.rs` | 80.82 | 100.00 | 79.36 | 177/219 |
-| `planning/execution_plan.rs` | 80.87 | 82.24 | 76.73 | 1831/2264 |
+| `planning/graph.rs` | 81.64 | 85.77 | 82.61 | 7252/8883 |
 | `planning/semantics.rs` | 81.72 | 83.53 | 81.41 | 3513/4299 |
 | `literals.rs` | 81.77 | 75.63 | 80.67 | 704/861 |
-| `planning/graph.rs` | 81.82 | 85.97 | 82.73 | 7268/8883 |
-| `evaluation/expression.rs` | 82.81 | 100.00 | 86.52 | 53/64 |
+| `evaluation/expression.rs` | 83.33 | 100.00 | 87.37 | 55/66 |
 | `computation/datetime.rs` | 84.32 | 78.65 | 83.01 | 941/1116 |
 | `parsing/parser.rs` | 84.77 | 87.94 | 80.68 | 1792/2114 |
 | `computation/range.rs` | 85.25 | 100.00 | 80.19 | 156/183 |
@@ -94,7 +94,7 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `evaluation/tree.rs` | 93.69 | 94.00 | 94.12 | 1039/1109 |
 | `planning/mod.rs` | 93.94 | 97.56 | 95.02 | 496/528 |
 | `registry.rs` | 94.04 | 90.44 | 93.44 | 1073/1141 |
-| `evaluation/mod.rs` | 94.68 | 95.24 | 95.78 | 267/282 |
+| `evaluation/mod.rs` | 94.76 | 95.45 | 95.83 | 271/286 |
 | `deps.rs` | 96.23 | 100.00 | 96.47 | 51/53 |
 | `evaluation/response.rs` | 99.19 | 91.67 | 98.62 | 492/496 |
 | `computation/bigint/alloc.rs` | 100.00 | 100.00 | 97.37 | 20/20 |
@@ -107,4 +107,4 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 - [Engine integration test catalog](../../../engine/tests/README.md) — qualitative map of scenarios and subsystem overlap clusters
 - [CLI test coverage](cli.md)
 - [Engine benchmarks](../benchmarks/engine.md)
-<!-- coverage-input-digest: 141da5078767d953 -->
+<!-- coverage-input-digest: 47a9aaf8d5df5444 -->

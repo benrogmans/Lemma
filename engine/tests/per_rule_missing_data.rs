@@ -858,6 +858,73 @@ rule main: a + b
     }
 }
 
+/// Reference-bound chain: local `code` inherits type from dependency `prev.code`,
+/// dependency slot is bound via `with prev.code: code`, and rule references `prev.name`
+/// which needs `prev.code`. The ultimate promptable target is `code`, not `prev.code`.
+///
+/// Bug: `show.data` is empty while `missing_data` contains `code`.
+/// Both must agree: every key in `missing_data` must exist in `show.data`.
+#[test]
+fn g2b_reference_bound_chain_missing_data_key_exists_in_show() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec prev
+data code: text -> options "AA" "BB"
+rule name: veto "no code"
+  unless code is "AA" then "Alpha"
+  unless code is "BB" then "Beta"
+
+spec current
+uses prev
+data code: prev.code -> option "SS"
+with prev.code: code
+rule name: prev.name
+"#,
+    );
+    let response = run(
+        &engine,
+        "current",
+        HashMap::new(),
+        Some(&["name".to_string()]),
+        false,
+    );
+    let md = missing(&response, "name");
+
+    let now = DateTimeValue::now();
+    let show = engine.show(None, "current", Some(&now)).expect("show");
+    let show_keys: Vec<_> = show.data.keys().collect();
+
+    assert!(
+        md.contains(&"code".to_string()),
+        "promptable input 'code' must appear in missing_data: {md:?}"
+    );
+    assert!(
+        !md.contains(&"prev.code".to_string()),
+        "internal reference 'prev.code' must NOT appear in missing_data: {md:?}"
+    );
+    assert!(
+        show.data.contains_key("code"),
+        "BUG: show.data must contain 'code' (the ultimate promptable target)\n\
+         missing_data={md:?}\n\
+         show.data.keys={show_keys:?}\n\
+         These must agree: every missing_data key must exist in show.data"
+    );
+
+    let name = rule(&response, "name");
+    assert!(name.vetoed, "unbound code must veto name");
+    let reason = name.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("Missing data: code"),
+        "veto must name promptable input key 'code', not internal reference path; got: {reason}"
+    );
+    assert!(
+        !reason.contains("prev"),
+        "veto must not expose internal reference path; got: {reason}"
+    );
+}
+
 #[test]
 fn g3_missing_data_order_follows_plan_data_declaration() {
     let mut engine = Engine::new();
