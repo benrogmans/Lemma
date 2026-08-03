@@ -1,7 +1,6 @@
-use crate::error::ErrorKind;
+use crate::error::EngineError;
 use crate::evaluation::RunDataValue;
-use crate::parsing::source::Source;
-use crate::{Engine, Error, SourceType};
+use crate::{Engine, Error, Source, SourceType};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -47,10 +46,10 @@ impl WasmEngine {
         match crate::spec_set_id::parse_spec_set_id(name) {
             Err(e) => {
                 let js_err_array = {
-                    let errors = vec![JsError::from(&e)];
+                    let errors = vec![EngineError::from(&e)];
                     errors
                         .serialize(&js_error_serializer())
-                        .expect("BUG: serialize JsError array")
+                        .expect("BUG: serialize EngineError array")
                 };
                 wasm_bindgen_futures::future_to_promise(async move { Err(js_err_array) })
             }
@@ -65,10 +64,10 @@ impl WasmEngine {
                         None::<String>,
                     );
                     let js_err_array = {
-                        let errors = vec![JsError::from(&err)];
+                        let errors = vec![EngineError::from(&err)];
                         errors
                             .serialize(&js_error_serializer())
-                            .expect("BUG: serialize JsError array")
+                            .expect("BUG: serialize EngineError array")
                     };
                     wasm_bindgen_futures::future_to_promise(async move { Err(js_err_array) })
                 }
@@ -349,10 +348,10 @@ fn wasm_registry_fetch_only_promise(name: String) -> js_sys::Promise {
                     None,
                     None,
                 );
-                let errors = vec![JsError::from(&err)];
+                let errors = vec![EngineError::from(&err)];
                 return Err(errors
                     .serialize(&js_error_serializer())
-                    .expect("BUG: serialize JsError array"));
+                    .expect("BUG: serialize EngineError array"));
             }
         };
 
@@ -381,69 +380,6 @@ fn js_err(msg: impl Into<String>) -> JsValue {
     JsValue::from_str(&msg.into())
 }
 
-/// Source slice serialized for JS (`EngineError.source` in TS).
-#[derive(Serialize)]
-struct JsSource {
-    attribute: String,
-    line: usize,
-    column: usize,
-    length: usize,
-}
-
-impl<'a> From<&'a Source> for JsSource {
-    fn from(s: &'a Source) -> Self {
-        JsSource {
-            attribute: s.source_type.to_string(),
-            line: s.span.line,
-            column: s.span.col,
-            length: s.span.end.saturating_sub(s.span.start),
-        }
-    }
-}
-
-/// Flat view of [`Error`] for `serde_wasm_bindgen` — matches `EngineError` in
-/// `engine/packages/npm/lemma.d.ts`.
-#[derive(Serialize)]
-struct JsError<'a> {
-    kind: ErrorKind,
-    message: &'a str,
-    related_data: Option<&'a str>,
-    spec: Option<&'a str>,
-    related_spec: Option<&'a str>,
-    source: Option<JsSource>,
-    suggestion: Option<&'a str>,
-    /// Set for [`Error::MissingRepository`] and [`Error::Registry`] (registry `@` id).
-    repository: Option<&'a str>,
-    /// Set only for [`Error::Registry`].
-    registry_kind: Option<crate::registry::RegistryErrorKind>,
-    /// Set only for [`Error::Request`].
-    request_kind: Option<crate::error::RequestErrorKind>,
-    /// Set only for [`Error::ResourceLimitExceeded`].
-    limit_name: Option<&'a str>,
-    limit_value: Option<&'a str>,
-    actual_value: Option<&'a str>,
-}
-
-impl<'a> From<&'a Error> for JsError<'a> {
-    fn from(e: &'a Error) -> Self {
-        JsError {
-            kind: e.kind(),
-            message: e.message(),
-            related_data: e.related_data(),
-            spec: e.spec_context_name(),
-            related_spec: e.related_spec(),
-            source: e.source_location().map(JsSource::from),
-            suggestion: e.suggestion(),
-            repository: e.repository(),
-            registry_kind: e.registry_kind(),
-            request_kind: e.request_kind(),
-            limit_name: e.limit_name(),
-            limit_value: e.limit_value(),
-            actual_value: e.actual_value(),
-        }
-    }
-}
-
 /// Serializer that emits `null` (not `undefined`) for missing optionals so the object
 /// matches the published `EngineError` TypeScript type.
 fn js_error_serializer() -> serde_wasm_bindgen::Serializer {
@@ -452,9 +388,24 @@ fn js_error_serializer() -> serde_wasm_bindgen::Serializer {
 
 /// Convert an engine [`Error`] into a plain JS object thrown from WASM.
 fn error_to_js(e: &Error) -> JsValue {
-    let err = JsError::from(e);
+    let err = EngineError::from(e);
     err.serialize(&js_error_serializer())
-        .expect("BUG: serialize JsError")
+        .expect("BUG: serialize EngineError")
+}
+
+fn serialize_load_errors(load_err: crate::Errors) -> JsValue {
+    let errors: Vec<EngineError> = load_err.errors.iter().map(EngineError::from).collect();
+    errors
+        .serialize(&js_error_serializer())
+        .expect("BUG: serialize EngineError array")
+}
+
+fn request_error_js(message: impl Into<String>) -> JsValue {
+    let err = Error::request(message, None::<String>);
+    let errors = vec![EngineError::from(&err)];
+    errors
+        .serialize(&js_error_serializer())
+        .expect("BUG: serialize EngineError array")
 }
 
 fn run_data_value_from_json_value(value: serde_json::Value) -> Result<RunDataValue, String> {
@@ -498,21 +449,6 @@ fn run_data_value_from_json_value(value: serde_json::Value) -> Result<RunDataVal
         serde_json::Value::Null => Err("data value must not be null".to_string()),
         serde_json::Value::Array(_) => Err("data value must not be an array".to_string()),
     }
-}
-
-fn serialize_load_errors(load_err: crate::Errors) -> JsValue {
-    let errors: Vec<JsError> = load_err.errors.iter().map(JsError::from).collect();
-    errors
-        .serialize(&js_error_serializer())
-        .expect("BUG: serialize JsError array")
-}
-
-fn request_error_js(message: impl Into<String>) -> JsValue {
-    let err = Error::request(message, None::<String>);
-    let errors = vec![JsError::from(&err)];
-    errors
-        .serialize(&js_error_serializer())
-        .expect("BUG: serialize JsError array")
 }
 
 fn parse_load_sources(sources: JsValue) -> Result<Vec<(SourceType, String)>, JsValue> {

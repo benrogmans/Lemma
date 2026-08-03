@@ -345,7 +345,7 @@ export type RuleResult = RuleResultValue & {
   rule_type: string;
   /** Input keys still unbound for this rule (run-data-aware; same keys as Show.data). */
   missing_data?: string[];
-  /** Present when `run(..., explain: true)`. Shape: documentation/schemas/api.v1.json (`RuleResult.explanation`). */
+  /** Present when `run(..., explain: true)`. Shape: engine/schemas/api.v1.json (`RuleResult.explanation`). */
   explanation?: Explanation;
 };
 

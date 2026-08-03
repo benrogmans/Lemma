@@ -1,4 +1,4 @@
-//! Emits `documentation/schemas/api.v1.json`: the JSON Schema for Show, Response,
+//! Emits `engine/schemas/api.v1.json`: the JSON Schema for Show, Response,
 //! `list`, and error documents (engine `Engine::show`/`run`/`list`, thrown `EngineError`
 //! arrays). Hand-authored, not derived by macro, because the wire shapes involve
 //! hand-written `Serialize` impls (decimal strings, externally/internally tagged enums)
@@ -10,7 +10,7 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-const SCHEMA_REL_PATH: &str = "documentation/schemas/api.v1.json";
+const SCHEMA_REL_PATH: &str = "engine/schemas/api.v1.json";
 
 fn decimal_string() -> Value {
     json!({"$ref": "#/$defs/DecimalString"})

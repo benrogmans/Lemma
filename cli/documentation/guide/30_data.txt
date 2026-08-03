@@ -1,0 +1,86 @@
+**Data: constraint definitions, not placeholders**
+
+`data` declares variables. Constraints define validity. Type-only `data` (no value) is input slot. `lemma show` lists static reachable data. Evaluator needs come from rule `missing_data` on `run` (not `show`). Use real domain values. Never `"TODO"` or dummy placeholders.
+
+**Example D — typed data (coffee order)**
+
+```lemma
+spec coffee_order
+
+data money: measure
+  -> decimals 2
+  -> unit eur 1.00
+  -> unit gbp 1.17
+  -> unit usd 0.84
+  -> minimum 0 eur
+
+data product: text
+  -> option "espresso"
+  -> option "latte"
+  -> option "cappuccino"
+  -> option "mocha"
+
+data size: text
+  -> option "small"
+  -> option "medium"
+  -> option "large"
+
+data age: number
+  -> maximum 100
+  -> minimum 0
+
+data number_of_cups: number
+  -> maximum 10
+
+data has_loyalty_card: boolean
+```
+
+- `age`, `number_of_cups`: input slots (type-only + bounds)
+- `money`: custom measure type with units, decimals, minimum
+- `product`, `size`: text enumeration via `-> option` (prefer over veto for static sets)
+
+**Example E — data patterns**
+
+Input slot:
+```lemma
+spec intake
+
+data customer_age: number -> minimum 0 -> maximum 120
+```
+
+Fixed policy constant:
+```lemma
+spec fiscal_policy
+
+data tax_rate: 21%
+```
+
+Text enumeration:
+```lemma
+spec membership
+
+data status: text
+  -> option "active"
+  -> option "inactive"
+```
+
+Typed alias:
+```lemma
+spec accounts
+
+data money: measure -> unit eur 1.00
+
+data wallet: money -> minimum 0 eur
+```
+
+With help text:
+```lemma
+spec payroll
+
+data pay_period: text
+  -> option "month"
+  -> option "week"
+  -> help "How often you are paid."
+```
+
+Constraints chain: `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, etc. Details in Reference.

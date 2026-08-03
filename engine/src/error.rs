@@ -718,6 +718,70 @@ impl Error {
     }
 }
 
+/// Source location attached to an [`EngineError`]. Line and column are 1-based;
+/// `length` is the UTF-8 byte length of the offending span.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct EngineErrorSource {
+    pub attribute: String,
+    pub line: usize,
+    pub column: usize,
+    pub length: usize,
+}
+
+impl From<&Source> for EngineErrorSource {
+    fn from(source: &Source) -> Self {
+        Self {
+            attribute: source.source_type.to_string(),
+            line: source.span.line,
+            column: source.span.col,
+            length: source.span.end.saturating_sub(source.span.start),
+        }
+    }
+}
+
+/// Flat wire view of [`Error`] matching `EngineError` in `engine/schemas/api.v1.json`
+/// and `engine/packages/npm/lemma.d.ts`. Missing optionals serialize as JSON `null`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct EngineError {
+    pub kind: ErrorKind,
+    pub message: String,
+    pub related_data: Option<String>,
+    pub spec: Option<String>,
+    pub related_spec: Option<String>,
+    pub source: Option<EngineErrorSource>,
+    pub suggestion: Option<String>,
+    /// Set for [`Error::MissingRepository`] and [`Error::Registry`] (registry `@` id).
+    pub repository: Option<String>,
+    /// Set only for [`Error::Registry`].
+    pub registry_kind: Option<RegistryErrorKind>,
+    /// Set only for [`Error::Request`].
+    pub request_kind: Option<RequestErrorKind>,
+    /// Set only for [`Error::ResourceLimitExceeded`].
+    pub limit_name: Option<String>,
+    pub limit_value: Option<String>,
+    pub actual_value: Option<String>,
+}
+
+impl From<&Error> for EngineError {
+    fn from(error: &Error) -> Self {
+        Self {
+            kind: error.kind(),
+            message: error.message().to_string(),
+            related_data: error.related_data().map(str::to_string),
+            spec: error.spec_context_name().map(str::to_string),
+            related_spec: error.related_spec().map(str::to_string),
+            source: error.source_location().map(EngineErrorSource::from),
+            suggestion: error.suggestion().map(str::to_string),
+            repository: error.repository().map(str::to_string),
+            registry_kind: error.registry_kind(),
+            request_kind: error.request_kind(),
+            limit_name: error.limit_name().map(str::to_string),
+            limit_value: error.limit_value().map(str::to_string),
+            actual_value: error.actual_value().map(str::to_string),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

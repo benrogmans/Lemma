@@ -100,7 +100,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 
 Full TypeScript types are bundled (see `lemma.d.ts`).
 
-**API values (`RuleResultValue`):** when present, always `display`, plus exactly one typed field (`measure` / `ratio` / `number` / …) or `range` instead. Same shape on `ShowData.prefilled` / `ShowData.suggestion`; non-veto rule results flatten those fields onto `RuleResult` (no `value` wrapper). Measure and ratio maps hold every declared unit name → magnitude string so interactive prompts can switch units. These maps are not `-> suggest` and not the removed `-> default` commit path.
+**API values (`RuleResultValue`):** when present, always `display`, plus exactly one typed field (`measure` / `ratio` / `number` / …) or `range` instead. Same shape on `ShowData.prefilled` / `ShowData.suggestion`; non-veto rule results flatten those fields onto `RuleResult` (no `value` wrapper). Measure and ratio maps hold every declared unit name → magnitude string so interactive prompts can switch units.
 
 ## Registry dependencies
 

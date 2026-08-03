@@ -1,7 +1,7 @@
 use super::{check_report, run_coverage_and_write, ReportConfig};
 use std::path::Path;
 
-pub const RESULTS_RELATIVE: &str = "documentation/reference/coverage/engine.md";
+pub const RESULTS_RELATIVE: &str = "cli/documentation/reference/coverage/engine.md";
 
 pub const INPUT_PATHS: &[&str] = &["engine/src", "engine/tests", "engine/Cargo.toml"];
 

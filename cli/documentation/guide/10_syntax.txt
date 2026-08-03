@@ -1,0 +1,11 @@
+**Mandatory spec opening order:**
+
+```
+spec <name> [<effective>]
+[""" commentary — optional, but if present must be HERE """]
+uses ...
+data ...
+rule ...
+```
+
+Commentary after `uses` or `data` is invalid, parse fails. No `#`, `//`, `--` comment syntax. Use descriptive names. Put user explanations outside code fences — never inside ` ```lemma ` blocks.

@@ -56,3 +56,4 @@ Write a `.lemma` file and run it. The [Learn guide](learn/readme.md) walks you t
 - **[Reference](reference/readme.md)** — operators, types, syntax, CLI, registry, test coverage, benchmarks
 - **[Tools & SDKs](tools/readme.md)** — Rust, Elixir, JavaScript/TypeScript, and more
 - **[Community](community/readme.md)** — contributing and publishing specs
+- **[LLMs.txt](llms.md)** — authoring Lemma from business logic

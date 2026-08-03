@@ -23,7 +23,7 @@ mod tracked {
     pub const MAVEN_VERSION_DOCS: &[&str] = &[
         "README.md",
         "engine/README.md",
-        "documentation/tools/maven.md",
+        "cli/documentation/tools/maven.md",
         "engine/packages/maven/README.md",
     ];
 }

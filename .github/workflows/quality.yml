@@ -19,7 +19,7 @@ env:
 
 jobs:
   precommit:
-    name: cargo precommit --fuzz
+    name: cargo precommit${{ github.event_name == 'push' && ' --fuzz' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -33,6 +33,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install Rust nightly
+        if: github.event_name == 'push'
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Default toolchain is stable
@@ -79,6 +80,7 @@ jobs:
           tool: cargo-deny@0.19.0
 
       - name: Install cargo-fuzz
+        if: github.event_name == 'push'
         run: cargo install cargo-fuzz
 
       - name: Install Elixir
@@ -93,5 +95,10 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: cargo precommit
+        if: github.event_name == 'pull_request'
+        run: cargo precommit
+
       - name: cargo precommit --fuzz
+        if: github.event_name == 'push'
         run: cargo precommit --fuzz

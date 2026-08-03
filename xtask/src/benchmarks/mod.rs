@@ -10,7 +10,7 @@
 //! cargo benchmarks all      # both suites, sequentially
 //! ```
 //!
-//! Writes reports under `documentation/reference/benchmarks/`. Any subprocess failure
+//! Writes reports under `cli/documentation/reference/benchmarks/`. Any subprocess failure
 //! aborts the run; no partial reports.
 
 mod cli;

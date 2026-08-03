@@ -23,7 +23,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 /**
- * Sealed API discriminators must match {@code documentation/schemas/api.v1.json} {@code $defs}.
+ * Sealed API discriminators must match {@code engine/schemas/api.v1.json} {@code $defs}.
  * Extracts {@code const} / external-tag property names only — not a full schema walker.
  */
 final class SchemaIntegrityTest {
@@ -48,7 +48,7 @@ final class SchemaIntegrityTest {
 
   private static Path schemaPath() {
     Path moduleDir = Path.of(System.getProperty("user.dir")).toAbsolutePath().normalize();
-    return moduleDir.resolve("../../../documentation/schemas/api.v1.json").normalize();
+    return moduleDir.resolve("../../schemas/api.v1.json").normalize();
   }
 
   @Test

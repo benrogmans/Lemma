@@ -1,0 +1,139 @@
+**Standard library — `uses lemma units`**
+
+Lemma embeds SI bases, derived compounds (force, pressure, energy, power, frequency, electrical), imperial, area/volume, and information (`bit`/`byte`) in `repo lemma` / `spec units`. Import: `uses lemma units`. Reference types: `units.mass`, `units.duration`, `units.length`, `units.force`. Unit names: **singular only** (`8 hour`). Length uses American `meter`. Durations (`hour`, `day`, `week`) require `units.duration`. No Celsius/Fahrenheit (kelvin only).
+
+```lemma
+spec logistics
+"""
+Physical shipment constraints using SI units from the standard library.
+"""
+
+uses lemma units
+
+data package_weight: 12 kilogram
+data shift_length:   8 hour
+data route_distance: 45 kilometer
+
+rule weight_grams:  package_weight as gram
+rule shift_hours:   shift_length as hour
+rule distance_km:   route_distance as kilometer
+
+rule is_heavy:      package_weight > 20 kilogram
+rule is_long_shift: shift_length >= 8 hour
+```
+
+Prefer `units.mass`, `units.duration`, `units.length` over redefining units. Convert in family: `as <unit>`. Strip unit: `amount as eur as number`. Cross-family relabel: `5 eur as kg` -> `5 kg`.
+
+**Ranges — half-open intervals**
+
+Ranges: lower bound inclusive, upper bound exclusive (`lo...hi`). Test with `in`. Width: `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>`). Bare `as number` on date/measure ranges fails. Typedefs: `number range`, `date range`, `measure range`, `ratio range`. Month/year intervals: `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar range`.
+
+```lemma
+spec eligibility
+uses lemma units
+
+data employee_age:       42 year
+data performance_score:  75
+data package_weight:     45 kilogram
+data hire_date:          2024-01-15
+data review_date:        2024-06-30
+data discount_rate:      15%
+
+data eligible_band: units.calendar range
+  -> suggest 18 year...67 year
+
+data score_band: number range
+  -> suggest 0...100
+
+rule is_working_age: employee_age in eligible_band
+
+rule is_top_score: performance_score in 90...100
+
+rule is_heavy: package_weight in 30 kilogram...80 kilogram
+
+rule in_discount_band: discount_rate in 0%...50%
+
+rule in_q2: hire_date in 2024-04-01...2024-07-01
+
+rule review_days: (hire_date...review_date) as day
+
+rule span_years: (1990-05-20...2024-06-15) as year
+```
+
+Upper bound exclusive: `67 year` is NOT inside `18 year...67 year` (returns false). Declare range slots on `data` for reuse, inline `value in lo...hi` for one-off.
+
+Range over custom measure type (no SI import needed):
+
+```lemma
+spec freight
+
+data weight: measure
+  -> unit gram 1
+  -> unit kilogram 1000
+
+data load_band: weight range
+  -> suggest 30 kilogram...80 kilogram
+
+rule inside_band: 45 kilogram in load_band
+
+rule band_width: (30 kilogram...80 kilogram) as kilogram
+```
+
+**Derived measures — compound units**
+
+Build compound units with `/`, `*`, `^`. Name derived unit, then give compound expression. Prior measure types must declare referenced base units (`eur`, `hour`, `employee`, `results`). Import `uses lemma units` if using time (`eur/hour`).
+
+```lemma
+spec contractor
+uses lemma units
+
+data money: measure
+  -> unit eur 1.00
+
+data headcount: measure
+  -> unit employee 1
+
+data outcome: measure
+  -> unit results 1
+
+data wage_rate: measure
+  -> unit eur_per_second eur/second
+  -> unit eur_per_hour eur/hour
+
+data productivity: measure
+  -> unit result_per_employee results/eur/hour/employee
+
+data premium_per_head: measure
+  -> unit eur_hour_per_employee eur_per_hour/employee
+
+data time_worked: 120 hour
+data wage: wage_rate -> suggest 85 eur_per_hour
+data yield_rate: productivity -> suggest 3 result_per_employee
+
+rule total: wage * time_worked
+
+rule is_high_yield: yield_rate >= 2 result_per_employee
+```
+
+Layer compound units: `eur_per_hour` builds on `eur` and `hour`. Dimensional checks run at plan time.
+
+**Date predicates relative to `now`**
+
+`now` is evaluation/effective instant. Import `uses lemma units` for duration windows.
+
+| Form | Meaning |
+|------|---------|
+| `date in past` / `in future` | Before / after `now` |
+| `date in past N day` / `in future N day` | In last / next N duration units |
+| `past N day` / `future N day` | Relative date-range window |
+| `date in calendar year\|month\|week` | Current calendar period |
+| `date in past\|future calendar year\|month\|week` | Adjacent calendar period |
+| `date not in calendar year\|month\|week` | Not current calendar period |
+
+```lemma
+spec recency
+uses lemma units
+data event_date: date
+rule recent: event_date in past 7 day
+rule this_year: event_date in calendar year
+```

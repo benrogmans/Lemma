@@ -3,7 +3,7 @@
 Hand-written Python implementations of the three Lemma specs in
 [`../specs/`](../specs). Used as the Python side of the hand-written Lemma vs
 hand-written Python comparison in
-[`../../../documentation/reference/benchmarks/engine.md`](../../../documentation/reference/benchmarks/engine.md).
+[`../../../cli/documentation/reference/benchmarks/engine.md`](../../../cli/documentation/reference/benchmarks/engine.md).
 
 ## Per-call boundary (latency)
 

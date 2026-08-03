@@ -7,13 +7,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn coffee_example_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../documentation/examples/01_coffee_order.lemma")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/coffee_order.lemma")
 }
 
 fn recipe_example_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../documentation/examples/03_recipe_scaling.lemma")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recipe_scaling.lemma")
 }
 
 fn load_coffee(engine: &mut Engine) {

@@ -163,7 +163,7 @@ lemma lsp
 
 ### `lemma mcp`: start MCP server
 
-AI assistant integration via [Model Context Protocol](https://modelcontextprotocol.io) over stdio.
+AI assistant integration via Model Context Protocol over stdio.
 
 ```bash
 lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
@@ -175,12 +175,16 @@ lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
 - `--request-timeout <second>`: wall-clock timeout for a single request (default: `10`)
 
 **Tools (default):**
-- `evaluate` — evaluate rules in a spec (always includes explanation trees; unlike CLI/HTTP/WASM, there is no opt-out)
+- `evaluate` — evaluate rules in a spec (always includes explanation trees; unlike CLI/HTTP/WASM, there is no opt-out). Measure/ratio results include every declared unit.
 - `list` — list loaded specs by repository
-- `show` — show a spec interface (data and rules)
+- `show` — return the JSON Show for a spec (data and rules, including units)
+- `check` — parse and plan a batch of labeled Lemma sources (ephemeral engine, does not mutate server state); returns success confirmation or structured diagnostics
+- `guide` — return a section of the embedded authoring guide (`syntax`, `data`, `rules`, `units`, `veto`, `composition`, `anti_patterns`)
+
+**Resources:** `lemma://guide`, `lemma://guide/{topic}`, `lemma://examples/{name}` (curated examples under `cli/documentation/examples/`).
 
 **Tools (with `--admin`):**
-- `add_spec` — load Lemma source into the engine
+- `add_spec` — load Lemma source into the engine (structured diagnostics on failure)
 - `source` — return formatted Lemma source for a repository or spec
 
 ## Workspace

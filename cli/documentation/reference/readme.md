@@ -1,8 +1,7 @@
 ---
-
-## nav_title: Reference
-
+nav_title: Reference
 nav_order: 40
+---
 
 # Lemma Language Reference
 

@@ -290,26 +290,10 @@ fn test_mcp_admin_enables_add_spec() {
         tool_names
     );
 
-    // add_spec should succeed and return structured show JSON
+    // add_spec should succeed
     let add_result = &responses[2]["result"]["content"][0]["text"];
     let text = add_result.as_str().expect("add_spec should return text");
-    let payload: serde_json::Value =
-        serde_json::from_str(text).expect("add_spec should return JSON");
-    assert_eq!(
-        payload["message"].as_str(),
-        Some("Spec added successfully.")
-    );
-    let specs = payload["specs"]
-        .as_array()
-        .expect("add_spec payload should include specs array");
-    assert!(
-        specs.iter().any(|s| s["spec"] == "test_spec"),
-        "Should include show for test_spec, got: {text}"
-    );
-    assert!(
-        specs[0]["rules"]["y"].is_object(),
-        "Should include rule types in show JSON, got: {text}"
-    );
+    assert_eq!(text, "Spec added successfully.");
 }
 
 #[test]
@@ -456,6 +440,10 @@ fn test_mcp_initialize_response() {
         result["capabilities"]["tools"].is_object(),
         "Should advertise tools capability"
     );
+    assert!(
+        result["capabilities"]["resources"].is_object(),
+        "Should advertise resources capability"
+    );
 }
 
 // ── show ──────────────────────────────────────────────────────────
@@ -485,14 +473,21 @@ fn test_mcp_show_full_spec() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("show should return text");
+    let show: serde_json::Value = serde_json::from_str(text).expect("show should return JSON Show");
 
+    assert_eq!(show["spec"], "pricing");
     assert!(
-        text.contains("pricing"),
-        "Should mention spec name, got: {text}"
+        show["data"]["quantity"].is_object(),
+        "Should list quantity data, got: {text}"
     );
-    assert!(text.contains("quantity"), "Should list data, got: {text}");
-    assert!(text.contains("base_price"), "Should list data, got: {text}");
-    assert!(text.contains("total"), "Should list rules, got: {text}");
+    assert!(
+        show["data"]["base_price"].is_object(),
+        "Should list base_price data, got: {text}"
+    );
+    assert!(
+        show["rules"]["total"].is_object(),
+        "Should list total rule, got: {text}"
+    );
 }
 
 #[test]
@@ -524,9 +519,10 @@ fn test_mcp_show_full_spec_rules() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("show should return text");
+    let show: serde_json::Value = serde_json::from_str(text).expect("show should return JSON Show");
 
     assert!(
-        text.contains("sum") && text.contains("product"),
+        show["rules"]["sum"].is_object() && show["rules"]["product"].is_object(),
         "Should list all rules, got: {text}"
     );
 }
@@ -1248,10 +1244,23 @@ fn test_mcp_add_spec_invalid_code() {
     );
 
     assert!(responses.len() >= 2);
-    let error = &responses[1]["error"];
+    let result = &responses[1]["result"];
+    assert_eq!(
+        result["isError"], true,
+        "Invalid Lemma should return isError tool result, got: {result}"
+    );
+    let text = result["content"][0]["text"]
+        .as_str()
+        .expect("diagnostics text");
+    let diagnostics: serde_json::Value =
+        serde_json::from_str(text).expect("diagnostics should be JSON");
     assert!(
-        error.is_object(),
-        "Should return an error for invalid Lemma code"
+        diagnostics.as_array().is_some_and(|a| !a.is_empty()),
+        "Should return at least one diagnostic, got: {text}"
+    );
+    assert!(
+        diagnostics[0]["message"].as_str().is_some(),
+        "Diagnostic should include message, got: {text}"
     );
 }
 
@@ -1282,10 +1291,12 @@ fn test_mcp_tools_list_read_only_tools() {
     );
     assert!(tool_names.contains(&"list"), "Should list list tool");
     assert!(tool_names.contains(&"show"), "Should list show tool");
+    assert!(tool_names.contains(&"check"), "Should list check tool");
+    assert!(tool_names.contains(&"guide"), "Should list guide tool");
     assert_eq!(
         tool_names.len(),
-        3,
-        "Read-only mode should have exactly 3 tools, got: {:?}",
+        5,
+        "Read-only mode should have exactly 5 tools, got: {:?}",
         tool_names
     );
 }
@@ -1315,6 +1326,8 @@ fn test_mcp_tools_list_admin_tools() {
     );
     assert!(tool_names.contains(&"list"), "Should list list tool");
     assert!(tool_names.contains(&"show"), "Should list show tool");
+    assert!(tool_names.contains(&"check"), "Should list check tool");
+    assert!(tool_names.contains(&"guide"), "Should list guide tool");
     assert!(
         tool_names.contains(&"add_spec"),
         "Should list add_spec tool in admin mode"
@@ -1325,8 +1338,8 @@ fn test_mcp_tools_list_admin_tools() {
     );
     assert_eq!(
         tool_names.len(),
-        5,
-        "Admin mode should have exactly 5 tools, got: {:?}",
+        7,
+        "Admin mode should have exactly 7 tools, got: {:?}",
         tool_names
     );
 }
@@ -1448,12 +1461,7 @@ fn test_mcp_add_spec_then_evaluate() {
     let add_text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("add_spec should return text");
-    let payload: serde_json::Value =
-        serde_json::from_str(add_text).expect("add_spec should return JSON");
-    assert_eq!(
-        payload["message"].as_str(),
-        Some("Spec added successfully.")
-    );
+    assert_eq!(add_text, "Spec added successfully.");
 
     let eval_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
@@ -1698,5 +1706,442 @@ fn mcp_evaluate_veto_must_not_invent_vetoed_placeholder() {
     assert!(
         !text.contains("Vetoed"),
         "MCP must not invent 'Vetoed' placeholder when veto_reason missing, got: {text}"
+    );
+}
+
+// ── check / guide / resources / unit maps ───────────────────────────────
+
+#[test]
+fn test_mcp_check_invalid_returns_diagnostics() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [["new_spec", "this is not valid lemma code !!!"]]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert_eq!(result["isError"], true);
+    let text = result["content"][0]["text"].as_str().expect("text");
+    let diagnostics: serde_json::Value = serde_json::from_str(text).expect("JSON diagnostics");
+    let first = &diagnostics[0];
+    assert!(first["message"].as_str().is_some());
+    assert!(
+        first["source"]["line"].as_u64().is_some(),
+        "diagnostic must include line, got: {text}"
+    );
+    assert!(
+        first["source"]["column"].as_u64().is_some(),
+        "diagnostic must include column, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_check_does_not_mutate_list() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(2, "tools/call", json!({ "name": "list", "arguments": {} })),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [["draft", "spec draft\ndata x: number\nrule y: x"]]
+                    }
+                }),
+            ),
+            make_request(4, "tools/call", json!({ "name": "list", "arguments": {} })),
+        ],
+    );
+
+    assert!(responses.len() >= 4);
+    let list_before = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    let check_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("check text");
+    assert!(
+        responses[2]["result"].get("isError").is_none()
+            || responses[2]["result"]["isError"] != true,
+        "valid check must succeed"
+    );
+    assert_eq!(
+        check_text, "All sources parsed and planned successfully.",
+        "check should return success message"
+    );
+    let list_after = responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert_eq!(
+        list_before, list_after,
+        "check must not mutate loaded specs"
+    );
+    assert!(
+        !list_after.contains("draft"),
+        "draft must not appear in list after check"
+    );
+}
+
+#[test]
+fn test_mcp_check_resolves_workspace_and_units() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "base.lemma",
+        "spec base\ndata flag: boolean\nrule ok: flag\n",
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [
+                            ["base", "spec base\ndata flag: boolean\nrule ok: flag\n"],
+                            ["ship", "spec ship\nuses lemma units\nuses base\ndata package_weight: units.mass\nrule heavy: package_weight > 0 units.kilogram\n"]
+                        ]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert!(
+        result.get("isError").is_none() || result["isError"] != true,
+        "check with uses lemma units + cross-spec uses must succeed, got: {result}"
+    );
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert_eq!(
+        text, "All sources parsed and planned successfully.",
+        "check should return success message"
+    );
+}
+
+#[test]
+fn test_mcp_check_resolves_registry_dependency() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [
+                            ["@test/base", "repo @test/base\n\nspec base\n\ndata flag: boolean\n\nrule is_set: flag\n"],
+                            ["ship", "spec ship\n\nuses base: @test/base base\n\nrule ok: base.is_set\n"]
+                        ]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert!(
+        result.get("isError").is_none() || result["isError"] != true,
+        "check with @owner/repo dependency must succeed, got: {result}"
+    );
+}
+
+#[test]
+fn test_mcp_check_rejects_duplicate_source_label() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [
+                            ["base", "spec base\ndata x: 5"],
+                            ["base", "spec other\ndata y: 10"]
+                        ]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert_eq!(result["isError"], true, "duplicate source label must fail");
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert!(
+        text.to_lowercase().contains("duplicate") || text.to_lowercase().contains("repeated"),
+        "diagnostic must mention duplicate source, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_show_json_includes_rule_units() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "money.lemma",
+        "spec money\ndata amount: measure\n  -> unit eur 1\n  -> unit cent 0.01\nrule total: amount\n",
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "show",
+                    "arguments": { "spec": "money" }
+                }),
+            ),
+        ],
+    );
+
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("show text");
+    let show: serde_json::Value = serde_json::from_str(text).expect("JSON Show");
+    let units = &show["rules"]["total"]["units"];
+    assert!(
+        units.is_array() && units.as_array().unwrap().len() >= 2,
+        "rule total must expose unit map in JSON Show, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_evaluate_renders_unit_map() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "money.lemma",
+        "spec money\ndata amount: measure\n  -> unit eur 1\n  -> unit cent 0.01\nrule total: amount\n",
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "money",
+                        "rule": "total",
+                        "data": ["amount=84 eur"]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(
+        responses.len() >= 2,
+        "expected initialize + evaluate responses, got: {responses:?}"
+    );
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("evaluate text");
+    assert!(
+        text.contains("eur") && text.contains("cent"),
+        "evaluate must render every declared unit, got: {text}"
+    );
+    assert!(
+        text.contains('(') && text.contains(')'),
+        "unit map should be parenthesized, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_guide_topics() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let topics = [
+        "syntax",
+        "data",
+        "rules",
+        "units",
+        "veto",
+        "composition",
+        "anti_patterns",
+    ];
+    let mut messages = vec![make_request(1, "initialize", json!({}))];
+    for (i, topic) in topics.iter().enumerate() {
+        messages.push(make_request(
+            (i + 2) as u64,
+            "tools/call",
+            json!({
+                "name": "guide",
+                "arguments": { "topic": topic }
+            }),
+        ));
+    }
+
+    let responses = mcp_session(Some(temp_dir.path()), false, &messages);
+    assert!(responses.len() > topics.len());
+    for (i, topic) in topics.iter().enumerate() {
+        let text = responses[i + 1]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert!(!text.is_empty(), "guide topic {topic} must not be empty");
+
+        match *topic {
+            "syntax" => {
+                assert!(
+                    text.contains("**Mandatory spec opening order:**"),
+                    "syntax must include opening order"
+                );
+            }
+            "composition" => {
+                assert!(
+                    text.contains("**Example A"),
+                    "composition must include Example A"
+                );
+                assert!(
+                    text.contains("**Example B"),
+                    "composition must include Example B"
+                );
+                assert!(
+                    text.contains("**LemmaBase"),
+                    "composition must include LemmaBase"
+                );
+            }
+            "data" => {
+                assert!(text.contains("**Example D"), "data must include Example D");
+                assert!(text.contains("**Example E"), "data must include Example E");
+            }
+            "units" => {
+                assert!(text.contains("**Ranges"), "units must include Ranges");
+                assert!(
+                    text.contains("**Derived measures"),
+                    "units must include Derived measures"
+                );
+            }
+            "rules" => {
+                assert!(text.contains("**Example F"), "rules must include Example F");
+                assert!(text.contains("**Example G"), "rules must include Example G");
+            }
+            "veto" => {
+                assert!(text.contains("**Example I"), "veto must include Example I");
+                assert!(
+                    text.contains("**Workflow checklist"),
+                    "veto must include Workflow checklist"
+                );
+            }
+            "anti_patterns" => {
+                assert!(
+                    text.contains("Inline comments (WRONG"),
+                    "anti_patterns must include inline comments example"
+                );
+                assert!(
+                    !text.contains("## Docs"),
+                    "anti_patterns must not include Docs footer"
+                );
+            }
+            _ => panic!("unknown topic: {topic}"),
+        }
+    }
+}
+
+#[test]
+fn test_mcp_resources_list_and_read() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(2, "resources/list", json!({})),
+            make_request(
+                3,
+                "resources/read",
+                json!({ "uri": "lemma://guide/syntax" }),
+            ),
+            make_request(
+                4,
+                "resources/read",
+                json!({ "uri": "lemma://examples/01_coffee_order.lemma" }),
+            ),
+            make_request(
+                5,
+                "resources/read",
+                json!({ "uri": "lemma://examples/does_not_exist.lemma" }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 5);
+    let resources = responses[1]["result"]["resources"]
+        .as_array()
+        .expect("resources list");
+    assert!(
+        resources.iter().any(|r| r["uri"] == "lemma://guide"),
+        "must list lemma://guide"
+    );
+    assert!(
+        resources
+            .iter()
+            .any(|r| r["uri"] == "lemma://examples/nl/tax/net_salary.lemma"),
+        "must list nested example"
+    );
+
+    let syntax = responses[2]["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("syntax resource");
+    assert!(syntax.contains("Mandatory spec opening order"));
+
+    let coffee = responses[3]["result"]["contents"][0]["text"]
+        .as_str()
+        .expect("example resource");
+    assert!(coffee.contains("spec coffee_order"));
+
+    assert!(
+        responses[4]["error"].is_object(),
+        "unknown resource URI must error"
     );
 }

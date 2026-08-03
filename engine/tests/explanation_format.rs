@@ -1,6 +1,7 @@
 use lemma::{Engine, SourceType};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 fn explanation_json(response: &lemma::Response, rule: &str) -> Value {
     serde_json::to_value(response).unwrap()["results"][rule]["explanation"].clone()
@@ -185,8 +186,10 @@ rule out: x + 1
 
 #[test]
 fn explanation_json_compact_for_net_salary() {
-    let source =
-        std::fs::read_to_string("../documentation/examples/nl/tax/net_salary.lemma").unwrap();
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nl/tax/net_salary.lemma"),
+    )
+    .expect("read net_salary fixture");
     let mut engine = Engine::new();
     engine
         .load([(SourceType::Volatile, &source.to_string())])

@@ -160,6 +160,8 @@ mod imp {
                 "initialize" => self.initialize(),
                 "tools/list" => self.list_tools(),
                 "tools/call" => self.call_tool(request.params),
+                "resources/list" => self.list_resources(),
+                "resources/read" => self.read_resource(request.params),
                 _ => Err(McpError::method_not_found(request.method)),
             };
 
@@ -190,6 +192,9 @@ mod imp {
                 "capabilities": {
                     "tools": {
                         "listChanged": false
+                    },
+                    "resources": {
+                        "listChanged": false
                     }
                 }
             }))
@@ -201,13 +206,13 @@ mod imp {
             let mut tools = vec![
                 serde_json::json!({
                     "name": "evaluate",
-                "description": "Evaluate rules in a Lemma spec. Returns the result and a step-by-step reasoning trace showing which data were used and which conditions matched. Omit 'rule' to evaluate all rules.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "spec": {
-                                        "type": "string",
-                                        "description": "Spec set id, e.g. pricing"
+                    "description": "Evaluate rules in a Lemma spec. Returns each rule's display value plus every declared measure/ratio unit map, and a step-by-step reasoning trace. Omit 'rule' to evaluate all rules. Prefer 'show' first to learn data/rule interfaces.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "spec": {
+                                "type": "string",
+                                "description": "Spec set id, e.g. pricing"
                             },
                             "rule": {
                                 "type": "string",
@@ -222,12 +227,6 @@ mod imp {
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: evaluate at a specific effective datetime (e.g. '2026', '2026-03', '2026-03-04', '2026-03-04T10:30:00Z')"
-                            },
-                            "conversions": {
-                                "type": "array",
-                                "items": { "type": "string" },
-                                "description": "Optional measure unit conversions as 'rule=unit' or 'rule:unit' (e.g. ['total=usd'])",
-                                "default": []
                             }
                         },
                         "required": ["spec"]
@@ -243,14 +242,14 @@ mod imp {
                 }),
                 serde_json::json!({
                     "name": "show",
-                "description": "Show a spec interface: data (inputs with types, constraints, and suggestions) and rules (outputs with types). Use this before calling evaluate to know which data to provide.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "spec": {
-                                        "type": "string",
-                                        "description": "Spec set id, e.g. pricing"
-                                    },
+                    "description": "Return the JSON Show for a spec: data inputs (types, constraints, suggestions, units) and rules (output types including units). Call this before evaluate.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "spec": {
+                                "type": "string",
+                                "description": "Spec set id, e.g. pricing"
+                            },
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: show at a specific effective datetime"
@@ -259,12 +258,47 @@ mod imp {
                         "required": ["spec"]
                     }
                 }),
+                serde_json::json!({
+                    "name": "check",
+                    "description": "Parse and plan a batch of Lemma sources without mutating server state. On success confirms all sources planned. On failure returns structured diagnostics (kind, message, suggestion, source line/column). Sources resolve cross-file `uses` within the batch. A leading `@` label loads as a dependency. Lemma has no `#` or `//` comments; commentary is valid only as a docstring immediately after the `spec` line. Call guide for authoring rules before drafting.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "sources": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "minItems": 2,
+                                    "maxItems": 2
+                                },
+                                "description": "Array of [label, code] pairs. Label is the source path (e.g. 'pricing.lemma') or a dependency identifier (e.g. '@org/repo')."
+                            }
+                        },
+                        "required": ["sources"]
+                    }
+                }),
+                serde_json::json!({
+                    "name": "guide",
+                    "description": "Return a section of the Lemma authoring guide (llms.txt). Topics: syntax, data, rules, units, veto, composition, anti_patterns. Start with syntax and anti_patterns before writing specs. Lemma has no `#` or `//` comments.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {
+                                "type": "string",
+                                "enum": ["syntax", "data", "rules", "units", "veto", "composition", "anti_patterns"],
+                                "description": "Guide section to return"
+                            }
+                        },
+                        "required": ["topic"]
+                    }
+                }),
             ];
 
             if self.config.admin {
                 tools.push(serde_json::json!({
                     "name": "add_spec",
-                    "description": "Add Lemma source to the engine. Returns each new spec show on success.",
+                    "description": "Load Lemma source into the engine (mutates state). Prefer check for draft validation. Returns each new spec's JSON Show on success; structured diagnostics with isError on failure. Commentary is valid only as a docstring immediately after the `spec` line; `#` and `//` comments do not exist.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -283,17 +317,17 @@ mod imp {
                 tools.push(serde_json::json!({
                     "name": "source",
                     "description": "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded units stdlib) for the whole repo, or `spec` for a workspace spec.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "repository": {
-                                        "type": "string",
-                                        "description": "Repository qualifier (e.g. lemma). When set, returns formatted source for the entire repository."
-                                    },
-                                    "spec": {
-                                        "type": "string",
-                                        "description": "Workspace spec set id (when repository is omitted)"
-                                    },
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "repository": {
+                                "type": "string",
+                                "description": "Repository qualifier (e.g. lemma). When set, returns formatted source for the entire repository."
+                            },
+                            "spec": {
+                                "type": "string",
+                                "description": "Workspace spec set id (when repository is omitted)"
+                            },
                             "effective": {
                                 "type": "string",
                                 "description": "Optional: get source at a specific effective datetime"
@@ -304,6 +338,73 @@ mod imp {
             }
 
             Ok(serde_json::json!({ "tools": tools }))
+        }
+
+        fn list_resources(&self) -> Result<serde_json::Value, McpError> {
+            let mut resources = vec![serde_json::json!({
+                "uri": "lemma://guide",
+                "name": "Lemma authoring guide",
+                "mimeType": "text/plain",
+                "description": "Full llms.txt authoring guide. Prefer the guide tool with a topic for a focused slice."
+            })];
+            for topic in crate::mcp::guide::GuideTopic::ALL {
+                resources.push(serde_json::json!({
+                    "uri": format!("lemma://guide/{}", topic.as_str()),
+                    "name": format!("Lemma guide: {}", topic.as_str()),
+                    "mimeType": "text/plain",
+                    "description": format!("Guide section '{}'", topic.as_str())
+                }));
+            }
+            for example in crate::mcp::guide::EXAMPLE_RESOURCES {
+                resources.push(serde_json::json!({
+                    "uri": format!("lemma://examples/{}", example.path),
+                    "name": example.path,
+                    "mimeType": "text/plain",
+                    "description": format!("Example Lemma source: {}", example.path)
+                }));
+            }
+            Ok(serde_json::json!({ "resources": resources }))
+        }
+
+        fn read_resource(
+            &self,
+            params: Option<serde_json::Value>,
+        ) -> Result<serde_json::Value, McpError> {
+            let params =
+                params.ok_or_else(|| McpError::invalid_params("Missing params".to_string()))?;
+            let uri = params["uri"]
+                .as_str()
+                .ok_or_else(|| McpError::invalid_params("Missing 'uri' field".to_string()))?;
+            let text = self.resource_text(uri)?;
+            Ok(serde_json::json!({
+                "contents": [{
+                    "uri": uri,
+                    "mimeType": "text/plain",
+                    "text": text
+                }]
+            }))
+        }
+
+        fn resource_text(&self, uri: &str) -> Result<&'static str, McpError> {
+            if uri == "lemma://guide" {
+                return Ok(crate::mcp::guide::LLMS_TXT);
+            }
+            if let Some(topic_name) = uri.strip_prefix("lemma://guide/") {
+                let topic = crate::mcp::guide::GuideTopic::parse(topic_name).ok_or_else(|| {
+                    McpError::invalid_params(format!(
+                        "Unknown guide topic '{topic_name}'. Valid: syntax, data, rules, units, veto, composition, anti_patterns"
+                    ))
+                })?;
+                return Ok(topic.section_text());
+            }
+            if let Some(path) = uri.strip_prefix("lemma://examples/") {
+                return crate::mcp::guide::example_by_path(path).ok_or_else(|| {
+                    McpError::invalid_params(format!("Unknown example resource: {uri}"))
+                });
+            }
+            Err(McpError::invalid_params(format!(
+                "Unknown resource URI: {uri}. Use resources/list."
+            )))
         }
 
         fn call_tool(
@@ -333,11 +434,46 @@ mod imp {
                 "evaluate" => self.tool_evaluate(arguments),
                 "list" => self.tool_list(arguments),
                 "show" => self.tool_show(arguments),
+                "check" => Self::tool_check(arguments),
+                "guide" => self.tool_guide(arguments),
                 _ => Err(McpError::invalid_params(format!(
                     "Unknown tool: {}",
                     tool_name
                 ))),
             }
+        }
+
+        fn load_diagnostics_tool_result(load_err: lemma::Errors) -> serde_json::Value {
+            for e in load_err.iter() {
+                error!(
+                    "{}",
+                    crate::error_formatter::format_error(e, &load_err.sources)
+                );
+            }
+            let diagnostics: Vec<lemma::EngineError> = load_err
+                .errors
+                .iter()
+                .map(lemma::EngineError::from)
+                .collect();
+            let text = serde_json::to_string_pretty(&diagnostics)
+                .expect("BUG: EngineError diagnostics must serialize");
+            serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": text
+                }],
+                "isError": true
+            })
+        }
+
+        fn append_unit_map(output: &mut String, map: &std::collections::BTreeMap<String, String>) {
+            let parts: Vec<String> = map
+                .iter()
+                .map(|(unit, magnitude)| format!("{unit} {magnitude}"))
+                .collect();
+            output.push_str(" (");
+            output.push_str(&parts.join(", "));
+            output.push(')');
         }
 
         fn tool_add_spec(
@@ -358,74 +494,87 @@ mod imp {
                 .as_str()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .ok_or_else(|| McpError::invalid_params("Missing 'source_id' field".to_string()))?
-                .to_string();
+                .ok_or_else(|| McpError::invalid_params("Missing 'source_id' field".to_string()))?;
 
-            let names_before: std::collections::HashSet<String> = self
-                .engine
-                .list()
-                .into_iter()
-                .find(|repository_group| repository_group.repository.is_none())
-                .expect("BUG: workspace repository must exist after Engine::new")
-                .specs
-                .into_iter()
-                .map(|ls| ls.name)
-                .collect();
+            let source_type = lemma::SourceType::from_binding_label(source_id)
+                .map_err(McpError::invalid_params)?;
 
-            let source_type =
-                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(&source_id)));
-            self.engine
-                .load([(source_type, code.to_string())])
-                .map_err(|load_err| {
-                    for e in load_err.iter() {
-                        error!(
-                            "{}",
-                            crate::error_formatter::format_error(e, &load_err.sources)
-                        );
-                    }
-                    McpError::internal_error(format!(
-                        "Failed to load Lemma source ({} error(s))",
-                        load_err.errors.len()
-                    ))
-                })?;
-
-            let new_spec_names: Vec<String> = self
-                .engine
-                .list()
-                .into_iter()
-                .find(|repository_group| repository_group.repository.is_none())
-                .expect("BUG: workspace repository must exist after Engine::new")
-                .specs
-                .into_iter()
-                .filter(|ls| !names_before.contains(&ls.name))
-                .map(|ls| ls.name)
-                .collect();
-
-            let now = DateTimeValue::now();
-            let mut shows: Vec<lemma::Show> = Vec::new();
-            for spec_name in &new_spec_names {
-                if let Ok(show) = self.engine.show(None, spec_name, Some(&now)) {
-                    shows.push(show);
-                }
+            if let Err(load_err) = self.engine.load([(source_type, code.to_string())]) {
+                return Ok(Self::load_diagnostics_tool_result(load_err));
             }
 
-            let payload = serde_json::json!({
-                "message": "Spec added successfully.",
-                "specs": shows,
-            });
-            let output = serde_json::to_string_pretty(&payload).map_err(|e| {
-                McpError::internal_error(format!("Failed to serialize add_spec response: {e}"))
-            })?;
-
-            info!(
-                "Spec added from source '{}': {:?}",
-                source_id, new_spec_names
-            );
+            info!("Spec added from source '{}'", source_id);
 
             Ok(serde_json::json!({
                 "content": [{
                     "type": "text",
-                    "text": output
+                    "text": "Spec added successfully."
+                }]
+            }))
+        }
+
+        fn tool_check(args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+            let sources_arr = args
+                .get("sources")
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| {
+                    McpError::invalid_params("Missing 'sources' array field".to_string())
+                })?;
+
+            if sources_arr.is_empty() {
+                return Err(McpError::invalid_params(
+                    "'sources' must be a non-empty array of [label, code] pairs".to_string(),
+                ));
+            }
+
+            let mut sources: Vec<(lemma::SourceType, String)> =
+                Vec::with_capacity(sources_arr.len());
+            for (i, entry) in sources_arr.iter().enumerate() {
+                let pair = entry.as_array().ok_or_else(|| {
+                    McpError::invalid_params(format!("sources[{i}] must be a [label, code] array"))
+                })?;
+                if pair.len() != 2 {
+                    return Err(McpError::invalid_params(format!(
+                        "sources[{i}] must have exactly 2 elements [label, code]"
+                    )));
+                }
+                let label = pair[0].as_str().ok_or_else(|| {
+                    McpError::invalid_params(format!("sources[{i}][0] (label) must be a string"))
+                })?;
+                let code = pair[1].as_str().ok_or_else(|| {
+                    McpError::invalid_params(format!("sources[{i}][1] (code) must be a string"))
+                })?;
+                let source_type = lemma::SourceType::from_binding_label(label)
+                    .map_err(McpError::invalid_params)?;
+                sources.push((source_type, code.to_string()));
+            }
+
+            let mut engine = Engine::new();
+            if let Err(load_err) = engine.load(sources) {
+                return Ok(Self::load_diagnostics_tool_result(load_err));
+            }
+
+            Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "All sources parsed and planned successfully."
+                }]
+            }))
+        }
+
+        fn tool_guide(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+            let topic_name = args["topic"]
+                .as_str()
+                .ok_or_else(|| McpError::invalid_params("Missing 'topic' field".to_string()))?;
+            let topic = crate::mcp::guide::GuideTopic::parse(topic_name).ok_or_else(|| {
+                McpError::invalid_params(format!(
+                    "Unknown guide topic '{topic_name}'. Valid: syntax, data, rules, units, veto, composition, anti_patterns"
+                ))
+            })?;
+            Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": topic.section_text()
                 }]
             }))
         }
@@ -549,6 +698,13 @@ mod imp {
                         ))
                     })?;
                     output.push_str(display);
+                    if let Some(value) = &result.value {
+                        if let Some(measure) = &value.measure {
+                            Self::append_unit_map(&mut output, measure);
+                        } else if let Some(ratio) = &value.ratio {
+                            Self::append_unit_map(&mut output, ratio);
+                        }
+                    }
                 }
                 output.push('\n');
 
@@ -628,13 +784,13 @@ mod imp {
                     McpError::internal_error(format!("Failed to show spec: {e}"))
                 })?;
 
-            let scope = format!("{} (all rules)", spec_set_id.trim());
-
-            let output = format!("Show for {}:\n\n{}", scope, show);
+            let output = serde_json::to_string_pretty(&show).map_err(|e| {
+                McpError::internal_error(format!("Failed to serialize show response: {e}"))
+            })?;
 
             info!(
                 "Returned show for '{}' ({} data, {} rules)",
-                scope,
+                spec_set_id.trim(),
                 show.data.len(),
                 show.rules.len()
             );
@@ -954,12 +1110,13 @@ mod imp {
         }
 
         #[test]
-        fn initialize_advertises_tools_list_changed_false() {
+        fn initialize_advertises_tools_and_resources() {
             let mut s = server();
             let req = parse(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
             let resp = s.handle_request(req).expect("request must yield response");
             let result = resp.result.expect("result expected");
             assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
+            assert_eq!(result["capabilities"]["resources"]["listChanged"], false);
         }
 
         fn read_all_capped(input: &[u8], cap: usize) -> Vec<CappedLine> {

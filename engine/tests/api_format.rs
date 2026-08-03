@@ -15,7 +15,7 @@
 //! Section F additionally requires that every show-default per-unit magnitude from
 //! section E (`magnitude_in_unit`, API `measure` / `ratio` maps) is submittable
 //! as convenience input through [`Engine::run`] without computation veto — same path
-//! as the CLI interactive trial. See `documentation/learn/precision.md`.
+//! as the CLI interactive trial. See `cli/documentation/learn/precision.md`.
 
 use lemma::{DateTimeValue, Engine, LemmaType, LiteralValue, RuleResultValue, Show, ValueKind};
 use rust_decimal::Decimal;

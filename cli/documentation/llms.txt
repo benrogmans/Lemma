@@ -1,12 +1,17 @@
 # Lemma
 
-> Lemma is a declarative business rule language. Translate natural-language policy into readable, deterministic `.lemma` specs. Lemma derives required inputs from rules — declare `data` with type constraints; do not invent runtime values.
+> Lemma: declarative business rule language. Translate natural-language policy to readable, deterministic `.lemma` specs. Inputs derived from rules — declare `data` with constraints. No runtime value invention.
 
-When a user describes business logic, your job is to produce Lemma source that humans can read and systems can evaluate. Prefer named pipeline rules over clever one-liners. Split unrelated policies into separate specs. Use `lemma show` to inspect the static interface (types, constraints, rules after normalize). Run-data-aware needs for a concrete evaluation come from each rule's `missing_data` on `run`, not from `show`. Explanations are opt-in (`explain: true` / `lemma run -x`); wire shape is `documentation/schemas/api.v1.json` (`RuleResult.explanation` is a `RuleNode`; nested nodes under `ExplanationNode`). For syntax not covered here, read the linked documentation.
+Goal: produce Lemma source for human reading and system evaluation. Prefer named pipeline rules. No clever one-liners. Split unrelated policies to separate specs.
+Use `lemma show` to inspect static interface (types, constraints, normalized rules). Run-data needs come from rule `missing_data` on `run` (not `show`).
+Explanations opt-in (`explain: true` / `lemma run -x`). Wire shape: `engine/schemas/api.v1.json` (`RuleResult.explanation` is `RuleNode`; nested nodes under `ExplanationNode`).
 
-**Do not write inline comments.** Lemma has no `#`, `//`, or `--` comment syntax. Anything after `#` on a line is a parse error, not a comment. Do not annotate `data` or `rule` lines with trailing remarks.
+**NO INLINE COMMENTS.** Lemma has no `#`, `//`, or `--` comment syntax. `#` starts parse error. No trailing remarks on `data` or `rule` lines.
 
-The **only** documentation allowed inside `.lemma` source is a **commentary** block: triple-quoted `"""..."""` as the **very next tokens** after the `spec` line — before `uses`, before `data`, before anything else. Nowhere else.
+**Only doc in source:** commentary block `"""..."""`. Must be **very next tokens** after `spec` line (before `uses`, `data`, etc.). Nowhere else.
+
+
+---
 
 **Mandatory spec opening order:**
 
@@ -18,15 +23,18 @@ data ...
 rule ...
 ```
 
-A common LLM mistake is putting commentary after `uses lemma units` or after the first `data` line. That is invalid and fails to parse. There is no `#`, `//`, or `--` comment syntax either. Use descriptive names for everything else. Put explanations for the user outside the code fence — never inside ` ```lemma ` blocks.
+Commentary after `uses` or `data` is invalid, parse fails. No `#`, `//`, `--` comment syntax. Use descriptive names. Put user explanations outside code fences — never inside ` ```lemma ` blocks.
+
 
 ---
 
 **Organization: spec → rule**
 
-Default assumption: one file, one implicit repository. Do not add `repo` blocks unless the user explicitly needs multi-namespace workspaces. Structure work as **spec → rule**.
+Default: one file, one implicit repo. No `repo` blocks unless multi-namespace workspace requested. Structure: **spec → rule**.
 
-A **spec** is a namespace for `data` and `rules`. A **rule** is a named computed value. Reference other rules by name; the engine resolves whether a name is data or a rule. One file may contain multiple specs. Use hierarchical names when helpful: `spec employee/contract`. Add an effective date when law changes over time: `spec pricing 2026-01-01`. Optional **commentary** (`"""..."""`) is the sole in-source documentation mechanism. It must be the first thing after `spec <name> [<effective>]`, before any `uses`, `data`, or `rule` line.
+**Spec** = namespace for `data` and `rules`. **Rule** = named computed value. Reference rules by name; engine resolves if name is data or rule. One file can have multiple specs.
+Hierarchical names: `spec employee/contract`. Effective date for temporal changes: `spec pricing 2026-01-01`.
+Sole documentation: commentary `"""..."""` immediately after `spec <name> [<effective>]` (before `uses`, `data`, or `rule`).
 
 **Example A — minimal single-spec file**
 
@@ -91,13 +99,13 @@ rule order_total:          line.line_total
 rule effective_unit_price: order_total / line.qty
 ```
 
-- `uses alias: target_spec` imports another spec in the same file.
-- Reference imported members as `alias.field` or `alias.rule_name`.
-- `with alias.field: value` sets data on an imported spec. Do not use `data alias.field`. Local `with name: …` is rejected — use `data name: …` for local slots.
+- `uses alias: target_spec`: imports spec in same file.
+- Reference members: `alias.field` or `alias.rule_name`.
+- `with alias.field: value`: sets imported data. Do not use `data alias.field`. Local `with name: …` invalid — use `data name: …`.
 
 **LemmaBase — shared specs from the registry**
 
-Specs published on [LemmaBase.com](https://lemmabase.com) can be imported into your spec with `@` repository qualifiers. Search for existing libraries at [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (append your query, e.g. `?q=finance`).
+Specs on [LemmaBase.com](https://lemmabase.com) imported with `@` repo qualifiers. Search: [lemmabase.com/search?q=](https://lemmabase.com/search?q=) (e.g. `?q=finance`).
 
 ```lemma
 spec invoicing
@@ -121,27 +129,28 @@ rule total: price + tariff
 ```
 
 Forms:
-- `uses @user/repo spec_name` — import a registry spec (implicit alias = spec name)
-- `uses alias: @user/repo spec_name` — import with alias (`iso.field`, `iso.rule_name`)
-- `uses @user/repo spec_name 2026-01-01` — pin to an effective date
+- `uses @user/repo spec_name`: import registry spec (alias = spec name)
+- `uses alias: @user/repo spec_name`: import with alias (`iso.field`)
+- `uses @user/repo spec_name 2026-01-01`: pin effective date
 
-Reference imported members through the alias: `iso.code`, `iso.name`, etc. See [Registry](https://github.com/lemma/lemma/blob/main/documentation/reference/registry.md) for fetch/resolution details.
+Reference imported members: `iso.code`. Detail: [Registry](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/registry.md).
 
-`repo` blocks namespace specs across bounded contexts (e.g. `repo accounting` / `repo billing`). Skip them in LLM-authored output unless the user asks. See [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/learn/composing_specs.md) for cross-repo `uses` and temporal pins.
+`repo` blocks namespace specs across contexts (e.g., `repo accounting`). Skip unless asked. Details: [Composing specs](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/composing_specs.md).
+
 
 ---
 
 **Natural language → Lemma**
 
-User request: *"Library charges €0.25/day for regular books, €0.50 for reference, €1 for new releases. First offense gets 50% off. Grace period 3 day except new releases. Block checkout if fee exceeds €10."*
+Request: *"Library charges €0.25/day for regular books, €0.50 for reference, €1 for new releases. First offense gets 50% off. Grace period 3 day except new releases. Block checkout if fee exceeds €10."*
 
-Mapping:
-- book types → `data book_type` with `-> option` constraints
-- day overdue, first offense → `data` input slots
-- per-day rates → `rule daily_fee` with unless arms per book type
-- grace period → `rule is_in_grace_period`
-- fee calculation → `rule total_fee`, `rule final_fee` pipeline
-- checkout block → `rule can_checkout: yes` with `unless final_fee > 10 eur then no` (boolean, not veto)
+Map logic:
+- Book types → `data book_type` with `-> option` constraints
+- Overdue days, first offense → `data` input slots
+- Per-day rates → `rule daily_fee` with unless branches
+- Grace period → `rule is_in_grace_period`
+- Fee pipeline → `rule total_fee`, `rule final_fee`
+- Checkout block → `rule can_checkout: yes` with `unless final_fee > 10 eur then no` (boolean, not veto)
 
 **Example C — library fees (full spec)**
 
@@ -181,11 +190,12 @@ rule can_checkout: yes
   unless final_fee > 10 eur then no
 ```
 
+
 ---
 
 **Data: constraint definitions, not placeholders**
 
-`data` declares values rules may use. Constraints define validity. Type-only `data` (no literal value) is an input slot. `lemma show` lists statically reachable data after normalize; what a concrete evaluation still needs is run-data-aware and comes from each rule's `missing_data` on `run`. Use real domain values; never `"TODO"` or dummy placeholders.
+`data` declares variables. Constraints define validity. Type-only `data` (no value) is input slot. `lemma show` lists static reachable data. Evaluator needs come from rule `missing_data` on `run` (not `show`). Use real domain values. Never `"TODO"` or dummy placeholders.
 
 **Example D — typed data (coffee order)**
 
@@ -220,9 +230,9 @@ data number_of_cups: number
 data has_loyalty_card: boolean
 ```
 
-- `age`, `number_of_cups` — type-only with bounds (input slots)
-- `money` — user-defined measure type with units and decimals
-- `product`, `size` — text enumeration via `-> option` (prefer over veto for known sets)
+- `age`, `number_of_cups`: input slots (type-only + bounds)
+- `money`: custom measure type with units, decimals, minimum
+- `product`, `size`: text enumeration via `-> option` (prefer over veto for static sets)
 
 **Example E — data patterns**
 
@@ -268,11 +278,14 @@ data pay_period: text
   -> help "How often you are paid."
 ```
 
-Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, and more. See the Reference for the full list.
+Constraints chain: `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, etc. Details in Reference.
+
+
+---
 
 **Standard library — `uses lemma units`**
 
-Lemma embeds SI bases, derived compounds (force, pressure, energy, power, frequency, electrical), imperial length/mass/volume, area/volume, and information (`bit`/`byte`) in `repo lemma` / `spec units`. Import with `uses lemma units`, then reference types as `units.mass`, `units.duration`, `units.length`, `units.force`, and others. Unit names are **singular only** (`8 hour`, not `8 hours`); length uses American `meter` (not `metre`). Duration units (`hour`, `day`, `week`) require `units.duration`. No Celsius/Fahrenheit in stdlib (kelvin only).
+Lemma embeds SI bases, derived compounds (force, pressure, energy, power, frequency, electrical), imperial, area/volume, and information (`bit`/`byte`) in `repo lemma` / `spec units`. Import: `uses lemma units`. Reference types: `units.mass`, `units.duration`, `units.length`, `units.force`. Unit names: **singular only** (`8 hour`). Length uses American `meter`. Durations (`hour`, `day`, `week`) require `units.duration`. No Celsius/Fahrenheit (kelvin only).
 
 ```lemma
 spec logistics
@@ -283,8 +296,8 @@ Physical shipment constraints using SI units from the standard library.
 uses lemma units
 
 data package_weight: 12 kilogram
-data shift_length:      8 hour
-data route_distance:     45 kilometer
+data shift_length:   8 hour
+data route_distance: 45 kilometer
 
 rule weight_grams:  package_weight as gram
 rule shift_hours:   shift_length as hour
@@ -294,11 +307,11 @@ rule is_heavy:      package_weight > 20 kilogram
 rule is_long_shift: shift_length >= 8 hour
 ```
 
-Prefer `units.mass`, `units.duration`, and `units.length` over redefining kilogram, hour, or meter in every spec. Convert within a family with `as <unit>`; strip to a bare number with a chain: `amount as eur as number`. Cross-family relabel keeps magnitude: `5 eur as kg` → `5 kg`.
+Prefer `units.mass`, `units.duration`, `units.length` over redefining units. Convert in family: `as <unit>`. Strip unit: `amount as eur as number`. Cross-family relabel: `5 eur as kg` -> `5 kg`.
 
 **Ranges — half-open intervals**
 
-Ranges express intervals where the lower bound is inclusive and the upper bound is exclusive (`lo...hi`). Test membership with `in`. Project width with `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>` when the result should stay unit-labelled). Bare `as number` on date/measure ranges is rejected. Range typedefs: `number range`, `date range`, `measure range`, `ratio range`. Calendar month/year intervals use `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar range`.
+Ranges: lower bound inclusive, upper bound exclusive (`lo...hi`). Test with `in`. Width: `(lo...hi) as <unit> as number` (or `(lo...hi) as <unit>`). Bare `as number` on date/measure ranges fails. Typedefs: `number range`, `date range`, `measure range`, `ratio range`. Month/year intervals: `uses lemma units` and inline literals (`18 year...67 year`) or `units.calendar range`.
 
 ```lemma
 spec eligibility
@@ -332,9 +345,9 @@ rule review_days: (hire_date...review_date) as day
 rule span_years: (1990-05-20...2024-06-15) as year
 ```
 
-At the upper bound, `in` is false: `67 year` is not inside `18 year...67 year`. Declare range slots on `data` when a band is reused; use inline `value in lo...hi` for one-off checks.
+Upper bound exclusive: `67 year` is NOT inside `18 year...67 year` (returns false). Declare range slots on `data` for reuse, inline `value in lo...hi` for one-off.
 
-Range over a custom measure type (no SI import needed):
+Range over custom measure type (no SI import needed):
 
 ```lemma
 spec freight
@@ -353,7 +366,7 @@ rule band_width: (30 kilogram...80 kilogram) as kilogram
 
 **Derived measures — compound units**
 
-Build units from other units with `/`, `*`, and `^`. Name each derived unit, then give a compound expression. Earlier measure types in the same spec must declare the base units referenced (`eur`, `hour`, `employee`, `results`) so Lemma can resolve dimensions. Import `uses lemma units` when compound units involve time (`eur/hour`, `results/eur/hour/employee`).
+Build compound units with `/`, `*`, `^`. Name derived unit, then give compound expression. Prior measure types must declare referenced base units (`eur`, `hour`, `employee`, `results`). Import `uses lemma units` if using time (`eur/hour`).
 
 ```lemma
 spec contractor
@@ -387,22 +400,20 @@ rule total: wage * time_worked
 rule is_high_yield: yield_rate >= 2 result_per_employee
 ```
 
-Layer compound units: `eur_per_hour` builds on `eur` and `hour`; `eur_per_hour/employee` builds on `eur_per_hour` and `employee`; `results/eur/hour/employee` combines outcome, money, time, and headcount into one productivity rate. Use derived types as rule inputs — Lemma checks dimensional consistency at plan time.
-
----
+Layer compound units: `eur_per_hour` builds on `eur` and `hour`. Dimensional checks run at plan time.
 
 **Date predicates relative to `now`**
 
-`now` is the evaluation/effective instant. Import `uses lemma units` for duration windows.
+`now` is evaluation/effective instant. Import `uses lemma units` for duration windows.
 
 | Form | Meaning |
 |------|---------|
 | `date in past` / `in future` | Before / after `now` |
-| `date in past N day` / `in future N day` | Within the last / next N duration units |
+| `date in past N day` / `in future N day` | In last / next N duration units |
 | `past N day` / `future N day` | Relative date-range window |
-| `date in calendar year\|month\|week` | Same calendar period as `now` |
-| `date in past\|future calendar year\|month\|week` | Adjacent period |
-| `date not in calendar year\|month\|week` | Not the current period |
+| `date in calendar year\|month\|week` | Current calendar period |
+| `date in past\|future calendar year\|month\|week` | Adjacent calendar period |
+| `date not in calendar year\|month\|week` | Not current calendar period |
 
 ```lemma
 spec recency
@@ -412,13 +423,14 @@ rule recent: event_date in past 7 day
 rule this_year: event_date in calendar year
 ```
 
+
 ---
 
 **Rules and unless: last matching clause wins**
 
-Write a default expression first, then zero or more lines: `unless <condition> then <result>`. Clauses are evaluated in source order; when multiple conditions match, **the bottommost wins**. Order general cases first, specific overrides later — mirroring legal prose: "X applies, unless Y, unless Z."
+Write default expression, then: `unless <condition> then <result>`. Evaluated in source order. If multiple match, **bottommost wins**. Order general first, specific overrides last.
 
-Use **snake_case** rule names. Boolean rules read as predicates: `is_eligible`, `can_ship`, `free_shipping_eligible`. Decompose logic into a pipeline of named rules; never one opaque expression.
+Use **snake_case** rule names. Boolean rules as predicates: `is_eligible`, `can_ship`. Decompose logic into pipeline of named rules. No opaque single expressions.
 
 **Example F — overlapping unless (last wins)**
 
@@ -434,7 +446,7 @@ rule discount: 0%
   unless is_vip          then 25%
 ```
 
-A VIP customer ordering 75 items gets **25%**, not 20%. Both `qty >= 50` and `is_vip` match; the bottommost clause wins.
+VIP customer ordering 75 items gets **25%** (not 20%). Both `qty >= 50` and `is_vip` match; bottommost wins.
 
 **Example G — progressive unless chain**
 
@@ -553,22 +565,23 @@ rule Summary: "Standard shipping"
   unless is_expedited then "Expedited shipping"
 ```
 
-Each fee is its own rule. `item_weight` uses `units.mass` with kilogram thresholds. Veto clauses are placed last in `weight_surcharge` and `ships_to_location`. Boolean eligibility (`free_shipping_eligible`) is separate from amount rules.
+Each fee is distinct rule. `item_weight` uses `units.mass`. Veto clauses placed last in `weight_surcharge` and `ships_to_location`. Eligibility separated from amount rules.
+
 
 ---
 
 **Veto: impossible to answer, not `false`**
 
-Veto is like Rust's `Err` — it means the rule has **no value** and propagates to dependents that need it. Use veto when the answer is impossible, not when the business answer is legitimately false.
+Veto is like Rust's `Err` — rule has **no value** and propagates to dependents. Use veto when answer is impossible, not when business answer is false.
 
 | Situation | Use |
 |-----------|-----|
-| Invalid or out-of-domain input | `unless ... then veto "reason"` |
-| Unmapped choice / no rule applies | default `veto` + unless arm per known value |
+| Invalid/out-of-domain input | `unless ... then veto "reason"` |
+| Unmapped choice / no rule applies | default `veto` + unless arm per choice |
 | Normal business "no" | `false` or `no` |
 | Test veto without propagating | `x is veto` (returns boolean) |
 
-Place veto unless clauses **last** so they override other branches.
+Place veto unless clauses **last** to override other branches.
 
 **Example I — enumeration with default veto**
 
@@ -583,7 +596,7 @@ rule selected: veto
   unless choice_field is 3 then true
 ```
 
-Default `veto` means cannot answer for unlisted values. Each `unless` maps a known choice. `false` is a valid business answer for choice 2.
+Default `veto` if unlisted. Each `unless` maps known choice. `false` is valid answer for choice 2.
 
 **Example J — veto lookup + propagation**
 
@@ -611,11 +624,11 @@ rule size_multiplier: veto "Unknown size of coffee"
 rule price_per_cup: base_price * size_multiplier
 ```
 
-If `base_price` vetoes, `price_per_cup` vetoes too because it needs that value.
+If `base_price` vetoes, `price_per_cup` vetoes automatically (propagates).
 
 **Example K — veto vs boolean**
 
-WRONG — veto for a business decision:
+WRONG — veto for business decision:
 ```lemma-skip
 rule can_checkout: veto
   unless fee <= 10 eur then true
@@ -657,26 +670,25 @@ rule result: validated_score
   unless use_default then 50
 ```
 
-If `validated_score` vetoes but `use_default` is true, `result = 50` because the unless branch avoids needing the vetoed value.
-
----
+If `validated_score` vetoes but `use_default` is true, `result` is 50. Unless branch avoids needing vetoed value.
 
 **Workflow checklist**
 
-1. **Scope** — one spec per coherent policy; compose with `uses` when policies relate; skip `repo` unless the user needs namespacing.
-2. **Inventory inputs** — every user-supplied fact becomes `data` with constraints.
-3. **Inventory outputs** — every answerable question becomes a `rule`.
-4. **Factor rules** — intermediate calculations as named rules in a pipeline.
-5. **Unless chains** — default first, general to specific, vetoes last.
-6. **No inline comments** — no `#`, `//`, or trailing annotations. Commentary (`"""..."""`) only as the first block after `spec <name> [<effective>]`, never after `uses` or `data`.
-7. **Validate** — would `lemma show` list the right static interface (types, constraints, reachable data)? Does a sample `run` report the expected run-data-aware needs in each rule's `missing_data`? Do overlapping unless cases resolve to the intended bottommost value?
-8. **Defer advanced features** — registry imports from LemmaBase, temporal pins → read linked docs. Use `uses lemma units`, ranges, and compound units when the domain needs them.
+1. **Scope**: one spec per coherent policy; compose with `uses`; skip `repo` unless needed.
+2. **Inputs**: every user-supplied fact is `data` with constraints.
+3. **Outputs**: every answerable question is a `rule`.
+4. **Factor**: intermediate calculations as named rules.
+5. **Unless**: default first, general to specific, vetoes last.
+6. **No inline comments**: no `#`, `//`. Commentary `"""..."""` only as first block after `spec`.
+7. **Validate**: verify reachable data with `show`, missing inputs via `run`, and correct override order.
+8. **Advanced**: use `uses lemma units`, ranges, compound units when needed.
+
 
 ---
 
 **Anti-patterns**
 
-Inline comments (WRONG — `#` is not comment syntax; this fails to parse):
+Inline comments (WRONG — `#` fails to parse):
 ```lemma-skip
 data customer_age: number -> minimum 0 -> maximum 120  # input slot
 data tax_rate: 21%  # fixed policy constant
@@ -684,7 +696,7 @@ rule discount: 0%  # default: no discount
   unless qty >= 10 then 10%  # bulk rate
 ```
 
-Commentary after `uses` (WRONG — a frequent LLM mistake; fails to parse):
+Commentary after `uses` (WRONG — fails to parse):
 ```lemma-skip
 spec wholesale_nuts_pricing
 uses lemma units
@@ -696,7 +708,7 @@ Handles product base pricing, organic premiums, and freight shipping.
 data base_price: number
 ```
 
-Commentary after `data` (WRONG — also fails to parse):
+Commentary after `data` (WRONG — fails to parse):
 ```lemma-skip
 spec pricing
 
@@ -721,7 +733,7 @@ uses lemma units
 data base_price: number
 ```
 
-Commentary only after spec (RIGHT — no `uses`):
+Commentary immediately after spec (RIGHT — no `uses`):
 ```lemma
 spec pricing
 """
@@ -803,7 +815,7 @@ spec customer_record
 data customer_name: text
 ```
 
-Error vs Veto: `5 and "text"` is a **planning Error** (invalid Lemma). `unless age > 120 then veto "Invalid age"` is a runtime **Veto** (valid spec, domain no-value). Do not confuse them.
+Error vs Veto: `5 and "text"` is planning Error (invalid Lemma). `unless age > 120 then veto "Invalid age"` is runtime Veto (valid spec, domain no-value). Do not confuse.
 
 Unnecessary repo (WRONG):
 ```lemma-skip
@@ -827,41 +839,42 @@ rule discount: 0%
   unless qty >= 10 then 10%
 ```
 
+
 ---
 
 ## Docs
 
-- [Learn guide](https://github.com/lemma/lemma/blob/main/documentation/learn/readme.md): specs, data, rules, unless, veto overview
-- [Reference](https://github.com/lemma/lemma/blob/main/documentation/reference/readme.md): operators, types, units, ranges, `uses`
-- [Veto](https://github.com/lemma/lemma/blob/main/documentation/learn/types_and_units.md#veto): propagation, `is veto`
-- [Composing specs](https://github.com/lemma/lemma/blob/main/documentation/learn/composing_specs.md): `uses`, temporal versions, pins
-- [CLI](https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md): `run`, `show`, `format`
-- [Registry](https://github.com/lemma/lemma/blob/main/documentation/reference/registry.md): LemmaBase `@user/repo` imports
-- [LemmaBase search](https://lemmabase.com/search?q=): find published registry specs
-- [Examples (documentation)](https://github.com/lemma/lemma/tree/main/documentation/examples): curated `.lemma` files
-- [Examples (integration tests)](https://github.com/lemma/lemma/tree/main/cli/tests/integrations/examples): progressive example suite
+- [Learn guide](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md): specs, data, rules, unless, veto
+- [Reference](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/readme.md): operators, types, units, ranges, `uses`
+- [Veto](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/types_and_units.md#veto): propagation, `is veto`
+- [Composing specs](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/composing_specs.md): `uses`, temporal versions, pins
+- [CLI](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/cli.md): `run`, `show`, `format`
+- [Registry](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/registry.md): LemmaBase `@user/repo` imports
+- [LemmaBase search](https://lemmabase.com/search?q=): registry search
+- [Examples (docs)](https://github.com/lemma/lemma/tree/main/cli/documentation/examples): `.lemma` files
+- [Examples (tests)](https://github.com/lemma/lemma/tree/main/cli/tests/integrations/examples): progressives
 
 ## Examples by pattern
 
-- [Coffee order](https://github.com/lemma/lemma/blob/main/documentation/examples/01_coffee_order.lemma): data constraints, unless, veto enumeration
-- [Library fees](https://github.com/lemma/lemma/blob/main/documentation/examples/02_library_fees.lemma): unless chains, boolean vs veto
-- [Rules and unless](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/02_rules_and_unless.lemma): progressive unless chains
-- [Spec references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/03_spec_references.lemma): compound units (`eur/hour`), `uses lemma units`
-- [Unit conversions](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/04_unit_conversions.lemma): `units.duration`, `as` conversions
-- [Spec composition](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/11_spec_composition.lemma): multi-spec hierarchy
-- [Registry references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/12_registry_references.lemma): `uses @user/repo spec_name`
-- [Shipping policy](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/07_shipping_policy.lemma): complex decomposed rules
+- [Coffee order](https://github.com/lemma/lemma/blob/main/cli/documentation/examples/01_coffee_order.lemma): constraints, unless, veto enum
+- [Library fees](https://github.com/lemma/lemma/blob/main/cli/documentation/examples/02_library_fees.lemma): unless chains, bool vs veto
+- [Rules and unless](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/02_rules_and_unless.lemma): progressive unless
+- [Spec references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/03_spec_references.lemma): compound units, `uses lemma units`
+- [Unit conversions](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/04_unit_conversions.lemma): duration, `as` conversion
+- [Spec composition](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/11_spec_composition.lemma): hierarchy
+- [Registry references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/12_registry_references.lemma): registry import
+- [Shipping policy](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/07_shipping_policy.lemma): decomposed rules
 
 ## Numeric precision (summary)
 
-Lemma computes in exact rationals (ℚ) for `+`, `−`, `×`, `÷`, comparisons, and unit conversions. `^`, `sqrt`, trig, and `log` use ~28-significant-digit Decimal semantics. `floor`/`ceil`/`round` on measures operate at Decimal precision.
+Exact rationals (ℚ) for `+`, `−`, `×`, `÷`, comparisons, conversions. `^`, `sqrt`, trig, `log` use ~28-significant-digit Decimal. `floor`/`ceil`/`round` on measures use Decimal.
 
-**Boundary number contract:** all API surfaces (WASM, HTTP JSON, Elixir NIF) accept integers as native numbers and reject non-integer (decimal/float) numbers — pass decimals as strings to preserve exactness. Example: `{ "quantity": 42, "rate": "0.075" }`. On Maven (JDK 21+), pass `BigDecimal` or decimal strings via `RunRequest.data(...)`; response magnitudes are `BigDecimal`.
+**Boundary number contract:** WASM, HTTP JSON, Elixir NIF accept integers as numbers, reject float/decimal numbers. Pass decimals as strings. Example: `{ "quantity": 42, "rate": "0.075" }`. On Maven (JDK 21+), pass `BigDecimal` or decimal strings via `RunRequest.data(...)`; output is `BigDecimal`.
 
 ## Optional
 
-- [LemmaBase](https://lemmabase.com): registry hosting and search
-- [Numeric precision](https://github.com/lemma/lemma/blob/main/documentation/learn/precision.md): exact rational arithmetic, full boundary contract
-- [JavaScript / TypeScript (WASM)](https://github.com/lemma/lemma/blob/main/documentation/tools/javascript.md): Lemma in the browser and Node
-- [Maven (Java / Kotlin)](https://github.com/lemma/lemma/blob/main/documentation/tools/maven.md): JNI package on Maven Central
+- [LemmaBase](https://lemmabase.com): registry
+- [Numeric precision](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/precision.md): exact rational arithmetic, boundary contract
+- [JavaScript / TypeScript (WASM)](https://github.com/lemma/lemma/blob/main/cli/documentation/tools/javascript.md): browser and Node
+- [Maven (Java / Kotlin)](https://github.com/lemma/lemma/blob/main/cli/documentation/tools/maven.md): Central JNI package
 - [README](https://github.com/lemma/lemma/blob/main/README.md): install, quick start

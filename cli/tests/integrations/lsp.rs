@@ -7,7 +7,7 @@ const LSP_ERROR_SEVERITY: i64 = 1;
 
 fn coffee_order_fixture() -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../documentation/examples/01_coffee_order.lemma");
+        .join("tests/integrations/fixtures_coffee_order.lemma");
     fs::read_to_string(path).expect("read coffee_order fixture")
 }
 

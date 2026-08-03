@@ -4,10 +4,8 @@ use lemma::*;
 use std::collections::HashMap;
 
 fn load_engine() -> Engine {
-    let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("cli crate must have parent dir")
-        .join("documentation/examples");
+    let examples_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("documentation/examples");
 
     let mut paths = Vec::new();
     let mut dirs = vec![examples_dir.clone()];
