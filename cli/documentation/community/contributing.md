@@ -52,7 +52,7 @@ cargo deny check --config .cargo/deny.toml
 
 ### Release version (maintainers)
 
-The workspace release is `[workspace.package] version` in the root `Cargo.toml`. The same number must appear in path-dep pins, Hex `mix.exs`, Maven `pom.xml`, Maven install snippets in root/`engine`/`documentation/tools` READMEs, `engine/README.md` Cargo example, and the VS Code extension `package.json` (see `xtask/src/versions.rs` module `tracked`).
+The workspace release is `[workspace.package] version` in the root `Cargo.toml`. The same number must appear in path-dep pins, Hex `mix.exs`, Maven `pom.xml`, Maven install snippets in root/`engine`/`cli/documentation/tools` READMEs, `engine/README.md` Cargo example, and the VS Code extension `package.json` (see `xtask/src/versions.rs` module `tracked`).
 
 - **`cargo bump <semver>`**: update all locations, then refresh `Cargo.lock` (`cargo generate-lockfile`), Hex `mix.lock` (`mix deps.get`), and VS Code `package-lock.json` (`npm install --package-lock-only`).
 - **`cargo verify`**: confirm everything matches (`versions-verify` is also the first step of `cargo precommit`).

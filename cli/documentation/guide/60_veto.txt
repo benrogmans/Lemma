@@ -1,0 +1,112 @@
+**Veto: impossible to answer, not `false`**
+
+Veto is like Rust's `Err` — rule has **no value** and propagates to dependents. Use veto when answer is impossible, not when business answer is false.
+
+| Situation | Use |
+|-----------|-----|
+| Invalid/out-of-domain input | `unless ... then veto "reason"` |
+| Unmapped choice / no rule applies | default `veto` + unless arm per choice |
+| Normal business "no" | `false` or `no` |
+| Test veto without propagating | `x is veto` (returns boolean) |
+
+Place veto unless clauses **last** to override other branches.
+
+**Example I — enumeration with default veto**
+
+```lemma
+spec choice_mapping
+
+data choice_field: number
+
+rule selected: veto
+  unless choice_field is 1 then true
+  unless choice_field is 2 then false
+  unless choice_field is 3 then true
+```
+
+Default `veto` if unlisted. Each `unless` maps known choice. `false` is valid answer for choice 2.
+
+**Example J — veto lookup + propagation**
+
+```lemma
+spec coffee_pricing
+
+data money: measure
+  -> unit eur 1.00
+  -> decimals 2
+
+data product: text
+data size:    text
+
+rule base_price: veto "Unknown type of coffee"
+  unless product is "espresso"   then 2.5 eur
+  unless product is "latte"      then 3.5 eur
+  unless product is "cappuccino" then 3.5 eur
+  unless product is "mocha"      then 4 eur
+
+rule size_multiplier: veto "Unknown size of coffee"
+  unless size is "small"  then 80%
+  unless size is "medium" then 100%
+  unless size is "large"  then 120%
+
+rule price_per_cup: base_price * size_multiplier
+```
+
+If `base_price` vetoes, `price_per_cup` vetoes automatically (propagates).
+
+**Example K — veto vs boolean**
+
+WRONG — veto for business decision:
+```lemma-skip
+rule can_checkout: veto
+  unless fee <= 10 eur then true
+```
+
+RIGHT — veto for invalid input, boolean for business logic:
+```lemma
+spec checkout_policy
+
+data money: measure
+  -> unit eur 1.00
+  -> decimals 2
+
+data customer_age: number
+data fee:          money
+
+rule age_validation:
+  true
+  unless customer_age < 18  then veto "Customer must be 18 or older"
+  unless customer_age > 120 then veto "Invalid age"
+
+rule can_checkout: yes
+  unless customer_age < 18 then no
+  unless fee > 10 eur then no
+```
+
+**Example L — veto propagation with unless fallback**
+
+```lemma
+spec scoring
+
+data score:       number
+data use_default: boolean
+
+rule validated_score: score
+  unless score < 0 then veto "Invalid score"
+
+rule result: validated_score
+  unless use_default then 50
+```
+
+If `validated_score` vetoes but `use_default` is true, `result` is 50. Unless branch avoids needing vetoed value.
+
+**Workflow checklist**
+
+1. **Scope**: one spec per coherent policy; compose with `uses`; skip `repo` unless needed.
+2. **Inputs**: every user-supplied fact is `data` with constraints.
+3. **Outputs**: every answerable question is a `rule`.
+4. **Factor**: intermediate calculations as named rules.
+5. **Unless**: default first, general to specific, vetoes last.
+6. **No inline comments**: no `#`, `//`. Commentary `"""..."""` only as first block after `spec`.
+7. **Validate**: verify reachable data with `show`, missing inputs via `run`, and correct override order.
+8. **Advanced**: use `uses lemma units`, ranges, compound units when needed.

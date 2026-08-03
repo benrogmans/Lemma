@@ -1,4 +1,4 @@
-//! Tests for example files under documentation/examples/
+//! Tests for example files under cli/documentation/examples/
 //!
 //! Ensures all example files in documentation/examples/ are valid and can be evaluated
 
@@ -44,28 +44,28 @@ fn get_rule_value(
 fn load_specs_folder_examples() -> Engine {
     let mut engine = Engine::new();
 
-    // Load all example files - paths relative to lemma/ crate root (same pattern as integration_examples.rs)
     let examples = [
-        "../documentation/examples/01_coffee_order.lemma",
-        "../documentation/examples/02_library_fees.lemma",
-        "../documentation/examples/03_recipe_scaling.lemma",
-        "../documentation/examples/04_membership_benefits.lemma",
-        "../documentation/examples/05_weather_clothing.lemma",
-        "../documentation/examples/nl/tax/net_salary.lemma",
+        "documentation/examples/01_coffee_order.lemma",
+        "documentation/examples/02_library_fees.lemma",
+        "documentation/examples/03_recipe_scaling.lemma",
+        "documentation/examples/04_membership_benefits.lemma",
+        "documentation/examples/05_weather_clothing.lemma",
+        "documentation/examples/nl/tax/net_salary.lemma",
     ];
 
     for path in examples {
-        let content = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("Failed to read {}: {}", path, e));
+        let full = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path);
+        let content = std::fs::read_to_string(&full)
+            .unwrap_or_else(|e| panic!("Failed to read {}: {}", full.display(), e));
         engine
             .load([(
-                lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(path))),
+                lemma::SourceType::Path(std::sync::Arc::new(full.clone())),
                 &content.to_string(),
             )])
             .unwrap_or_else(|errs| {
                 panic!(
                     "Failed to parse {}: {}",
-                    path,
+                    full.display(),
                     errs.iter()
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()

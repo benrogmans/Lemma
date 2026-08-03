@@ -40,7 +40,7 @@ The `Response` carries every rule's value (or `veto` if no result could be compu
 ## Why use it from JavaScript?
 
 - **Deterministic.** `(spec, data, effective_date) → result`. No DB, no clock, no ambient state. Same inputs → same outputs, every time.
-- **Explainable.** Pass `explain: true` in your `run()` options to get a per-rule explanation tree; see [api.v1.json](https://github.com/lemma/lemma/blob/main/documentation/schemas/api.v1.json). Pair with the [CLI](https://github.com/lemma/lemma) for human reasoning tables.
+- **Explainable.** Pass `explain: true` in your `run()` options to get a per-rule explanation tree; see [api.v1.json](https://github.com/lemma/lemma/blob/main/engine/schemas/api.v1.json). Pair with the [CLI](https://github.com/lemma/lemma) for human reasoning tables.
 - **Time-aware.** Multiple versions of the same spec coexist. Pass an `effective` date and the engine resolves the version in force on that day.
 - **Statically checked.** Type errors, missing data, cycles, measure-family mismatches - all caught at `load()` time. Bad specs never reach `run()`.
 - **Runs anywhere JavaScript does.** ~2 MB package, no native binary, no postinstall script.

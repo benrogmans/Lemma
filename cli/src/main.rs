@@ -370,7 +370,7 @@ struct RunOptions<'a> {
 fn run_command(options: RunOptions<'_>) -> Result<()> {
     let now = resolve_effective(options.effective)?;
     let mut engine = Engine::new();
-    let _: usize = load_workspace(&mut engine, options.source)?;
+    load_workspace(&mut engine, options.source)?;
 
     let (repository_qualifier_optional, spec_name_optional) = match options.positionals {
         [] => (None, None),
@@ -563,7 +563,7 @@ fn show_command(
 ) -> Result<()> {
     let now = resolve_effective(effective)?;
     let mut engine = Engine::new();
-    let _: usize = load_workspace(&mut engine, source_path)?;
+    load_workspace(&mut engine, source_path)?;
 
     let (repository_for_show, chosen_specification) =
         resolve_show_target(&engine, repository_qualifier, specification_name)?;
@@ -608,7 +608,7 @@ fn repository_spec_groups(engine: &Engine) -> Vec<(Option<String>, Vec<String>)>
 
 fn list_command(source_path: &Path, json: bool) -> Result<()> {
     let mut engine = Engine::new();
-    let _: usize = load_workspace(&mut engine, source_path)?;
+    load_workspace(&mut engine, source_path)?;
 
     if json {
         let payload = engine.list();
@@ -645,7 +645,7 @@ fn server_command(
     let rt = Runtime::new()?;
     rt.block_on(async {
         let mut engine = Engine::new();
-        let _: usize = load_workspace(&mut engine, source)?;
+        load_workspace(&mut engine, source)?;
 
         let workspace = engine
             .list()
@@ -680,7 +680,7 @@ fn lsp_command() -> Result<()> {
 
 fn mcp_command(workdir: &Path, admin: bool, request_timeout_secs: u64) -> Result<()> {
     let mut engine = Engine::new();
-    let _: usize = load_workspace(&mut engine, workdir)?;
+    load_workspace(&mut engine, workdir)?;
 
     let config = mcp::McpConfig {
         admin,
@@ -1023,8 +1023,8 @@ fn make_fetch_registry() -> Box<dyn lemma::Registry> {
 /// `lemma_deps/` `.lemma` paths load as dependencies with identifiers derived from paths under
 /// `lemma_deps/` (e.g. `lemma_deps/@org/repo.lemma` -> `"@org/repo"`).
 ///
-/// Returns rough path-entry count for workspace listing (`1` for single file, else workspace + dep paths seen).
-fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<usize> {
+/// Returns the loaded source batch (empty when the workspace has no `.lemma` files).
+fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
     let mut workspace_paths: Vec<std::path::PathBuf> = Vec::new();
     let mut deps_paths: Vec<std::path::PathBuf> = Vec::new();
 
@@ -1045,12 +1045,6 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<usiz
         }
     }
 
-    let discovered_lemma_source_total: usize = if workdir.is_file() {
-        1
-    } else {
-        workspace_paths.len() + deps_paths.len()
-    };
-
     let mut sources = Vec::with_capacity(deps_paths.len().saturating_add(workspace_paths.len()));
 
     for dep_path in &deps_paths {
@@ -1070,11 +1064,11 @@ fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<usiz
             bail_workspace_load_errors(&load_failures)?;
         }
     }
-    Ok(discovered_lemma_source_total)
+    Ok(())
 }
 
-/// Always fails after printing diagnostics. Return type satisfies `Result<usize>` callers.
-fn bail_workspace_load_errors(load_errors: &lemma::Errors) -> anyhow::Result<usize> {
+/// Always fails after printing diagnostics.
+fn bail_workspace_load_errors(load_errors: &lemma::Errors) -> anyhow::Result<()> {
     let mut emitted_message_keys = std::collections::HashSet::new();
     let unique_errors: Vec<_> = load_errors
         .iter()

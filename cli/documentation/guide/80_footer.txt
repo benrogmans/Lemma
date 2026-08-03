@@ -1,0 +1,36 @@
+## Docs
+
+- [Learn guide](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md): specs, data, rules, unless, veto
+- [Reference](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/readme.md): operators, types, units, ranges, `uses`
+- [Veto](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/types_and_units.md#veto): propagation, `is veto`
+- [Composing specs](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/composing_specs.md): `uses`, temporal versions, pins
+- [CLI](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/cli.md): `run`, `show`, `format`
+- [Registry](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/registry.md): LemmaBase `@user/repo` imports
+- [LemmaBase search](https://lemmabase.com/search?q=): registry search
+- [Examples (docs)](https://github.com/lemma/lemma/tree/main/cli/documentation/examples): `.lemma` files
+- [Examples (tests)](https://github.com/lemma/lemma/tree/main/cli/tests/integrations/examples): progressives
+
+## Examples by pattern
+
+- [Coffee order](https://github.com/lemma/lemma/blob/main/cli/documentation/examples/01_coffee_order.lemma): constraints, unless, veto enum
+- [Library fees](https://github.com/lemma/lemma/blob/main/cli/documentation/examples/02_library_fees.lemma): unless chains, bool vs veto
+- [Rules and unless](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/02_rules_and_unless.lemma): progressive unless
+- [Spec references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/03_spec_references.lemma): compound units, `uses lemma units`
+- [Unit conversions](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/04_unit_conversions.lemma): duration, `as` conversion
+- [Spec composition](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/11_spec_composition.lemma): hierarchy
+- [Registry references](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/12_registry_references.lemma): registry import
+- [Shipping policy](https://github.com/lemma/lemma/blob/main/cli/tests/integrations/examples/07_shipping_policy.lemma): decomposed rules
+
+## Numeric precision (summary)
+
+Exact rationals (ℚ) for `+`, `−`, `×`, `÷`, comparisons, conversions. `^`, `sqrt`, trig, `log` use ~28-significant-digit Decimal. `floor`/`ceil`/`round` on measures use Decimal.
+
+**Boundary number contract:** WASM, HTTP JSON, Elixir NIF accept integers as numbers, reject float/decimal numbers. Pass decimals as strings. Example: `{ "quantity": 42, "rate": "0.075" }`. On Maven (JDK 21+), pass `BigDecimal` or decimal strings via `RunRequest.data(...)`; output is `BigDecimal`.
+
+## Optional
+
+- [LemmaBase](https://lemmabase.com): registry
+- [Numeric precision](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/precision.md): exact rational arithmetic, boundary contract
+- [JavaScript / TypeScript (WASM)](https://github.com/lemma/lemma/blob/main/cli/documentation/tools/javascript.md): browser and Node
+- [Maven (Java / Kotlin)](https://github.com/lemma/lemma/blob/main/cli/documentation/tools/maven.md): Central JNI package
+- [README](https://github.com/lemma/lemma/blob/main/README.md): install, quick start

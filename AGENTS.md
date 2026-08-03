@@ -1,6 +1,6 @@
 # AGENTS.md: Mandatory rules for AI agents working on Lemma
 
-These are **non-negotiable rules**, not guidelines, for code and for the value you deliver while working. Violating any of them is a bug you introduced. This file does not describe Lemma's language; read `documentation/`, `README.md`, and the codebase for that.
+These are **non-negotiable rules**, not guidelines, for code and for the value you deliver while working. Violating any of them is a bug you introduced. This file does not describe Lemma's language; read `cli/documentation/`, `README.md`, and the codebase for that.
 
 ---
 
@@ -130,6 +130,6 @@ Unit tests go in the same module as the code (to test private functions). Engine
 |----------|---------|
 | **README.md** | Project overview, quick start |
 | **xtask/README.md** | precommit, `cargo bump` / `cargo verify`, release paths |
-| **documentation/learn/readme.md** | Learn guide: language concepts |
-| **documentation/reference/readme.md** | Operators, types, literals, syntax |
-| **documentation/learn/types_and_units.md#veto** | Veto propagation rules |
+| **cli/documentation/learn/readme.md** | Learn guide: language concepts |
+| **cli/documentation/reference/readme.md** | Operators, types, literals, syntax |
+| **cli/documentation/learn/types_and_units.md#veto** | Veto propagation rules |

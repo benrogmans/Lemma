@@ -7,7 +7,7 @@
 //! cargo coverage all --check   # verify committed reports match inputs
 //! ```
 //!
-//! Writes reports under `documentation/reference/coverage/`. Any subprocess failure
+//! Writes reports under `cli/documentation/reference/coverage/`. Any subprocess failure
 //! aborts the run; no partial reports.
 
 mod cli;
@@ -710,7 +710,7 @@ mod tests {
             nav_title: "Engine test coverage",
             nav_order: 55,
             title: "Engine test coverage",
-            results_relative: "documentation/reference/coverage/engine.md",
+            results_relative: "cli/documentation/reference/coverage/engine.md",
             src_prefix: "engine/src",
             input_paths: engine::INPUT_PATHS,
             methodology: "- Tooling\n",

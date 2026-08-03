@@ -1,0 +1,60 @@
+spec coffee_order
+"""
+Coffee Shop Pricing
+
+A simple example showing how data and rules work together.
+Perfect for understanding the basics of Lemma.
+"""
+
+data money: measure
+  -> decimals 2
+  -> unit eur 1.00
+  -> unit gbp 1.17
+  -> minimum 0 eur
+
+data product: text
+  -> option "espresso"
+  -> option "latte"
+  -> option "cappuccino"
+  -> option "mocha"
+
+data size: text
+  -> option "small"
+  -> option "medium"
+  -> option "large"
+
+data age: number
+  -> maximum 100
+  -> minimum 0
+
+data number_of_cups: number
+  -> maximum 10
+
+data has_loyalty_card: boolean
+
+rule base_price: veto "Unknown type of coffee"
+  unless product is "espresso"   then 2.5 eur
+  unless product is "latte"      then 3.5 eur
+  unless product is "cappuccino" then 3.5 eur
+  unless product is "mocha"      then 4 eur
+
+rule size_multiplier: veto "Unknown size of coffee"
+  unless size is "small"  then 80%
+  unless size is "medium" then 100%
+  unless size is "large"  then 120%
+
+rule price_per_cup: base_price * size_multiplier
+
+rule subtotal: price_per_cup * number_of_cups
+
+rule loyalty_discount: 0%
+  unless has_loyalty_card then 10%
+
+rule age_discount: 0%
+  unless age >= 65 then 10%
+
+rule combined_discount: loyalty_discount + age_discount
+
+rule discount_amount: subtotal * combined_discount
+
+rule total: subtotal - discount_amount

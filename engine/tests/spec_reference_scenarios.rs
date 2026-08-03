@@ -1,4 +1,4 @@
-//! Integration tests locking spec composability behavior (see [spec_composability.md](../../documentation/spec_composability.md)).
+//! Integration tests locking spec composability behavior (see [spec_composability.md](../../cli/documentation/spec_composability.md)).
 //!
 //! Each `scenario_XX_*` test encodes a fixture and asserts planning/load or eval outcomes.
 

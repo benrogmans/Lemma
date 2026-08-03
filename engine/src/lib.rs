@@ -31,7 +31,7 @@ pub use computation::{OperationResult, VetoType};
 pub use engine::{
     resolve_effective, Engine, Errors, ListedSpec, ResolvedRepository, EMBEDDED_STDLIB_REPOSITORY,
 };
-pub use error::{Error, ErrorDetails, ErrorKind, RequestErrorKind};
+pub use error::{EngineError, EngineErrorSource, Error, ErrorDetails, ErrorKind, RequestErrorKind};
 pub use evaluation::explanations::{format_explanation, Cause, Explanation, ExplanationNode};
 pub use evaluation::response::{Response, RuleResult};
 pub use evaluation::run_data::RunDataValue;
@@ -59,65 +59,10 @@ pub mod __test_support {
     pub use crate::literals::TimeValue;
     pub use crate::planning::semantics::{SemanticDateTime, SemanticTime, SemanticTimezone};
 
-    /// Serializes an [`Error`](crate::Error) the way WASM/`JsError` does today.
-    /// API-contract tests assert the *target* shape against this until a single
-    /// derived error type replaces the three hand-built projections.
+    /// Serializes an [`Error`](crate::Error) as [`EngineError`](crate::EngineError).
     pub fn current_binding_error_json(error: &crate::Error) -> serde_json::Value {
-        use crate::parsing::source::Source;
-        use serde::Serialize;
-
-        #[derive(Serialize)]
-        struct JsSource {
-            attribute: String,
-            line: usize,
-            column: usize,
-            length: usize,
-        }
-
-        impl From<&Source> for JsSource {
-            fn from(s: &Source) -> Self {
-                Self {
-                    attribute: s.source_type.to_string(),
-                    line: s.span.line,
-                    column: s.span.col,
-                    length: s.span.end.saturating_sub(s.span.start),
-                }
-            }
-        }
-
-        #[derive(Serialize)]
-        struct JsError<'a> {
-            kind: crate::ErrorKind,
-            message: &'a str,
-            related_data: Option<&'a str>,
-            spec: Option<&'a str>,
-            related_spec: Option<&'a str>,
-            source: Option<JsSource>,
-            suggestion: Option<&'a str>,
-            repository: Option<&'a str>,
-            registry_kind: Option<crate::registry::RegistryErrorKind>,
-            request_kind: Option<crate::error::RequestErrorKind>,
-            limit_name: Option<&'a str>,
-            limit_value: Option<&'a str>,
-            actual_value: Option<&'a str>,
-        }
-
-        let shaped = JsError {
-            kind: error.kind(),
-            message: error.message(),
-            related_data: error.related_data(),
-            spec: error.spec_context_name(),
-            related_spec: error.related_spec(),
-            source: error.source_location().map(JsSource::from),
-            suggestion: error.suggestion(),
-            repository: error.repository(),
-            registry_kind: error.registry_kind(),
-            request_kind: error.request_kind(),
-            limit_name: error.limit_name(),
-            limit_value: error.limit_value(),
-            actual_value: error.actual_value(),
-        };
-        serde_json::to_value(shaped).expect("JsError-shaped JSON must serialize")
+        serde_json::to_value(crate::EngineError::from(error))
+            .expect("BUG: EngineError must serialize")
     }
 }
 
@@ -138,5 +83,6 @@ pub use parsing::ast::{LemmaRepository, LemmaSpec};
 pub use planning::LemmaSpecSet;
 #[cfg(all(feature = "registry", not(target_arch = "wasm32")))]
 pub use registry::resolve_registry_references;
+pub use registry::RegistryErrorKind;
 #[cfg(feature = "registry")]
-pub use registry::{LemmaBase, Registry, RegistryBundle, RegistryError, RegistryErrorKind};
+pub use registry::{LemmaBase, Registry, RegistryBundle, RegistryError};

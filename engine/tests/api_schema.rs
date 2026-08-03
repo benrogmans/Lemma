@@ -1,4 +1,4 @@
-//! Contract: `documentation/schemas/api.v1.json` is the schema for Show, Response, list, and errors.
+//! Contract: `engine/schemas/api.v1.json` is the schema for Show, Response, list, and errors.
 
 use lemma::{DateTimeValue, Engine, ResourceLimits, SourceType};
 use std::collections::HashMap;
@@ -11,14 +11,14 @@ fn workspace_root() -> PathBuf {
 }
 
 fn api_schema_path() -> PathBuf {
-    workspace_root().join("documentation/schemas/api.v1.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas/api.v1.json")
 }
 
 fn load_api_schema() -> serde_json::Value {
     let path = api_schema_path();
     assert!(
         path.is_file(),
-        "documentation/schemas/api.v1.json must exist (emit via `cargo run -p xtask -- schema`)"
+        "engine/schemas/api.v1.json must exist (emit via `cargo run -p xtask -- schema`)"
     );
     let text = std::fs::read_to_string(&path).expect("read api.v1.json");
     serde_json::from_str(&text).expect("api.v1.json must be JSON")

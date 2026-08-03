@@ -40,10 +40,10 @@ lemma list --prefix ./my_project
 lemma list --json
 
 # Start the HTTP server
-lemma server --prefix ./documentation/examples --port 8012
+lemma server --prefix ./cli/documentation/examples --port 8012
 
 # Start the MCP server (AI assistant integration)
-lemma mcp --prefix ./documentation/examples
+lemma mcp --prefix ./cli/documentation/examples
 ```
 
 Each command supports `--help` for full usage details.
@@ -78,10 +78,10 @@ lemma run shipping --json > output.json
 
 ## Documentation
 
-- CLI reference: <https://github.com/lemma/lemma/blob/main/documentation/reference/cli.md>
-- Learn guide: <https://github.com/lemma/lemma/blob/main/documentation/learn/readme.md>
+- CLI reference: <https://github.com/lemma/lemma/blob/main/cli/documentation/reference/cli.md>
+- Learn guide: <https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md>
 - API docs (engine): <https://docs.rs/lemma-engine>
-- Examples: <https://github.com/lemma/lemma/tree/main/documentation/examples>
+- Examples: <https://github.com/lemma/lemma/tree/main/cli/documentation/examples>
 
 ## Contributing
 

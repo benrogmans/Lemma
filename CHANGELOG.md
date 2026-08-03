@@ -2,6 +2,22 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.9.2] - 2026-08-03
+
+0.9.2 strengthens the MCP authoring loop, relocates published docs next to the CLI, and exposes a single serializable `EngineError` wire type from the Rust engine.
+
+### Added
+
+- **MCP authoring loop**: read-only `check` (batch of labeled sources, non-mutating parse/plan with structured diagnostics) and `guide` (topic slices of the embedded authoring guide); `resources/list` and `resources/read` for `lemma://guide`, `lemma://guide/{topic}`, and `lemma://examples/...`.
+- **Embedded authoring guide**: fragment files under `cli/documentation/guide/` (built into the CLI) plus refreshed `llms.txt` / `llms.md`.
+- **`EngineError` / `EngineErrorSource`**: public Rust types matching `api.v1.json` / TS `EngineError`; WASM and MCP load failures serialize this shape instead of parallel hand-built projections.
+
+### Changed
+
+- **Documentation layout**: docs live under `cli/documentation/`; consumer wire schema at [`engine/schemas/api.v1.json`](engine/schemas/api.v1.json); agent rules at root [`AGENTS.md`](AGENTS.md).
+- **MCP tool surfaces**: `show` returns JSON `Show` (rule units visible). `add_spec` returns a success confirmation. `evaluate` renders full measure/ratio unit maps. Load failures return `isError` tool results with `EngineError` diagnostics.
+- **Quality CI**: pull requests run `cargo precommit`; push events still run `cargo precommit --fuzz`.
+
 ## [0.9.1] - 2026-08-01
 
 0.9.1 consolidates the consumer API schema into a single `api.v1.json` document, completes the Java Maven SDK (typed Show/ExplanationNode/LemmaType, BigDecimal magnitudes, JDK 21, thread-safe Engine), aligns the TypeScript and Elixir SDKs to the canonical wire format, hardens release quality gates, adds qualified units, and folds long `unless` chains into ordered lookups.
@@ -59,7 +75,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ### Added
 
-- **Java Maven package** `com.lemmabase:lemma-engine`: JNI bridge (`lemma_jni`), `BigDecimal`-first API, `RunRequest`, AutoCloseable `Engine`, prebuilt natives in the JAR, Maven Central publish from release workflow. Docs: `documentation/tools/maven.md`.
+- **Java Maven package** `com.lemmabase:lemma-engine`: JNI bridge (`lemma_jni`), `BigDecimal`-first API, `RunRequest`, AutoCloseable `Engine`, prebuilt natives in the JAR, Maven Central publish from release workflow. Docs: `cli/documentation/tools/maven.md`.
 - **Range endpoint and width constraints**: `* range` data accept `-> lower` / `-> upper` (endpoint envelope) and `-> minimum` / `-> maximum` (span width). Measure/ratio bounds use the same mixed declaring-unit model as scalar measure. Date range width is duration or calendar (not both on one type); time range width is duration only. Named element min/max inherit as range lower/upper.
 - **`lemma units` catalog expansion**: SI scales (`nanosecond`, `nanometer`, …), derived compounds (`newton`, `pascal`, `joule`, `watt`, `hertz`, electrical), `area`/`volume`, imperial (`inch`, `pound`, `gallon`, …), and `information` (`bit`/`byte`/…); still no affine Celsius/Fahrenheit.
 - **`Engine::show(repository?, spec, effective?)`**: returns **`Show`** — interface + temporal window (no Lemma text).
@@ -84,7 +100,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 - **Resource limits**: `max_normalized_expression_nodes` counts **unique reachable NormalForm cells** per rule root (not tree-expanded size). `max_normal_form_depth` bounds DAG nesting for recursive eval. Self-doubling rule chains stay linear under sharing and are not rejected solely for that pattern; non-sharing blowups still hit the cell budget.
 - **Show vs run data**: **`show`** lists statically reachable data after normalize (all remaining unless arms; no caller overlay) with types, prefilled literals, and suggestions. Overlay-aware unbound keys for a concrete run are per-rule **`missing_data`** only — evaluate JSON has no top-level `data` array.
 - **Evaluate JSON** (CLI `--json`, HTTP POST, WASM/Hex/JS `run`): each rule result may include **`missing_data`**. Human `lemma run` prints a **Missing data** section when any requested rule lists unbound keys.
-- **Explanation wire**: every node uses language-facing `type` + `name`. Root `results.<rule>.explanation` is the same shape as nested rule nodes (`"type":"rule"`, `"name"`, …). Bound data is `"type":"data"`; cause paths never looked up are `"type":"data_unused"`. Documented in [`api.v1.json`](documentation/schemas/api.v1.json) (`RuleNode` / `ExplanationNode`). No legacy aliases.
+- **Explanation wire**: every node uses language-facing `type` + `name`. Root `results.<rule>.explanation` is the same shape as nested rule nodes (`"type":"rule"`, `"name"`, …). Bound data is `"type":"data"`; cause paths never looked up are `"type":"data_unused"`. Documented in [`api.v1.json`](engine/schemas/api.v1.json) (`RuleNode` / `ExplanationNode`). No legacy aliases.
 - **MCP:** `list_specs` → **`list`**, `get_spec_source` → **`source`**; **`add_spec`** returns structured JSON `{ message, specs: Show[] }`.
 - **HTTP GET `/`:** returns **`Engine.list()`** JSON (`ResolvedRepository[]`); no per-spec show payloads or `?effective=` on the list route.
 - **Static interface**: **`Engine::show`** lists only data used by the spec's rules (plus local rule result types). Rule-scoped unbound keys on a partial run come from each result's **`missing_data`**.
@@ -102,7 +118,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 ### Added
 
 - **Windows ARM64 prebuilt binaries**: release workflow builds CLI and Hex NIF for `aarch64-pc-windows-msvc` on `windows-11-vs2026-arm`; npm publishes `@lemmabase/cli-win32-arm64`.
-- **Published test coverage reports**: `cargo coverage <engine|cli|all>` regenerates [`documentation/reference/coverage/`](documentation/reference/coverage/) from `cargo-llvm-cov` + nextest; `cargo coverage all --check` verifies reports match inputs; `cargo precommit` runs the check at the end.
+- **Published test coverage reports**: `cargo coverage <engine|cli|all>` regenerates [`cli/documentation/reference/coverage/`](cli/documentation/reference/coverage/) from `cargo-llvm-cov` + nextest; `cargo coverage all --check` verifies reports match inputs; `cargo precommit` runs the check at the end.
 - **`prefilled` / `supplied` / `default` schema fields**: API and interactive schema distinguish spec literals, caller overlay values, and `-> default` suggestions; only caller-supplied values decide unless-arm pruning.
 - **API wire format contract tests**: `engine/tests/api_wire_format.rs` encodes ratio, measure, and range wire rules, plan-persistence separation, and overlay behavior; npm WASM tests mirror schema and response JSON serialization.
 
@@ -175,7 +191,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ### Removed
 
-- **Internal plan documents** under `documentation/plans/` (5 files).
+- **Internal plan documents** under `cli/documentation/plans/` (5 files).
 
 ## [0.8.19] - 2026-06-11
 
@@ -229,22 +245,22 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ## [0.8.17] - 2026-06-10
 
-0.8.17 replaces tree-walking evaluation with a compiled virtual machine, makes exact math hold at any magnitude and gives every result a machine-readable explanation. Planning now compiles each rule into a validated instruction stream that a register-based VM executes, so evaluation costs only what the requested rules cost: the engine skips unrequested rules and builds explanations only on demand. Execution plans are no longer cloned per request. Larger calculations whose intermediate values exceed machine-integer range stay exact instead of switching to approximation. Current measured performance is published in [`documentation/reference/benchmarks/`](documentation/reference/benchmarks/).
+0.8.17 replaces tree-walking evaluation with a compiled virtual machine, makes exact math hold at any magnitude and gives every result a machine-readable explanation. Planning now compiles each rule into a validated instruction stream that a register-based VM executes, so evaluation costs only what the requested rules cost: the engine skips unrequested rules and builds explanations only on demand. Execution plans are no longer cloned per request. Larger calculations whose intermediate values exceed machine-integer range stay exact instead of switching to approximation. Current measured performance is published in [`cli/documentation/reference/benchmarks/`](cli/documentation/reference/benchmarks/).
 
 ### Added
 
-- **Explanations fit for audit trails**: every rule result carries a flat explanation object holding the rule's body, its operand values, the branch that applied, and the condition that vetoed. The format is specified in the consumer API schema ([`documentation/schemas/api.v1.json`](documentation/schemas/api.v1.json)); the previous trace format was undocumented and is replaced.
+- **Explanations fit for audit trails**: every rule result carries a flat explanation object holding the rule's body, its operand values, the branch that applied, and the condition that vetoed. The format is specified in the consumer API schema ([`engine/schemas/api.v1.json`](engine/schemas/api.v1.json)); the previous trace format was undocumented and is replaced.
 - **Explanations read recorded execution, never re-evaluate**: when explanations are requested, the engine executes a source-shaped instruction stream (compiled from the same inlined rule equation with the optimizer's rewrite passes skipped) and records what happened — branch decisions, the winning arm, register values. The explanation is rendered purely from source structure plus that recording, and the recorded run's result is the response result, so an explanation can never disagree with the answer it explains. The previous implementation re-evaluated source expressions in a parallel interpreter, which could silently diverge from the VM. A differential test suite pins both instruction streams to identical results across the test corpus and documentation examples.
 - **Explanations state causes as facts**: evaluated unless conditions appear as true statements — a failed `distance < 5 mile` is stated as `distance >= 5 mile` — with the data values that drove them as children. Causes render at the rule level (they explain branch selection, not the body computation), literal operands are no longer repeated below expressions that already display them, embedded rule references show `name: result` and carry their full explanation tree wherever they appear. Implicit unit reconciliation inside arithmetic and comparisons is stated as an equivalence fact (`1 mile is 1.60934 kilometer`, decimal when exact) so cross-unit math is followable without external lookup tables; identity conversions and steps that would restate an already-visible value are omitted. JSON consumers: `causes[].condition` now holds the true-form condition expression instead of a datum name, `causes[].children`, rule-node `result`, and the `unit_equivalence` node are new, and the wrapping `compose` node duplicating the rule body is gone (operands are direct children).
 - **One-binary editor setup**: installing the `lemma` CLI is now the only requirement for editor support — the new `lemma lsp` subcommand starts the language server over stdio. This removes the separate language-server binary and the version skew it allowed.
 - **A shared server survives bad specs**: a service evaluating specs it did not author can no longer be hung or crashed by them. Self-doubling rule chains are rejected at planning with a resource-limit error (`ResourceLimits::max_normalized_expression_nodes`, default 30,000) instead of exhausting memory; tampered or stale serialized execution plans are rejected at load by full instruction validation instead of crashing the virtual machine; a step budget halts instruction streams that loop.
-- **Reproducible performance reports**: `cargo benchmarks <engine|cli|all>` regenerates the engine and CLI benchmark reports in [`documentation/reference/benchmarks/`](documentation/reference/benchmarks/), so the published numbers can be independently re-measured from the repository.
+- **Reproducible performance reports**: `cargo benchmarks <engine|cli|all>` regenerates the engine and CLI benchmark reports in [`cli/documentation/reference/benchmarks/`](cli/documentation/reference/benchmarks/), so the published numbers can be independently re-measured from the repository.
 
 ### Changed
 
 - **Compiled virtual machine**: rules are compiled at planning into register-based instruction streams that the engine executes directly, replacing per-request tree-walking of the expression graph. Compilation happens once per plan; evaluation then dispatches flat instructions over a register file. Run output is unchanged.
-- **Greater precision for math with large numbers**: financial and scientific calculations whose intermediate values grow very large now stay exact end to end. Previously, magnitudes were bounded by `i128` (~1.7×10³⁸) and arithmetic beyond that bound fell back to decimal approximation; that fallback is gone. A calculation that genuinely exhausts memory vetoes the affected rule with `out of memory` rather than taking the process down. Transcendental functions (`sqrt`, `sin`, `log`, …) compute in decimal as before; see [`documentation/learn/precision.md`](documentation/learn/precision.md).
-- **Improved performance**: callers that need one answer no longer pay for the whole spec. Evaluation computes only the requested rules (`rules: Option<&[String]>` on `Engine::run` / `Engine::run_plan`), explanations are built only when `explain` is set, and immutable plans (`DataOverlay`) remove the per-request plan clone; the VM (above) removes per-request expression-tree walking. On the benchmark specs, a single-rule evaluation measures 20–169 µs where 0.8.16 measured 285 µs–6.2 ms evaluating every rule with per-call JSON parsing — methodology and numbers in [`documentation/reference/benchmarks/engine.md`](documentation/reference/benchmarks/engine.md). API: `None` means all local rules, and `lemma::plan(context)` is now `lemma::plan(context, &ResourceLimits)`.
+- **Greater precision for math with large numbers**: financial and scientific calculations whose intermediate values grow very large now stay exact end to end. Previously, magnitudes were bounded by `i128` (~1.7×10³⁸) and arithmetic beyond that bound fell back to decimal approximation; that fallback is gone. A calculation that genuinely exhausts memory vetoes the affected rule with `out of memory` rather than taking the process down. Transcendental functions (`sqrt`, `sin`, `log`, …) compute in decimal as before; see [`cli/documentation/learn/precision.md`](cli/documentation/learn/precision.md).
+- **Improved performance**: callers that need one answer no longer pay for the whole spec. Evaluation computes only the requested rules (`rules: Option<&[String]>` on `Engine::run` / `Engine::run_plan`), explanations are built only when `explain` is set, and immutable plans (`DataOverlay`) remove the per-request plan clone; the VM (above) removes per-request expression-tree walking. On the benchmark specs, a single-rule evaluation measures 20–169 µs where 0.8.16 measured 285 µs–6.2 ms evaluating every rule with per-call JSON parsing — methodology and numbers in [`cli/documentation/reference/benchmarks/engine.md`](cli/documentation/reference/benchmarks/engine.md). API: `None` means all local rules, and `lemma::plan(context)` is now `lemma::plan(context, &ResourceLimits)`.
 - **Plans serve concurrent requests**: an `ExecutionPlan` is immutable — data values ride alongside in a `DataOverlay` instead of mutating the plan — so one compiled plan can be shared across requests and memory allocation is reduced. Run output unchanged.
 - **Decisions always show what they depended on**: the optimizer can no longer change which inputs a result requires — algebraic folds (`x * 0`, `false and …`, …) apply only to literal operands, so `rule r: x * 0` still requires `x` and vetoes when it is missing. `response.data` again lists the effective values of the data behind the requested rules (it had regressed to always empty). Together these guarantee an auditor sees the true inputs of every decision.
 - **Consistent explanations**: a result exceeding the decimal output limit now vetoes identically in downstream references, `is veto` checks, explanations, and the response — previously these could disagree. Explanations of vetoed unless conditions now name the vetoing condition and carry its veto instead of describing a branch that never ran. Callers and auditors can no longer receive contradictory accounts of the same evaluation.
@@ -315,7 +331,7 @@ rule net_salary: contract.net
 - **Unified ratio units across types**: same unit name (e.g. `percent`, `permille`, `basis_points`) may be reused across distinct `ratio` typedefs in the same spec as long as the conversion factors match. Mismatched factors still error at planning. Built-in `percent` / `permille` collisions across multiple `data: ratio` fields are now valid; cross-type ratio rule-result conversion (`lemma run --as rule:unit`) works across the unified unit space.
 - **Ratio range defaults**: ratio ranges may declare a default literal range, e.g. `data band: ratio range -> default 10%...50%`. The default participates in schema (`SpecSchema.data[].default`) the same way scalar ratio defaults do.
 - **LSP navigation for `uses` references**: a `uses @org/repo spec` line becomes a single clickable link that jumps to the resolved dependency file in `lemma_deps/` at the spec's starting line; hover shows the LemmaBase URL. `uses lemma units` opens an on-demand snapshot at `lemma_deps/lemma.std`.
-- **`documentation/llms.txt`**: authoring guide for LLMs translating natural-language policy into Lemma specs. Linked from `documentation/index.md` and the root README.
+- **`cli/documentation/llms.txt`**: authoring guide for LLMs translating natural-language policy into Lemma specs. Linked from `cli/documentation/index.md` and the root README.
 - **`lemma` CLI on npm**: install without Rust via `npm install -g lemma` or run ad-hoc with `npx lemma`. The umbrella `lemma` package resolves a per-platform binary from `@lemmabase/cli-{linux,darwin,win32}-{x64,arm64}` optional dependencies; no postinstall scripts, works offline once installed.
 
 ### Changed
@@ -342,7 +358,7 @@ rule net_salary: contract.net
 - Time: elapsed intervals via `uses lemma units` and types like `units.duration` (no built-in `duration` type); calendar periods (`year`, `month`, `week`) on **calendar** and **date** types — not mixed with elapsed durations.
 - **Calendar** type and **calendar range** for calendar-aware periods; **date**, **number**, **measure**, and **ratio** ranges with half-open `lo...hi`; width via `(lo...hi) as <unit>` for number, duration measure, and ratio ranges.
 - Compound measure units (e.g. rates built from SI units in `uses lemma units`).
-- Arithmetic stays exact until API output; JSON magnitudes are decimal strings (see `documentation/learn/precision.md`). Division by zero in rule bodies is rejected at planning time.
+- Arithmetic stays exact until API output; JSON magnitudes are decimal strings (see `cli/documentation/learn/precision.md`). Division by zero in rule bodies is rejected at planning time.
 
 ### Breaking (0.8.13 → 0.8.14)
 
@@ -455,8 +471,8 @@ rule net_salary: contract.net
 - Veto type enum for classification in responses.
 
 **Documentation**
-- `documentation/blueprint.md`: normative semantics document covering goals, temporal composition, planning architecture, feature catalog.
-- `documentation/reference.md`: new "Data References" section; corrected text / duration type command tables; duration gains `minimum` / `maximum`.
+- `cli/documentation/blueprint.md`: normative semantics document covering goals, temporal composition, planning architecture, feature catalog.
+- `cli/documentation/reference.md`: new "Data References" section; corrected text / duration type command tables; duration gains `minimum` / `maximum`.
 
 ### Changed
 
@@ -492,8 +508,8 @@ rule net_salary: contract.net
 - Tracked scratch files `plan.txt`, `deleted_tests.txt`.
 - Superseded engine integration tests: `bdd`, cross-spec interface contract, end-to-end, older inversion suites, `type_propagation`, `missing_fact_propagation` (replaced by focused missing-data tests).
 - `cli/tests/integrations/interactive.rs` (superseded by interactive mode tests).
-- `documentation/plans/temporal_ranges_blueprint_alignment.md` and `temporal_ranges_tests.md` (implementation complete; absorbed into `blueprint.md §2.1` and `engine/tests/temporal_range_references.rs`).
-- `documentation/plans/tables.md` (obsolete syntax; tables not yet implemented; direction noted in `blueprint.md §3.14`).
+- `cli/documentation/plans/temporal_ranges_blueprint_alignment.md` and `temporal_ranges_tests.md` (implementation complete; absorbed into `blueprint.md §2.1` and `engine/tests/temporal_range_references.rs`).
+- `cli/documentation/plans/tables.md` (obsolete syntax; tables not yet implemented; direction noted in `blueprint.md §3.14`).
 - `TypePageification::Text` `minimum` / `maximum` length commands (breaking change; use `length` for exact length).
 
 ## [0.8.10] - 2026-03-31
@@ -581,7 +597,7 @@ rule net_salary: contract.net
 
 - Cargo aliases `cargo bump`, `cargo verify`, and `cargo changelog` wired to xtask: centralized versions-bump (workspace semver + mirrored pins in CLI/OpenAPI/LSP manifests, Hex `mix.exs`, `engine/README.md`, VS Code `package.json`), versions-verify, and versions-diff (tag-to-tree or tag-range changelog helper).
 - versions-verify step in the quality workflow lint job so CI matches local precommit.
-- `xtask/README.md` and a maintainer Release version section in `documentation/contributing.md`; `README.md` documents running versions-verify in precommit and using bump/verify when changing the release.
+- `xtask/README.md` and a maintainer Release version section in `cli/documentation/contributing.md`; `README.md` documents running versions-verify in precommit and using bump/verify when changing the release.
 
 ### Changed
 
@@ -592,4 +608,4 @@ rule net_salary: contract.net
 
 ### Removed
 
-- Jekyll/GitHub Pages scaffolding: `documentation/Gemfile` and `documentation/_config.yml`.
+- Jekyll/GitHub Pages scaffolding: `cli/documentation/Gemfile` and `cli/documentation/_config.yml`.

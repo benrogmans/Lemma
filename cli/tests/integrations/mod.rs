@@ -1,3 +1,6 @@
+mod documentation_examples;
+mod documentation_fences;
+mod documentation_formatting;
 mod examples;
 mod lsp;
 mod lsp_session;

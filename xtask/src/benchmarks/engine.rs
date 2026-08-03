@@ -74,7 +74,7 @@ pub struct Fixture {
 }
 
 const BENCH_EFFECTIVE_ISO: &str = "2026-01-01T00:00:00Z";
-pub const RESULTS_RELATIVE: &str = "documentation/reference/benchmarks/engine.md";
+pub const RESULTS_RELATIVE: &str = "cli/documentation/reference/benchmarks/engine.md";
 const PYTHON_BENCH_RELATIVE: &str = "engine/benches/python/benchmark.py";
 
 #[derive(Debug, Deserialize)]

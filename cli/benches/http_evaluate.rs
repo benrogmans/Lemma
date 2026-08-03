@@ -28,10 +28,8 @@ fn wait_for_port(port: u16, timeout: Duration) -> bool {
 }
 
 fn start_server() -> ServerGuard {
-    let examples_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("cli crate must have parent dir")
-        .join("documentation/examples");
+    let examples_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("documentation/examples");
 
     let child = Command::new(env!("CARGO_BIN_EXE_lemma"))
         .arg("server")

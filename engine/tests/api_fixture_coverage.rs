@@ -9,7 +9,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn api_schema_path() -> PathBuf {
-    workspace_root().join("documentation/schemas/api.v1.json")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas/api.v1.json")
 }
 
 fn fixtures_dir() -> PathBuf {

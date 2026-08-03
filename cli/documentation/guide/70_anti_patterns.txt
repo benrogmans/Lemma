@@ -1,0 +1,152 @@
+**Anti-patterns**
+
+Inline comments (WRONG — `#` fails to parse):
+```lemma-skip
+data customer_age: number -> minimum 0 -> maximum 120  # input slot
+data tax_rate: 21%  # fixed policy constant
+rule discount: 0%  # default: no discount
+  unless qty >= 10 then 10%  # bulk rate
+```
+
+Commentary after `uses` (WRONG — fails to parse):
+```lemma-skip
+spec wholesale_nuts_pricing
+uses lemma units
+"""
+B2B pricing calculation for a wholesale nuts supplier.
+Handles product base pricing, organic premiums, and freight shipping.
+"""
+
+data base_price: number
+```
+
+Commentary after `data` (WRONG — fails to parse):
+```lemma-skip
+spec pricing
+
+data qty: number
+"""
+This is not valid commentary placement.
+"""
+
+rule discount: 0%
+```
+
+Commentary before `uses` (RIGHT):
+```lemma
+spec wholesale_nuts_pricing
+"""
+B2B pricing for a wholesale nuts supplier.
+Handles base pricing, organic premiums, volume discounts, and freight.
+"""
+
+uses lemma units
+
+data base_price: number
+```
+
+Commentary immediately after spec (RIGHT — no `uses`):
+```lemma
+spec pricing
+"""
+Customer age is an input; tax_rate is a fixed policy constant.
+"""
+
+data customer_age: number -> minimum 0 -> maximum 120
+data tax_rate: 21%
+data qty: number
+
+rule discount: 0%
+  unless qty >= 10 then 10%
+```
+
+Mega-rule (WRONG):
+```lemma-skip
+rule final_total:
+  base_price * qty
+  - base_price * qty * (0% unless qty >= 10 then 10% unless is_premium then 20%)
+  + (15 unless base_price * qty >= 100 then 10 unless base_price * qty >= 200 then 0)
+```
+
+Decomposed pipeline (RIGHT):
+```lemma
+spec order_pricing
+
+data base_price: number -> minimum 0
+data qty:        number -> minimum 0
+
+rule subtotal:             base_price * qty
+rule discount_percentage:  0% unless qty >= 10 then 10%
+rule discount_amount:      subtotal * discount_percentage
+rule total_after_discount: subtotal - discount_amount
+rule shipping_cost:        15 unless total_after_discount >= 100 then 10
+rule final_total:          total_after_discount + shipping_cost
+```
+
+Hardcoded input (WRONG):
+```lemma-skip
+rule discount: 10 * 0.1
+```
+
+Input as data (RIGHT):
+```lemma
+spec bulk_discount
+
+data qty: number -> minimum 0
+rule discount: qty * 0.1
+```
+
+Wrong unless order (WRONG — VIP gets 20%, not 25%):
+```lemma-skip
+rule discount: 0%
+  unless is_vip          then 25%
+  unless qty >= 50  then 20%
+```
+
+Correct order (RIGHT):
+```lemma
+spec tiered_discount
+
+data qty: number
+data is_vip:   boolean
+
+rule discount: 0%
+  unless qty >= 50  then 20%
+  unless is_vip          then 25%
+```
+
+Placeholder (WRONG):
+```lemma-skip
+data customer_name: "TODO"
+```
+
+Type-only input (RIGHT):
+```lemma
+spec customer_record
+
+data customer_name: text
+```
+
+Error vs Veto: `5 and "text"` is planning Error (invalid Lemma). `unless age > 120 then veto "Invalid age"` is runtime Veto (valid spec, domain no-value). Do not confuse.
+
+Unnecessary repo (WRONG):
+```lemma-skip
+repo default
+
+spec pricing
+
+data qty: number
+
+rule discount: 0%
+  unless qty >= 10 then 10%
+```
+
+Single-file spec (RIGHT):
+```lemma
+spec pricing
+
+data qty: number
+
+rule discount: 0%
+  unless qty >= 10 then 10%
+```

@@ -10,7 +10,7 @@ use super::common::{
 };
 use std::path::Path;
 
-pub const RESULTS_RELATIVE: &str = "documentation/reference/benchmarks/cli.md";
+pub const RESULTS_RELATIVE: &str = "cli/documentation/reference/benchmarks/cli.md";
 
 pub struct BenchCase {
     pub group: &'static str,
@@ -108,7 +108,7 @@ fn compose_report(
     out.push_str("## Methodology\n\n");
     out.push_str("### HTTP evaluate (`http_evaluate`)\n\n");
     out.push_str(
-        "- Spawns `lemma server --prefix documentation/examples` on `127.0.0.1:19877` once per Criterion group.\n",
+        "- Spawns `lemma server --prefix cli/documentation/examples` on `127.0.0.1:19877` once per Criterion group.\n",
     );
     out.push_str(
         "- Each iteration: blocking `reqwest` POST with `application/x-www-form-urlencoded` body \
@@ -116,7 +116,7 @@ fn compose_report(
     );
     out.push_str(&format!(
         "- Examples loaded from {}.\n",
-        github_source_link(&env.git_sha, "documentation/examples", true),
+        github_source_link(&env.git_sha, "cli/documentation/examples", true),
     ));
     out.push_str(
         "- Latency: Criterion (3s warmup, 10s measurement for evaluate group, 5s for show). Median and standard deviation reported.\n\n",
@@ -124,7 +124,7 @@ fn compose_report(
 
     out.push_str("### Engine profile (`engine_profile`)\n\n");
     out.push_str(
-        "- In-process: loads all `.lemma` files from `documentation/examples` into one `Engine`.\n",
+        "- In-process: loads all `.lemma` files from `cli/documentation/examples` into one `Engine`.\n",
     );
     out.push_str(
         "- Fixture: Dutch net salary (`net_salary`) with `gross_salary=5000 eur`, \
@@ -194,7 +194,7 @@ mod tests {
         assert!(report.contains("Envelope JSON serialize"));
         assert!(report.contains("| 1.000 ms |"));
         assert!(report.contains(
-            "[`documentation/examples`](https://github.com/lemma/lemma/tree/abc123/documentation/examples)"
+            "[`cli/documentation/examples`](https://github.com/lemma/lemma/tree/abc123/cli/documentation/examples)"
         ));
         assert!(!report.contains("](../../"));
     }

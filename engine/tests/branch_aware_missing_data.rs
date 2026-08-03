@@ -11,13 +11,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn coffee_example_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../documentation/examples/01_coffee_order.lemma")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/coffee_order.lemma")
 }
 
 fn net_salary_example_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../documentation/examples/nl/tax/net_salary.lemma")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/nl/tax/net_salary.lemma")
 }
 
 fn effective_2026() -> DateTimeValue {

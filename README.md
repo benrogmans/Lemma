@@ -225,7 +225,7 @@ rule bonus_percentage: 0%
     then veto "Review date must be after start date"
 ```
 
-A vetoed rule produces no result. See [veto](documentation/learn/types_and_units.md#veto).
+A vetoed rule produces no result. See [veto](cli/documentation/learn/types_and_units.md#veto).
 
 ### Registry dependencies
 
@@ -298,13 +298,14 @@ lemma server --prefix ./policies --watch
 
 ### MCP Server
 
-AI assistants interact with Lemma specs via the [Model Context Protocol](https://modelcontextprotocol.io):
+AI assistants interact with Lemma specs via the Model Context Protocol:
 
 ```bash
-lemma mcp             # read-only (evaluate, list, show)
+lemma mcp             # read-only (evaluate, list, show, check, guide)
 lemma mcp --admin     # also enable add_spec and source
 ```
 
+Authoring loop: `guide` → `check` (diagnostics) → `evaluate`. Resources expose `lemma://guide` and curated examples.
 ### WebAssembly
 
 ```bash
@@ -324,11 +325,11 @@ See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.1</version>
+  <version>0.9.2</version>
 </dependency>
 ```
 
-See [engine/packages/maven/README.md](engine/packages/maven/README.md) and [documentation/tools/maven.md](documentation/tools/maven.md).
+See [engine/packages/maven/README.md](engine/packages/maven/README.md) and [cli/documentation/tools/maven.md](cli/documentation/tools/maven.md).
 
 ### Docker
 
@@ -348,14 +349,14 @@ Supports `linux/amd64` and `linux/arm64`.
 
 ## Documentation
 
-- **[Learn guide](documentation/learn/readme.md)** -- guided path from first spec to composing specs
-- **[LLM guide (llms.txt)](documentation/llms.txt)** -- authoring Lemma from business logic
-- **[Composing specs](documentation/learn/composing_specs.md)** -- `uses`, temporal versions, pins
-- **[Reference](documentation/reference/readme.md)** -- operators, literals, syntax
-- **[Veto](documentation/learn/types_and_units.md#veto)** -- when rules produce no value
-- **[CLI Reference](documentation/reference/cli.md)** -- all commands and flags
-- **[Registry](documentation/reference/registry.md)** -- shared specs and `@` references
-- **[Examples](documentation/examples/)** -- example `.lemma` files
+- **[Learn guide](cli/documentation/learn/readme.md)** -- guided path from first spec to composing specs
+- **[LLM guide (llms.txt)](cli/documentation/llms.txt)** -- authoring Lemma from business logic
+- **[Composing specs](cli/documentation/learn/composing_specs.md)** -- `uses`, temporal versions, pins
+- **[Reference](cli/documentation/reference/readme.md)** -- operators, literals, syntax
+- **[Veto](cli/documentation/learn/types_and_units.md#veto)** -- when rules produce no value
+- **[CLI Reference](cli/documentation/reference/cli.md)** -- all commands and flags
+- **[Registry](cli/documentation/reference/registry.md)** -- shared specs and `@` references
+- **[Examples](cli/documentation/examples/)** -- example `.lemma` files
 
 ## Status
 
@@ -363,7 +364,7 @@ Lemma is pre-1.0. The language and APIs are stable for most use cases, but break
 
 ## Contributing
 
-Contributions welcome! See [Contributing](documentation/community/contributing.md) for setup and workflow.
+Contributions welcome! See [Contributing](cli/documentation/community/contributing.md) for setup and workflow.
 
 CI runs **`cargo precommit --fuzz`**. That is the PR bar: same gate as local **`cargo precommit`**, then 30 minutes of fuzz total across [`engine/fuzz`](engine/fuzz) targets. Use bare **`cargo precommit`** as a faster local shortcut (no fuzz). The gate covers **`versions-verify`**, Hex `mix precommit`, VS Code `npm precommit`, `fmt --check`, Clippy (`--all-features`), **`cargo check -p lemma-engine --no-default-features`**, Nextest (`--all-features`), WASM npm `build.js` + `test.js`, Maven `./mvnw -B verify` (after `lemma_jni` build), cargo-deny, and **`cargo coverage all --check`**. Install [`cargo-nextest`](https://nexte.st/), [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny), Elixir/Mix, [Node.js](https://nodejs.org/), [`wasm-pack`](https://rustwasm.github.io/wasm-pack/), and a **JDK 21+** first; for `--fuzz` also install nightly (`rustup install nightly`) and [`cargo-fuzz`](https://github.com/rust-fuzz/cargo-fuzz). Regenerate coverage with **`cargo coverage all`** when engine/cli sources change ([`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) required). `cargo nextest` alone is Rust tests only. When bumping the workspace release version, use **`cargo bump <version>`** and **`cargo verify`** (see [`xtask/README.md`](xtask/README.md)).
 
@@ -373,4 +374,4 @@ Apache 2.0 -- see LICENSE for details.
 
 ---
 
-**[GitHub](https://github.com/lemma/lemma)** -- **[Issues](https://github.com/lemma/lemma/issues)** -- **[Documentation](documentation/readme.md)**
+**[GitHub](https://github.com/lemma/lemma)** -- **[Issues](https://github.com/lemma/lemma/issues)** -- **[Documentation](cli/documentation/readme.md)**

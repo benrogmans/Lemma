@@ -1,0 +1,140 @@
+**Rules and unless: last matching clause wins**
+
+Write default expression, then: `unless <condition> then <result>`. Evaluated in source order. If multiple match, **bottommost wins**. Order general first, specific overrides last.
+
+Use **snake_case** rule names. Boolean rules as predicates: `is_eligible`, `can_ship`. Decompose logic into pipeline of named rules. No opaque single expressions.
+
+**Example F — overlapping unless (last wins)**
+
+```lemma
+spec vip_discount
+
+data qty: number
+data is_vip:   boolean
+
+rule discount: 0%
+  unless qty >= 10  then 10%
+  unless qty >= 50  then 20%
+  unless is_vip          then 25%
+```
+
+VIP customer ordering 75 items gets **25%** (not 20%). Both `qty >= 50` and `is_vip` match; bottommost wins.
+
+**Example G — progressive unless chain**
+
+```lemma
+spec rules_and_unless
+
+data is_premium:   yes
+data base_price:   number -> minimum 0
+data customer_age: number -> minimum 0 -> maximum 120
+data qty:          number -> minimum 0
+
+rule total_before_discount:
+  base_price * qty
+
+rule discount_percentage:
+  0%
+  unless qty >= 10 then 10%
+  unless qty >= 20 then 15%
+  unless is_premium   then 20%
+
+rule discount_amount:
+  total_before_discount * discount_percentage
+
+rule total_after_discount:
+  total_before_discount - discount_amount
+
+rule shipping_cost:
+  15
+  unless total_after_discount >= 100 then 10
+  unless total_after_discount >= 200 then 0
+
+rule final_total:
+  total_after_discount + shipping_cost
+```
+
+Tiered discounts, derived rules referencing prior rules, unless on computed values.
+
+**Example H — decomposed shipping pipeline**
+
+```lemma
+spec shipping_policy
+uses lemma units
+
+data destination_country: text
+  -> option "NL"
+  -> option "BE"
+  -> option "DE"
+  -> option "FR"
+  -> suggest "NL"
+
+data customer_tier: text
+  -> option "standard"
+  -> option "silver"
+  -> option "gold"
+  -> option "platinum"
+  -> suggest "gold"
+
+data destination_region: text
+data is_expedited:       boolean
+data is_hazardous:       boolean
+data is_po_box:          boolean
+data item_weight:        units.mass
+data order_total:        number -> minimum 0
+
+rule base_shipping_rate: 35
+  unless destination_country is "NL" then 22
+  unless destination_country is "BE" then 25
+  unless destination_country is "DE" then 28
+  unless destination_country is "FR" then 30
+
+rule weight_surcharge: 0
+  unless item_weight > 5 kilogram  then 7.5
+  unless item_weight > 20 kilogram
+    then veto "Item too heavy for standard shipping"
+
+rule po_box_fee: 0
+  unless is_po_box then 5
+
+rule expedited_fee: 0
+  unless is_expedited                           then 25
+  unless is_expedited and item_weight > 10 kilogram then 45
+
+rule hazardous_fee: 0
+  unless is_hazardous then 50
+  unless is_hazardous and destination_country is not "NL"
+    then veto "Cannot ship hazardous materials internationally"
+
+rule customer_discount: 0%
+  unless customer_tier is "silver"   then 10%
+  unless customer_tier is "gold"     then 20%
+  unless customer_tier is "platinum" then 30%
+
+rule free_shipping_eligible:
+  order_total >= 100 and destination_country is "NL"
+
+rule shipping_before_discount:
+  base_shipping_rate + weight_surcharge + po_box_fee
+  + expedited_fee + hazardous_fee
+
+rule shipping_discount_amount:
+  shipping_before_discount * customer_discount
+
+rule final_shipping:
+  shipping_before_discount - shipping_discount_amount
+  unless free_shipping_eligible then 0
+
+rule ships_to_location: true
+  unless is_po_box and is_hazardous
+    then veto "Cannot ship hazardous materials to PO boxes"
+  unless destination_region is "Svalbard"
+    then veto "Shipping not available to Svalbard"
+
+rule Summary: "Standard shipping"
+  unless free_shipping_eligible
+    then "Free shipping (order over €100)"
+  unless is_expedited then "Expedited shipping"
+```
+
+Each fee is distinct rule. `item_weight` uses `units.mass`. Veto clauses placed last in `weight_surcharge` and `ships_to_location`. Eligibility separated from amount rules.

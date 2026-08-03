@@ -2,7 +2,7 @@
 
 Rust integration tests for `lemma-engine`. Each `*.rs` file here is a separate test binary (public API only). Unit tests belong in `engine/src/**` under `#[cfg(test)]` (or the shared `engine/src/tests/` harness for private helpers).
 
-Published line-coverage totals and per-module tables: [`documentation/reference/coverage/engine.md`](../../documentation/reference/coverage/engine.md) (regenerate with `cargo coverage engine`).
+Published line-coverage totals and per-module tables: [`cli/documentation/reference/coverage/engine.md`](../../cli/documentation/reference/coverage/engine.md) (regenerate with `cargo coverage engine`).
 
 Run:
 
@@ -51,7 +51,7 @@ cargo nextest run -p lemma-engine --tests
 | `temporal_interface_deep_slice.rs` | Deep temporal interface |
 | `temporal_boundary_explosion.rs` | Boundary cases |
 | `temporal_cycle_panic.rs` | Invalid temporal cycles |
-| `spec_reference_scenarios.rs` | Composability contracts (unpinned/pinned `uses`, coverage, self-ref, `with`; see [composing_specs.md](../documentation/learn/composing_specs.md)) |
+| `spec_reference_scenarios.rs` | Composability contracts (unpinned/pinned `uses`, coverage, self-ref, `with`; see [composing_specs.md](../../cli/documentation/learn/composing_specs.md)) |
 | `temporal_self_uses.rs` | Cross-temporal same-name `uses` (implicit or explicit alias) |
 | `type_import_temporal.rs` | Type-only deps + temporal versions |
 | `spec_name_repository_plan_collision.rs` | Cross-repo spec name collision (regression) |
@@ -159,8 +159,6 @@ cargo nextest run -p lemma-engine --tests
 |------|--------|
 | `integration_comprehensive.rs` | Broad integration scenarios |
 | `integration_examples.rs` | CLI example `.lemma` files |
-| `documentation_examples.rs` | `documentation/examples/` |
-| `documentation_fences.rs` | `` ```lemma `` fences in repo `*.md` / `*.txt` |
 | `coffee_order.rs` | Coffee order example |
 
 ### Registry, WASM, limits
@@ -267,7 +265,7 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 | Spec graph | `nested_spec_references`, `cross_spec_references`, `required_data_names_nested_spec`, `inline_type_imports` |
 | Temporal | `temporal_slicing`, `type_import_temporal`, `temporal_range_references`, `temporal_type_resolver_instant`, `temporal_timezone_ordering`, `temporal_interface_deep_slice`, `temporal_boundary_explosion` |
 | Registry / plan identity | `spec_name_repository_plan_collision`, `repro_finance_dual_slice_registry_uses`, `load_wasm_planning_parity` |
-| Example E2E | `coffee_order`, `documentation_examples`, `documentation_fences`, `integration_examples`, `integration_comprehensive` |
+| Example E2E | `coffee_order`, `integration_examples`, `integration_comprehensive` |
 | Data QA matrix | `data_literals_coverage`, `data_type_declarations_coverage`, `data_binding_type_validation`, `data_with_values_contract`, `data_nested_bindings_coverage`, `data_references` |
 
 ### Regression guards and intentional reds
@@ -291,7 +289,7 @@ No integration file uses `#[should_panic]`.
 | No `computation/*` unit tests except datetime/rational/units | Add unit tests beside `arithmetic.rs` / `comparison.rs` for edge cases; keep integration matrix |
 | Thin `Engine::invert` integration surface | Extend when changing inversion UX; unit tests in `inversion/` are primary |
 | `evaluation/expression.rs` untested in isolation | Unit-test eval of individual ops; integration already heavy via `run` |
-| Duplicate example runners | `documentation_examples` vs `integration_examples` — different roots; keep both, share helpers if duplicated |
+| Duplicate example runners | `integration_examples` vs CLI `documentation_examples` — different roots; keep both |
 | Stale “must fail” comments | `spec_name_*` / `repro_finance_*` **pass** when fixed; comments describe failure mode if bug returns |
 
 ### CLI integration map

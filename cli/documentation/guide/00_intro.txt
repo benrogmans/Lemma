@@ -1,0 +1,11 @@
+# Lemma
+
+> Lemma: declarative business rule language. Translate natural-language policy to readable, deterministic `.lemma` specs. Inputs derived from rules — declare `data` with constraints. No runtime value invention.
+
+Goal: produce Lemma source for human reading and system evaluation. Prefer named pipeline rules. No clever one-liners. Split unrelated policies to separate specs.
+Use `lemma show` to inspect static interface (types, constraints, normalized rules). Run-data needs come from rule `missing_data` on `run` (not `show`).
+Explanations opt-in (`explain: true` / `lemma run -x`). Wire shape: `engine/schemas/api.v1.json` (`RuleResult.explanation` is `RuleNode`; nested nodes under `ExplanationNode`).
+
+**NO INLINE COMMENTS.** Lemma has no `#`, `//`, or `--` comment syntax. `#` starts parse error. No trailing remarks on `data` or `rule` lines.
+
+**Only doc in source:** commentary block `"""..."""`. Must be **very next tokens** after `spec` line (before `uses`, `data`, etc.). Nowhere else.

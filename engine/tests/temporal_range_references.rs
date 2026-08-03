@@ -1,6 +1,6 @@
 //! Integration tests for temporal range and spec references.
 //!
-//! Normative source: [Composing specs](../../documentation/learn/composing_specs.md).
+//! Normative source: [Composing specs](../../cli/documentation/learn/composing_specs.md).
 
 use lemma::{DateGranularity, DateTimeValue, Engine, SourceType};
 use std::collections::HashMap;
