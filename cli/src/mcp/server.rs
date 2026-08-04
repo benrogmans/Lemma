@@ -3,7 +3,9 @@ mod imp {
     use lemma::DateTimeValue;
     use lemma::Engine;
     use serde::{Deserialize, Serialize};
+    use std::fs;
     use std::io::{self, BufRead, Write};
+    use std::path::{Component, Path, PathBuf};
     use std::time::Duration;
     use tracing::{debug, error, info};
 
@@ -93,8 +95,8 @@ mod imp {
 
     /// Configuration for the MCP server.
     pub struct McpConfig {
-        /// When true, admin tools (`add_spec`, `source`) are
-        /// advertised and allowed. When false (default), the server is read-only.
+        /// When true, admin tools (`add_spec`, `update_spec`, `remove_spec`, `clear`, `fetch`)
+        /// are advertised and allowed. When false (default), the server is read-only.
         pub admin: bool,
         /// Wall-clock budget for handling a single request. Requests that
         /// exceed it get a JSON-RPC internal error; the worker finishes the
@@ -114,11 +116,152 @@ mod imp {
     struct McpServer {
         engine: Engine,
         config: McpConfig,
+        /// Workspace directory for admin persist (add / update / remove / clear / fetch).
+        workdir: PathBuf,
+    }
+
+    /// Resolve `workdir/source_path` for relative source ids. Rejects absolute paths and `..`.
+    fn validated_write_path(workdir: &Path, source_path: &Path) -> Result<PathBuf, McpError> {
+        if source_path.as_os_str().is_empty() {
+            return Err(McpError::invalid_params(
+                "source_id path must be non-empty".to_string(),
+            ));
+        }
+        if source_path.is_absolute() {
+            return Err(McpError::invalid_params(
+                "source_id must be a relative path within the workspace".to_string(),
+            ));
+        }
+        for component in source_path.components() {
+            match component {
+                Component::Normal(_) | Component::CurDir => {}
+                Component::ParentDir => {
+                    return Err(McpError::invalid_params(
+                        "source_id must not contain '..'".to_string(),
+                    ));
+                }
+                _ => {
+                    return Err(McpError::invalid_params(
+                        "source_id must be a relative path within the workspace".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(workdir.join(source_path))
+    }
+
+    /// Absolute Path sources (workspace load) must still resolve under workdir.
+    fn absolute_path_under_workdir(
+        workdir: &Path,
+        source_path: &Path,
+    ) -> Result<PathBuf, McpError> {
+        let workdir_canon = fs::canonicalize(workdir).map_err(|e| {
+            McpError::internal_error(format!(
+                "Failed to resolve workspace {}: {e}",
+                workdir.display()
+            ))
+        })?;
+        let path_canon =
+            fs::canonicalize(source_path).unwrap_or_else(|_| source_path.to_path_buf());
+        if !path_canon.starts_with(&workdir_canon) {
+            return Err(McpError::invalid_params(format!(
+                "path {} is outside the workspace",
+                source_path.display()
+            )));
+        }
+        Ok(path_canon)
+    }
+
+    /// Atomic write: temp file in same directory, fsync, rename.
+    fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
+        let file_name = path.file_name().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "persist path must include a file name",
+            )
+        })?;
+        let dir = match path.parent() {
+            Some(p) if !p.as_os_str().is_empty() => p,
+            _ => Path::new("."),
+        };
+        fs::create_dir_all(dir)?;
+        let tmp = dir.join(format!(".{}.tmp", file_name.to_string_lossy()));
+        match (|| -> io::Result<()> {
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(contents.as_bytes())?;
+            f.sync_all()?;
+            fs::rename(&tmp, path)?;
+            Ok(())
+        })() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = fs::remove_file(&tmp);
+                Err(e)
+            }
+        }
     }
 
     impl McpServer {
-        fn new(engine: Engine, config: McpConfig) -> Self {
-            Self { engine, config }
+        fn new(engine: Engine, config: McpConfig, workdir: PathBuf) -> Self {
+            Self {
+                engine,
+                config,
+                workdir,
+            }
+        }
+
+        /// Disk path for this source. Always a concrete path — never optional skip.
+        fn disk_path(&self, source_type: &lemma::SourceType) -> Result<PathBuf, McpError> {
+            match source_type {
+                lemma::SourceType::Path(source_path) => {
+                    let path = source_path.as_ref();
+                    if path.is_absolute() {
+                        absolute_path_under_workdir(&self.workdir, path)
+                    } else {
+                        validated_write_path(&self.workdir, path)
+                    }
+                }
+                lemma::SourceType::Dependency(id) if id == lemma::EMBEDDED_STDLIB_REPOSITORY => {
+                    Err(McpError::invalid_params(
+                        "cannot mutate the embedded standard library".to_string(),
+                    ))
+                }
+                lemma::SourceType::Dependency(id) => {
+                    Ok(lemma::deps::dependency_cache_file(&self.workdir, id))
+                }
+                lemma::SourceType::Volatile => Err(McpError::invalid_params(
+                    "volatile sources cannot be persisted".to_string(),
+                )),
+            }
+        }
+
+        fn formatted_persist_source(code: &str, source_type: &lemma::SourceType) -> String {
+            lemma::format_source(code, source_type.clone()).expect(
+                "BUG: format_source must succeed after engine load/update accepted the source",
+            )
+        }
+
+        /// Remove every spec that `code` defined (reverse parse order) so dependents
+        /// of an add can be torn down after a failed disk write.
+        fn rollback_added_source(&mut self, code: &str, source_type: &lemma::SourceType) {
+            let parsed = lemma::parse(code, source_type.clone(), &lemma::ResourceLimits::default())
+                .expect("BUG: source already loaded successfully must parse for rollback");
+            let mut removals: Vec<(Option<String>, String, Option<DateTimeValue>)> = Vec::new();
+            for (repo, specs) in parsed.repositories {
+                let repo_name = repo.name.clone();
+                for spec in specs {
+                    removals.push((
+                        repo_name.clone(),
+                        spec.name.clone(),
+                        spec.effective_from().cloned(),
+                    ));
+                }
+            }
+            for (repo, name, eff) in removals.into_iter().rev() {
+                self.engine
+                    .remove(repo.as_deref(), &name, eff.as_ref())
+                    .expect("BUG: rollback remove after failed persist must succeed");
+            }
         }
 
         /// JSON-RPC 2.0: requests with no `id` are notifications and MUST NOT
@@ -206,7 +349,7 @@ mod imp {
             let mut tools = vec![
                 serde_json::json!({
                     "name": "evaluate",
-                    "description": "Evaluate rules in a Lemma spec. Returns each rule's display value plus every declared measure/ratio unit map, and a step-by-step reasoning trace. Omit 'rule' to evaluate all rules. Prefer 'show' first to learn data/rule interfaces.",
+                    "description": "Evaluate rules. Pass `rule` to target one rule; omit for all. For human intake: call guide (default = evaluate guide; not topic full), then list, show once, evaluate. missing_data lines include name, type, and help. Primary loop: after each user turn, bind every field that utterance decides (entailments), re-evaluate; ask at most one open topic-question when something remains. Never ask the user what the policy means. Never dispose interpretation as truth; use “should” when a judgment call cannot be answered. When the rule answers, present details+answer in domain language for user verify (no tooling jargon to the user) before treating as done. No questionnaire dumps. No re-call show between asks. Do not dump every show data field into evaluate. Returns display values, unit maps, reasoning, and missing_data when inputs are still needed.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -221,7 +364,7 @@ mod imp {
                             "data": {
                                 "type": "array",
                                 "items": { "type": "string" },
-                                "description": "Optional data values as 'name=value' (e.g. ['price=100', 'measure=5'])",
+                                "description": "Optional data values as 'name=value' (e.g. ['price=100', 'measure=5']). Partial is fine.",
                                 "default": []
                             },
                             "effective": {
@@ -234,7 +377,7 @@ mod imp {
                 }),
                 serde_json::json!({
                     "name": "list",
-                    "description": "List loaded specs grouped by repository (metadata only: name, effective_from, effective_to). Use the show tool for data/rule interfaces.",
+                    "description": "List loaded specs by repository (name, effective_from, effective_to). Call this first when you do not already know the exact spec name. Do not invent or guess spec names. For human intake call guide (default evaluate guide), then show once and evaluate.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {}
@@ -242,7 +385,7 @@ mod imp {
                 }),
                 serde_json::json!({
                     "name": "show",
-                    "description": "Return the JSON Show for a spec: data inputs (types, constraints, suggestions, units) and rules (output types including units). Call this before evaluate.",
+                    "description": "Return JSON Show for a spec: data catalog (types, constraints, suggestions, units, help) and rule output types. Call once after list. Static interface — not a required-input list, not a questionnaire, not something to re-call between evaluate/ask turns. Human intake: call guide (default = evaluate guide).",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -259,62 +402,6 @@ mod imp {
                     }
                 }),
                 serde_json::json!({
-                    "name": "check",
-                    "description": "Parse and plan a batch of Lemma sources without mutating server state. On success confirms all sources planned. On failure returns structured diagnostics (kind, message, suggestion, source line/column). Sources resolve cross-file `uses` within the batch. A leading `@` label loads as a dependency. Lemma has no `#` or `//` comments; commentary is valid only as a docstring immediately after the `spec` line. Call guide for authoring rules before drafting.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "sources": {
-                                "type": "array",
-                                "items": {
-                                    "type": "array",
-                                    "items": { "type": "string" },
-                                    "minItems": 2,
-                                    "maxItems": 2
-                                },
-                                "description": "Array of [label, code] pairs. Label is the source path (e.g. 'pricing.lemma') or a dependency identifier (e.g. '@org/repo')."
-                            }
-                        },
-                        "required": ["sources"]
-                    }
-                }),
-                serde_json::json!({
-                    "name": "guide",
-                    "description": "Return a section of the Lemma authoring guide (llms.txt). Topics: syntax, data, rules, units, veto, composition, anti_patterns. Start with syntax and anti_patterns before writing specs. Lemma has no `#` or `//` comments.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "topic": {
-                                "type": "string",
-                                "enum": ["syntax", "data", "rules", "units", "veto", "composition", "anti_patterns"],
-                                "description": "Guide section to return"
-                            }
-                        },
-                        "required": ["topic"]
-                    }
-                }),
-            ];
-
-            if self.config.admin {
-                tools.push(serde_json::json!({
-                    "name": "add_spec",
-                    "description": "Load Lemma source into the engine (mutates state). Prefer check for draft validation. Returns each new spec's JSON Show on success; structured diagnostics with isError on failure. Commentary is valid only as a docstring immediately after the `spec` line; `#` and `//` comments do not exist.",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "The complete Lemma code to add"
-                            },
-                            "source_id": {
-                                "type": "string",
-                                "description": "Identifier for this source fragment (used as load path)"
-                            }
-                        },
-                        "required": ["code", "source_id"]
-                    }
-                }));
-                tools.push(serde_json::json!({
                     "name": "source",
                     "description": "Return formatted Lemma source. Pass `repository` (e.g. `lemma` for embedded units stdlib) for the whole repo, or `spec` for a workspace spec.",
                     "inputSchema": {
@@ -334,6 +421,140 @@ mod imp {
                             }
                         }
                     }
+                }),
+                serde_json::json!({
+                    "name": "check",
+                    "description": "Validate Lemma sources (does not load). On success confirms syntax is valid. Call add_spec to load after check passes. On failure returns structured diagnostics (kind, message, suggestion, source line/column). Sources resolve cross-file `uses` within the batch. A leading `@` label loads as a dependency. Lemma has no `#` or `//` comments; commentary is valid only as a docstring immediately after the `spec` line. Before drafting new specs, call guide with topic full.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "sources": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "items": { "type": "string" },
+                                    "minItems": 2,
+                                    "maxItems": 2
+                                },
+                                "description": "Array of [label, code] pairs. Label is the source path (e.g. 'pricing.lemma') or a dependency identifier (e.g. '@org/repo')."
+                            }
+                        },
+                        "required": ["sources"]
+                    }
+                }),
+                serde_json::json!({
+                    "name": "guide",
+                    "description": "Return a Lemma guide. Omit topic for the evaluate guide (CS intake with loaded specs — default). Pass topic full only when authoring new Lemma specs (complete authoring guide). Other topics are authoring sections: method, syntax, data, rules, units, veto, composition, natural_language, anti_patterns; topic evaluate is the same as the default.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {
+                                "type": "string",
+                                "enum": ["method", "syntax", "data", "rules", "units", "veto", "composition", "natural_language", "anti_patterns", "evaluate", "full"],
+                                "description": "Optional. Omit for evaluate guide. Use full only when authoring new specs."
+                            }
+                        }
+                    }
+                }),
+            ];
+
+            if self.config.admin {
+                tools.push(serde_json::json!({
+                    "name": "add_spec",
+                    "description": "Load Lemma source as one or more specs (persists). Prefer check first; check alone does not load. On failure returns structured diagnostics. After success, present the full source in chat for user verify.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "description": "The complete Lemma code to add"
+                            },
+                            "source_id": {
+                                "type": "string",
+                                "description": "Stable id for this source (e.g. pricing.lemma)"
+                            }
+                        },
+                        "required": ["code", "source_id"]
+                    }
+                }));
+                tools.push(serde_json::json!({
+                    "name": "update_spec",
+                    "description": "Replace an existing spec with new source. After success, present the full source in chat for user verify.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "spec": {
+                                "type": "string",
+                                "description": "Name of the spec to replace"
+                            },
+                            "code": {
+                                "type": "string",
+                                "description": "The complete new Lemma source"
+                            },
+                            "source_id": {
+                                "type": "string",
+                                "description": "Stable id for this source (e.g. pricing.lemma)"
+                            },
+                            "repository": {
+                                "type": "string",
+                                "description": "Repository qualifier when the spec is not in the workspace"
+                            },
+                            "effective": {
+                                "type": "string",
+                                "description": "Effective datetime of the version to replace"
+                            }
+                        },
+                        "required": ["spec", "code", "source_id"]
+                    }
+                }));
+                tools.push(serde_json::json!({
+                    "name": "remove_spec",
+                    "description": "Remove one spec version. Omit effective to remove the origin version; pass effective to remove that version.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "spec": {
+                                "type": "string",
+                                "description": "Name of the spec to remove"
+                            },
+                            "repository": {
+                                "type": "string",
+                                "description": "Repository qualifier when the spec is not in the workspace"
+                            },
+                            "effective": {
+                                "type": "string",
+                                "description": "Effective datetime of the version to remove"
+                            }
+                        },
+                        "required": ["spec"]
+                    }
+                }));
+                tools.push(serde_json::json!({
+                    "name": "clear",
+                    "description": "Remove all specs.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }));
+                tools.push(serde_json::json!({
+                    "name": "fetch",
+                    "description": "Fetch a registry dependency (e.g. @iso/countries) and load it. Pass force=true to overwrite an existing copy.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "dependency": {
+                                "type": "string",
+                                "description": "Registry identifier including @, e.g. @iso/countries"
+                            },
+                            "force": {
+                                "type": "boolean",
+                                "description": "Overwrite if already present (default false)",
+                                "default": false
+                            }
+                        },
+                        "required": ["dependency"]
+                    }
                 }));
             }
 
@@ -343,9 +564,9 @@ mod imp {
         fn list_resources(&self) -> Result<serde_json::Value, McpError> {
             let mut resources = vec![serde_json::json!({
                 "uri": "lemma://guide",
-                "name": "Lemma authoring guide",
+                "name": "Lemma evaluate guide",
                 "mimeType": "text/plain",
-                "description": "Full llms.txt authoring guide. Prefer the guide tool with a topic for a focused slice."
+                "description": "Default evaluate guide for CS intake. Same as guide tool with no topic. Use lemma://guide/full only when authoring."
             })];
             for topic in crate::mcp::guide::GuideTopic::ALL {
                 resources.push(serde_json::json!({
@@ -387,12 +608,13 @@ mod imp {
 
         fn resource_text(&self, uri: &str) -> Result<&'static str, McpError> {
             if uri == "lemma://guide" {
-                return Ok(crate::mcp::guide::LLMS_TXT);
+                return Ok(crate::mcp::guide::EVALUATE_GUIDE);
             }
             if let Some(topic_name) = uri.strip_prefix("lemma://guide/") {
                 let topic = crate::mcp::guide::GuideTopic::parse(topic_name).ok_or_else(|| {
                     McpError::invalid_params(format!(
-                        "Unknown guide topic '{topic_name}'. Valid: syntax, data, rules, units, veto, composition, anti_patterns"
+                        "Unknown guide topic '{topic_name}'. Valid: {}",
+                        crate::mcp::guide::GuideTopic::VALID_LIST
                     ))
                 })?;
                 return Ok(topic.section_text());
@@ -425,11 +647,19 @@ mod imp {
             debug!("Calling tool: {}", tool_name);
 
             match tool_name {
-                "add_spec" | "source" if !self.config.admin => Err(McpError::invalid_params(
-                    "Admin tools are disabled. Start the server with --admin to enable them."
-                        .to_string(),
-                )),
+                "add_spec" | "update_spec" | "remove_spec" | "clear" | "fetch"
+                    if !self.config.admin =>
+                {
+                    Err(McpError::invalid_params(
+                        "Admin tools are disabled. Start the server with --admin to enable them."
+                            .to_string(),
+                    ))
+                }
                 "add_spec" => self.tool_add_spec(arguments),
+                "update_spec" => self.tool_update_spec(arguments),
+                "remove_spec" => self.tool_remove_spec(arguments),
+                "clear" => self.tool_clear(arguments),
+                "fetch" => self.tool_fetch(arguments),
                 "source" => self.tool_source(arguments),
                 "evaluate" => self.tool_evaluate(arguments),
                 "list" => self.tool_list(arguments),
@@ -480,6 +710,605 @@ mod imp {
             &mut self,
             args: &serde_json::Value,
         ) -> Result<serde_json::Value, McpError> {
+            let (code, source_type) = Self::parse_code_and_source(args)?;
+            let path = self.disk_path(&source_type)?;
+
+            if let Err(load_err) = self.engine.load([(source_type.clone(), code.to_string())]) {
+                return Ok(Self::load_diagnostics_tool_result(load_err));
+            }
+
+            let formatted = Self::formatted_persist_source(code, &source_type);
+            if let Err(e) = atomic_write(&path, &formatted) {
+                self.rollback_added_source(code, &source_type);
+                return Err(McpError::internal_error(format!(
+                    "Failed to persist source to {}: {e}",
+                    path.display()
+                )));
+            }
+
+            info!("Spec added from source '{source_type}'");
+
+            Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "Spec added successfully."
+                }]
+            }))
+        }
+
+        fn tool_update_spec(
+            &mut self,
+            args: &serde_json::Value,
+        ) -> Result<serde_json::Value, McpError> {
+            let spec = args["spec"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
+
+            let (code, source_type) = Self::parse_code_and_source(args)?;
+            let path = self.disk_path(&source_type)?;
+
+            let repository = args["repository"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+
+            let effective = match args.get("effective").and_then(|v| v.as_str()) {
+                None => None,
+                Some(raw) => Some(
+                    lemma::resolve_effective(Some(raw))
+                        .map_err(|e| McpError::invalid_params(e.to_string()))?,
+                ),
+            };
+
+            let rollback_snapshot =
+                match self
+                    .engine
+                    .source(repository, Some(spec), effective.as_ref())
+                {
+                    Ok(old_code) => {
+                        let show = self
+                            .engine
+                            .show(repository, spec, effective.as_ref())
+                            .expect("BUG: source succeeded so show must succeed for same identity");
+                        let old_source_type = show.source_type.expect(
+                            "BUG: loaded spec must carry source_type for update persist rollback",
+                        );
+                        Some((old_source_type, old_code))
+                    }
+                    Err(_) => None,
+                };
+
+            if let Err(load_err) = self.engine.update(
+                repository,
+                spec,
+                effective.as_ref(),
+                source_type.clone(),
+                code.to_string(),
+            ) {
+                return Ok(Self::load_diagnostics_tool_result(load_err));
+            }
+
+            let formatted = Self::formatted_persist_source(code, &source_type);
+            if let Err(e) = atomic_write(&path, &formatted) {
+                let (old_source_type, old_code) = rollback_snapshot
+                    .expect("BUG: successful update with persist requires rollback snapshot");
+                self.engine
+                    .update(
+                        repository,
+                        spec,
+                        effective.as_ref(),
+                        old_source_type,
+                        old_code,
+                    )
+                    .expect("BUG: restore previous spec after failed persist must succeed");
+                return Err(McpError::internal_error(format!(
+                    "Failed to persist source to {}: {e}",
+                    path.display()
+                )));
+            }
+
+            info!("Spec '{spec}' updated from source '{source_type}'");
+
+            Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "Spec updated successfully."
+                }]
+            }))
+        }
+
+        /// Remove every loaded temporal row whose `show.source_type` equals `source_type`.
+        fn remove_all_with_source_type(&mut self, source_type: &lemma::SourceType) {
+            let mut removals: Vec<(Option<String>, String, Option<DateTimeValue>)> = Vec::new();
+            for repo_group in self.engine.list() {
+                let repo = repo_group.repository.clone();
+                for listed in repo_group.specs {
+                    let show = self
+                        .engine
+                        .show(
+                            repo.as_deref(),
+                            &listed.name,
+                            listed.effective_from.as_ref(),
+                        )
+                        .expect("BUG: listed spec must show for source_type scan");
+                    if show.source_type.as_ref() == Some(source_type) {
+                        removals.push((repo.clone(), listed.name, listed.effective_from));
+                    }
+                }
+            }
+            for (repo, name, eff) in removals {
+                self.engine
+                    .remove(repo.as_deref(), &name, eff.as_ref())
+                    .expect("BUG: remove of previously listed source_type row must succeed");
+            }
+        }
+
+        fn tool_remove_spec(
+            &mut self,
+            args: &serde_json::Value,
+        ) -> Result<serde_json::Value, McpError> {
+            let spec = args["spec"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| McpError::invalid_params("Missing 'spec' field".to_string()))?;
+
+            let repository = args["repository"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+
+            let effective = match args.get("effective").and_then(|v| v.as_str()) {
+                None => None,
+                Some(raw) => Some(
+                    lemma::resolve_effective(Some(raw))
+                        .map_err(|e| McpError::invalid_params(e.to_string()))?,
+                ),
+            };
+
+            let show = match self.engine.show(repository, spec, effective.as_ref()) {
+                Ok(show) => show,
+                Err(err) => {
+                    error!("{}", err);
+                    let diagnostics = vec![lemma::EngineError::from(&err)];
+                    let text = serde_json::to_string_pretty(&diagnostics)
+                        .expect("BUG: EngineError diagnostics must serialize");
+                    return Ok(serde_json::json!({
+                        "content": [{
+                            "type": "text",
+                            "text": text
+                        }],
+                        "isError": true
+                    }));
+                }
+            };
+
+            let source_type = show
+                .source_type
+                .expect("BUG: loaded spec must carry source_type for remove");
+            let path = self.disk_path(&source_type)?;
+            let file_snapshot = fs::read_to_string(&path).map_err(|e| {
+                McpError::internal_error(format!(
+                    "Failed to snapshot {} before remove: {e}",
+                    path.display()
+                ))
+            })?;
+
+            // Sibling temporal rows that share this Path (exclude the row about to be removed).
+            let mut siblings: Vec<(Option<String>, String, Option<DateTimeValue>)> = Vec::new();
+            for repo_group in self.engine.list() {
+                let repo = repo_group.repository.clone();
+                for listed in repo_group.specs {
+                    let same_identity = repo.as_deref() == repository
+                        && listed.name == spec
+                        && listed.effective_from == effective;
+                    if same_identity {
+                        continue;
+                    }
+                    let sibling_show = self
+                        .engine
+                        .show(
+                            repo.as_deref(),
+                            &listed.name,
+                            listed.effective_from.as_ref(),
+                        )
+                        .expect("BUG: listed sibling must show");
+                    if sibling_show.source_type.as_ref() == Some(&source_type) {
+                        siblings.push((repo.clone(), listed.name, listed.effective_from));
+                    }
+                }
+            }
+
+            if let Err(err) = self.engine.remove(repository, spec, effective.as_ref()) {
+                error!("{}", err);
+                let diagnostics = vec![lemma::EngineError::from(&err)];
+                let text = serde_json::to_string_pretty(&diagnostics)
+                    .expect("BUG: EngineError diagnostics must serialize");
+                return Ok(serde_json::json!({
+                    "content": [{
+                        "type": "text",
+                        "text": text
+                    }],
+                    "isError": true
+                }));
+            }
+
+            let disk_result = if siblings.is_empty() {
+                match fs::remove_file(&path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(e),
+                }
+            } else {
+                let mut pieces: Vec<String> = Vec::with_capacity(siblings.len());
+                for (repo, name, eff) in &siblings {
+                    let piece = self
+                        .engine
+                        .source(repo.as_deref(), Some(name), eff.as_ref())
+                        .expect("BUG: sibling remaining after remove must have source");
+                    pieces.push(piece);
+                }
+                atomic_write(&path, &pieces.join("\n\n"))
+            };
+
+            if let Err(e) = disk_result {
+                self.remove_all_with_source_type(&source_type);
+                self.engine
+                    .load([(source_type, file_snapshot)])
+                    .expect("BUG: restore file after failed remove persist must succeed");
+                return Err(McpError::internal_error(format!(
+                    "Failed to persist remove to {}: {e}",
+                    path.display()
+                )));
+            }
+
+            info!("Spec '{spec}' removed");
+
+            Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Spec '{spec}' removed.")
+                }]
+            }))
+        }
+
+        fn tool_clear(&mut self, _args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+            for path in Self::workspace_lemma_files(&self.workdir)? {
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(McpError::internal_error(format!(
+                            "Failed to delete {}: {e}",
+                            path.display()
+                        )));
+                    }
+                }
+            }
+
+            self.engine = Engine::new();
+            info!("Engine cleared");
+
+            Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "Removed all specs."
+                }]
+            }))
+        }
+
+        /// Every `.lemma` file under `workdir` (or `workdir` itself when it is a file).
+        fn workspace_lemma_files(workdir: &Path) -> Result<Vec<PathBuf>, McpError> {
+            if workdir.is_file() {
+                return Ok(vec![workdir.to_path_buf()]);
+            }
+            if !workdir.is_dir() {
+                return Ok(Vec::new());
+            }
+            let mut paths = Vec::new();
+            for entry in walkdir::WalkDir::new(workdir) {
+                let entry = entry.map_err(|e| {
+                    McpError::internal_error(format!("Failed to walk workspace during clear: {e}"))
+                })?;
+                if entry.file_type().is_file()
+                    && entry.path().extension().and_then(|s| s.to_str()) == Some("lemma")
+                {
+                    paths.push(entry.path().to_path_buf());
+                }
+            }
+            Ok(paths)
+        }
+
+        fn make_fetch_registry() -> Box<dyn lemma::Registry> {
+            match std::env::var_os("LEMMA_REGISTRY_FIXTURES") {
+                Some(dir) => Box::new(lemma::LemmaBase::with_fixture_dir(PathBuf::from(dir))),
+                None => Box::new(lemma::LemmaBase::new()),
+            }
+        }
+
+        fn dependency_in_engine(engine: &Engine, dependency: &str) -> bool {
+            engine
+                .list()
+                .iter()
+                .any(|repo| repo.repository.as_deref() == Some(dependency))
+        }
+
+        /// Remove every temporal row currently loaded under `dependency`.
+        fn unload_dependency(engine: &mut Engine, dependency: &str) {
+            let rows: Vec<(String, Option<DateTimeValue>)> = engine
+                .list()
+                .into_iter()
+                .find(|repo| repo.repository.as_deref() == Some(dependency))
+                .map(|repo| {
+                    repo.specs
+                        .into_iter()
+                        .map(|spec| (spec.name, spec.effective_from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (name, effective) in rows {
+                engine
+                    .remove(Some(dependency), &name, effective.as_ref())
+                    .expect("BUG: unload of previously listed dependency row must succeed");
+            }
+        }
+
+        fn tool_fetch(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+            let dependency = args["dependency"]
+                .as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    McpError::invalid_params("Missing 'dependency' field".to_string())
+                })?;
+
+            if !dependency.starts_with('@') {
+                return Err(McpError::invalid_params(format!(
+                    "Dependency must be a registry identifier starting with '@' (got '{dependency}')"
+                )));
+            }
+
+            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let workdir = &self.workdir;
+
+            lemma::parse_spec_set_id(dependency)
+                .map_err(|e| McpError::invalid_params(e.to_string()))?;
+
+            let registry = Self::make_fetch_registry();
+            let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+                McpError::internal_error(format!("Failed to start async runtime for fetch: {e}"))
+            })?;
+            let bundle = runtime.block_on(registry.get(dependency)).map_err(|e| {
+                McpError::internal_error(format!("Registry error for {dependency}: {}", e.message))
+            })?;
+
+            let source_text = bundle.source;
+            let limits = lemma::ResourceLimits::default();
+            let source_type = lemma::SourceType::Dependency(dependency.to_string());
+
+            let new_specs = lemma::parse(&source_text, source_type.clone(), &limits)
+                .map_err(|e| {
+                    McpError::internal_error(format!(
+                        "Registry returned unparseable dependency: {}",
+                        e.message()
+                    ))
+                })?
+                .into_flattened_specs();
+            let new_spec_names: std::collections::HashSet<String> =
+                new_specs.iter().map(|s| s.name.clone()).collect();
+
+            let deps_dir = lemma::deps::lemma_deps_dir(workdir);
+            let destination_relative = lemma::deps::relative_dependency_cache_path(dependency);
+            let destination_absolute = deps_dir.join(&destination_relative);
+
+            let mut conflict_paths: Vec<PathBuf> = Vec::new();
+            if deps_dir.exists() {
+                for entry in walkdir::WalkDir::new(&deps_dir) {
+                    let entry = entry.map_err(|e| {
+                        McpError::internal_error(format!("Failed to walk lemma_deps: {e}"))
+                    })?;
+                    if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
+                        continue;
+                    }
+                    let path = entry.path();
+                    let existing_content = fs::read_to_string(path).map_err(|e| {
+                        McpError::internal_error(format!("Failed to read {}: {e}", path.display()))
+                    })?;
+                    if existing_content == source_text && path == destination_absolute {
+                        if !Self::dependency_in_engine(&self.engine, dependency) {
+                            if let Err(load_err) = self
+                                .engine
+                                .load([(source_type.clone(), source_text.clone())])
+                            {
+                                return Ok(Self::load_diagnostics_tool_result(load_err));
+                            }
+                        }
+                        let message = format!(
+                            "Already up to date: {} -> {}",
+                            dependency,
+                            destination_relative.display()
+                        );
+                        info!("{message}");
+                        return Ok(serde_json::json!({
+                            "content": [{ "type": "text", "text": message }]
+                        }));
+                    }
+                    let existing_specs = match lemma::parse(
+                        &existing_content,
+                        lemma::SourceType::Path(std::sync::Arc::new(path.to_path_buf())),
+                        &limits,
+                    ) {
+                        Ok(parsed) => parsed.into_flattened_specs(),
+                        Err(_) => continue,
+                    };
+                    let conflict: Vec<&str> = existing_specs
+                        .iter()
+                        .filter(|s| new_spec_names.contains(&s.name))
+                        .map(|s| s.name.as_str())
+                        .collect();
+                    if !conflict.is_empty() {
+                        if path == destination_absolute {
+                            continue;
+                        }
+                        if !force {
+                            return Err(McpError::invalid_params(format!(
+                                "Dependency containing spec(s) {} already exists in {}.\n\
+                                 Content has changed on the registry. Re-run with force=true to overwrite.",
+                                conflict.join(", "),
+                                path.display()
+                            )));
+                        }
+                        conflict_paths.push(path.to_path_buf());
+                    }
+                }
+            }
+
+            if destination_absolute.exists() {
+                let existing = fs::read_to_string(&destination_absolute).map_err(|e| {
+                    McpError::internal_error(format!(
+                        "Failed to read {}: {e}",
+                        destination_absolute.display()
+                    ))
+                })?;
+                if existing == source_text && !force {
+                    if !Self::dependency_in_engine(&self.engine, dependency) {
+                        if let Err(load_err) = self
+                            .engine
+                            .load([(source_type.clone(), source_text.clone())])
+                        {
+                            return Ok(Self::load_diagnostics_tool_result(load_err));
+                        }
+                    }
+                    let message = format!(
+                        "Already up to date: {} -> {}",
+                        dependency,
+                        destination_relative.display()
+                    );
+                    info!("{message}");
+                    return Ok(serde_json::json!({
+                        "content": [{ "type": "text", "text": message }]
+                    }));
+                }
+            }
+
+            // Validate the bundle plans before mutating server state or disk.
+            let mut probe = Engine::new();
+            if let Err(load_err) = probe.load([(source_type.clone(), source_text.clone())]) {
+                return Ok(Self::load_diagnostics_tool_result(load_err));
+            }
+
+            let already_loaded = Self::dependency_in_engine(&self.engine, dependency);
+            let rollback_source = if already_loaded {
+                Some(
+                    self.engine
+                        .source(Some(dependency), None, None)
+                        .map_err(|e| {
+                            McpError::internal_error(format!(
+                                "Failed to snapshot existing dependency '{dependency}' for rollback: {e}"
+                            ))
+                        })?,
+                )
+            } else {
+                None
+            };
+
+            if already_loaded {
+                if !force
+                    && destination_absolute.exists()
+                    && fs::read_to_string(&destination_absolute)
+                        .map(|c| c == source_text)
+                        .unwrap_or(false)
+                {
+                    let message = format!(
+                        "Already up to date: {} -> {}",
+                        dependency,
+                        destination_relative.display()
+                    );
+                    return Ok(serde_json::json!({
+                        "content": [{ "type": "text", "text": message }]
+                    }));
+                }
+                if !force {
+                    return Err(McpError::invalid_params(format!(
+                        "Dependency '{dependency}' is already loaded. Re-run with force=true to overwrite."
+                    )));
+                }
+                Self::unload_dependency(&mut self.engine, dependency);
+            }
+
+            if let Err(load_err) = self
+                .engine
+                .load([(source_type.clone(), source_text.clone())])
+            {
+                if let Some(old) = rollback_source.as_ref() {
+                    self.engine
+                        .load([(
+                            lemma::SourceType::Dependency(dependency.to_string()),
+                            old.clone(),
+                        )])
+                        .expect("BUG: restore previous dependency after failed load must succeed");
+                }
+                return Ok(Self::load_diagnostics_tool_result(load_err));
+            }
+
+            let removed_conflict_snapshots: Vec<(PathBuf, String)> = {
+                let mut snaps = Vec::new();
+                for path in &conflict_paths {
+                    let content = fs::read_to_string(path).map_err(|e| {
+                        McpError::internal_error(format!(
+                            "Failed to snapshot conflict file {}: {e}",
+                            path.display()
+                        ))
+                    })?;
+                    snaps.push((path.clone(), content));
+                }
+                snaps
+            };
+
+            for (path, _) in &removed_conflict_snapshots {
+                fs::remove_file(path).map_err(|e| {
+                    McpError::internal_error(format!(
+                        "Failed to remove conflict file {}: {e}",
+                        path.display()
+                    ))
+                })?;
+            }
+
+            if let Err(e) = atomic_write(&destination_absolute, &source_text) {
+                for (path, content) in &removed_conflict_snapshots {
+                    let _ = atomic_write(path, content);
+                }
+                Self::unload_dependency(&mut self.engine, dependency);
+                if let Some(old) = rollback_source {
+                    self.engine
+                        .load([(lemma::SourceType::Dependency(dependency.to_string()), old)])
+                        .expect(
+                            "BUG: restore previous dependency after failed persist must succeed",
+                        );
+                }
+                return Err(McpError::internal_error(format!(
+                    "Failed to persist dependency to {}: {e}",
+                    destination_absolute.display()
+                )));
+            }
+
+            let message = format!(
+                "Fetched {} -> {}",
+                dependency,
+                destination_relative.display()
+            );
+            info!("{message}");
+            Ok(serde_json::json!({
+                "content": [{ "type": "text", "text": message }]
+            }))
+        }
+
+        fn parse_code_and_source(
+            args: &serde_json::Value,
+        ) -> Result<(&str, lemma::SourceType), McpError> {
             let code = args["code"]
                 .as_str()
                 .ok_or_else(|| McpError::invalid_params("Missing 'code' field".to_string()))?;
@@ -499,18 +1328,7 @@ mod imp {
             let source_type = lemma::SourceType::from_binding_label(source_id)
                 .map_err(McpError::invalid_params)?;
 
-            if let Err(load_err) = self.engine.load([(source_type, code.to_string())]) {
-                return Ok(Self::load_diagnostics_tool_result(load_err));
-            }
-
-            info!("Spec added from source '{}'", source_id);
-
-            Ok(serde_json::json!({
-                "content": [{
-                    "type": "text",
-                    "text": "Spec added successfully."
-                }]
-            }))
+            Ok((code, source_type))
         }
 
         fn tool_check(args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
@@ -554,27 +1372,48 @@ mod imp {
                 return Ok(Self::load_diagnostics_tool_result(load_err));
             }
 
+            let recommendations = engine.quality();
+            let mut text = String::from(
+                "Parsed and planned. Syntax is valid; this does not verify the policy is correct.",
+            );
+            const MAX_RECOMMENDATIONS: usize = 20;
+            if !recommendations.is_empty() {
+                text.push_str("\n\nRecommendations:");
+                for (i, rec) in recommendations.iter().take(MAX_RECOMMENDATIONS).enumerate() {
+                    text.push_str(&format!("\n{}. {}", i + 1, rec));
+                }
+                let omitted = recommendations.len().saturating_sub(MAX_RECOMMENDATIONS);
+                if omitted > 0 {
+                    text.push_str(&format!("\n… and {omitted} more"));
+                }
+            }
+
             Ok(serde_json::json!({
                 "content": [{
                     "type": "text",
-                    "text": "All sources parsed and planned successfully."
+                    "text": text
                 }]
             }))
         }
 
         fn tool_guide(&self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
-            let topic_name = args["topic"]
-                .as_str()
-                .ok_or_else(|| McpError::invalid_params("Missing 'topic' field".to_string()))?;
-            let topic = crate::mcp::guide::GuideTopic::parse(topic_name).ok_or_else(|| {
-                McpError::invalid_params(format!(
-                    "Unknown guide topic '{topic_name}'. Valid: syntax, data, rules, units, veto, composition, anti_patterns"
-                ))
-            })?;
+            let text = match args.get("topic").and_then(|v| v.as_str()) {
+                None => crate::mcp::guide::EVALUATE_GUIDE,
+                Some(topic_name) => {
+                    let topic =
+                        crate::mcp::guide::GuideTopic::parse(topic_name).ok_or_else(|| {
+                            McpError::invalid_params(format!(
+                                "Unknown guide topic '{topic_name}'. Valid: {}",
+                                crate::mcp::guide::GuideTopic::VALID_LIST
+                            ))
+                        })?;
+                    topic.section_text()
+                }
+            };
             Ok(serde_json::json!({
                 "content": [{
                     "type": "text",
-                    "text": topic.section_text()
+                    "text": text
                 }]
             }))
         }
@@ -679,6 +1518,29 @@ mod imp {
                     McpError::internal_error(format!("Evaluation failed: {e}"))
                 })?;
 
+            let show_for_missing = if response
+                .results
+                .values()
+                .any(|result| !result.missing_data.is_empty())
+            {
+                Some(
+                    self.engine
+                        .show(None, &spec_name, Some(&now))
+                        .map_err(|e| {
+                            error!(
+                                "show failed after evaluate for '{}': {}",
+                                spec_set_id.trim(),
+                                e
+                            );
+                            McpError::internal_error(format!(
+                                "Failed to show spec for missing_data: {e}"
+                            ))
+                        })?,
+                )
+            } else {
+                None
+            };
+
             let mut output = String::new();
             output.push_str(&format!("spec: {}\n", spec_set_id.trim()));
             output.push_str(&format!("effective: {}\n", now));
@@ -707,6 +1569,27 @@ mod imp {
                     }
                 }
                 output.push('\n');
+
+                if !result.missing_data.is_empty() {
+                    let show = show_for_missing
+                        .as_ref()
+                        .expect("BUG: missing_data nonempty so show_for_missing must be Some");
+                    output.push_str("missing_data:\n");
+                    for name in &result.missing_data {
+                        let entry = show.data.get(name).unwrap_or_else(|| {
+                            panic!(
+                                "BUG: missing_data key {name:?} must exist in show.data after evaluate"
+                            )
+                        });
+                        let type_name = entry.lemma_type.specifications.to_string();
+                        let help = entry.lemma_type.specifications.help();
+                        if help.is_empty() {
+                            output.push_str(&format!("  {name}: {type_name}\n"));
+                        } else {
+                            output.push_str(&format!("  {name}: {type_name} — {help}\n"));
+                        }
+                    }
+                }
 
                 if let Some(explanation) = &result.explanation {
                     let steps = lemma::format_explanation(explanation);
@@ -865,7 +1748,7 @@ mod imp {
         }
     }
 
-    pub fn start_server(engine: Engine, config: McpConfig) -> Result<()> {
+    pub fn start_server(engine: Engine, config: McpConfig, workdir: &Path) -> Result<()> {
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -883,6 +1766,7 @@ mod imp {
         }
 
         let request_timeout = config.request_timeout;
+        let workdir = workdir.to_path_buf();
 
         // Requests are handled on a dedicated worker thread that owns the
         // engine state, so the reader loop can enforce a wall-clock timeout
@@ -892,7 +1776,7 @@ mod imp {
         let (request_tx, request_rx) = std::sync::mpsc::channel::<McpRequest>();
         let (response_tx, response_rx) = std::sync::mpsc::channel::<Option<McpResponse>>();
         std::thread::spawn(move || {
-            let mut server = McpServer::new(engine, config);
+            let mut server = McpServer::new(engine, config, workdir);
             for request in request_rx {
                 let request_id = request.id.clone();
                 let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1054,7 +1938,7 @@ mod imp {
         use super::*;
 
         fn server() -> McpServer {
-            McpServer::new(Engine::new(), McpConfig::default())
+            McpServer::new(Engine::new(), McpConfig::default(), std::env::temp_dir())
         }
 
         fn parse(line: &str) -> McpRequest {
@@ -1187,6 +2071,40 @@ mod imp {
             input.push(b'\n');
             let lines = read_all_capped(&input, 10);
             assert!(matches!(&lines[0], CappedLine::Line(s) if s.len() == 10));
+        }
+
+        #[test]
+        fn validated_write_path_accepts_relative_file() {
+            let workdir = Path::new("/tmp/lemma-workspace");
+            let path = validated_write_path(workdir, Path::new("pricing.lemma"))
+                .expect("relative path must be accepted");
+            assert_eq!(path, PathBuf::from("/tmp/lemma-workspace/pricing.lemma"));
+        }
+
+        #[test]
+        fn validated_write_path_rejects_parent_dir() {
+            let err = validated_write_path(Path::new("/tmp/ws"), Path::new("../escape.lemma"))
+                .expect_err(".. must be rejected");
+            assert!(err.message.contains(".."));
+        }
+
+        #[test]
+        fn validated_write_path_rejects_absolute() {
+            let err = validated_write_path(Path::new("/tmp/ws"), Path::new("/etc/passwd"))
+                .expect_err("absolute path must be rejected");
+            assert!(err.message.contains("relative"));
+        }
+
+        #[test]
+        fn atomic_write_round_trip() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("out.lemma");
+            atomic_write(&path, "spec x\ndata a: 1\n").unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "spec x\ndata a: 1\n");
+            assert!(
+                !dir.path().join(".out.lemma.tmp").exists(),
+                "temp file must be cleaned up"
+            );
         }
     }
 }

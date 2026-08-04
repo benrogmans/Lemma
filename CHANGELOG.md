@@ -2,6 +2,23 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.9.3] - 2026-08-05
+
+0.9.3 makes engine mutations transactional, adds structural quality Recommendations, and expands the MCP authoring/evaluate loop (`update_spec`, evaluate guide, richer admin tools).
+
+### Added
+
+- **Transactional `Engine::update`**: replace a temporal spec slice with new source in one atomic apply (rollback on failure). Exposed on WASM/TS as `update(...)`.
+- **MCP admin mutators**: `update_spec`, `remove_spec`, `clear`, and `fetch` (with `--admin`).
+- **Structural quality**: `Engine::quality()` returns advisory `Recommendation` values (missing commentary/effective date/`-> help`, open text without options, open inputs without suggest, veto-as-rejection cascades). MCP `check` appends them on success; LSP publishes them as Hint diagnostics.
+- **Evaluate guide**: MCP `guide` with no topic (and `lemma://guide`) returns the CS evaluate guide. Authoring uses `topic: "full"` / `lemma://guide/full`. New section topics: `method`, `natural_language`.
+
+### Changed
+
+- **`load` / `remove` / `update`**: share one transactional apply path; failed batches leave the engine unchanged.
+- **MCP `source`**: available in read-only mode (no longer requires `--admin`).
+- **Authoring guide**: refreshed fragments (rules method, anti-patterns, veto, data, composition) and `llms.txt`.
+
 ## [0.9.2] - 2026-08-03
 
 0.9.2 strengthens the MCP authoring loop, relocates published docs next to the CLI, and exposes a single serializable `EngineError` wire type from the Rust engine.

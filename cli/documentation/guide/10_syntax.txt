@@ -8,4 +8,9 @@ data ...
 rule ...
 ```
 
-Commentary after `uses` or `data` is invalid, parse fails. No `#`, `//`, `--` comment syntax. Use descriptive names. Put user explanations outside code fences — never inside ` ```lemma ` blocks.
+Commentary after `uses` or `data` is invalid. No `#`, `//`, `--` comments. Use descriptive names. Put user explanations outside code fences — never inside ` ```lemma ` blocks.
+
+**Gotchas (parse errors)**
+
+- No `or` operator. Disjunction via `unless` chains or separate boolean rules.
+- Constraints (`-> help`, `-> option`, `-> minimum`, etc.) apply to `data` only. Rules have no constraints.

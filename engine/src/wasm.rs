@@ -175,19 +175,42 @@ impl WasmEngine {
         spec: &str,
         effective: Option<String>,
     ) -> Result<(), JsValue> {
-        let effective_dt = match effective {
-            None => None,
-            Some(s) => {
-                Some(crate::resolve_effective(Some(s.as_str())).map_err(|e| error_to_js(&e))?)
-            }
-        };
-        let repo = repository
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
+        let (repo, effective_dt) = parse_repo_and_effective(repository.as_ref(), effective)?;
         self.engine
             .remove(repo, spec, effective_dt.as_ref())
             .map_err(|e| error_to_js(&e))
+    }
+
+    /// Replace a temporal spec slice with new source (atomic remove + load).
+    ///
+    /// `attribute` is the source label (path or `@owner/repo`). Omit for a volatile source.
+    #[wasm_bindgen(js_name = update)]
+    pub fn update_wasm(
+        &mut self,
+        repository: Option<String>,
+        spec: &str,
+        effective: Option<String>,
+        code: &str,
+        attribute: Option<String>,
+    ) -> Result<(), JsValue> {
+        let (repo, effective_dt) = parse_repo_and_effective(repository.as_ref(), effective)?;
+        let source_type = match attribute
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            None => SourceType::Volatile,
+            Some(label) => SourceType::from_binding_label(label).map_err(js_err)?,
+        };
+        self.engine
+            .update(
+                repo,
+                spec,
+                effective_dt.as_ref(),
+                source_type,
+                code.to_string(),
+            )
+            .map_err(serialize_load_errors)
     }
 
     /// Resource limits configured for this engine.
@@ -214,6 +237,21 @@ impl WasmEngine {
             Err(e) => Err(error_to_js(&e)),
         }
     }
+}
+
+fn parse_repo_and_effective(
+    repository: Option<&String>,
+    effective: Option<String>,
+) -> Result<(Option<&str>, Option<crate::DateTimeValue>), JsValue> {
+    let effective_dt = match effective {
+        None => None,
+        Some(s) => Some(crate::resolve_effective(Some(s.as_str())).map_err(|e| error_to_js(&e))?),
+    };
+    let repo = repository
+        .map(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    Ok((repo, effective_dt))
 }
 
 /// Options for [`WasmEngine::run`].

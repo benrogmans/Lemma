@@ -1,4 +1,4 @@
-use lemma::Error;
+use lemma::{Error, Recommendation};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 /// Convert a byte offset to an LSP Position (0-based line and UTF-16 code unit column).
@@ -119,6 +119,45 @@ pub fn errors_to_diagnostics(
     }
 
     diagnostics
+}
+
+/// Convert quality Recommendations into LSP HINT diagnostics for a given file.
+pub fn recommendations_to_diagnostics(
+    recommendations: &[Recommendation],
+    text: &str,
+    file_attribute: &str,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for recommendation in recommendations {
+        if recommendation.source_location.source_type.to_string() != file_attribute {
+            continue;
+        }
+        diagnostics.push(single_recommendation_to_diagnostic(recommendation, text));
+    }
+    diagnostics
+}
+
+fn single_recommendation_to_diagnostic(recommendation: &Recommendation, text: &str) -> Diagnostic {
+    let source = &recommendation.source_location;
+    let start = source.span.start;
+    let end = source.span.end;
+    let range = if start == 0 && end == 0 {
+        default_range()
+    } else {
+        span_to_range(text, start, end)
+    };
+
+    Diagnostic {
+        range,
+        severity: Some(DiagnosticSeverity::HINT),
+        code: None,
+        code_description: None,
+        source: Some("lemma".to_string()),
+        message: recommendation.to_string(),
+        related_information: None,
+        tags: None,
+        data: None,
+    }
 }
 
 #[cfg(test)]
@@ -258,5 +297,40 @@ mod tests {
             errors_to_diagnostics(&[error_in_file, error_in_other_file], text, "file_a.lemma");
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].message.contains("bad syntax"));
+    }
+
+    #[test]
+    fn recommendations_map_to_hint_severity() {
+        use lemma::{RecommendationKind, Source, SourceType, Span};
+        use std::sync::Arc;
+
+        let recommendation = Recommendation {
+            kind: RecommendationKind::SpecMissingCommentary,
+            repository: None,
+            spec: "pricing".to_string(),
+            source_location: Source::new(
+                SourceType::Path(Arc::new(std::path::PathBuf::from("pricing.lemma"))),
+                Span {
+                    start: 0,
+                    end: 0,
+                    line: 1,
+                    col: 0,
+                },
+            ),
+        };
+        let diagnostics =
+            recommendations_to_diagnostics(&[recommendation], "spec pricing", "pricing.lemma");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::HINT));
+        assert!(diagnostics[0].message.contains("commentary"));
+    }
+
+    #[test]
+    fn errors_keep_error_severity_alongside_hints() {
+        let error =
+            Error::resource_limit_exceeded("limit_a", "100", "200", "fix a", None, None, None);
+        let diagnostics = errors_to_diagnostics(&[error], "spec test", "test.lemma");
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
     }
 }

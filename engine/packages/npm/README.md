@@ -119,6 +119,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `source(repo, spec?, effective?)` | Canonical Lemma source text. Omit `spec` for whole repository. |
 | `run({ spec, repository?, effective?, data?, rules?, explain? })` | Evaluate. Omit `rules` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. `explain: true` adds per-rule explanation trees. |
 | `remove(repo, name, effective?)` | Remove a temporal spec slice. |
+| `update(repo, name, effective?, code, attribute?)` | Replace a temporal spec slice (atomic remove + load). |
 | `limits()` | Resource limits for this engine. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 

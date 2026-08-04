@@ -253,6 +253,22 @@ impl Context {
 
 // ─── Engine ──────────────────────────────────────────────────────────
 
+/// One mutation in a transactional [`Engine::apply`] batch.
+///
+/// Removes are applied before loads so replace = `[Remove, Load]` for the same
+/// identity cannot hit the duplicate-spec error or a mid-batch missing-dep replan.
+enum Mutation {
+    Remove {
+        repository: Option<String>,
+        spec: String,
+        effective: Option<DateTimeValue>,
+    },
+    Load {
+        source_type: SourceType,
+        code: String,
+    },
+}
+
 /// Engine for evaluating Lemma rules.
 ///
 /// Pure Rust implementation that evaluates Lemma specs directly from the AST.
@@ -286,11 +302,11 @@ impl Engine {
             limits,
         };
         engine
-            .add_sources_inner(
-                IndexMap::from([(
-                    SourceType::Dependency(EMBEDDED_STDLIB_REPOSITORY.to_string()),
-                    crate::stdlib::UNITS_LEMMA.to_string(),
-                )]),
+            .apply(
+                vec![Mutation::Load {
+                    source_type: SourceType::Dependency(EMBEDDED_STDLIB_REPOSITORY.to_string()),
+                    code: crate::stdlib::UNITS_LEMMA.to_string(),
+                }],
                 true,
             )
             .expect("BUG: embedded stdlib must load");
@@ -311,23 +327,62 @@ impl Engine {
         &mut self,
         sources: impl IntoIterator<Item = (SourceType, impl Into<String>)>,
     ) -> Result<(), Errors> {
-        let mut map = IndexMap::new();
-        let mut attempted = HashMap::new();
-        for (source_type, code) in sources {
-            let code = code.into();
-            if map.contains_key(&source_type) {
-                return Err(Errors {
-                    errors: vec![Error::request(
-                        format!("Duplicate source key: {source_type}"),
-                        None::<String>,
-                    )],
-                    sources: attempted,
-                });
-            }
-            attempted.insert(source_type.clone(), code.clone());
-            map.insert(source_type, code);
-        }
-        self.add_sources_inner(map, false)
+        let mutations = sources
+            .into_iter()
+            .map(|(source_type, code)| Mutation::Load {
+                source_type,
+                code: code.into(),
+            })
+            .collect();
+        self.apply(mutations, false)
+    }
+
+    /// Replace one temporal spec slice with new source in a single planning pass.
+    ///
+    /// Equivalent to remove then load, but atomic: dependents of `spec` stay valid
+    /// across the swap when the new source still satisfies them.
+    pub fn update(
+        &mut self,
+        repository: Option<&str>,
+        spec: &str,
+        effective: Option<&DateTimeValue>,
+        source_type: SourceType,
+        code: String,
+    ) -> Result<(), Errors> {
+        self.apply(
+            vec![
+                Mutation::Remove {
+                    repository: repository.map(str::to_string),
+                    spec: spec.to_string(),
+                    effective: effective.cloned(),
+                },
+                Mutation::Load { source_type, code },
+            ],
+            false,
+        )
+    }
+
+    /// Remove a temporal spec slice and replan remaining specs.
+    pub fn remove(
+        &mut self,
+        repository: Option<&str>,
+        spec: &str,
+        effective: Option<&DateTimeValue>,
+    ) -> Result<(), Error> {
+        self.apply(
+            vec![Mutation::Remove {
+                repository: repository.map(str::to_string),
+                spec: spec.to_string(),
+                effective: effective.cloned(),
+            }],
+            false,
+        )
+        .map_err(|errs| {
+            errs.errors
+                .into_iter()
+                .next()
+                .expect("BUG: apply Errors must contain at least one error")
+        })
     }
 
     /// Every loaded repository in insertion order (workspace, embedded stdlib [`EMBEDDED_STDLIB_REPOSITORY`], dependencies).
@@ -528,35 +583,6 @@ impl Engine {
         Ok(response)
     }
 
-    pub fn remove(
-        &mut self,
-        repository: Option<&str>,
-        spec: &str,
-        effective: Option<&DateTimeValue>,
-    ) -> Result<(), Error> {
-        let effective = self.effective_or_now(effective);
-        let repository_arc = match repository {
-            Some(q) => self.context.find_repository(q).ok_or_else(|| {
-                Error::request_not_found(
-                    format!("Repository '{q}' not loaded"),
-                    Some("List repositories with `lemma list` after loading your workspace"),
-                )
-            })?,
-            None => self.context.workspace(),
-        };
-        let spec_to_remove = self.get_spec(spec, repository, Some(&effective))?.clone();
-        self.context.remove_spec(&repository_arc, &spec_to_remove);
-        let result = crate::planning::plan(&self.context, &self.limits);
-        if let Some(error) = result.errors.into_iter().next() {
-            self.context
-                .insert_spec(Arc::clone(&repository_arc), spec_to_remove)
-                .expect("BUG: restore removed spec for rollback");
-            return Err(error);
-        }
-        self.plans.replace(result.plans);
-        Ok(())
-    }
-
     fn format_repository_source(&self, repository: Option<&str>) -> Result<String, Error> {
         let repo_arc = self.resolve_repository(repository)?;
         let mut all_specs: Vec<&LemmaSpec> = self
@@ -628,13 +654,89 @@ impl Engine {
         effective.cloned().unwrap_or_else(DateTimeValue::now)
     }
 
-    /// `sources` is order-preserving so multi-source parse errors are reported in submission
-    /// order rather than scrambled by hash iteration.
-    fn add_sources_inner(
-        &mut self,
+    fn reserved_stdlib_error(source: Option<crate::parsing::source::Source>) -> Error {
+        Error::validation(
+            format!(
+                "Repository '{EMBEDDED_STDLIB_REPOSITORY}' is reserved for the embedded standard library and cannot be loaded via load; use @owner/repo qualifiers (e.g. '@iso/countries'), not the reserved 'lemma' repository"
+            ),
+            source,
+            Some(
+                "Load registry dependencies with @owner/repo qualifiers, not the reserved 'lemma' stdlib repository"
+                    .to_string(),
+            ),
+        )
+    }
+
+    fn resource_limit_errors(
+        name: &str,
+        limit: impl ToString,
+        actual: impl ToString,
+        hint: &str,
         sources: IndexMap<SourceType, String>,
-        embedded_stdlib: bool,
-    ) -> Result<(), Errors> {
+    ) -> Errors {
+        Errors {
+            errors: vec![Error::resource_limit_exceeded(
+                name,
+                limit.to_string(),
+                actual.to_string(),
+                hint,
+                None::<crate::parsing::source::Source>,
+                None,
+                None,
+            )],
+            sources: sources.into_iter().collect(),
+        }
+    }
+
+    /// Apply removes then loads in one planning pass. Rolls back the whole batch on failure.
+    ///
+    /// Load sources are order-preserving so multi-source parse errors are reported in
+    /// submission order rather than scrambled by hash iteration.
+    fn apply(&mut self, mutations: Vec<Mutation>, embedded_stdlib: bool) -> Result<(), Errors> {
+        let mut sources: IndexMap<SourceType, String> = IndexMap::new();
+        let mut errors: Vec<Error> = Vec::new();
+        let mut to_restore: Vec<(Arc<LemmaRepository>, LemmaSpec)> = Vec::new();
+
+        for mutation in mutations {
+            match mutation {
+                Mutation::Remove {
+                    repository,
+                    spec,
+                    effective,
+                } => {
+                    let repo_ref = repository.as_deref();
+                    let effective_dt = self.effective_or_now(effective.as_ref());
+                    match self.get_spec(&spec, repo_ref, Some(&effective_dt)) {
+                        Ok(spec_to_remove) => {
+                            let repository_arc = self
+                                .resolve_repository(repo_ref)
+                                .expect("BUG: get_spec succeeded so repository exists");
+                            to_restore.push((repository_arc, spec_to_remove.clone()));
+                        }
+                        Err(e) => errors.push(e),
+                    }
+                }
+                Mutation::Load { source_type, code } => {
+                    if sources.insert(source_type.clone(), code).is_some() {
+                        return Err(Errors {
+                            errors: vec![Error::request(
+                                format!("Duplicate source key: {source_type}"),
+                                None::<String>,
+                            )],
+                            sources: sources.into_iter().collect(),
+                        });
+                    }
+                }
+            }
+        }
+
+        if !errors.is_empty() {
+            return Err(Errors {
+                errors,
+                sources: sources.into_iter().collect(),
+            });
+        }
+
         for st in sources.keys() {
             match st {
                 SourceType::Path(p) if p.as_os_str().to_string_lossy().trim().is_empty() => {
@@ -659,65 +761,45 @@ impl Engine {
                     if !embedded_stdlib && id == EMBEDDED_STDLIB_REPOSITORY =>
                 {
                     return Err(Errors {
-                        errors: vec![Error::validation(
-                            format!(
-                                "Repository '{EMBEDDED_STDLIB_REPOSITORY}' is reserved for the embedded standard library and cannot be loaded via load; use @owner/repo qualifiers (e.g. '@iso/countries'), not the reserved 'lemma' repository"
-                            ),
-                            None,
-                            Some("Load registry dependencies with @owner/repo qualifiers, not the reserved 'lemma' stdlib repository".to_string()),
-                        )],
+                        errors: vec![Self::reserved_stdlib_error(None)],
                         sources: HashMap::new(),
                     });
                 }
                 _ => {}
             }
         }
-        if !embedded_stdlib {
+        if !embedded_stdlib && !sources.is_empty() {
             let limits = &self.limits;
             if sources.len() > limits.max_sources {
-                return Err(Errors {
-                    errors: vec![Error::resource_limit_exceeded(
-                        "max_sources",
-                        limits.max_sources.to_string(),
-                        sources.len().to_string(),
-                        "Reduce the number of paths or sources in one load",
-                        None::<crate::parsing::source::Source>,
-                        None,
-                        None,
-                    )],
-                    sources: sources.into_iter().collect(),
-                });
+                return Err(Self::resource_limit_errors(
+                    "max_sources",
+                    limits.max_sources,
+                    sources.len(),
+                    "Reduce the number of paths or sources in one load",
+                    sources,
+                ));
             }
             let total_loaded_bytes: usize = sources.values().map(|s| s.len()).sum();
             if total_loaded_bytes > limits.max_loaded_bytes {
-                return Err(Errors {
-                    errors: vec![Error::resource_limit_exceeded(
-                        "max_loaded_bytes",
-                        limits.max_loaded_bytes.to_string(),
-                        total_loaded_bytes.to_string(),
-                        "Load fewer or smaller sources",
-                        None::<crate::parsing::source::Source>,
-                        None,
-                        None,
-                    )],
-                    sources: sources.into_iter().collect(),
-                });
+                return Err(Self::resource_limit_errors(
+                    "max_loaded_bytes",
+                    limits.max_loaded_bytes,
+                    total_loaded_bytes,
+                    "Load fewer or smaller sources",
+                    sources,
+                ));
             }
-            for code in sources.values() {
-                if code.len() > limits.max_source_size_bytes {
-                    return Err(Errors {
-                        errors: vec![Error::resource_limit_exceeded(
-                            "max_source_size_bytes",
-                            limits.max_source_size_bytes.to_string(),
-                            code.len().to_string(),
-                            "Use a smaller source text or increase limit",
-                            None::<crate::parsing::source::Source>,
-                            None,
-                            None,
-                        )],
-                        sources: sources.into_iter().collect(),
-                    });
-                }
+            if let Some(code) = sources
+                .values()
+                .find(|code| code.len() > limits.max_source_size_bytes)
+            {
+                return Err(Self::resource_limit_errors(
+                    "max_source_size_bytes",
+                    limits.max_source_size_bytes,
+                    code.len(),
+                    "Use a smaller source text or increase limit",
+                    sources,
+                ));
             }
         }
 
@@ -726,7 +808,6 @@ impl Engine {
         } else {
             &self.limits
         };
-        let mut errors: Vec<Error> = Vec::new();
         let mut staged: Vec<(SourceType, Arc<LemmaRepository>, LemmaSpec)> = Vec::new();
 
         for (source_id, code) in &sources {
@@ -767,16 +848,7 @@ impl Engine {
                                     col: 0,
                                 },
                             );
-                            errors.push(Error::validation(
-                                format!(
-                                    "Repository '{EMBEDDED_STDLIB_REPOSITORY}' is reserved for the embedded standard library and cannot be loaded via load; use @owner/repo qualifiers (e.g. '@iso/countries'), not the reserved 'lemma' repository"
-                                ),
-                                Some(source),
-                                Some(
-                                    "Load registry dependencies with @owner/repo qualifiers, not the reserved 'lemma' stdlib repository"
-                                        .to_string(),
-                                ),
-                            ));
+                            errors.push(Self::reserved_stdlib_error(Some(source)));
                             continue;
                         }
                         for spec in specs {
@@ -793,6 +865,10 @@ impl Engine {
                 errors,
                 sources: sources.into_iter().collect(),
             });
+        }
+
+        for (repo, spec) in &to_restore {
+            self.context.remove_spec(repo, spec);
         }
 
         let mut inserted: Vec<(Arc<LemmaRepository>, String, EffectiveDate)> = Vec::new();
@@ -817,13 +893,7 @@ impl Engine {
                         Some(source),
                         None::<String>,
                     ));
-                    for (repo, inserted_name, inserted_effective) in inserted.iter().rev() {
-                        self.context.remove_spec_by_identity(
-                            repo,
-                            inserted_name,
-                            inserted_effective.as_ref(),
-                        );
-                    }
+                    self.rollback_apply(&inserted, &to_restore);
                     return Err(Errors {
                         errors,
                         sources: sources.into_iter().collect(),
@@ -834,13 +904,7 @@ impl Engine {
 
         let result = crate::planning::plan(&self.context, &self.limits);
         if !result.errors.is_empty() {
-            for (repo, inserted_name, inserted_effective) in inserted.iter().rev() {
-                self.context.remove_spec_by_identity(
-                    repo,
-                    inserted_name,
-                    inserted_effective.as_ref(),
-                );
-            }
+            self.rollback_apply(&inserted, &to_restore);
             return Err(Errors {
                 errors: result.errors,
                 sources: sources.into_iter().collect(),
@@ -849,6 +913,22 @@ impl Engine {
 
         self.plans.replace(result.plans);
         Ok(())
+    }
+
+    fn rollback_apply(
+        &mut self,
+        inserted: &[(Arc<LemmaRepository>, String, EffectiveDate)],
+        removed: &[(Arc<LemmaRepository>, LemmaSpec)],
+    ) {
+        for (repo, inserted_name, inserted_effective) in inserted.iter().rev() {
+            self.context
+                .remove_spec_by_identity(repo, inserted_name, inserted_effective.as_ref());
+        }
+        for (repo, spec) in removed.iter().rev() {
+            self.context
+                .insert_spec(Arc::clone(repo), spec.clone())
+                .expect("BUG: restore removed spec for rollback");
+        }
     }
 
     /// Active [`LemmaSpec`] slice for `name` at the resolved effective instant in `repository`.

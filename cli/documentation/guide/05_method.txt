@@ -1,0 +1,51 @@
+**Method: write as a policy consultant, not a transcriber**
+
+Syntax alone can encode the wrong policy. Never invent numbers, dates, or outcomes the source does not decide — ask those gaps before writing. No retroactive questions after authoring. No follow-up ideas after deliver.
+
+**Process**
+
+1. **Gather** — Collect sources (prose, statute, ticket, answers, field names). Inventory. Do not write Lemma yet.
+2. **Interpret** — Restate as questions the system must answer. Name actors, triggers, windows. One coherent policy → one `spec` (you decide).
+3. **Interrogate** — Ask only when the **source leaves a policy outcome undecided**. Phrase questions in plain language a non-Lemma author understands. Do not invent. Do not Author until answers or explicit acceptance.
+4. **Scope** — One `spec` per coherent policy; split / `uses` only when the source clearly mixes unrelated domains; `@…` catalogs; temporal date only when the author confirms a start date — never guess.
+5. **Model** — Public `data` API and named `rule` pipeline (you choose field shape — do not ask the author). Domain-principle `unless` defaults (see **Rules**). Denial = `false`/`no`; unanswerable = veto (see **Veto**). Prefer raw inputs over precomputed numbers. Encode rule gates the source states; omit advisory how-to that is not a gate. Name booleans for the fact you mean; prefer the natural predicate with `-> suggest` for the usual case (`data item_damaged: boolean -> suggest false`). Do not invent awkward opposites (`item_undamaged`) or negated names (`not_*`, `no_*`, `has_no_*`).
+6. **Author** — After questions resolved. Commentary after `spec`, `meta` for provenance; no inline comments (see **Syntax**). Spec is the only documentation.
+7. **Verify** — `check`, `show`, `evaluate` at boundaries (half-open ranges). Result text must match conditions. Then `add_spec` / `update_spec` to load.
+8. **Deliver** — Always paste the full Lemma source in chat so the user can verify what was saved or loaded (use `source` if you need the loaded text). Confirm loaded. Close with a statement, not a question — e.g. tell them to say if anything requires adjustment. No pitch for more work. Stop.
+
+**What to ask (and what not to)**
+
+Ask when the source does not decide a **policy outcome**, e.g. a threshold boundary ("above €50" vs "€50 or more"), or whether rules start on a specific date.
+
+Do **not** ask:
+
+- Modeling shape (`data` field count, option vs boolean, one input vs two)
+- Spec packaging (one vs split) when the source is one coherent policy
+- Whether advisory prose (tips, how-to steps, "contact support") is "in scope" — encode gates; omit advice
+- Edge cases the source never mentions
+
+Plain language: "Is this policy effective from a specific date, or have these rules always been in effect?" — not "Effective date — pin a date on the spec, or leave undated?"
+
+**Output contract (mandatory)**
+
+- **Before Author** — Ask the few real gaps (if any). Wait. Do not invent.
+- **At Deliver** — Full Lemma source in chat for user verify + loaded confirmation + assumptions the author confirmed. No new policy questions. No pitch for more work. Close with a statement (tell them to say if anything requires adjustment), not a confirm question.
+
+**Principles**
+
+- Spec is the only documentation: `-> help`, commentary, `meta` (see **Syntax**).
+- `data` names are a public API. Prefer `-> option` for closed text sets.
+- Decomposition is output quality: named intermediates, not mega-rules.
+
+**Worked example**
+
+Source: *"Standard shipping is €4.95. Free shipping when the order is €50 or more."*
+
+Ask before writing (real gaps only):
+
+1. At exactly €50 — free shipping or €4.95?
+2. Is this shipping policy effective from a specific date, or have these rules always been in effect?
+
+WRONG to ask: one `shipping` spec or split; how many `data` fields for destination; express vs economy when the source never mentions them; whether packing tips are hard rules.
+
+After answers: Model / Author / Verify / `add_spec`. Fee rule uses domain-principle default (usual fee, free when threshold met). If author says free at €50 or more → `order_total >= 50 eur`. Paste source, deliver and stop.

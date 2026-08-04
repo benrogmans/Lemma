@@ -244,6 +244,10 @@ Also: `in future`, `future N day`, `in past|future calendar year|month|week`, `n
 
 Use Veto when a Rule cannot produce a meaningful value: the domain says "no answer here." Use Veto for impossible situations, not for negative business results. A Rule that evaluates to `false` or `0` is still a valid result.
 
+**Litmus test:** Can the question be answered? If yes, even when the answer is negative, use `true`/`false`. If the question itself is unanswerable for this input, use veto. "Is the customer eligible?" is always answerable (`true` or `false`). "What is the price of this coffee?" when the product is not on the menu is unanswerable (veto).
+
+A vetoed Rule is not `false`. `x is false` does not match a vetoed `x`. To test whether a Rule vetoed, use `x is veto`.
+
 Common cases:
 
 - Data validation: input is out of acceptable range.

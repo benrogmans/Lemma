@@ -40,14 +40,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 1450 | 3451 | 42.02% |
-| Functions | 143 | 333 | 42.94% |
-| Regions | 2201 | 5221 | 42.16% |
+| Lines | 1934 | 4251 | 45.50% |
+| Functions | 173 | 395 | 43.80% |
+| Regions | 2992 | 6481 | 46.17% |
 
 ## Test run
 
-- Total: 138
-- Passed: 138
+- Total: 164
+- Passed: 164
 - Skipped: 0
 - Failed: 0
 
@@ -59,16 +59,16 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 |--------|-------:|-----------:|---------:|--------------------:|
 | `server.rs` | 0.00 | 0.00 | 0.00 | 0/650 |
 | `interactive.rs` | 1.08 | 3.57 | 0.59 | 7/651 |
-| `main.rs` | 37.38 | 47.95 | 35.44 | 314/840 |
+| `main.rs` | 38.21 | 47.95 | 36.48 | 321/840 |
 | `error_formatter.rs` | 61.76 | 100.00 | 62.26 | 42/68 |
+| `mcp/server.rs` | 74.41 | 63.64 | 72.85 | 1288/1731 |
 | `formatter.rs` | 80.56 | 83.33 | 81.70 | 116/144 |
-| `mcp/server.rs` | 87.22 | 73.91 | 82.85 | 819/939 |
 | `data_json.rs` | 94.26 | 94.74 | 94.39 | 115/122 |
-| `mcp/guide.rs` | 100.00 | 100.00 | 100.00 | 37/37 |
+| `mcp/guide.rs` | 100.00 | 100.00 | 100.00 | 45/45 |
 
 ## Related docs
 
 - [CLI integration test catalog](../../../cli/tests/README.md)
 - [Engine test coverage](engine.md)
 - [CLI benchmarks](../benchmarks/cli.md)
-<!-- coverage-input-digest: 1ee823a78bf3ef48 -->
+<!-- coverage-input-digest: f29a005b150432e8 -->
