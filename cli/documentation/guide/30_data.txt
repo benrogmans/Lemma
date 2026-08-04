@@ -1,6 +1,8 @@
 **Data: constraint definitions, not placeholders**
 
-`data` declares variables. Constraints define validity. Type-only `data` (no value) is input slot. `lemma show` lists static reachable data. Evaluator needs come from rule `missing_data` on `run` (not `show`). Use real domain values. Never `"TODO"` or dummy placeholders.
+`data` declares variables. Constraints define validity. Type-only `data` (no value) is an input slot. Use real domain values. Never `"TODO"` or dummy placeholders.
+
+For which inputs a rule still needs at runtime, call MCP `guide` with no topic (evaluate guide): `list` → `show` once → `evaluate` → ask one `missing_data` field → repeat. Load `guide` topic `full` only when authoring new specs. `show` is the static catalog — not a required-input checklist. `-> help` is the literal CS ask string; do not replace the question with a different one.
 
 **Example D — typed data (coffee order)**
 
@@ -73,7 +75,7 @@ data money: measure -> unit eur 1.00
 data wallet: money -> minimum 0 eur
 ```
 
-With help text:
+With help text (literal CS ask string):
 ```lemma
 spec payroll
 
@@ -81,6 +83,15 @@ data pay_period: text
   -> option "month"
   -> option "week"
   -> help "How often you are paid."
+```
+
+Boolean with usual-case suggest:
+```lemma
+spec returns
+
+data item_damaged: boolean
+  -> suggest false
+  -> help "Item damaged?"
 ```
 
 Constraints chain: `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, `-> help`, etc. Details in Reference.

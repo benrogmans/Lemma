@@ -33,11 +33,16 @@ async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceMod
         }
     };
     for file_diag in file_diagnostics {
-        let lsp_diagnostics = diagnostics::errors_to_diagnostics(
+        let mut lsp_diagnostics = diagnostics::errors_to_diagnostics(
             &file_diag.errors,
             &file_diag.text,
             &file_diag.attribute,
         );
+        lsp_diagnostics.extend(diagnostics::recommendations_to_diagnostics(
+            &file_diag.recommendations,
+            &file_diag.text,
+            &file_diag.attribute,
+        ));
         client
             .publish_diagnostics(file_diag.url, lsp_diagnostics, None)
             .await;

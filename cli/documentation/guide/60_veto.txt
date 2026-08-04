@@ -9,6 +9,10 @@ Veto is like Rust's `Err` — rule has **no value** and propagates to dependents
 | Normal business "no" | `false` or `no` |
 | Test veto without propagating | `x is veto` (returns boolean) |
 
+**Litmus test:** Can the question be answered? If yes, even when the answer is negative, use `true`/`false`. If the question itself is unanswerable for this input, use veto. "Is the customer eligible?" is always answerable (`true` or `false`). "What is the price of this coffee?" when the product is not on the menu is unanswerable (veto).
+
+A vetoed rule is not `false`. `x is false` does not match a vetoed `x`. To test whether a rule vetoed, use `x is veto`.
+
 Place veto unless clauses **last** to override other branches.
 
 **Example I — enumeration with default veto**
@@ -107,6 +111,5 @@ If `validated_score` vetoes but `use_default` is true, `result` is 50. Unless br
 3. **Outputs**: every answerable question is a `rule`.
 4. **Factor**: intermediate calculations as named rules.
 5. **Unless**: default first, general to specific, vetoes last.
-6. **No inline comments**: no `#`, `//`. Commentary `"""..."""` only as first block after `spec`.
-7. **Validate**: verify reachable data with `show`, missing inputs via `run`, and correct override order.
-8. **Advanced**: use `uses lemma units`, ranges, compound units when needed.
+6. **Validate**: `check`, then `show`, then `evaluate` (MCP `guide` with no topic for `missing_data` intake; topic `full` only when authoring).
+7. **Advanced**: `uses lemma units`, ranges, compound units when needed.

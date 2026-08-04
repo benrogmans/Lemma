@@ -111,3 +111,109 @@ rule total: d.value
         .run(None, "consumer", Some(&now), HashMap::new(), None, false)
         .expect("consumer still runs after failed remove");
 }
+
+#[test]
+fn update_replaces_spec_with_dependents() {
+    let mut engine = Engine::new();
+    engine
+        .load([(
+            SourceType::Volatile,
+            r#"
+spec dep
+data value: 10
+rule out: value
+
+spec consumer
+uses d: dep
+rule total: d.value
+"#
+            .to_string(),
+        )])
+        .expect("load dep + consumer");
+
+    let now = DateTimeValue::now();
+    engine
+        .update(
+            None,
+            "dep",
+            Some(&now),
+            SourceType::Volatile,
+            r#"
+spec dep
+data value: 20
+rule out: value
+"#
+            .to_string(),
+        )
+        .expect("update dep while consumer depends on it");
+
+    let response = engine
+        .run(None, "consumer", Some(&now), HashMap::new(), None, false)
+        .expect("consumer runs after update");
+    let total = response
+        .results
+        .get("total")
+        .expect("total rule")
+        .display()
+        .expect("total display");
+    assert_eq!(total, "20", "consumer must see updated dep value");
+}
+
+#[test]
+fn update_rolls_back_when_new_source_invalid() {
+    let mut engine = Engine::new();
+    engine
+        .load([(
+            SourceType::Volatile,
+            r#"
+spec dep
+data value: 10
+rule out: value
+
+spec consumer
+uses d: dep
+rule total: d.value
+"#
+            .to_string(),
+        )])
+        .expect("load dep + consumer");
+
+    let now = DateTimeValue::now();
+    let before = engine
+        .run(None, "consumer", Some(&now), HashMap::new(), None, false)
+        .expect("consumer runs before");
+
+    let bad = engine.update(
+        None,
+        "dep",
+        Some(&now),
+        SourceType::Volatile,
+        r#"
+spec dep
+uses missing: nonexistent_spec
+data value: 99
+rule out: value + missing.x
+"#
+        .to_string(),
+    );
+    assert!(bad.is_err(), "update with broken deps must fail");
+
+    let listed = engine.list();
+    let workspace = listed
+        .iter()
+        .find(|r| r.repository.is_none())
+        .expect("workspace");
+    assert!(
+        workspace.specs.iter().any(|s| s.name == "dep"),
+        "dep must remain after failed update"
+    );
+
+    let after = engine
+        .run(None, "consumer", Some(&now), HashMap::new(), None, false)
+        .expect("consumer still runs after failed update");
+    assert_eq!(
+        before.results.get("total").and_then(|r| r.display()),
+        after.results.get("total").and_then(|r| r.display()),
+        "old dep value must be restored"
+    );
+}

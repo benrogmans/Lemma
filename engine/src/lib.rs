@@ -16,6 +16,7 @@ pub(crate) mod limits;
 pub(crate) mod literals;
 pub(crate) mod parsing;
 pub(crate) mod planning;
+pub mod quality;
 pub(crate) mod registry;
 pub mod result_value;
 pub(crate) mod spec_set_id;
@@ -73,6 +74,7 @@ pub use parsing::ast::{
 pub use parsing::lexer::{Lexer, TokenKind};
 pub use parsing::source::Source;
 pub use parsing::{parse, ParseResult};
+pub use quality::{Recommendation, RecommendationKind};
 
 // Tier 2 — registry network (feature-gated)
 #[cfg(feature = "registry")]

@@ -115,7 +115,8 @@ fn test_02_library_fees() {
     let engine = load_specs_folder_examples();
 
     let mut data = HashMap::new();
-    data.insert("days_overdue".to_string(), "5".to_string());
+    data.insert("due_date".to_string(), "2024-01-01".to_string());
+    data.insert("return_date".to_string(), "2024-01-06".to_string());
     data.insert("book_type".to_string(), "regular".to_string());
     data.insert("is_first_offense".to_string(), "false".to_string());
 

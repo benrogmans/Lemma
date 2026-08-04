@@ -140,7 +140,7 @@ enum Commands {
         /// Workspace directory or `.lemma` file (default: current directory)
         #[arg(long, value_name = "PATH")]
         prefix: Option<PathBuf>,
-        /// Enable admin tools: add_spec, source (read-only by default)
+        /// Enable admin tools: add_spec, update_spec, remove_spec, clear, fetch (read-only by default)
         #[arg(long)]
         admin: bool,
         /// Wall-clock timeout for a single request, in second
@@ -699,7 +699,7 @@ fn mcp_command(workdir: &Path, admin: bool, request_timeout_secs: u64) -> Result
         "Starting MCP server with {} spec(s) loaded",
         unique_specs.len()
     );
-    mcp::server::start_server(engine, config)?;
+    mcp::server::start_server(engine, config, workdir)?;
     Ok(())
 }
 

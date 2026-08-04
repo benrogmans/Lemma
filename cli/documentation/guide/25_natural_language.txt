@@ -4,7 +4,8 @@ Request: *"Library charges €0.25/day for regular books, €0.50 for reference,
 
 Map logic:
 - Book types → `data book_type` with `-> option` constraints
-- Overdue days, first offense → `data` input slots
+- Due and return dates → `data` input slots; overdue days derived by a rule
+- First offense → `data` input slot
 - Per-day rates → `rule daily_fee` with unless branches
 - Grace period → `rule is_in_grace_period`
 - Fee pipeline → `rule total_fee`, `rule final_fee`
@@ -14,6 +15,7 @@ Map logic:
 
 ```lemma
 spec library_fees
+uses lemma units
 
 data money: measure
   -> decimals 2
@@ -27,8 +29,10 @@ data book_kind: text
 
 data book_type:        book_kind
 data is_first_offense: boolean
-data days_overdue: number
-  -> minimum 0
+data due_date:         date
+data return_date:      date
+
+rule days_overdue: (due_date...return_date) as day as number
 
 rule daily_fee: 0 eur
   unless book_type is "regular"     then 0.25 eur

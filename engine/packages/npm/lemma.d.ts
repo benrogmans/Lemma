@@ -60,6 +60,18 @@ declare module './lemma.bindings.js' {
       effective?: string | null,
     ): void;
 
+    /**
+     * Replace a temporal spec slice with new source (atomic remove + load).
+     * `attribute` is the source label (path or `@owner/repo`); omit for volatile.
+     */
+    update(
+      repository: string | null | undefined,
+      spec: string,
+      effective: string | null | undefined,
+      code: string,
+      attribute?: string | null,
+    ): void;
+
     /** Resource limits configured for this engine. */
     limits(): ResourceLimits;
 

@@ -2,63 +2,11 @@
 
 Inline comments (WRONG — `#` fails to parse):
 ```lemma-skip
-data customer_age: number -> minimum 0 -> maximum 120  # input slot
-data tax_rate: 21%  # fixed policy constant
-rule discount: 0%  # default: no discount
-  unless qty >= 10 then 10%  # bulk rate
+data customer_age: number -> minimum 0  # input
+rule discount: 0%  # default
 ```
 
-Commentary after `uses` (WRONG — fails to parse):
-```lemma-skip
-spec wholesale_nuts_pricing
-uses lemma units
-"""
-B2B pricing calculation for a wholesale nuts supplier.
-Handles product base pricing, organic premiums, and freight shipping.
-"""
-
-data base_price: number
-```
-
-Commentary after `data` (WRONG — fails to parse):
-```lemma-skip
-spec pricing
-
-data qty: number
-"""
-This is not valid commentary placement.
-"""
-
-rule discount: 0%
-```
-
-Commentary before `uses` (RIGHT):
-```lemma
-spec wholesale_nuts_pricing
-"""
-B2B pricing for a wholesale nuts supplier.
-Handles base pricing, organic premiums, volume discounts, and freight.
-"""
-
-uses lemma units
-
-data base_price: number
-```
-
-Commentary immediately after spec (RIGHT — no `uses`):
-```lemma
-spec pricing
-"""
-Customer age is an input; tax_rate is a fixed policy constant.
-"""
-
-data customer_age: number -> minimum 0 -> maximum 120
-data tax_rate: 21%
-data qty: number
-
-rule discount: 0%
-  unless qty >= 10 then 10%
-```
+Commentary after `uses` (WRONG). RIGHT: commentary immediately after `spec` (see **Syntax**).
 
 Mega-rule (WRONG):
 ```lemma-skip
@@ -83,70 +31,44 @@ rule shipping_cost:        15 unless total_after_discount >= 100 then 10
 rule final_total:          total_after_discount + shipping_cost
 ```
 
-Hardcoded input (WRONG):
-```lemma-skip
-rule discount: 10 * 0.1
-```
+Hardcoded input (WRONG): `rule discount: 10 * 0.1`
+RIGHT: `data qty: number` then `rule discount: qty * 0.1`
 
-Input as data (RIGHT):
-```lemma
-spec bulk_discount
-
-data qty: number -> minimum 0
-rule discount: qty * 0.1
-```
-
-Wrong unless order (WRONG — VIP gets 20%, not 25%):
+Wrong unless order (WRONG — VIP gets 20% not 25%):
 ```lemma-skip
 rule discount: 0%
-  unless is_vip          then 25%
-  unless qty >= 50  then 20%
+  unless is_vip then 25%
+  unless qty >= 50 then 20%
 ```
+RIGHT: specific override last (`qty` tiers first, `is_vip` last).
 
-Correct order (RIGHT):
-```lemma
-spec tiered_discount
+Placeholder (WRONG): `data customer_name: "TODO"`
+RIGHT: `data customer_name: text`
 
-data qty: number
-data is_vip:   boolean
+Error vs Veto: `5 and "text"` = planning Error. `unless age > 120 then veto "…"` = runtime Veto.
 
-rule discount: 0%
-  unless qty >= 50  then 20%
-  unless is_vip          then 25%
-```
-
-Placeholder (WRONG):
+Veto-as-rejection (WRONG — denial is answerable; see **Veto**):
 ```lemma-skip
-data customer_name: "TODO"
+rule is_eligible: true
+  unless age < 18 then veto "Must be 18+"
+  unless has_id is false then veto "ID required"
 ```
+RIGHT: boolean rules composed with `and` (`is_old_enough and has_valid_id`).
 
-Type-only input (RIGHT):
-```lemma
-spec customer_record
+Unnecessary `repo` (WRONG). RIGHT: single-file `spec` without `repo`.
 
-data customer_name: text
-```
+No `or` (WRONG): `rule is_eligible: is_adult or has_guardian` — see **Syntax**; use `unless` or separate booleans.
 
-Error vs Veto: `5 and "text"` is planning Error (invalid Lemma). `unless age > 120 then veto "Invalid age"` is runtime Veto (valid spec, domain no-value). Do not confuse.
+Constraints on rules (WRONG): `rule discount: 10% -> help "…"` — `->` is data-only (see **Syntax**).
 
-Unnecessary repo (WRONG):
+Domain-blind polarity / double denial (WRONG):
 ```lemma-skip
-repo default
-
-spec pricing
-
-data qty: number
-
-rule discount: 0%
-  unless qty >= 10 then 10%
+rule can_ship: yes
+  unless in_stock is false then no
+  unless address_complete is false then no
 ```
-
-Single-file spec (RIGHT):
-```lemma
-spec pricing
-
-data qty: number
-
-rule discount: 0%
-  unless qty >= 10 then 10%
+RIGHT: domain principle + positive grant (see **Rules**):
+```lemma-skip
+rule can_ship: no
+  unless in_stock and address_complete then yes
 ```

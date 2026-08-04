@@ -6,6 +6,8 @@ Shows conditional logic with unless clauses.
 Easy to understand: books returned late incur fees.
 """
 
+uses lemma units
+
 data money: measure
   -> decimals 2
   -> unit eur 1.00
@@ -18,8 +20,10 @@ data book_kind: text
 
 data book_type:        book_kind
 data is_first_offense: boolean
-data days_overdue: number
-  -> minimum 0
+data due_date:         date
+data return_date:      date
+
+rule days_overdue: (due_date...return_date) as day as number
 
 rule daily_fee: 0 eur
   unless book_type is "regular"     then 0.25 eur

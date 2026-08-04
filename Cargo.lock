@@ -837,9 +837,9 @@ dependencies = [
 
 [[package]]
 name = "fancy-regex"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1e1dacd0d2082dfcf1351c4bdd566bbe89a2b263235a2b50058f1e130a47277"
+checksum = "476de73bddf2ef8490aa4ee8f1cf40b430bf1d56c48c22080e5186952cd580e6"
 dependencies = [
  "bit-set",
  "regex-automata",
@@ -1526,9 +1526,9 @@ dependencies = [
 
 [[package]]
 name = "jsonschema"
-version = "0.49.3"
+version = "0.49.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "508004a5500f2e1f68af048f70feea2de86d35ab115d85716530860822aef397"
+checksum = "8da60094fc1968bbd091e2cfa004415cb7b19e25e592376e66a64aa832bb6039"
 dependencies = [
  "ahash 0.8.12",
  "bytecount",
@@ -1555,18 +1555,18 @@ dependencies = [
 
 [[package]]
 name = "jsonschema-regex"
-version = "0.49.3"
+version = "0.49.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a8b30cafa78358ae6cd1494a7d6410b89530e28bf567f862c869c667e900d9f"
+checksum = "36539f34ef9e5da418433fbbf7294522d8f930ecf6a540ccd1ec6481c9ff9056"
 dependencies = [
  "regex-syntax",
 ]
 
 [[package]]
 name = "jsonschema-value"
-version = "0.49.3"
+version = "0.49.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5526bd381d230af94908d07e6835a33fd82a465e12f5f1e9c81f5c2aa23b3c21"
+checksum = "8bc513dfee68c6fe29498451df95a32951ea227801b476f4a1f236433986c891"
 dependencies = [
  "ahash 0.8.12",
  "bytecount",
@@ -1578,9 +1578,9 @@ dependencies = [
 
 [[package]]
 name = "kqueue"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "273c0752728918e0ac4976f2b275b6fefb9ecd400585dec929419f3844cd87b5"
+checksum = "8d763e5b24120b4ddf50de6c92308156765aabfbbccebf401da7cff2d70a41ea"
 dependencies = [
  "kqueue-sys",
  "libc",
@@ -1604,7 +1604,7 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lemma"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "ariadne",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-engine"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1660,7 +1660,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-lsp"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "console_error_panic_hook",
  "futures",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "lemma-openapi"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "lemma-engine",
  "serde",
@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "lemma_hex"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "lemma-engine",
  "lemma-openapi",
@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "lemma_jni"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "jni",
  "lemma-engine",
@@ -2372,9 +2372,9 @@ dependencies = [
 
 [[package]]
 name = "referencing"
-version = "0.49.3"
+version = "0.49.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7af3eb523cce0df0af3c30d624b829b2dabd233172b5bc2615fcd03ceae8f746"
+checksum = "05915176d843da9ec5c925e5e2631be9aa61b27430acfdd562e79cae8f559725"
 dependencies = [
  "ahash 0.8.12",
  "fluent-uri",
@@ -2401,9 +2401,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.16"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fcfdb36bda0c880c5931cdc7a2bcdc8ba4556847b9d912bca70bc94708711ad"
+checksum = "ad8553b9b26413251cbf30e620595c7a41b3887f03da04579c0e6b0d6a06b4b2"
 dependencies = [
  "aho-corasick",
  "memchr",

@@ -4,7 +4,7 @@ Default: one file, one implicit repo. No `repo` blocks unless multi-namespace wo
 
 **Spec** = namespace for `data` and `rules`. **Rule** = named computed value. Reference rules by name; engine resolves if name is data or rule. One file can have multiple specs.
 Hierarchical names: `spec employee/contract`. Effective date for temporal changes: `spec pricing 2026-01-01`.
-Sole documentation: commentary `"""..."""` immediately after `spec <name> [<effective>]` (before `uses`, `data`, or `rule`).
+Commentary placement: see **Syntax**.
 
 **Example A — minimal single-spec file**
 
@@ -12,7 +12,6 @@ Sole documentation: commentary `"""..."""` immediately after `spec <name> [<effe
 spec pricing 2026-01-01
 """
 Pricing rules for bulk and member discounts.
-Commentary must follow the spec line; it cannot go anywhere else.
 """
 
 data qty:        number

@@ -1,9 +1,12 @@
-//! Embedded Lemma authoring guide and example specs for MCP tools/resources.
+//! Embedded Lemma guides and example specs for MCP tools/resources.
 
 pub const LLMS_TXT: &str = include_str!("../../documentation/llms.txt");
+pub const EVALUATE_GUIDE: &str = include_str!("../../documentation/evaluate_guide.txt");
 
+const METHOD: &str = include_str!("../../documentation/guide/05_method.txt");
 const SYNTAX: &str = include_str!("../../documentation/guide/10_syntax.txt");
 const COMPOSITION: &str = include_str!("../../documentation/guide/20_composition.txt");
+const NATURAL_LANGUAGE: &str = include_str!("../../documentation/guide/25_natural_language.txt");
 const DATA: &str = include_str!("../../documentation/guide/30_data.txt");
 const UNITS: &str = include_str!("../../documentation/guide/40_units.txt");
 const RULES: &str = include_str!("../../documentation/guide/50_rules.txt");
@@ -23,38 +26,53 @@ pub const EXAMPLE_05_WEATHER_CLOTHING: &str =
 pub const EXAMPLE_NL_TAX_NET_SALARY: &str =
     include_str!("../../documentation/examples/nl/tax/net_salary.lemma");
 
-/// Guide topics map to fragment files under `cli/documentation/guide/`.
+/// Guide topics: authoring sections under `cli/documentation/guide/`,
+/// plus `evaluate` (default CS guide) and `full` (complete authoring llms.txt).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuideTopic {
+    Method,
     Syntax,
     Data,
     Rules,
     Units,
     Veto,
     Composition,
+    NaturalLanguage,
     AntiPatterns,
+    Evaluate,
+    Full,
 }
 
 impl GuideTopic {
     pub const ALL: &[GuideTopic] = &[
+        GuideTopic::Method,
         GuideTopic::Syntax,
         GuideTopic::Data,
         GuideTopic::Rules,
         GuideTopic::Units,
         GuideTopic::Veto,
         GuideTopic::Composition,
+        GuideTopic::NaturalLanguage,
         GuideTopic::AntiPatterns,
+        GuideTopic::Evaluate,
+        GuideTopic::Full,
     ];
+
+    pub const VALID_LIST: &str = "method, syntax, data, rules, units, veto, composition, natural_language, anti_patterns, evaluate, full";
 
     pub fn as_str(self) -> &'static str {
         match self {
+            GuideTopic::Method => "method",
             GuideTopic::Syntax => "syntax",
             GuideTopic::Data => "data",
             GuideTopic::Rules => "rules",
             GuideTopic::Units => "units",
             GuideTopic::Veto => "veto",
             GuideTopic::Composition => "composition",
+            GuideTopic::NaturalLanguage => "natural_language",
             GuideTopic::AntiPatterns => "anti_patterns",
+            GuideTopic::Evaluate => "evaluate",
+            GuideTopic::Full => "full",
         }
     }
 
@@ -65,13 +83,17 @@ impl GuideTopic {
     /// Guide topic content from corresponding fragment.
     pub fn section_text(self) -> &'static str {
         match self {
+            GuideTopic::Method => METHOD,
             GuideTopic::Syntax => SYNTAX,
             GuideTopic::Data => DATA,
             GuideTopic::Rules => RULES,
             GuideTopic::Units => UNITS,
             GuideTopic::Veto => VETO,
             GuideTopic::Composition => COMPOSITION,
+            GuideTopic::NaturalLanguage => NATURAL_LANGUAGE,
             GuideTopic::AntiPatterns => ANTI_PATTERNS,
+            GuideTopic::Evaluate => EVALUATE_GUIDE,
+            GuideTopic::Full => LLMS_TXT,
         }
     }
 }

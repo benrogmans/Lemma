@@ -65,7 +65,18 @@ fn lsp_parse_error_publishes_diagnostics() {
 #[test]
 fn lsp_valid_spec_has_no_diagnostics() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let source = "spec t\ndata x: 1\n";
+    let source = r#"spec pricing 2026-01-01
+"""
+Bulk pricing.
+"""
+
+data qty: number
+  -> minimum 0
+  -> help "Order quantity."
+  -> suggest 10
+
+rule total: qty
+"#;
     let path = write_lemma_file(dir.path(), "valid.lemma", source);
     let uri = path_to_uri(&path);
 
@@ -80,7 +91,7 @@ fn lsp_valid_spec_has_no_diagnostics() {
         .expect("diagnostics array");
     assert!(
         diagnostics.is_empty(),
-        "expected no diagnostics for valid spec, got: {diagnostics:?}"
+        "expected no diagnostics for valid quality-clean spec, got: {diagnostics:?}"
     );
 
     session.shutdown();

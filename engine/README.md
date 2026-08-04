@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.9.2"
+lemma-engine = "0.9.3"
 ```
 
 ### Minimal example
@@ -232,7 +232,7 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.2</version>
+  <version>0.9.3</version>
 </dependency>
 ```
 

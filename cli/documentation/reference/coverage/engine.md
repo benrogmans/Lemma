@@ -41,14 +41,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 34028 | 40036 | 84.99% |
-| Functions | 2565 | 2923 | 87.75% |
-| Regions | 50509 | 60299 | 83.76% |
+| Lines | 34371 | 40387 | 85.10% |
+| Functions | 2599 | 2958 | 87.86% |
+| Regions | 50861 | 60661 | 83.84% |
 
 ## Test run
 
-- Total: 2348
-- Passed: 2348
+- Total: 2358
+- Passed: 2358
 - Skipped: 2
 - Failed: 0
 
@@ -66,8 +66,8 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `evaluation/explanations.rs` | 74.74 | 76.92 | 73.01 | 142/190 |
 | `computation/arithmetic.rs` | 74.95 | 87.50 | 74.95 | 718/958 |
 | `planning/explanation.rs` | 78.57 | 75.00 | 77.27 | 22/28 |
-| `parsing/ast.rs` | 79.11 | 85.00 | 70.71 | 977/1235 |
 | `computation/bigint/signed.rs` | 79.12 | 81.08 | 73.87 | 197/249 |
+| `parsing/ast.rs` | 79.35 | 85.71 | 70.91 | 980/1235 |
 | `error.rs` | 80.32 | 79.63 | 74.93 | 453/564 |
 | `computation/units.rs` | 80.82 | 100.00 | 79.36 | 177/219 |
 | `planning/execution_plan.rs` | 80.96 | 82.41 | 76.91 | 1862/2300 |
@@ -87,9 +87,10 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `computation/rational.rs` | 89.21 | 96.72 | 82.04 | 488/547 |
 | `planning/spec_set.rs` | 90.20 | 90.91 | 90.26 | 138/153 |
 | `formatting/mod.rs` | 90.36 | 98.51 | 89.22 | 731/809 |
-| `engine.rs` | 90.58 | 90.09 | 91.31 | 1375/1518 |
 | `evaluation/conversion_trace.rs` | 91.25 | 100.00 | 91.75 | 146/160 |
 | `evaluation/tree.rs` | 91.32 | 92.86 | 92.19 | 1126/1233 |
+| `engine.rs` | 91.72 | 91.45 | 92.44 | 1429/1558 |
+| `quality.rs` | 91.96 | 89.66 | 89.91 | 286/311 |
 | `parsing/mod.rs` | 92.84 | 98.86 | 90.43 | 1257/1354 |
 | `evaluation/branch_semantics.rs` | 92.86 | 100.00 | 81.82 | 39/42 |
 | `planning/discovery.rs` | 93.13 | 97.06 | 93.96 | 1220/1310 |
@@ -109,4 +110,4 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 - [Engine integration test catalog](../../../engine/tests/README.md) — qualitative map of scenarios and subsystem overlap clusters
 - [CLI test coverage](cli.md)
 - [Engine benchmarks](../benchmarks/engine.md)
-<!-- coverage-input-digest: acb41682b12abac1 -->
+<!-- coverage-input-digest: 3e45f07edc9e9fbb -->

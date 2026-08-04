@@ -28,6 +28,16 @@ fn mcp_session_in_dir(
     admin: bool,
     messages: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
+    mcp_session_with_env(prefix, current_dir, admin, &[], messages)
+}
+
+fn mcp_session_with_env(
+    prefix: Option<&std::path::Path>,
+    current_dir: Option<&std::path::Path>,
+    admin: bool,
+    env: &[(&str, &str)],
+    messages: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
     let bin = env!("CARGO_BIN_EXE_lemma");
     let mut cmd = Command::new(bin);
     cmd.arg("mcp");
@@ -39,6 +49,9 @@ fn mcp_session_in_dir(
     }
     if admin {
         cmd.arg("--admin");
+    }
+    for (key, value) in env {
+        cmd.env(key, value);
     }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -70,6 +83,24 @@ fn mcp_session_in_dir(
 
     child.wait().unwrap();
     responses
+}
+
+fn registry_fixtures_dir() -> std::path::PathBuf {
+    lemma::LemmaBase::test_fixtures_dir()
+}
+
+fn mcp_fetch_session(
+    prefix: &std::path::Path,
+    messages: &[serde_json::Value],
+) -> Vec<serde_json::Value> {
+    let fixtures = registry_fixtures_dir();
+    mcp_session_with_env(
+        Some(prefix),
+        None,
+        true,
+        &[("LEMMA_REGISTRY_FIXTURES", fixtures.to_str().unwrap())],
+        messages,
+    )
 }
 
 fn make_request(id: u64, method: &str, params: serde_json::Value) -> serde_json::Value {
@@ -186,6 +217,125 @@ fn test_mcp_evaluate_includes_reasoning() {
 }
 
 #[test]
+fn test_mcp_evaluate_reports_missing_data_when_partial() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "pricing.lemma",
+        "spec pricing\ndata quantity: number\ndata price: number\nrule total: quantity * price\n",
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "pricing",
+                        "rule": "total",
+                        "data": ["quantity=2"]
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "pricing",
+                        "rule": "total",
+                        "data": ["quantity=2", "price=10"]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 3);
+    let partial = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("partial evaluate text");
+    assert!(
+        partial.contains("missing_data:"),
+        "partial evaluate must report missing_data, got: {partial}"
+    );
+    assert!(
+        partial.contains("price:"),
+        "missing_data must include price with type, got: {partial}"
+    );
+
+    let complete = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("complete evaluate text");
+    assert!(
+        !complete.contains("missing_data:"),
+        "complete evaluate must omit missing_data, got: {complete}"
+    );
+    assert!(
+        complete.contains("total:"),
+        "complete evaluate must show rule result, got: {complete}"
+    );
+}
+
+#[test]
+fn test_mcp_evaluate_missing_data_includes_help() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "pricing.lemma",
+        r#"spec pricing
+data quantity: number
+data price: number
+  -> help "Unit price of the item."
+rule total: quantity * price
+"#,
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "pricing",
+                        "rule": "total",
+                        "data": ["quantity=2"]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("evaluate text");
+    assert!(
+        text.contains("missing_data:"),
+        "must report missing_data, got: {text}"
+    );
+    assert!(
+        text.contains("Unit price of the item."),
+        "missing_data line must include -> help text, got: {text}"
+    );
+    assert!(
+        text.contains("price:") && text.contains("number"),
+        "missing_data line must include name and type, got: {text}"
+    );
+}
+
+#[test]
 fn test_mcp_read_only_by_default() {
     let temp_dir = tempfile::tempdir().unwrap();
 
@@ -224,8 +374,28 @@ fn test_mcp_read_only_by_default() {
         tool_names
     );
     assert!(
-        !tool_names.contains(&"source"),
-        "source should not be listed in read-only mode, got: {:?}",
+        !tool_names.contains(&"update_spec"),
+        "update_spec should not be listed in read-only mode, got: {:?}",
+        tool_names
+    );
+    assert!(
+        !tool_names.contains(&"remove_spec"),
+        "remove_spec should not be listed in read-only mode, got: {:?}",
+        tool_names
+    );
+    assert!(
+        !tool_names.contains(&"clear"),
+        "clear should not be listed in read-only mode, got: {:?}",
+        tool_names
+    );
+    assert!(
+        !tool_names.contains(&"fetch"),
+        "fetch should not be listed in read-only mode, got: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"source"),
+        "source should be listed in read-only mode, got: {:?}",
         tool_names
     );
 
@@ -285,8 +455,28 @@ fn test_mcp_admin_enables_add_spec() {
         tool_names
     );
     assert!(
+        tool_names.contains(&"update_spec"),
+        "update_spec should be listed with --admin, got: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"remove_spec"),
+        "remove_spec should be listed with --admin, got: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"clear"),
+        "clear should be listed with --admin, got: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"fetch"),
+        "fetch should be listed with --admin, got: {:?}",
+        tool_names
+    );
+    assert!(
         tool_names.contains(&"source"),
-        "source should be listed with --admin, got: {:?}",
+        "source should be listed (default tool), got: {:?}",
         tool_names
     );
 
@@ -303,7 +493,7 @@ fn test_mcp_source() {
 
     let responses = mcp_session(
         Some(temp_dir.path()),
-        true,
+        false,
         &[
             make_request(1, "initialize", json!({})),
             make_request(
@@ -344,7 +534,7 @@ fn test_mcp_source_embedded_lemma_repository() {
 
     let responses = mcp_session(
         Some(temp_dir.path()),
-        true,
+        false,
         &[
             make_request(1, "initialize", json!({})),
             make_request(
@@ -373,7 +563,7 @@ fn test_mcp_source_embedded_lemma_repository() {
 }
 
 #[test]
-fn test_mcp_source_blocked_without_admin() {
+fn test_mcp_source_without_admin() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
         temp_dir.path(),
@@ -401,18 +591,12 @@ fn test_mcp_source_blocked_without_admin() {
 
     assert!(responses.len() >= 2, "Expected at least 2 responses");
 
-    let error = &responses[1]["error"];
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("source should return text without --admin");
     assert!(
-        error.is_object(),
-        "source should return an error without --admin"
-    );
-    assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("Admin tools are disabled"),
-        "Error should mention admin tools are disabled, got: {}",
-        error["message"]
+        text.contains("spec pricing"),
+        "source without --admin should return formatted source, got: {text}"
     );
 }
 
@@ -1291,13 +1475,531 @@ fn test_mcp_tools_list_read_only_tools() {
     );
     assert!(tool_names.contains(&"list"), "Should list list tool");
     assert!(tool_names.contains(&"show"), "Should list show tool");
+    assert!(tool_names.contains(&"source"), "Should list source tool");
     assert!(tool_names.contains(&"check"), "Should list check tool");
     assert!(tool_names.contains(&"guide"), "Should list guide tool");
     assert_eq!(
         tool_names.len(),
-        5,
-        "Read-only mode should have exactly 5 tools, got: {:?}",
+        6,
+        "Read-only mode should have exactly 6 tools, got: {:?}",
         tool_names
+    );
+}
+
+#[test]
+fn test_mcp_remove_spec_and_clear() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": "spec draft\ndata x: number\nrule y: x\n",
+                        "source_id": "draft.lemma"
+                    }
+                }),
+            ),
+            make_request(3, "tools/call", json!({ "name": "list", "arguments": {} })),
+            make_request(
+                4,
+                "tools/call",
+                json!({
+                    "name": "remove_spec",
+                    "arguments": { "spec": "draft" }
+                }),
+            ),
+            make_request(5, "tools/call", json!({ "name": "list", "arguments": {} })),
+            make_request(
+                6,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": "spec again\ndata z: 1\nrule r: z\n",
+                        "source_id": "again.lemma"
+                    }
+                }),
+            ),
+            make_request(7, "tools/call", json!({ "name": "clear", "arguments": {} })),
+            make_request(8, "tools/call", json!({ "name": "list", "arguments": {} })),
+        ],
+    );
+
+    assert!(responses.len() >= 8);
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec added successfully."
+    );
+    let list_after_add = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        list_after_add.contains("draft"),
+        "draft must appear after add, got: {list_after_add}"
+    );
+
+    let remove_text = responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("remove text");
+    assert!(
+        remove_text.contains("removed"),
+        "remove must confirm, got: {remove_text}"
+    );
+    assert!(
+        responses[3]["result"].get("isError").is_none()
+            || responses[3]["result"]["isError"] != true,
+        "remove must succeed"
+    );
+    // Full session already ran remove_spec; draft.lemma must be gone on disk.
+    assert!(
+        !temp_dir.path().join("draft.lemma").exists(),
+        "remove_spec must delete draft.lemma from disk"
+    );
+
+    let list_after_remove = responses[4]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        !list_after_remove.contains("draft"),
+        "draft must be gone after remove, got: {list_after_remove}"
+    );
+
+    let clear_text = responses[6]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("clear text");
+    assert_eq!(
+        clear_text, "Removed all specs.",
+        "clear must confirm remove-all without stdlib chatter, got: {clear_text}"
+    );
+    assert!(
+        !temp_dir.path().join("again.lemma").exists(),
+        "clear must delete again.lemma from disk"
+    );
+
+    let list_after_clear = responses[7]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        !list_after_clear.contains("again"),
+        "workspace specs must be gone after clear, got: {list_after_clear}"
+    );
+}
+
+#[test]
+fn test_mcp_remove_spec_rewrites_shared_path_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": "spec first\ndata a: 1\nrule x: a\n\nspec second\ndata b: 2\nrule y: b\n",
+                        "source_id": "pair.lemma"
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "remove_spec",
+                    "arguments": { "spec": "first" }
+                }),
+            ),
+            make_request(4, "tools/call", json!({ "name": "list", "arguments": {} })),
+        ],
+    );
+
+    assert!(responses.len() >= 4);
+    assert!(
+        temp_dir.path().join("pair.lemma").exists(),
+        "shared Path file must remain after removing one of two specs"
+    );
+    let on_disk = std::fs::read_to_string(temp_dir.path().join("pair.lemma")).unwrap();
+    assert!(
+        on_disk.contains("spec second") && !on_disk.contains("spec first"),
+        "file must be rewritten without first, got: {on_disk}"
+    );
+    let list_text = responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        list_text.contains("second") && !list_text.contains("first"),
+        "engine must keep only second, got: {list_text}"
+    );
+}
+
+#[test]
+fn test_mcp_remove_spec_deletes_startup_loaded_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let policy = temp_dir.path().join("workspace_policy.lemma");
+    std::fs::write(
+        &policy,
+        "spec workspace_policy\ndata x: number\nrule y: x\n",
+    )
+    .unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "remove_spec",
+                    "arguments": { "spec": "workspace_policy" }
+                }),
+            ),
+            make_request(3, "tools/call", json!({ "name": "list", "arguments": {} })),
+        ],
+    );
+
+    assert!(responses.len() >= 3);
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec 'workspace_policy' removed."
+    );
+    assert!(
+        !policy.exists(),
+        "remove_spec must delete startup-loaded .lemma from disk"
+    );
+    let list_after = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        !list_after.contains("workspace_policy"),
+        "spec must be gone after remove, got: {list_after}"
+    );
+}
+
+#[test]
+fn test_mcp_clear_deletes_startup_loaded_workspace_files() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let policy = temp_dir.path().join("workspace_policy.lemma");
+    std::fs::write(
+        &policy,
+        "spec workspace_policy\ndata x: number\nrule y: x\n",
+    )
+    .unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(2, "tools/call", json!({ "name": "list", "arguments": {} })),
+            make_request(3, "tools/call", json!({ "name": "clear", "arguments": {} })),
+            make_request(4, "tools/call", json!({ "name": "list", "arguments": {} })),
+        ],
+    );
+
+    assert!(responses.len() >= 4);
+    let list_before = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        list_before.contains("workspace_policy"),
+        "startup load must see workspace file, got: {list_before}"
+    );
+
+    assert_eq!(
+        responses[2]["result"]["content"][0]["text"],
+        "Removed all specs."
+    );
+    assert!(
+        !policy.exists(),
+        "clear must delete startup-loaded .lemma from disk"
+    );
+
+    let list_after = responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        !list_after.contains("workspace_policy"),
+        "spec must be gone after clear, got: {list_after}"
+    );
+}
+
+#[test]
+fn test_mcp_clear_description_leads_with_remove_all() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(2, "tools/list", json!({})),
+        ],
+    );
+    let tools = responses[1]["result"]["tools"].as_array().expect("tools");
+    let clear = tools
+        .iter()
+        .find(|t| t["name"] == "clear")
+        .expect("clear tool");
+    let description = clear["description"].as_str().expect("description");
+    assert_eq!(
+        description, "Remove all specs.",
+        "clear description must be remove-all only, got: {description}"
+    );
+}
+
+#[test]
+fn test_mcp_remove_spec_blocked_without_admin() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "remove_spec",
+                    "arguments": { "spec": "anything" }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "clear",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 3);
+    for i in [1, 2] {
+        let error = &responses[i]["error"];
+        assert!(
+            error.is_object(),
+            "admin tool call {i} must error without --admin"
+        );
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("Admin tools are disabled"),
+            "got: {}",
+            error["message"]
+        );
+    }
+}
+
+#[test]
+fn test_mcp_fetch_writes_file_and_loads() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_fetch_session(
+        temp_dir.path(),
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "fetch",
+                    "arguments": { "dependency": "@iso/countries" }
+                }),
+            ),
+            make_request(3, "tools/call", json!({ "name": "list", "arguments": {} })),
+        ],
+    );
+
+    assert!(responses.len() >= 3);
+    let fetch_text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("fetch text");
+    assert!(
+        fetch_text.contains("Fetched @iso/countries"),
+        "got: {fetch_text}"
+    );
+
+    let dep_path = temp_dir
+        .path()
+        .join("lemma_deps")
+        .join("@iso")
+        .join("countries.lemma");
+    assert!(dep_path.exists(), "fetch must write {}", dep_path.display());
+    let on_disk = std::fs::read_to_string(&dep_path).unwrap();
+    assert!(
+        on_disk.contains("spec alpha2"),
+        "disk content must include fixture specs, got: {on_disk}"
+    );
+
+    let list_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list text");
+    assert!(
+        list_text.contains("@iso/countries") && list_text.contains("alpha2"),
+        "engine must list fetched dependency, got: {list_text}"
+    );
+}
+
+#[test]
+fn test_mcp_fetch_blocked_without_admin() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let fixtures = registry_fixtures_dir();
+
+    let responses = mcp_session_with_env(
+        Some(temp_dir.path()),
+        None,
+        false,
+        &[("LEMMA_REGISTRY_FIXTURES", fixtures.to_str().unwrap())],
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "fetch",
+                    "arguments": { "dependency": "@iso/countries" }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let error = &responses[1]["error"];
+    assert!(error.is_object(), "fetch without admin must error");
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Admin tools are disabled"),
+        "got: {}",
+        error["message"]
+    );
+    assert!(
+        !temp_dir.path().join("lemma_deps").exists(),
+        "fetch without admin must not write lemma_deps"
+    );
+}
+
+#[test]
+fn test_mcp_fetch_skips_unchanged_unless_force() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let first = mcp_fetch_session(
+        temp_dir.path(),
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "fetch",
+                    "arguments": { "dependency": "@iso/countries" }
+                }),
+            ),
+        ],
+    );
+    let first_text = first[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("first fetch");
+    assert!(
+        first_text.contains("Fetched @iso/countries"),
+        "got: {first_text}"
+    );
+
+    let second = mcp_fetch_session(
+        temp_dir.path(),
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "fetch",
+                    "arguments": { "dependency": "@iso/countries" }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "fetch",
+                    "arguments": { "dependency": "@iso/countries", "force": true }
+                }),
+            ),
+        ],
+    );
+
+    let skip_text = second[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("skip fetch");
+    assert!(
+        skip_text.contains("Already up to date"),
+        "second fetch without force must skip, got: {skip_text}"
+    );
+
+    let force_text = second[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("force fetch");
+    assert!(
+        force_text.contains("Fetched @iso/countries") || force_text.contains("Already up to date"),
+        "force with identical content may rewrite or report up to date, got: {force_text}"
+    );
+}
+
+#[test]
+fn test_mcp_fetch_missing_registry_spec_errors() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_fetch_session(
+        temp_dir.path(),
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "fetch",
+                    "arguments": { "dependency": "@org/does-not-exist" }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let error = &responses[1]["error"];
+    assert!(
+        error.is_object(),
+        "missing registry dependency must error, got: {}",
+        responses[1]
+    );
+    let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("@org/does-not-exist") || message.contains("Registry error"),
+        "got: {message}"
+    );
+    assert!(
+        !temp_dir
+            .path()
+            .join("lemma_deps")
+            .join("@org")
+            .join("does-not-exist.lemma")
+            .exists(),
+        "failed fetch must not write lemma_deps file"
     );
 }
 
@@ -1333,13 +2035,26 @@ fn test_mcp_tools_list_admin_tools() {
         "Should list add_spec tool in admin mode"
     );
     assert!(
-        tool_names.contains(&"source"),
-        "Should list source tool in admin mode"
+        tool_names.contains(&"update_spec"),
+        "Should list update_spec tool in admin mode"
     );
+    assert!(
+        tool_names.contains(&"remove_spec"),
+        "Should list remove_spec tool in admin mode"
+    );
+    assert!(
+        tool_names.contains(&"clear"),
+        "Should list clear tool in admin mode"
+    );
+    assert!(
+        tool_names.contains(&"fetch"),
+        "Should list fetch tool in admin mode"
+    );
+    assert!(tool_names.contains(&"source"), "Should list source tool");
     assert_eq!(
         tool_names.len(),
-        7,
-        "Admin mode should have exactly 7 tools, got: {:?}",
+        11,
+        "Admin mode should have exactly 11 tools, got: {:?}",
         tool_names
     );
 }
@@ -1476,6 +2191,266 @@ fn test_mcp_add_spec_then_evaluate() {
     );
 }
 
+#[test]
+fn test_mcp_update_spec_with_dependents() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "workspace.lemma",
+        r#"
+spec dep
+data value: 10
+rule out: value
+
+spec consumer
+uses d: dep
+rule total: d.value
+"#,
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "update_spec",
+                    "arguments": {
+                        "spec": "dep",
+                        "code": "spec dep\ndata value: 20\nrule out: value\n",
+                        "source_id": "dep.lemma"
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": { "spec": "consumer" }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 3);
+
+    let update_text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("update_spec should return text");
+    assert_eq!(update_text, "Spec updated successfully.");
+
+    let eval_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("evaluate should return text");
+    assert!(
+        eval_text.contains("total:"),
+        "Should contain total rule, got: {eval_text}"
+    );
+    assert!(
+        eval_text.contains("20"),
+        "total should be 20 after update, got: {eval_text}"
+    );
+}
+
+#[test]
+fn test_add_spec_persists_to_disk() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let code = "spec dynamic\ndata n: 7\nrule doubled: n * 2\n";
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": code,
+                        "source_id": "dynamic.lemma"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec added successfully."
+    );
+
+    let path = temp_dir.path().join("dynamic.lemma");
+    let on_disk = std::fs::read_to_string(&path).expect("dynamic.lemma must exist after add_spec");
+    let expected = lemma::format_source(
+        code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+            "dynamic.lemma",
+        ))),
+    )
+    .expect("fixture must format");
+    assert_eq!(on_disk, expected);
+}
+
+#[test]
+fn test_update_spec_persists_to_disk() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "dep.lemma",
+        "spec dep\ndata value: 10\nrule out: value\n",
+    );
+
+    let new_code = "spec dep\ndata value: 20\nrule out: value\n";
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "update_spec",
+                    "arguments": {
+                        "spec": "dep",
+                        "code": new_code,
+                        "source_id": "dep.lemma"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    assert_eq!(
+        responses[1]["result"]["content"][0]["text"],
+        "Spec updated successfully."
+    );
+
+    let on_disk =
+        std::fs::read_to_string(temp_dir.path().join("dep.lemma")).expect("dep.lemma must exist");
+    let expected = lemma::format_source(
+        new_code,
+        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("dep.lemma"))),
+    )
+    .expect("fixture must format");
+    assert_eq!(on_disk, expected);
+    assert!(on_disk.contains("20"));
+}
+
+#[test]
+fn test_add_spec_path_traversal_rejected() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": "spec escape\ndata x: 1\nrule y: x\n",
+                        "source_id": "../escape.lemma"
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let error = &responses[1]["error"];
+    assert!(
+        error.is_object(),
+        "path traversal must return JSON-RPC error, got: {}",
+        responses[1]
+    );
+    let message = error["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains(".."),
+        "error should mention '..', got: {message}"
+    );
+    assert!(
+        !temp_dir.path().join("../escape.lemma").exists()
+            || !std::fs::read_to_string(temp_dir.path().join("../escape.lemma"))
+                .unwrap_or_default()
+                .contains("spec escape"),
+        "must not write escaped path"
+    );
+}
+
+#[test]
+fn test_add_spec_write_failure_rolls_back_engine() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    // Parent path component is a file, so create_dir_all / write must fail.
+    std::fs::write(temp_dir.path().join("blocked"), "not a directory").unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "add_spec",
+                    "arguments": {
+                        "code": "spec trapped\ndata x: 1\nrule y: x\n",
+                        "source_id": "blocked/trapped.lemma"
+                    }
+                }),
+            ),
+            make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "list",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 3);
+    let error = &responses[1]["error"];
+    assert!(
+        error.is_object(),
+        "write failure must return JSON-RPC error, got: {}",
+        responses[1]
+    );
+    assert!(
+        error["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Failed to persist"),
+        "error should mention persist failure, got: {}",
+        error["message"]
+    );
+
+    let list_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list should return text");
+    assert!(
+        !list_text.contains("trapped"),
+        "engine must roll back failed persist; list was: {list_text}"
+    );
+    assert!(
+        !temp_dir.path().join("blocked/trapped.lemma").exists(),
+        "failed write must leave no target file"
+    );
+}
+
 // ── source for missing spec ─────────────────────────────────────────────
 
 #[test]
@@ -1484,7 +2459,7 @@ fn test_mcp_source_missing_spec() {
 
     let responses = mcp_session(
         Some(temp_dir.path()),
-        true,
+        false,
         &[
             make_request(1, "initialize", json!({})),
             make_request(
@@ -1787,9 +2762,9 @@ fn test_mcp_check_does_not_mutate_list() {
             || responses[2]["result"]["isError"] != true,
         "valid check must succeed"
     );
-    assert_eq!(
-        check_text, "All sources parsed and planned successfully.",
-        "check should return success message"
+    assert!(
+        check_text.contains("Parsed and planned"),
+        "check should return success message, got: {check_text}"
     );
     let list_after = responses[3]["result"]["content"][0]["text"]
         .as_str()
@@ -1841,9 +2816,9 @@ fn test_mcp_check_resolves_workspace_and_units() {
         "check with uses lemma units + cross-spec uses must succeed, got: {result}"
     );
     let text = result["content"][0]["text"].as_str().expect("text");
-    assert_eq!(
-        text, "All sources parsed and planned successfully.",
-        "check should return success message"
+    assert!(
+        text.contains("Parsed and planned"),
+        "check should return success message, got: {text}"
     );
 }
 
@@ -1877,6 +2852,141 @@ fn test_mcp_check_resolves_registry_dependency() {
     assert!(
         result.get("isError").is_none() || result["isError"] != true,
         "check with @owner/repo dependency must succeed, got: {result}"
+    );
+}
+
+#[test]
+fn test_mcp_check_reports_veto_cascade_recommendation() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let code = r#"spec eligibility 2026-01-01
+"""
+Age gate.
+"""
+
+data age: number
+  -> help "Customer age."
+  -> suggest 30
+
+rule is_eligible: true
+  unless age < 18 then veto "Must be 18+"
+"#;
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [["eligibility.lemma", code]]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert!(
+        result.get("isError").is_none() || result["isError"] != true,
+        "check must succeed with recommendations, got: {result}"
+    );
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert!(
+        text.contains("Parsed and planned"),
+        "success path must keep advisory framing, got: {text}"
+    );
+    assert!(
+        text.contains("Recommendations:"),
+        "must list recommendations, got: {text}"
+    );
+    assert!(
+        text.contains("is_eligible") && text.contains("veto"),
+        "must report veto-as-rejection cascade, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_check_clean_spec_has_no_recommendations() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let code = r#"spec pricing 2026-01-01
+"""
+Bulk pricing.
+"""
+
+data qty: number
+  -> minimum 0
+  -> help "Order quantity."
+  -> suggest 10
+
+rule total: qty
+"#;
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [["pricing.lemma", code]]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert!(
+        result.get("isError").is_none() || result["isError"] != true,
+        "clean check must succeed, got: {result}"
+    );
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert!(text.contains("Parsed and planned"), "got: {text}");
+    assert!(
+        !text.contains("Recommendations:"),
+        "clean spec must not emit recommendations, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_check_invalid_skips_recommendations() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "check",
+                    "arguments": {
+                        "sources": [["bad.lemma", "this is not valid lemma code !!!"]]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let result = &responses[1]["result"];
+    assert_eq!(result["isError"], true);
+    let text = result["content"][0]["text"].as_str().expect("text");
+    assert!(
+        !text.contains("Recommendations:"),
+        "failed plan must not include recommendations, got: {text}"
     );
 }
 
@@ -2001,13 +3111,17 @@ fn test_mcp_evaluate_renders_unit_map() {
 fn test_mcp_guide_topics() {
     let temp_dir = tempfile::tempdir().unwrap();
     let topics = [
+        "method",
         "syntax",
         "data",
         "rules",
         "units",
         "veto",
         "composition",
+        "natural_language",
         "anti_patterns",
+        "evaluate",
+        "full",
     ];
     let mut messages = vec![make_request(1, "initialize", json!({}))];
     for (i, topic) in topics.iter().enumerate() {
@@ -2030,6 +3144,136 @@ fn test_mcp_guide_topics() {
         assert!(!text.is_empty(), "guide topic {topic} must not be empty");
 
         match *topic {
+            "method" => {
+                assert!(
+                    text.contains("**Method: write as a policy consultant"),
+                    "method must include consultant heading"
+                );
+                assert!(
+                    text.contains("**Output contract (mandatory)**"),
+                    "method must include output contract"
+                );
+                assert!(
+                    text.contains("**What to ask (and what not to)**"),
+                    "method must teach ask-only-real-gaps filter"
+                );
+                assert!(
+                    !text.contains("**Consuming loaded specs**"),
+                    "method must not include consuming section (moved to evaluate guide)"
+                );
+                assert!(
+                    !text.contains("Defective on arrival?"),
+                    "method must not train laundry-list edge-case questions"
+                );
+                assert!(
+                    text.contains("Always paste the full Lemma source"),
+                    "method must require pasting full source at deliver"
+                );
+                assert!(
+                    text.contains("user can verify what was saved"),
+                    "method must require user verify of saved/loaded source"
+                );
+                assert!(
+                    text.contains("if anything requires adjustment"),
+                    "method must invite adjustment with a statement, not a confirm question"
+                );
+            }
+            "evaluate" => {
+                assert!(
+                    text.contains("**Evaluating loaded specs**"),
+                    "evaluate must include evaluating heading"
+                );
+                assert!(
+                    text.contains("**User-facing language**"),
+                    "evaluate must include User-facing language"
+                );
+                assert!(
+                    text.contains("Do not say bindings"),
+                    "evaluate must forbid saying bindings to the user"
+                );
+                assert!(
+                    text.contains("Never ask the user what the policy means"),
+                    "evaluate must forbid asking the user to interpret policy"
+                );
+                assert!(
+                    text.contains("Never dispose your interpretation as the truth"),
+                    "evaluate must forbid disposing interpretation as truth"
+                );
+                assert!(
+                    text.contains("use *should*"),
+                    "evaluate must require should when judgment call cannot be answered"
+                );
+                assert!(
+                    text.contains("A reply can close many fields"),
+                    "evaluate must teach multi-bind from replies"
+                );
+                assert!(
+                    text.contains("After every user turn (primary loop)"),
+                    "evaluate must make utterance multi-bind the primary loop"
+                );
+                assert!(
+                    text.contains("Synonym probes of the same claim are forbidden"),
+                    "evaluate must forbid synonym leaf-walk"
+                );
+                assert!(
+                    text.contains("At most one unanswered question in flight"),
+                    "evaluate must limit open questions"
+                );
+                assert!(
+                    text.contains("When the rule answers (verify before done)"),
+                    "evaluate must require verify before done"
+                );
+                assert!(
+                    text.contains("**Details**") && text.contains("**Answer**"),
+                    "evaluate must require details+answer verify table"
+                );
+                assert!(
+                    text.contains("Close with a statement, not a question"),
+                    "evaluate must close verify with a statement, not a question"
+                );
+                assert!(
+                    text.contains("if anything requires adjustment"),
+                    "evaluate must invite adjustment after verify table"
+                );
+                assert!(
+                    text.contains("missing_data"),
+                    "evaluate must mention missing_data"
+                );
+                assert!(
+                    !text.contains("copy help verbatim"),
+                    "evaluate must not force dumping help as the entire message"
+                );
+            }
+            "full" => {
+                assert!(
+                    text.contains("**Method: write as a policy consultant"),
+                    "full must include authoring method"
+                );
+                assert!(
+                    text.contains("Always paste the full Lemma source"),
+                    "full must require pasting full source at deliver"
+                );
+                assert!(
+                    text.contains("user can verify what was saved"),
+                    "full must require user verify of saved/loaded source"
+                );
+                assert!(
+                    text.contains("if anything requires adjustment"),
+                    "full must invite adjustment with a statement, not a confirm question"
+                );
+                assert!(
+                    text.contains("**Mandatory spec opening order:**"),
+                    "full must include syntax"
+                );
+                assert!(
+                    text.contains("## See also"),
+                    "full must include See also footer"
+                );
+                assert!(
+                    !text.contains("**Evaluating loaded specs**"),
+                    "full authoring guide must not include evaluate guide"
+                );
+            }
             "syntax" => {
                 assert!(
                     text.contains("**Mandatory spec opening order:**"),
@@ -2050,6 +3294,16 @@ fn test_mcp_guide_topics() {
                     "composition must include LemmaBase"
                 );
             }
+            "natural_language" => {
+                assert!(
+                    text.contains("**Natural language"),
+                    "natural_language must include heading"
+                );
+                assert!(
+                    text.contains("**Example C"),
+                    "natural_language must include Example C"
+                );
+            }
             "data" => {
                 assert!(text.contains("**Example D"), "data must include Example D");
                 assert!(text.contains("**Example E"), "data must include Example E");
@@ -2064,6 +3318,7 @@ fn test_mcp_guide_topics() {
             "rules" => {
                 assert!(text.contains("**Example F"), "rules must include Example F");
                 assert!(text.contains("**Example G"), "rules must include Example G");
+                assert!(text.contains("**Example H"), "rules must include Example H");
             }
             "veto" => {
                 assert!(text.contains("**Example I"), "veto must include Example I");
@@ -2078,13 +3333,135 @@ fn test_mcp_guide_topics() {
                     "anti_patterns must include inline comments example"
                 );
                 assert!(
-                    !text.contains("## Docs"),
-                    "anti_patterns must not include Docs footer"
+                    !text.contains("## See also"),
+                    "anti_patterns must not include footer"
                 );
             }
             _ => panic!("unknown topic: {topic}"),
         }
     }
+}
+
+#[test]
+fn test_mcp_guide_default_is_evaluate() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "guide",
+                    "arguments": {}
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("default guide text");
+    assert!(
+        text.contains("**Evaluating loaded specs**"),
+        "default guide (no topic) must be evaluate guide"
+    );
+    assert!(
+        text.contains("**User-facing language**"),
+        "default guide must include User-facing language"
+    );
+    assert!(
+        text.contains("Do not say bindings"),
+        "default guide must forbid saying bindings to the user"
+    );
+    assert!(
+        text.contains("Never ask the user what the policy means"),
+        "default guide must forbid asking the user to interpret policy"
+    );
+    assert!(
+        text.contains("Never dispose your interpretation as the truth"),
+        "default guide must forbid disposing interpretation as truth"
+    );
+    assert!(
+        text.contains("use *should*"),
+        "default guide must require should when judgment call cannot be answered"
+    );
+    assert!(
+        text.contains("A reply can close many fields"),
+        "default guide must teach multi-bind from replies"
+    );
+    assert!(
+        text.contains("When the rule answers (verify before done)"),
+        "default guide must require verify before done"
+    );
+    assert!(
+        text.contains("Close with a statement, not a question"),
+        "default guide must close verify with a statement, not a question"
+    );
+    assert!(
+        text.contains("if anything requires adjustment"),
+        "default guide must invite adjustment after verify table"
+    );
+    assert!(
+        !text.contains("copy help verbatim"),
+        "default guide must not force dumping help as the entire message"
+    );
+    assert!(
+        !text.contains("**Mandatory spec opening order:**"),
+        "default guide must not be the full authoring guide"
+    );
+}
+
+#[test]
+fn test_mcp_guide_full_topic_is_authoring() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "initialize", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "guide",
+                    "arguments": { "topic": "full" }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("full guide text");
+    assert!(
+        text.contains("**Mandatory spec opening order:**"),
+        "full guide must include syntax section"
+    );
+    assert!(
+        text.contains("**Method: write as a policy consultant"),
+        "full guide must include method section"
+    );
+    assert!(
+        !text.contains("**Evaluating loaded specs**"),
+        "full authoring guide must not include evaluate guide"
+    );
+    assert!(
+        !text.contains("**Consuming loaded specs**"),
+        "full authoring guide must not include old consuming section"
+    );
+    assert!(
+        text.contains("**Workflow checklist**"),
+        "full guide must include veto section"
+    );
+    assert!(
+        text.contains("## See also"),
+        "full guide must include See also footer"
+    );
 }
 
 #[test]

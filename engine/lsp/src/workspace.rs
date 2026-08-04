@@ -1,4 +1,4 @@
-use lemma::{parse, Error, ParseResult, ResourceLimits, SourceType};
+use lemma::{parse, Error, ParseResult, Recommendation, ResourceLimits, SourceType};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,6 +36,8 @@ pub struct FileDiagnostics {
     pub attribute: String,
     /// All errors for this file (parse errors + planning errors).
     pub errors: Vec<Error>,
+    /// Quality Recommendations for this file (advisory only).
+    pub recommendations: Vec<Recommendation>,
 }
 
 /// In-memory workspace model.
@@ -197,6 +199,7 @@ impl WorkspaceModel {
     pub fn validate_workspace(&self) -> Vec<FileDiagnostics> {
         let mut engine = lemma::Engine::new();
         let load_errors_by_attribute = self.load_tracked_files_into(&mut engine);
+        let recommendations = engine.quality();
 
         let mut results = Vec::new();
         for (attribute, tracked) in &self.files {
@@ -207,11 +210,17 @@ impl WorkspaceModel {
             if let Some(load_errors) = load_errors_by_attribute.get(attribute) {
                 file_errors.extend(load_errors.iter().cloned());
             }
+            let file_recommendations: Vec<Recommendation> = recommendations
+                .iter()
+                .filter(|r| r.source_location.source_type.to_string() == *attribute)
+                .cloned()
+                .collect();
             results.push(FileDiagnostics {
                 url: tracked.url.clone(),
                 text: tracked.text.clone(),
                 attribute: attribute.clone(),
                 errors: file_errors,
+                recommendations: file_recommendations,
             });
         }
         results
