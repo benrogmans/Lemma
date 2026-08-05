@@ -107,7 +107,7 @@ Engine.create().use { engine ->
 | `Lemma.format(String)` | Format source without an engine |
 | `close()` | Drop native engine (`AutoCloseable` + `Cleaner`) |
 
-`RunRequest.of(spec)` defaults: repository null, effective null, rules null (all rules), explain false. An empty `rules` list is a request error. With `explain(true)`, `RuleResult.explanation()` is an `ExplanationNode.Rule` (schema `RuleNode`) whose children are a sealed `ExplanationNode` tree matching [api.v1.json](../schemas/api.v1.json). `show(...)` returns `Show`; each `Show.data` entry is `ShowData`. Non-veto `RuleResult` flattens `RuleResultValue` (`display()` / typed accessors).
+`RunRequest.of(spec)` defaults: repository null, effective null, rules null (all rules), explain false. An empty `rules` list is a request error. With `explain(true)`, `RuleResult.explanation()` is an `ExplanationNode.Rule` whose children are a sealed `ExplanationNode` tree. `show(...)` returns `Show`; each `Show.data` entry is `ShowData`. Non-veto `RuleResult` flattens `RuleResultValue` (`display()` / typed accessors).
 
 ## Errors and veto
 
@@ -129,7 +129,7 @@ The JAR embeds `lemma_jni` natives. On first use, the SDK extracts the native fo
 | 2 | Environment variable `LEMMA_JNI_LIBRARY` | `LEMMA_JNI_LIBRARY=/opt/liblemma_jni.so` |
 | 3 | Bundled JAR resource (extracted to cache) | Automatic |
 
-The cache path is `~/.lemma/native/{version}/{platform}/`. Use `file:/path` or `jar:file:...!/resource` URLs for custom extraction behavior.
+The cache path is `~/.cache/lemma-jni/{version}-{triple}/`. Override the cache root with the system property `lemma.native.cache.dir`.
 
 ## ExplanationNode dispatch
 
@@ -147,13 +147,4 @@ switch (node.type()) {
 }
 ```
 
-Records match [api.v1.json](../schemas/api.v1.json). `LemmaType` follows the same pattern with `kind()`.
-
-## Development in this repository
-
-```bash
-cargo build -p lemma_jni
-cd engine/packages/maven && ./mvnw verify
-```
-
-`cargo precommit` (and CI’s `cargo precommit --fuzz`) builds `lemma_jni` and runs `./mvnw -B verify`.
+`LemmaType` follows the same pattern with `kind()`.
