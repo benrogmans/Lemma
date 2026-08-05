@@ -10,7 +10,7 @@ JVM binding for the Lemma rules engine. Coordinates: `com.lemmabase:lemma-engine
 </dependency>
 ```
 
-Docs: [cli/documentation/tools/maven.md](../../../cli/documentation/tools/maven.md). With `RunRequest.explain(true)`, `RuleResult.explanation()` is an `ExplanationNode.Rule` tree ([api.v1.json](../../../engine/schemas/api.v1.json)).
+Docs: [cli/documentation/tools/maven.md](../../../cli/documentation/tools/maven.md). With `RunRequest.explain(true)`, `RuleResult.explanation()` is an `ExplanationNode.Rule` tree.
 
 ## Develop
 
