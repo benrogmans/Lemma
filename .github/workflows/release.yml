@@ -404,7 +404,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      WASM_PACK_VERSION: 0.14.0
+      WASM_PACK_VERSION: 0.15.0
     steps:
       - uses: actions/checkout@v4
 
@@ -579,30 +579,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
-      - name: Install dependencies
-        working-directory: engine/lsp/editors/vscode
-        run: npm ci
-
-      - name: Compile extension
-        working-directory: engine/lsp/editors/vscode
-        run: npm run compile
-
       - name: Package extension
-        working-directory: engine/lsp/editors/vscode
-        run: npx vsce package
+        run: cargo run -p xtask -- lsp package
 
       - name: Publish to Marketplace
-        working-directory: engine/lsp/editors/vscode
-        run: npx vsce publish --packagePath lemma-language-*.vsix -p ${{ secrets.VSCE_PAT }}
+        run: cargo run -p xtask -- lsp publish-marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Publish to Open VSX
-        working-directory: engine/lsp/editors/vscode
-        run: npx ovsx publish lemma-language-*.vsix -p ${{ secrets.OPEN_VSX_TOKEN }}
+        run: cargo run -p xtask -- lsp publish-openvsx
+        env:
+          OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
 
   publish-hex:
     name: Publish to Hex.pm

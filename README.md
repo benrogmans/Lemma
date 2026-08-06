@@ -248,8 +248,8 @@ rule total: price + tariff
 ```
 
 ```bash
-lemma fetch --all           # fetch all @... dependencies
-lemma fetch @iso/countries -f   # force re-fetch if content changed
+lemma install --all           # install all @... dependencies
+lemma install @iso/countries -f   # force re-install if content changed
 ```
 
 ## CLI
@@ -267,7 +267,7 @@ lemma run pricing -x                      # show reasoning
 lemma show pricing                      # spec interface
 lemma list                                # list all specs
 lemma format                               # format .lemma files
-lemma fetch --all                         # fetch all @... registry dependencies
+lemma install --all                         # install all @... registry dependencies
 lemma lsp                                 # language server (stdio)
 ```
 
@@ -319,7 +319,7 @@ const engine = await Lemma();
 
 See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 
-### Maven (Java / Kotlin)
+### Java / Kotlin
 
 ```xml
 <dependency>
@@ -329,7 +329,7 @@ See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 </dependency>
 ```
 
-See [engine/packages/maven/README.md](engine/packages/maven/README.md) and [cli/documentation/tools/maven.md](cli/documentation/tools/maven.md).
+See [engine/packages/maven/README.md](engine/packages/maven/README.md) and [cli/documentation/tools/java.md](cli/documentation/tools/java.md).
 
 ### Docker
 

@@ -10,9 +10,7 @@ pub mod http {
     };
     use lemma::DateTimeValue;
     use lemma::Engine;
-    use lemma_cli::deps::{dependency_identifier_from_dependency_path, lemma_deps_dir};
     use serde::Deserialize;
-    use std::fs;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
     use std::net::SocketAddr;
@@ -665,191 +663,67 @@ pub mod http {
     // File watcher (--watch mode)
     // -----------------------------------------------------------------------
 
-    /// Snapshot of the last-modified timestamps for all `.lemma` files in the
-    /// workspace. Used to detect whether files have actually changed between
-    /// watcher callbacks, avoiding needless reloads from access-only events.
-    type ModifiedSnapshot = std::collections::BTreeMap<PathBuf, std::time::SystemTime>;
-
-    /// Walk the workspace and collect `(path, modified)` for every `.lemma` file.
-    fn collect_modified_times(workdir: &std::path::Path) -> ModifiedSnapshot {
-        use walkdir::WalkDir;
-
-        let mut snapshot = std::collections::BTreeMap::new();
-        for entry in WalkDir::new(workdir).into_iter().flatten() {
-            if entry.path().extension().and_then(|s| s.to_str()) == Some("lemma") {
-                if let Ok(metadata) = entry.path().metadata() {
-                    if let Ok(modified) = metadata.modified() {
-                        snapshot.insert(entry.path().to_path_buf(), modified);
-                    }
-                }
-            }
-        }
-        snapshot
-    }
-
     fn start_file_watcher(shared_engine: SharedEngine, workdir: PathBuf) -> anyhow::Result<()> {
-        use notify_debouncer_mini::new_debouncer;
-        use std::sync::Mutex;
-        use std::time::Duration;
-
         let watch_dir = workdir.clone();
+        let on_change = Arc::new(move || {
+            info!("Detected .lemma file changes, reloading...");
+            let engine_clone = shared_engine.clone();
+            let workdir_clone = workdir.clone();
 
-        // Track the last-known modified timestamps so we only reload when
-        // file contents have actually changed, not on access-only events.
-        let last_snapshot: Arc<Mutex<ModifiedSnapshot>> =
-            Arc::new(Mutex::new(collect_modified_times(&workdir)));
-
-        // The debouncer thread runs in the background. We intentionally
-        // "forget" the handle so the watcher stays alive for the lifetime
-        // of the process. Dropping it would stop watching.
-        let mut debouncer = new_debouncer(
-            Duration::from_millis(500),
-            move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
-                match result {
-                    Ok(events) => {
-                        let has_lemma_events = events.iter().any(|event| {
-                            event
-                                .path
-                                .extension()
-                                .and_then(|ext| ext.to_str())
-                                .map(|ext| ext == "lemma")
-                                .unwrap_or(false)
-                        });
-
-                        if !has_lemma_events {
-                            return;
-                        }
-
-                        // Check if any file was actually modified by comparing
-                        // the current timestamps to the last known snapshot.
-                        let current_snapshot = collect_modified_times(&workdir);
-
-                        let files_changed = {
-                            let previous = match last_snapshot.lock() {
-                                Ok(guard) => guard,
-                                Err(poisoned) => poisoned.into_inner(),
-                            };
-                            current_snapshot != *previous
-                        };
-
-                        if !files_changed {
-                            return;
-                        }
-
-                        // Store the new snapshot before starting the reload so
-                        // that subsequent callbacks see the up-to-date times.
-                        {
-                            let mut previous = match last_snapshot.lock() {
-                                Ok(guard) => guard,
-                                Err(poisoned) => poisoned.into_inner(),
-                            };
-                            *previous = current_snapshot;
-                        }
-
-                        info!("Detected .lemma file changes, reloading...");
-                        let engine_clone = shared_engine.clone();
-                        let workdir_clone = workdir.clone();
-
-                        // Spawn a dedicated OS thread for reloading. The notify
-                        // callback is synchronous, so we create a fresh tokio
-                        // runtime on a new thread to run the async reload.
-                        std::thread::spawn(move || {
-                            let runtime = match tokio::runtime::Runtime::new() {
-                                Ok(rt) => rt,
-                                Err(err) => {
-                                    error!("Failed to create tokio runtime for reload: {}", err);
-                                    return;
-                                }
-                            };
-
-                            runtime.block_on(async {
-                                match reload_engine(&workdir_clone).await {
-                                    Ok(new_engine) => {
-                                        let workspace_specs = new_engine
-                                            .list()
-                                            .into_iter()
-                                            .find(|repository_group| repository_group.repository.is_none())
-                                            .expect("BUG: workspace repository must exist after Engine::new")
-                                            .specs;
-                                        let unique_specs: std::collections::BTreeSet<&str> =
-                                            workspace_specs
-                                                .iter()
-                                                .map(|ls| ls.name.as_str())
-                                                .collect();
-                                        let spec_count = unique_specs.len();
-                                        // Write lock held only for the Arc swap.
-                                        *engine_clone.write().await = Arc::new(new_engine);
-                                        info!("Reloaded engine with {} spec(s)", spec_count);
-                                    }
-                                    Err(err) => {
-                                        warn!("Reload failed (keeping previous state): {}", err);
-                                    }
-                                }
-                            });
-                        });
-                    }
+            // Spawn a dedicated OS thread for reloading. The notify
+            // callback is synchronous, so we create a fresh tokio
+            // runtime on a new thread to run the async reload.
+            std::thread::spawn(move || {
+                let runtime = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
                     Err(err) => {
-                        error!("File watcher error: {}", err);
+                        error!("Failed to create tokio runtime for reload: {}", err);
+                        return;
                     }
-                }
-            },
-        )?;
+                };
 
-        debouncer
-            .watcher()
-            .watch(&watch_dir, notify::RecursiveMode::Recursive)?;
+                runtime.block_on(async {
+                    match reload_engine(&workdir_clone).await {
+                        Ok(new_engine) => {
+                            let workspace_specs = new_engine
+                                .list()
+                                .into_iter()
+                                .find(|repository_group| repository_group.repository.is_none())
+                                .expect("BUG: workspace repository must exist after Engine::new")
+                                .specs;
+                            let unique_specs: std::collections::BTreeSet<&str> =
+                                workspace_specs.iter().map(|ls| ls.name.as_str()).collect();
+                            let spec_count = unique_specs.len();
+                            // Write lock held only for the Arc swap.
+                            *engine_clone.write().await = Arc::new(new_engine);
+                            info!("Reloaded engine with {} spec(s)", spec_count);
+                        }
+                        Err(err) => {
+                            warn!("Reload failed (keeping previous state): {}", err);
+                        }
+                    }
+                });
+            });
+        });
+
+        let guard = lemma_cli::workspace::watch_lemma_workspace(watch_dir.clone(), on_change)
+            .map_err(|error| anyhow::Error::msg(error.to_string()))?;
 
         info!("Watching {:?} for .lemma file changes", watch_dir);
 
-        // Leak the debouncer so the watcher thread stays alive.
-        // This is intentional: the watcher should run for the lifetime of the process.
-        std::mem::forget(debouncer);
+        // Leak the guard so the watcher stays alive for the process lifetime.
+        std::mem::forget(guard);
 
         Ok(())
     }
 
     /// Create a fresh engine by loading all .lemma files from the workspace
     /// directory (including `lemma_deps/` for cached registry dependencies).
-    /// `lemma_deps/` files are loaded as dependencies with IDs derived from their path.
     async fn reload_engine(workdir: &std::path::Path) -> anyhow::Result<Engine> {
-        use walkdir::WalkDir;
-
         let mut engine = Engine::new();
-        let deps_dir = lemma_deps_dir(workdir);
-        let mut workspace_paths: Vec<std::path::PathBuf> = Vec::new();
-        let mut deps_paths: Vec<std::path::PathBuf> = Vec::new();
-        for entry in WalkDir::new(workdir) {
-            let entry = entry?;
-            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
-                continue;
-            }
-            if entry.path().starts_with(&deps_dir) {
-                deps_paths.push(entry.path().to_path_buf());
-            } else {
-                workspace_paths.push(entry.path().to_path_buf());
-            }
-        }
-
-        let mut sources =
-            Vec::with_capacity(deps_paths.len().saturating_add(workspace_paths.len()));
-
-        for dep_path in &deps_paths {
-            let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
-            let content = fs::read_to_string(dep_path)?;
-            sources.push((
-                lemma::SourceType::Dependency(dependency_id.to_string()),
-                content,
-            ));
-        }
-        for path in &workspace_paths {
-            let content = fs::read_to_string(path)?;
-            sources.push((
-                lemma::SourceType::Path(std::sync::Arc::new(path.clone())),
-                content,
-            ));
-        }
-        if !sources.is_empty() {
-            if let Err(load_err) = engine.load(sources) {
+        match lemma_cli::workspace::load_workspace(&mut engine, workdir) {
+            Ok(()) => Ok(engine),
+            Err(lemma_cli::workspace::WorkspaceDiskError::EngineLoad(load_err)) => {
                 for err in load_err.iter() {
                     tracing::error!(
                         "{}",
@@ -858,7 +732,7 @@ pub mod http {
                 }
                 anyhow::bail!("Workspace load failed ({} error(s))", load_err.errors.len());
             }
+            Err(error) => Err(anyhow::Error::msg(error.to_string())),
         }
-        Ok(engine)
     }
 }

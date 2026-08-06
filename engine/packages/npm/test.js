@@ -176,6 +176,35 @@ export async function test() {
     passed++;
   };
 
+    await run('Engine.withLimits applies named overrides', () => {
+      const limited = Engine.withLimits({ max_sources: 7 });
+      assert(limited.limits().max_sources === 7, 'max_sources override');
+      let threw = false;
+      try {
+        Engine.withLimits({ not_a_limit: 1 });
+      } catch {
+        threw = true;
+      }
+      assert(threw, 'unknown limits key must throw');
+    });
+
+    await run('Engine.withLimits rejects non-integer and unsafe integers', () => {
+      let threwFrac = false;
+      try {
+        Engine.withLimits({ max_sources: 1.5 });
+      } catch {
+        threwFrac = true;
+      }
+      assert(threwFrac, 'fractional max_sources must throw');
+      let threwUnsafe = false;
+      try {
+        Engine.withLimits({ max_sources: 2 ** 54 });
+      } catch {
+        threwUnsafe = true;
+      }
+      assert(threwUnsafe, 'max_sources beyond f64 safe integer range must throw');
+    });
+
     await run('embedded lemma in list + source', () => {
       const fresh = new Engine();
       const groups = fresh.list();

@@ -277,7 +277,7 @@ enum Mutation {
 /// The engine never performs network calls. External `@...` references must be
 /// pre-resolved before loading — either by including dependency sources
 /// in the source map or by calling `resolve_registry_references` separately
-/// (e.g. in a `lemma fetch` command).
+/// (e.g. in a `lemma install` command).
 pub struct Engine {
     pub(crate) context: Context,
     pub(crate) plans: PlanStore,

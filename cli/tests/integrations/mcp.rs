@@ -85,24 +85,6 @@ fn mcp_session_with_env(
     responses
 }
 
-fn registry_fixtures_dir() -> std::path::PathBuf {
-    lemma::LemmaBase::test_fixtures_dir()
-}
-
-fn mcp_fetch_session(
-    prefix: &std::path::Path,
-    messages: &[serde_json::Value],
-) -> Vec<serde_json::Value> {
-    let fixtures = registry_fixtures_dir();
-    mcp_session_with_env(
-        Some(prefix),
-        None,
-        true,
-        &[("LEMMA_REGISTRY_FIXTURES", fixtures.to_str().unwrap())],
-        messages,
-    )
-}
-
 fn make_request(id: u64, method: &str, params: serde_json::Value) -> serde_json::Value {
     json!({
         "jsonrpc": "2.0",
@@ -389,8 +371,8 @@ fn test_mcp_read_only_by_default() {
         tool_names
     );
     assert!(
-        !tool_names.contains(&"fetch"),
-        "fetch should not be listed in read-only mode, got: {:?}",
+        !tool_names.contains(&"install"),
+        "install should not be listed in read-only mode, got: {:?}",
         tool_names
     );
     assert!(
@@ -470,8 +452,8 @@ fn test_mcp_admin_enables_add_spec() {
         tool_names
     );
     assert!(
-        tool_names.contains(&"fetch"),
-        "fetch should be listed with --admin, got: {:?}",
+        tool_names.contains(&"install"),
+        "install should be listed with --admin, got: {:?}",
         tool_names
     );
     assert!(
@@ -1806,72 +1788,19 @@ fn test_mcp_remove_spec_blocked_without_admin() {
 }
 
 #[test]
-fn test_mcp_fetch_writes_file_and_loads() {
+fn test_mcp_install_blocked_without_admin() {
     let temp_dir = tempfile::tempdir().unwrap();
 
-    let responses = mcp_fetch_session(
-        temp_dir.path(),
-        &[
-            make_request(1, "initialize", json!({})),
-            make_request(
-                2,
-                "tools/call",
-                json!({
-                    "name": "fetch",
-                    "arguments": { "dependency": "@iso/countries" }
-                }),
-            ),
-            make_request(3, "tools/call", json!({ "name": "list", "arguments": {} })),
-        ],
-    );
-
-    assert!(responses.len() >= 3);
-    let fetch_text = responses[1]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("fetch text");
-    assert!(
-        fetch_text.contains("Fetched @iso/countries"),
-        "got: {fetch_text}"
-    );
-
-    let dep_path = temp_dir
-        .path()
-        .join("lemma_deps")
-        .join("@iso")
-        .join("countries.lemma");
-    assert!(dep_path.exists(), "fetch must write {}", dep_path.display());
-    let on_disk = std::fs::read_to_string(&dep_path).unwrap();
-    assert!(
-        on_disk.contains("spec alpha2"),
-        "disk content must include fixture specs, got: {on_disk}"
-    );
-
-    let list_text = responses[2]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("list text");
-    assert!(
-        list_text.contains("@iso/countries") && list_text.contains("alpha2"),
-        "engine must list fetched dependency, got: {list_text}"
-    );
-}
-
-#[test]
-fn test_mcp_fetch_blocked_without_admin() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let fixtures = registry_fixtures_dir();
-
-    let responses = mcp_session_with_env(
+    let responses = mcp_session(
         Some(temp_dir.path()),
-        None,
         false,
-        &[("LEMMA_REGISTRY_FIXTURES", fixtures.to_str().unwrap())],
         &[
             make_request(1, "initialize", json!({})),
             make_request(
                 2,
                 "tools/call",
                 json!({
-                    "name": "fetch",
+                    "name": "install",
                     "arguments": { "dependency": "@iso/countries" }
                 }),
             ),
@@ -1880,7 +1809,7 @@ fn test_mcp_fetch_blocked_without_admin() {
 
     assert!(responses.len() >= 2);
     let error = &responses[1]["error"];
-    assert!(error.is_object(), "fetch without admin must error");
+    assert!(error.is_object(), "install without admin must error");
     assert!(
         error["message"]
             .as_str()
@@ -1891,115 +1820,7 @@ fn test_mcp_fetch_blocked_without_admin() {
     );
     assert!(
         !temp_dir.path().join("lemma_deps").exists(),
-        "fetch without admin must not write lemma_deps"
-    );
-}
-
-#[test]
-fn test_mcp_fetch_skips_unchanged_unless_force() {
-    let temp_dir = tempfile::tempdir().unwrap();
-
-    let first = mcp_fetch_session(
-        temp_dir.path(),
-        &[
-            make_request(1, "initialize", json!({})),
-            make_request(
-                2,
-                "tools/call",
-                json!({
-                    "name": "fetch",
-                    "arguments": { "dependency": "@iso/countries" }
-                }),
-            ),
-        ],
-    );
-    let first_text = first[1]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("first fetch");
-    assert!(
-        first_text.contains("Fetched @iso/countries"),
-        "got: {first_text}"
-    );
-
-    let second = mcp_fetch_session(
-        temp_dir.path(),
-        &[
-            make_request(1, "initialize", json!({})),
-            make_request(
-                2,
-                "tools/call",
-                json!({
-                    "name": "fetch",
-                    "arguments": { "dependency": "@iso/countries" }
-                }),
-            ),
-            make_request(
-                3,
-                "tools/call",
-                json!({
-                    "name": "fetch",
-                    "arguments": { "dependency": "@iso/countries", "force": true }
-                }),
-            ),
-        ],
-    );
-
-    let skip_text = second[1]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("skip fetch");
-    assert!(
-        skip_text.contains("Already up to date"),
-        "second fetch without force must skip, got: {skip_text}"
-    );
-
-    let force_text = second[2]["result"]["content"][0]["text"]
-        .as_str()
-        .expect("force fetch");
-    assert!(
-        force_text.contains("Fetched @iso/countries") || force_text.contains("Already up to date"),
-        "force with identical content may rewrite or report up to date, got: {force_text}"
-    );
-}
-
-#[test]
-fn test_mcp_fetch_missing_registry_spec_errors() {
-    let temp_dir = tempfile::tempdir().unwrap();
-
-    let responses = mcp_fetch_session(
-        temp_dir.path(),
-        &[
-            make_request(1, "initialize", json!({})),
-            make_request(
-                2,
-                "tools/call",
-                json!({
-                    "name": "fetch",
-                    "arguments": { "dependency": "@org/does-not-exist" }
-                }),
-            ),
-        ],
-    );
-
-    assert!(responses.len() >= 2);
-    let error = &responses[1]["error"];
-    assert!(
-        error.is_object(),
-        "missing registry dependency must error, got: {}",
-        responses[1]
-    );
-    let message = error["message"].as_str().unwrap();
-    assert!(
-        message.contains("@org/does-not-exist") || message.contains("Registry error"),
-        "got: {message}"
-    );
-    assert!(
-        !temp_dir
-            .path()
-            .join("lemma_deps")
-            .join("@org")
-            .join("does-not-exist.lemma")
-            .exists(),
-        "failed fetch must not write lemma_deps file"
+        "install without admin must not write lemma_deps"
     );
 }
 
@@ -2047,8 +1868,8 @@ fn test_mcp_tools_list_admin_tools() {
         "Should list clear tool in admin mode"
     );
     assert!(
-        tool_names.contains(&"fetch"),
-        "Should list fetch tool in admin mode"
+        tool_names.contains(&"install"),
+        "Should list install tool in admin mode"
     );
     assert!(tool_names.contains(&"source"), "Should list source tool");
     assert_eq!(

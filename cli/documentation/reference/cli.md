@@ -90,18 +90,18 @@ lemma list --prefix ./project
 lemma list --json
 ```
 
-### `lemma fetch`: fetch registry dependencies
+### `lemma install`: install registry dependencies
 
-Resolves `@...` references and downloads specs from the registry.
+Resolves `@...` references and downloads specs from the registry into `lemma_deps/`.
 
 ```bash
-lemma fetch [--prefix PATH] --all
-lemma fetch [--prefix PATH] <dependency> -f
+lemma install [--prefix PATH] --all
+lemma install [--prefix PATH] <dependency> -f
 ```
 
 **Options:**
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
-- `-a, --all`: fetch all @... references in the workspace
+- `-a, --all`: install all @... references in the workspace
 - `-f, --force`: overwrite existing specs when content has changed on the registry
 
 ### `lemma format`: format .lemma files
@@ -157,13 +157,15 @@ curl -X POST http://localhost:8012/pricing \
 
 Starts the Language Server Protocol server over stdio for editor integration (diagnostics, formatting, semantic tokens). The VS Code/Cursor extension invokes this automatically; a globally installed `lemma` CLI is the only requirement.
 
+Workspace file discovery uses the same policy as `lemma list` / `lemma run`: project `.gitignore` rules, plus always loading `<workdir>/lemma_deps/**/*.lemma`. The CLI injects that discovery and a filesystem watch into the LSP. The watch covers discovered workspace `.lemma` files and `lemma_deps/` only (not a recursive whole-tree watch), so disk changes such as `lemma install` update diagnostics without hanging on large build directories. Editor open/change/save/close remain the primary sync path for buffers.
+
 ```bash
 lemma lsp
 ```
 
 ### `lemma mcp`: start MCP server
 
-AI assistant integration via Model Context Protocol over stdio.
+Start the MCP server over stdio so AI assistants can work with workspace specs. Full setup guide: [MCP](../tools/mcp.md).
 
 ```bash
 lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
@@ -171,25 +173,8 @@ lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
 
 **Options:**
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
-- `--admin`: enable admin tools (read-only by default)
-- `--request-timeout <second>`: wall-clock timeout for a single request (default: `10`)
-
-**Tools (default):**
-- `evaluate` — evaluate rules in a spec (always includes explanation trees; unlike CLI/HTTP/WASM, there is no opt-out). Measure/ratio results include every declared unit.
-- `list` — list loaded specs by repository
-- `show` — return the JSON Show for a spec (data and rules, including units)
-- `source` — return formatted Lemma source for a repository or spec
-- `check` — parse and plan a batch of labeled Lemma sources (ephemeral engine, does not mutate server state); returns success confirmation or structured diagnostics
-- `guide` — return a section of the embedded authoring guide (`syntax`, `data`, `rules`, `units`, `veto`, `composition`, `anti_patterns`)
-
-**Resources:** `lemma://guide`, `lemma://guide/{topic}`, `lemma://examples/{name}` (curated examples under `cli/documentation/examples/`).
-
-**Tools (with `--admin`):**
-- `add_spec` — load Lemma source into the engine (structured diagnostics on failure)
-- `update_spec` — replace an existing spec with updated source
-- `remove_spec` — remove one temporal spec slice from the engine
-- `clear` — remove workspace and loaded dependency specs from the engine
-- `fetch` — fetch a registry dependency into `lemma_deps/` and load it
+- `--admin`: enable write tools (read-only by default)
+- `--request-timeout <seconds>`: wall-clock timeout for a single request (default: `10`)
 
 ## Workspace
 

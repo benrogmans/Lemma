@@ -12,6 +12,30 @@ import org.junit.jupiter.api.Test;
 final class EngineContractTest {
 
   @Test
+  void updateReplacesSpecSlice() {
+    try (Engine engine = Engine.create()) {
+      engine.load(
+          """
+          spec pricing
+          data quantity: 1
+          rule total: quantity * 10
+          """);
+      engine.update(
+          null,
+          "pricing",
+          null,
+          """
+          spec pricing
+          data quantity: 1
+          rule total: quantity * 20
+          """,
+          null);
+      Response response = engine.run(RunRequest.of("pricing"));
+      assertEquals("20", response.results().get("total").number().toPlainString());
+    }
+  }
+
+  @Test
   void rejectsDoubleRunDataValues() {
     try (Engine engine = Engine.create()) {
       engine.load(

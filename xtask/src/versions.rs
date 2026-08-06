@@ -18,15 +18,20 @@ mod tracked {
     pub const MAVEN_POM: &str = "engine/packages/maven/pom.xml";
     pub const ENGINE_README: &str = "engine/README.md";
     pub const VSCODE_PACKAGE_JSON: &str = "engine/lsp/editors/vscode/package.json";
+    pub const QUALITY_YML: &str = ".github/workflows/quality.yml";
+    pub const RELEASE_YML: &str = ".github/workflows/release.yml";
 
     /// Doc/README snippets that embed the Maven artifact version (XML and/or Gradle).
     pub const MAVEN_VERSION_DOCS: &[&str] = &[
         "README.md",
         "engine/README.md",
-        "cli/documentation/tools/maven.md",
+        "cli/documentation/tools/java.md",
         "engine/packages/maven/README.md",
     ];
 }
+
+/// Exact wasm-pack version required by precommit / CI. Keep workflow `WASM_PACK_VERSION` in sync.
+pub const WASM_PACK_VERSION: &str = "0.15.0";
 
 fn dep_pin_needle(v: &str) -> String {
     format!(r#"version = "={v}""#)
@@ -413,6 +418,22 @@ pub fn versions_verify(root: &Path) -> Result<(), String> {
             Err(e) => errs.push(format!("{}: {e}", pkg.display())),
         },
         Err(e) => errs.push(format!("{}: {e}", pkg.display())),
+    }
+
+    let wasm_pack_needle = format!("WASM_PACK_VERSION: {WASM_PACK_VERSION}");
+    for rel in [tracked::QUALITY_YML, tracked::RELEASE_YML] {
+        let p = root.join(rel);
+        match fs::read_to_string(&p) {
+            Ok(s) => {
+                if !s.contains(&wasm_pack_needle) {
+                    errs.push(format!(
+                        "{}: expected `{wasm_pack_needle}` (must match xtask WASM_PACK_VERSION)",
+                        p.display()
+                    ));
+                }
+            }
+            Err(e) => errs.push(format!("{}: {e}", p.display())),
+        }
     }
 
     if errs.is_empty() {

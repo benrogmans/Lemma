@@ -17,9 +17,18 @@ pub struct LspSession {
 
 impl LspSession {
     pub fn spawn_lemma_lsp() -> Self {
+        Self::spawn_lemma_lsp_args(&["lsp"])
+    }
+
+    /// Same as [`Self::spawn_lemma_lsp`], plus `--stdio` (vscode-languageclient flag).
+    pub fn spawn_lemma_lsp_with_stdio_flag() -> Self {
+        Self::spawn_lemma_lsp_args(&["lsp", "--stdio"])
+    }
+
+    fn spawn_lemma_lsp_args(args: &[&str]) -> Self {
         let bin = env!("CARGO_BIN_EXE_lemma");
         let mut child = Command::new(bin)
-            .arg("lsp")
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

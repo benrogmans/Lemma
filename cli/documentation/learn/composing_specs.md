@@ -278,11 +278,11 @@ rule total: price + tariff
 Fetch dependencies before running:
 
 ```bash
-lemma fetch --all           # fetch all @... dependencies into lemma_deps/
-lemma fetch @iso/countries -f   # force re-fetch if content changed
+lemma install --all           # install all @... dependencies into lemma_deps/
+lemma install @iso/countries -f   # force re-install if content changed
 ```
 
-Importing from a registry uses `@owner/name` on the `uses` line (for example `uses iso: @iso/countries alpha2`). The engine does not fetch the network; load sources with `lemma fetch` (or your embedder) first. See [Registry](../reference/registry.md).
+Importing from a registry uses `@owner/name` on the `uses` line (for example `uses iso: @iso/countries alpha2`). The engine does not fetch the network; load sources with `lemma install` (or your embedder) first. See [Registry](../reference/registry.md).
 
 ## Evaluating a composed Spec
 

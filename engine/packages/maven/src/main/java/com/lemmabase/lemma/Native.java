@@ -48,6 +48,14 @@ final class Native {
 
   static native void remove(long handle, String repository, String spec, String effective);
 
+  static native void update(
+      long handle,
+      String repository,
+      String spec,
+      String effective,
+      String code,
+      String attribute);
+
   static native String format(String code);
 
   static native String limits(long handle);

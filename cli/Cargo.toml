@@ -25,6 +25,7 @@ ariadne = "0.6"
 chrono.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 walkdir = "2.4"
+ignore = "0.4"
 super-table = { version = "1.1.1", features = ["custom_styling"] }
 inquire = { version = "0.9", features = ["date"] }
 rust_decimal.workspace = true

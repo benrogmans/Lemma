@@ -1,4 +1,4 @@
-//! Dependency layout under `<workdir>/lemma_deps/`, shared by CLI fetch and LSP.
+//! Dependency layout under `<workdir>/lemma_deps/`, shared by CLI install and LSP.
 
 use std::path::{Path, PathBuf};
 
@@ -44,7 +44,7 @@ pub fn dependency_identifier_from_dependency_path(
     without_ext.to_string_lossy().to_string()
 }
 
-/// Absolute path where `lemma fetch` writes the bundle for this registry qualifier.
+/// Absolute path where `lemma install` writes the bundle for this registry qualifier.
 #[must_use]
 pub fn dependency_cache_file(workdir: &Path, registry_qualifier: &str) -> PathBuf {
     lemma_deps_dir(workdir).join(relative_dependency_cache_path(registry_qualifier))

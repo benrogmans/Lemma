@@ -196,24 +196,9 @@ fn limits_from_json(raw: &str) -> Result<ResourceLimits, lemma::Error> {
                 None::<String>,
             )
         })? as usize;
-        match key.as_str() {
-            "max_sources" => limits.max_sources = n,
-            "max_loaded_bytes" => limits.max_loaded_bytes = n,
-            "max_source_size_bytes" => limits.max_source_size_bytes = n,
-            "max_expression_depth" => limits.max_expression_depth = n,
-            "max_expression_count" => limits.max_expression_count = n,
-            "max_data_value_bytes" => limits.max_data_value_bytes = n,
-            "max_spec_dependency_depth" => limits.max_spec_dependency_depth = n,
-            "max_dag_specs" => limits.max_dag_specs = n,
-            "max_normalized_expression_nodes" => limits.max_normalized_expression_nodes = n,
-            "max_normal_form_depth" => limits.max_normal_form_depth = n,
-            other => {
-                return Err(lemma::Error::request(
-                    format!("unknown limits key: '{other}'"),
-                    None::<String>,
-                ));
-            }
-        }
+        limits
+            .apply(key, n)
+            .map_err(|e| lemma::Error::request(e, None::<String>))?;
     }
     Ok(limits)
 }
@@ -553,6 +538,64 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_remove(
                 "remove failed",
                 &engine_errors_json(std::slice::from_ref(&err)),
             );
+        }
+        Ok(())
+    });
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_update(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+    repository: JString,
+    spec: JString,
+    effective: JString,
+    code: JString,
+    attribute: JString,
+) {
+    with_catch(&mut unowned, |env| {
+        let engine = handle_from_jlong(handle)?;
+        let repo = jstring_optional(env, &repository)?;
+        let spec = jstring_required(env, &spec)?;
+        let effective = match parse_effective(env, &effective) {
+            Ok(v) => v,
+            Err(()) => return Ok(()),
+        };
+        let code = jstring_required(env, &code)?;
+        let attribute = jstring_optional(env, &attribute)?;
+        let source_type = match attribute
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            None => SourceType::Volatile,
+            Some(label) => match SourceType::from_binding_label(label) {
+                Ok(st) => st,
+                Err(message) => {
+                    throw_lemma_exception(
+                        env,
+                        "update failed",
+                        &engine_errors_json(&[lemma::Error::request(
+                            format!("update: label '{label}': {message}"),
+                            None::<String>,
+                        )]),
+                    );
+                    return Ok(());
+                }
+            },
+        };
+        let mut guard = engine
+            .lock()
+            .map_err(|_| "BUG: Engine lock poisoned".to_string())?;
+        if let Err(load_err) = guard.update(
+            repo.as_deref(),
+            &spec,
+            effective.as_ref(),
+            source_type,
+            code,
+        ) {
+            throw_lemma_exception(env, "update failed", &engine_errors_json(&load_err.errors));
         }
         Ok(())
     });

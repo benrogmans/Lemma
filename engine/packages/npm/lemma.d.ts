@@ -10,6 +10,11 @@ export interface RegistryFetchResult {
 }
 
 declare module './lemma.bindings.js' {
+  namespace Engine {
+    /** Create engine with named limit overrides. Unknown keys throw. */
+    function withLimits(limits: Record<string, number>): Engine;
+  }
+
   interface Engine {
     /**
      * Load Lemma source(s).

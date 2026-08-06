@@ -5,7 +5,6 @@ import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
-  TransportKind,
 } from "vscode-languageclient/node";
 
 let client: LanguageClient | undefined;
@@ -39,27 +38,26 @@ export function activate(context: ExtensionContext): void {
   const rawPath: string = config.get<string>("lspServerPath", "lemma");
   const server = resolveServerCommand(rawPath);
 
+  // Omit transport: TransportKind.stdio — languageclient appends `--stdio` when set,
+  // which older/unpatched CLIs reject. Undefined transport still uses stdio pipes.
   const serverOptions: ServerOptions = {
     run: {
       command: server.command,
       args: server.args,
-      transport: TransportKind.stdio,
     },
     debug: {
       command: server.command,
       args: server.args,
-      transport: TransportKind.stdio,
     },
   };
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "lemma" }],
-    synchronize: {
-      fileEvents: workspace.createFileSystemWatcher("**/*.lemma"),
-    },
     // Diagnostics: the LSP server sends textDocument/publishDiagnostics with an array of
     // Diagnostic per file. The client forwards them as-is; multiple diagnostics per file
     // (e.g. one per registry error) are all shown. No filtering or merging on the JS side.
+    // Disk create/change sync (including lemma_deps after `lemma install`) is owned by the
+    // Lemma CLI filesystem watch injected into `lemma lsp`, not by an editor file watcher.
   };
 
   client = new LanguageClient(

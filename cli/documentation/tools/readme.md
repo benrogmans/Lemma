@@ -14,7 +14,7 @@ Embed Lemma directly in your language:
 - [Rust](rust.md)
 - [Elixir](elixir.md)
 - [JavaScript / TypeScript](javascript.md)
-- [Maven](maven.md)
+- [Java / Kotlin](java.md)
 - [Python](python.md) (coming soon)
 - [C# / .NET](dotnet.md) (coming soon)
 
@@ -22,8 +22,8 @@ More SDKs are on the way. Precompiled binaries make each new one straightforward
 
 ## Command line & servers
 
-- [Lemma CLI](../reference/cli.md): `lemma run`, `show`, `list`, `format`, `fetch`, plus `server`, `lsp`, and `mcp`
-- [Lemma MCP](../reference/cli.md#lemma-mcp-start-mcp-server): expose specs to AI assistants over the Model Context Protocol
+- [Lemma CLI](../reference/cli.md): `lemma run`, `show`, `list`, `format`, `install`, plus `server`, `lsp`, and `mcp`
+- [Lemma MCP](mcp.md): connect Claude, Gemini CLI, or Cursor to your specs over the Model Context Protocol
 - [Registry: LemmaBase](../reference/registry.md): share and reuse specs via `@owner/name` imports on `uses`
 
 ## Notes that apply to every SDK
@@ -32,5 +32,5 @@ More SDKs are on the way. Precompiled binaries make each new one straightforward
 - `load` validates: invalid specs are rejected there, never at run time.
 - The engine never hits the network. Resolve `@...` [registry](../reference/registry.md) references before loading.
 - Explanations are opt-in (`explain: true` / `--explain`). Wire shape: [`api.v1.json`](../schemas/api.v1.json) (`RuleResult.explanation` → `RuleNode`; nested tree under `ExplanationNode`).
-- Maven package requires **JDK 21+**.
+- Java / Kotlin package requires **JDK 21+**.
 - Editor support (any language): the [VS Code / Cursor extension](../installation.md) drives `lemma lsp`.

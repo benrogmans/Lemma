@@ -2,3 +2,6 @@
 pub mod deps {
     pub use lemma::deps::*;
 }
+
+pub mod install;
+pub mod workspace;

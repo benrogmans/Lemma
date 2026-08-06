@@ -5,7 +5,7 @@ nav_order: 20
 
 # Installation
 
-Lemma is designed to run wherever your rules need to live. Install the CLI to evaluate specs from the terminal, embed the engine directly in Rust, JavaScript/TypeScript, Elixir, or Java/Kotlin via Maven, serve specs over HTTP or MCP, or pull a Docker image for containerized workloads. For language bindings and the full SDK documentation, see [Tools & SDKs](tools/readme.md).
+Lemma is designed to run wherever your rules need to live. Install the CLI to evaluate specs from the terminal, embed the engine directly in Rust, JavaScript/TypeScript, Elixir, or Java/Kotlin, serve specs over HTTP or MCP, or pull a Docker image for containerized workloads. For language bindings and the full SDK documentation, see [Tools & SDKs](tools/readme.md).
 
 ## Lemma CLI
 
@@ -25,7 +25,7 @@ See [Lemma CLI](reference/cli.md) for all commands.
 
 ## Embed Lemma in your application
 
-Lemma can be embedded directly in Rust, JavaScript/TypeScript, Elixir, and Java/Kotlin (Maven). See [Tools & SDKs](tools/readme.md) for the full SDK documentation for each language. More languages are coming soon.
+Lemma can be embedded directly in Rust, JavaScript/TypeScript, Elixir, and Java/Kotlin. See [Tools & SDKs](tools/readme.md) for the full SDK documentation for each language. More languages are coming soon.
 
 ## Editor support
 

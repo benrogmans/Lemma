@@ -359,21 +359,34 @@ impl LemmaBase {
     }
 
     /// Base URL for the spec; when effective is set, appends ?effective=... for temporal resolution.
-    fn source_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
+    fn source_url(
+        &self,
+        name: &str,
+        effective: Option<&DateTimeValue>,
+    ) -> Result<String, RegistryError> {
+        if !name.starts_with('@') {
+            return Err(RegistryError {
+                message: format!("Registry identifier must start with '@' (got '{name}')"),
+                kind: RegistryErrorKind::Other,
+            });
+        }
         let base = format!("{}/{}.lemma", Self::BASE_URL, name);
-        match effective {
+        Ok(match effective {
             None => base,
             Some(d) => format!("{}?effective={}", base, d),
-        }
+        })
     }
 
     /// Human-facing URL for navigation; when effective is set, appends ?effective=... for linking to a specific temporal version.
-    fn navigation_url(&self, name: &str, effective: Option<&DateTimeValue>) -> String {
+    fn navigation_url(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
+        if !name.starts_with('@') {
+            return None;
+        }
         let base = format!("{}/{}", Self::BASE_URL, name);
-        match effective {
+        Some(match effective {
             None => base,
             Some(d) => format!("{}?effective={}", base, d),
-        }
+        })
     }
 
     fn display_id(name: &str, effective: Option<&DateTimeValue>) -> String {
@@ -385,7 +398,7 @@ impl LemmaBase {
 
     /// Fetch all zones for the given identifier (no temporal filtering).
     async fn fetch_source(&self, name: &str) -> Result<RegistryBundle, RegistryError> {
-        let url = self.source_url(name, None);
+        let url = self.source_url(name, None)?;
         let display = Self::display_id(name, None);
 
         let source = self.fetcher.get(&url).await.map_err(|error| {
@@ -434,7 +447,7 @@ impl Registry for LemmaBase {
     }
 
     fn url_for_id(&self, name: &str, effective: Option<&DateTimeValue>) -> Option<String> {
-        Some(self.navigation_url(name, effective))
+        self.navigation_url(name, effective)
     }
 }
 
@@ -755,7 +768,7 @@ data price: 100"#;
         assert!(names.iter().any(|n| n == "units"));
     }
 
-    /// Mirrors `lemma fetch --all`: bare `Context::new()` without embedded stdlib.
+    /// Mirrors `lemma install --all`: bare `Context::new()` without embedded stdlib.
     #[tokio::test(flavor = "current_thread")]
     async fn resolve_does_not_fetch_non_at_qualified_repositories() {
         let local_source = r#"spec burn_baby_burn
@@ -1351,7 +1364,9 @@ data code: text
         #[test]
         fn source_url_without_effective() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("@user/workspace/somespec", None);
+            let url = registry
+                .source_url("@user/workspace/somespec", None)
+                .unwrap();
             assert_eq!(
                 url,
                 format!("{}/@user/workspace/somespec.lemma", LemmaBase::BASE_URL)
@@ -1373,7 +1388,9 @@ data code: text
 
                 granularity: DateGranularity::Full,
             };
-            let url = registry.source_url("@user/workspace/somespec", Some(&effective));
+            let url = registry
+                .source_url("@user/workspace/somespec", Some(&effective))
+                .unwrap();
             assert_eq!(
                 url,
                 format!(
@@ -1386,7 +1403,9 @@ data code: text
         #[test]
         fn source_url_for_deeply_nested_identifier() {
             let registry = LemmaBase::new();
-            let url = registry.source_url("@org/team/project/subdir/spec", None);
+            let url = registry
+                .source_url("@org/team/project/subdir/spec", None)
+                .unwrap();
             assert_eq!(
                 url,
                 format!(
@@ -1397,9 +1416,30 @@ data code: text
         }
 
         #[test]
+        fn source_url_rejects_id_without_at() {
+            let registry = LemmaBase::new();
+            let err = registry
+                .source_url("not-a-registry-id", None)
+                .expect_err("non-@ id must be a registry error");
+            assert_eq!(err.kind, RegistryErrorKind::Other);
+            assert!(
+                err.message.contains("must start with '@'"),
+                "got: {}",
+                err.message
+            );
+            assert!(
+                err.message.contains("not-a-registry-id"),
+                "got: {}",
+                err.message
+            );
+        }
+
+        #[test]
         fn navigation_url_without_effective() {
             let registry = LemmaBase::new();
-            let url = registry.navigation_url("@user/workspace/somespec", None);
+            let url = registry
+                .navigation_url("@user/workspace/somespec", None)
+                .unwrap();
             assert_eq!(
                 url,
                 format!("{}/@user/workspace/somespec", LemmaBase::BASE_URL)
@@ -1421,7 +1461,9 @@ data code: text
 
                 granularity: DateGranularity::Full,
             };
-            let url = registry.navigation_url("@user/workspace/somespec", Some(&effective));
+            let url = registry
+                .navigation_url("@user/workspace/somespec", Some(&effective))
+                .unwrap();
             assert_eq!(
                 url,
                 format!(
@@ -1429,6 +1471,12 @@ data code: text
                     LemmaBase::BASE_URL
                 )
             );
+        }
+
+        #[test]
+        fn navigation_url_rejects_id_without_at() {
+            let registry = LemmaBase::new();
+            assert!(registry.navigation_url("iso/countries", None).is_none());
         }
 
         #[test]
@@ -1485,6 +1533,22 @@ data code: text
             let registry = LemmaBase::test();
             let iso = registry.get("@iso/countries").await.unwrap();
             assert!(iso.source.contains("spec alpha2"));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn fetch_source_rejects_id_without_at() {
+            let registry =
+                lemma_base_with_fetcher(Box::new(MockHttpFetcher::always_returning("unused")));
+            let err = registry
+                .fetch_source("not-a-registry-id")
+                .await
+                .expect_err("non-@ id must not hit the network");
+            assert_eq!(err.kind, RegistryErrorKind::Other);
+            assert!(
+                err.message.contains("must start with '@'"),
+                "got: {}",
+                err.message
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]

@@ -41,14 +41,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 34371 | 40387 | 85.10% |
-| Functions | 2599 | 2958 | 87.86% |
-| Regions | 50861 | 60661 | 83.84% |
+| Lines | 34458 | 40477 | 85.13% |
+| Functions | 2607 | 2966 | 87.90% |
+| Regions | 50967 | 60778 | 83.86% |
 
 ## Test run
 
-- Total: 2358
-- Passed: 2358
+- Total: 2364
+- Passed: 2364
 - Skipped: 2
 - Failed: 0
 
@@ -96,13 +96,13 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `planning/discovery.rs` | 93.13 | 97.06 | 93.96 | 1220/1310 |
 | `planning/unit_index.rs` | 93.19 | 97.78 | 94.39 | 424/455 |
 | `planning/mod.rs` | 93.94 | 97.56 | 95.02 | 496/528 |
-| `registry.rs` | 94.04 | 90.44 | 93.44 | 1073/1141 |
+| `registry.rs` | 94.08 | 90.71 | 93.50 | 1128/1199 |
 | `evaluation/mod.rs` | 94.76 | 95.45 | 95.83 | 271/286 |
 | `deps.rs` | 96.23 | 100.00 | 96.47 | 51/53 |
 | `evaluation/response.rs` | 99.19 | 91.67 | 98.62 | 492/496 |
 | `computation/bigint/alloc.rs` | 100.00 | 100.00 | 97.37 | 20/20 |
 | `lib.rs` | 100.00 | 100.00 | 100.00 | 4/4 |
-| `limits.rs` | 100.00 | 100.00 | 100.00 | 34/34 |
+| `limits.rs` | 100.00 | 100.00 | 90.00 | 66/66 |
 | `parsing/source.rs` | 100.00 | 100.00 | 99.46 | 125/125 |
 
 ## Related docs
@@ -110,4 +110,4 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 - [Engine integration test catalog](../../../engine/tests/README.md) — qualitative map of scenarios and subsystem overlap clusters
 - [CLI test coverage](cli.md)
 - [Engine benchmarks](../benchmarks/engine.md)
-<!-- coverage-input-digest: 3e45f07edc9e9fbb -->
+<!-- coverage-input-digest: 5894bd7f8eed1f26 -->

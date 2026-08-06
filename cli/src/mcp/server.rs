@@ -95,7 +95,7 @@ mod imp {
 
     /// Configuration for the MCP server.
     pub struct McpConfig {
-        /// When true, admin tools (`add_spec`, `update_spec`, `remove_spec`, `clear`, `fetch`)
+        /// When true, admin tools (`add_spec`, `update_spec`, `remove_spec`, `clear`, `install`)
         /// are advertised and allowed. When false (default), the server is read-only.
         pub admin: bool,
         /// Wall-clock budget for handling a single request. Requests that
@@ -116,8 +116,9 @@ mod imp {
     struct McpServer {
         engine: Engine,
         config: McpConfig,
-        /// Workspace directory for admin persist (add / update / remove / clear / fetch).
+        /// Workspace directory for admin persist (add / update / remove / clear / install).
         workdir: PathBuf,
+        registry: Box<dyn lemma::Registry>,
     }
 
     /// Resolve `workdir/source_path` for relative source ids. Rejects absolute paths and `..`.
@@ -174,39 +175,21 @@ mod imp {
 
     /// Atomic write: temp file in same directory, fsync, rename.
     fn atomic_write(path: &Path, contents: &str) -> io::Result<()> {
-        let file_name = path.file_name().ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "persist path must include a file name",
-            )
-        })?;
-        let dir = match path.parent() {
-            Some(p) if !p.as_os_str().is_empty() => p,
-            _ => Path::new("."),
-        };
-        fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".{}.tmp", file_name.to_string_lossy()));
-        match (|| -> io::Result<()> {
-            let mut f = fs::File::create(&tmp)?;
-            f.write_all(contents.as_bytes())?;
-            f.sync_all()?;
-            fs::rename(&tmp, path)?;
-            Ok(())
-        })() {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let _ = fs::remove_file(&tmp);
-                Err(e)
-            }
-        }
+        lemma_cli::install::atomic_write(path, contents)
     }
 
     impl McpServer {
-        fn new(engine: Engine, config: McpConfig, workdir: PathBuf) -> Self {
+        fn new(
+            engine: Engine,
+            config: McpConfig,
+            workdir: PathBuf,
+            registry: Box<dyn lemma::Registry>,
+        ) -> Self {
             Self {
                 engine,
                 config,
                 workdir,
+                registry,
             }
         }
 
@@ -538,14 +521,14 @@ mod imp {
                     }
                 }));
                 tools.push(serde_json::json!({
-                    "name": "fetch",
-                    "description": "Fetch a registry dependency (e.g. @iso/countries) and load it. Pass force=true to overwrite an existing copy.",
+                    "name": "install",
+                    "description": "Download a registry dependency (e.g. @iso/countries), persist under lemma_deps/, and load it. Pass force=true to overwrite an existing copy.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
                             "dependency": {
                                 "type": "string",
-                                "description": "Registry identifier including @, e.g. @iso/countries"
+                                "description": "Registry identifier, e.g. @iso/countries"
                             },
                             "force": {
                                 "type": "boolean",
@@ -647,7 +630,7 @@ mod imp {
             debug!("Calling tool: {}", tool_name);
 
             match tool_name {
-                "add_spec" | "update_spec" | "remove_spec" | "clear" | "fetch"
+                "add_spec" | "update_spec" | "remove_spec" | "clear" | "install"
                     if !self.config.admin =>
                 {
                     Err(McpError::invalid_params(
@@ -659,7 +642,7 @@ mod imp {
                 "update_spec" => self.tool_update_spec(arguments),
                 "remove_spec" => self.tool_remove_spec(arguments),
                 "clear" => self.tool_clear(arguments),
-                "fetch" => self.tool_fetch(arguments),
+                "install" => self.tool_install(arguments),
                 "source" => self.tool_source(arguments),
                 "evaluate" => self.tool_evaluate(arguments),
                 "list" => self.tool_list(arguments),
@@ -1021,13 +1004,6 @@ mod imp {
             Ok(paths)
         }
 
-        fn make_fetch_registry() -> Box<dyn lemma::Registry> {
-            match std::env::var_os("LEMMA_REGISTRY_FIXTURES") {
-                Some(dir) => Box::new(lemma::LemmaBase::with_fixture_dir(PathBuf::from(dir))),
-                None => Box::new(lemma::LemmaBase::new()),
-            }
-        }
-
         fn dependency_in_engine(engine: &Engine, dependency: &str) -> bool {
             engine
                 .list()
@@ -1055,7 +1031,10 @@ mod imp {
             }
         }
 
-        fn tool_fetch(&mut self, args: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+        fn tool_install(
+            &mut self,
+            args: &serde_json::Value,
+        ) -> Result<serde_json::Value, McpError> {
             let dependency = args["dependency"]
                 .as_str()
                 .map(str::trim)
@@ -1064,140 +1043,58 @@ mod imp {
                     McpError::invalid_params("Missing 'dependency' field".to_string())
                 })?;
 
-            if !dependency.starts_with('@') {
-                return Err(McpError::invalid_params(format!(
-                    "Dependency must be a registry identifier starting with '@' (got '{dependency}')"
-                )));
-            }
+            let force = match args.get("force") {
+                None => false,
+                Some(v) => v.as_bool().ok_or_else(|| {
+                    McpError::invalid_params("'force' must be a boolean".to_string())
+                })?,
+            };
 
-            let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            let workdir = &self.workdir;
-
-            lemma::parse_spec_set_id(dependency)
-                .map_err(|e| McpError::invalid_params(e.to_string()))?;
-
-            let registry = Self::make_fetch_registry();
-            let runtime = tokio::runtime::Runtime::new().map_err(|e| {
-                McpError::internal_error(format!("Failed to start async runtime for fetch: {e}"))
-            })?;
-            let bundle = runtime.block_on(registry.get(dependency)).map_err(|e| {
-                McpError::internal_error(format!("Registry error for {dependency}: {}", e.message))
-            })?;
-
-            let source_text = bundle.source;
-            let limits = lemma::ResourceLimits::default();
             let source_type = lemma::SourceType::Dependency(dependency.to_string());
+            let outcome = lemma_cli::install::install_registry_dependency(
+                &self.workdir,
+                dependency,
+                force,
+                self.registry.as_ref(),
+            );
 
-            let new_specs = lemma::parse(&source_text, source_type.clone(), &limits)
-                .map_err(|e| {
-                    McpError::internal_error(format!(
-                        "Registry returned unparseable dependency: {}",
-                        e.message()
-                    ))
-                })?
-                .into_flattened_specs();
-            let new_spec_names: std::collections::HashSet<String> =
-                new_specs.iter().map(|s| s.name.clone()).collect();
-
-            let deps_dir = lemma::deps::lemma_deps_dir(workdir);
-            let destination_relative = lemma::deps::relative_dependency_cache_path(dependency);
-            let destination_absolute = deps_dir.join(&destination_relative);
-
-            let mut conflict_paths: Vec<PathBuf> = Vec::new();
-            if deps_dir.exists() {
-                for entry in walkdir::WalkDir::new(&deps_dir) {
-                    let entry = entry.map_err(|e| {
-                        McpError::internal_error(format!("Failed to walk lemma_deps: {e}"))
-                    })?;
-                    if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
-                        continue;
+            let (relative_path, source, freshly_written) = match outcome {
+                Ok(lemma_cli::install::InstallOutcome::AlreadyUpToDate {
+                    relative_path,
+                    source,
+                }) => (relative_path, source, false),
+                Ok(lemma_cli::install::InstallOutcome::Written {
+                    relative_path,
+                    source,
+                }) => (relative_path, source, true),
+                Err(lemma_cli::install::InstallError::Plan(load_err)) => {
+                    return Ok(Self::load_diagnostics_tool_result(load_err));
+                }
+                Err(lemma_cli::install::InstallError::Message(message)) => {
+                    if message.starts_with("Registry error")
+                        || message.starts_with("Registry returned unparseable")
+                    {
+                        return Err(McpError::internal_error(message));
                     }
-                    let path = entry.path();
-                    let existing_content = fs::read_to_string(path).map_err(|e| {
-                        McpError::internal_error(format!("Failed to read {}: {e}", path.display()))
-                    })?;
-                    if existing_content == source_text && path == destination_absolute {
-                        if !Self::dependency_in_engine(&self.engine, dependency) {
-                            if let Err(load_err) = self
-                                .engine
-                                .load([(source_type.clone(), source_text.clone())])
-                            {
-                                return Ok(Self::load_diagnostics_tool_result(load_err));
-                            }
-                        }
-                        let message = format!(
-                            "Already up to date: {} -> {}",
-                            dependency,
-                            destination_relative.display()
-                        );
-                        info!("{message}");
-                        return Ok(serde_json::json!({
-                            "content": [{ "type": "text", "text": message }]
-                        }));
-                    }
-                    let existing_specs = match lemma::parse(
-                        &existing_content,
-                        lemma::SourceType::Path(std::sync::Arc::new(path.to_path_buf())),
-                        &limits,
-                    ) {
-                        Ok(parsed) => parsed.into_flattened_specs(),
-                        Err(_) => continue,
-                    };
-                    let conflict: Vec<&str> = existing_specs
-                        .iter()
-                        .filter(|s| new_spec_names.contains(&s.name))
-                        .map(|s| s.name.as_str())
-                        .collect();
-                    if !conflict.is_empty() {
-                        if path == destination_absolute {
-                            continue;
-                        }
-                        if !force {
-                            return Err(McpError::invalid_params(format!(
-                                "Dependency containing spec(s) {} already exists in {}.\n\
-                                 Content has changed on the registry. Re-run with force=true to overwrite.",
-                                conflict.join(", "),
-                                path.display()
-                            )));
-                        }
-                        conflict_paths.push(path.to_path_buf());
+                    return Err(McpError::invalid_params(message));
+                }
+            };
+
+            if !freshly_written {
+                if !Self::dependency_in_engine(&self.engine, dependency) {
+                    if let Err(load_err) = self.engine.load([(source_type, source)]) {
+                        return Ok(Self::load_diagnostics_tool_result(load_err));
                     }
                 }
-            }
-
-            if destination_absolute.exists() {
-                let existing = fs::read_to_string(&destination_absolute).map_err(|e| {
-                    McpError::internal_error(format!(
-                        "Failed to read {}: {e}",
-                        destination_absolute.display()
-                    ))
-                })?;
-                if existing == source_text && !force {
-                    if !Self::dependency_in_engine(&self.engine, dependency) {
-                        if let Err(load_err) = self
-                            .engine
-                            .load([(source_type.clone(), source_text.clone())])
-                        {
-                            return Ok(Self::load_diagnostics_tool_result(load_err));
-                        }
-                    }
-                    let message = format!(
-                        "Already up to date: {} -> {}",
-                        dependency,
-                        destination_relative.display()
-                    );
-                    info!("{message}");
-                    return Ok(serde_json::json!({
-                        "content": [{ "type": "text", "text": message }]
-                    }));
-                }
-            }
-
-            // Validate the bundle plans before mutating server state or disk.
-            let mut probe = Engine::new();
-            if let Err(load_err) = probe.load([(source_type.clone(), source_text.clone())]) {
-                return Ok(Self::load_diagnostics_tool_result(load_err));
+                let message = format!(
+                    "Already up to date: {} -> {}",
+                    dependency,
+                    relative_path.display()
+                );
+                info!("{message}");
+                return Ok(serde_json::json!({
+                    "content": [{ "type": "text", "text": message }]
+                }));
             }
 
             let already_loaded = Self::dependency_in_engine(&self.engine, dependency);
@@ -1216,33 +1113,10 @@ mod imp {
             };
 
             if already_loaded {
-                if !force
-                    && destination_absolute.exists()
-                    && fs::read_to_string(&destination_absolute)
-                        .map(|c| c == source_text)
-                        .unwrap_or(false)
-                {
-                    let message = format!(
-                        "Already up to date: {} -> {}",
-                        dependency,
-                        destination_relative.display()
-                    );
-                    return Ok(serde_json::json!({
-                        "content": [{ "type": "text", "text": message }]
-                    }));
-                }
-                if !force {
-                    return Err(McpError::invalid_params(format!(
-                        "Dependency '{dependency}' is already loaded. Re-run with force=true to overwrite."
-                    )));
-                }
                 Self::unload_dependency(&mut self.engine, dependency);
             }
 
-            if let Err(load_err) = self
-                .engine
-                .load([(source_type.clone(), source_text.clone())])
-            {
+            if let Err(load_err) = self.engine.load([(source_type, source)]) {
                 if let Some(old) = rollback_source.as_ref() {
                     self.engine
                         .load([(
@@ -1254,52 +1128,7 @@ mod imp {
                 return Ok(Self::load_diagnostics_tool_result(load_err));
             }
 
-            let removed_conflict_snapshots: Vec<(PathBuf, String)> = {
-                let mut snaps = Vec::new();
-                for path in &conflict_paths {
-                    let content = fs::read_to_string(path).map_err(|e| {
-                        McpError::internal_error(format!(
-                            "Failed to snapshot conflict file {}: {e}",
-                            path.display()
-                        ))
-                    })?;
-                    snaps.push((path.clone(), content));
-                }
-                snaps
-            };
-
-            for (path, _) in &removed_conflict_snapshots {
-                fs::remove_file(path).map_err(|e| {
-                    McpError::internal_error(format!(
-                        "Failed to remove conflict file {}: {e}",
-                        path.display()
-                    ))
-                })?;
-            }
-
-            if let Err(e) = atomic_write(&destination_absolute, &source_text) {
-                for (path, content) in &removed_conflict_snapshots {
-                    let _ = atomic_write(path, content);
-                }
-                Self::unload_dependency(&mut self.engine, dependency);
-                if let Some(old) = rollback_source {
-                    self.engine
-                        .load([(lemma::SourceType::Dependency(dependency.to_string()), old)])
-                        .expect(
-                            "BUG: restore previous dependency after failed persist must succeed",
-                        );
-                }
-                return Err(McpError::internal_error(format!(
-                    "Failed to persist dependency to {}: {e}",
-                    destination_absolute.display()
-                )));
-            }
-
-            let message = format!(
-                "Fetched {} -> {}",
-                dependency,
-                destination_relative.display()
-            );
+            let message = format!("Installed {} -> {}", dependency, relative_path.display());
             info!("{message}");
             Ok(serde_json::json!({
                 "content": [{ "type": "text", "text": message }]
@@ -1776,7 +1605,8 @@ mod imp {
         let (request_tx, request_rx) = std::sync::mpsc::channel::<McpRequest>();
         let (response_tx, response_rx) = std::sync::mpsc::channel::<Option<McpResponse>>();
         std::thread::spawn(move || {
-            let mut server = McpServer::new(engine, config, workdir);
+            let mut server =
+                McpServer::new(engine, config, workdir, Box::new(lemma::LemmaBase::new()));
             for request in request_rx {
                 let request_id = request.id.clone();
                 let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1938,7 +1768,24 @@ mod imp {
         use super::*;
 
         fn server() -> McpServer {
-            McpServer::new(Engine::new(), McpConfig::default(), std::env::temp_dir())
+            McpServer::new(
+                Engine::new(),
+                McpConfig::default(),
+                std::env::temp_dir(),
+                Box::new(lemma::LemmaBase::test()),
+            )
+        }
+
+        fn admin_server(workdir: PathBuf) -> McpServer {
+            McpServer::new(
+                Engine::new(),
+                McpConfig {
+                    admin: true,
+                    ..McpConfig::default()
+                },
+                workdir,
+                Box::new(lemma::LemmaBase::test()),
+            )
         }
 
         fn parse(line: &str) -> McpRequest {
@@ -2001,6 +1848,176 @@ mod imp {
             let result = resp.result.expect("result expected");
             assert_eq!(result["capabilities"]["tools"]["listChanged"], false);
             assert_eq!(result["capabilities"]["resources"]["listChanged"], false);
+        }
+
+        fn tools_call(id: u64, name: &str, arguments: serde_json::Value) -> McpRequest {
+            McpRequest {
+                jsonrpc: "2.0".to_string(),
+                id: Some(serde_json::json!(id)),
+                method: "tools/call".to_string(),
+                params: Some(serde_json::json!({
+                    "name": name,
+                    "arguments": arguments,
+                })),
+            }
+        }
+
+        #[test]
+        fn install_writes_file_and_loads() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = admin_server(dir.path().to_path_buf());
+            let resp = s
+                .handle_request(tools_call(
+                    1,
+                    "install",
+                    serde_json::json!({ "dependency": "@iso/countries" }),
+                ))
+                .expect("response");
+            let text = resp.result.as_ref().unwrap()["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            assert!(text.contains("Installed @iso/countries"), "got: {text}");
+            let dep_path = dir.path().join("lemma_deps/@iso/countries.lemma");
+            assert!(dep_path.exists(), "must write {}", dep_path.display());
+            assert!(fs::read_to_string(&dep_path)
+                .unwrap()
+                .contains("spec alpha2"));
+
+            let list = s
+                .handle_request(tools_call(2, "list", serde_json::json!({})))
+                .expect("list");
+            let list_text = list.result.as_ref().unwrap()["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            assert!(
+                list_text.contains("@iso/countries") && list_text.contains("alpha2"),
+                "got: {list_text}"
+            );
+        }
+
+        #[test]
+        fn install_force_must_be_bool() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = admin_server(dir.path().to_path_buf());
+            for bad in [serde_json::json!("true"), serde_json::json!(1)] {
+                let resp = s
+                    .handle_request(tools_call(
+                        1,
+                        "install",
+                        serde_json::json!({ "dependency": "@iso/countries", "force": bad }),
+                    ))
+                    .expect("response");
+                let err = resp.error.as_ref().expect("invalid_params");
+                assert_eq!(err.code, -32602);
+                assert!(err.message.contains("force"), "got: {}", err.message);
+            }
+        }
+
+        #[test]
+        fn install_skips_unchanged() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = admin_server(dir.path().to_path_buf());
+            let first = s
+                .handle_request(tools_call(
+                    1,
+                    "install",
+                    serde_json::json!({ "dependency": "@iso/countries" }),
+                ))
+                .expect("response");
+            assert!(first.result.as_ref().unwrap()["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Installed"));
+
+            let second = s
+                .handle_request(tools_call(
+                    2,
+                    "install",
+                    serde_json::json!({ "dependency": "@iso/countries" }),
+                ))
+                .expect("response");
+            let skip = second.result.as_ref().unwrap()["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            assert!(skip.contains("Already up to date"), "got: {skip}");
+        }
+
+        #[test]
+        fn install_missing_registry_spec_errors() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = admin_server(dir.path().to_path_buf());
+            let resp = s
+                .handle_request(tools_call(
+                    1,
+                    "install",
+                    serde_json::json!({ "dependency": "@org/does-not-exist" }),
+                ))
+                .expect("response");
+            let err = resp.error.as_ref().expect("registry miss");
+            assert!(
+                err.message.contains("@org/does-not-exist")
+                    || err.message.contains("Registry error"),
+                "got: {}",
+                err.message
+            );
+            assert!(!dir
+                .path()
+                .join("lemma_deps/@org/does-not-exist.lemma")
+                .exists());
+        }
+
+        #[test]
+        fn install_non_at_id_reaches_registry() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut s = admin_server(dir.path().to_path_buf());
+            let resp = s
+                .handle_request(tools_call(
+                    1,
+                    "install",
+                    serde_json::json!({ "dependency": "not-a-registry-id" }),
+                ))
+                .expect("response");
+            let err = resp.error.as_ref().expect("registry miss");
+            assert!(
+                err.message.contains("Registry error")
+                    || err.message.contains("must start with '@'")
+                    || err.message.contains("not-a-registry-id"),
+                "got: {}",
+                err.message
+            );
+        }
+
+        #[test]
+        fn install_identical_content_elsewhere_is_up_to_date() {
+            let dir = tempfile::tempdir().unwrap();
+            let fixture = fs::read_to_string(
+                lemma::LemmaBase::test_fixtures_dir()
+                    .join("@iso")
+                    .join("countries.lemma"),
+            )
+            .unwrap();
+            let other = dir.path().join("lemma_deps/@other/copy.lemma");
+            fs::create_dir_all(other.parent().unwrap()).unwrap();
+            fs::write(&other, &fixture).unwrap();
+
+            let mut s = admin_server(dir.path().to_path_buf());
+            let resp = s
+                .handle_request(tools_call(
+                    1,
+                    "install",
+                    serde_json::json!({ "dependency": "@iso/countries" }),
+                ))
+                .expect("response");
+            assert!(
+                resp.error.is_none(),
+                "identical content must not conflict, got error: {:?}",
+                resp.error
+            );
+            let text = resp.result.as_ref().unwrap()["content"][0]["text"]
+                .as_str()
+                .unwrap();
+            assert!(text.contains("Already up to date"), "got: {text}");
+            assert!(!dir.path().join("lemma_deps/@iso/countries.lemma").exists());
         }
 
         fn read_all_capped(input: &[u8], cap: usize) -> Vec<CappedLine> {

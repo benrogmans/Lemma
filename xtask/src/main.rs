@@ -64,6 +64,33 @@ fn require_command(name: &str, install_hint: &str) {
     }
 }
 
+fn require_wasm_pack() {
+    let output = Command::new("wasm-pack")
+        .arg("--version")
+        .output()
+        .unwrap_or_else(|e| {
+            panic!(
+                "wasm-pack not found on PATH. Install: cargo install wasm-pack --version {} --locked ({e})",
+                versions::WASM_PACK_VERSION
+            )
+        });
+    if !output.status.success() {
+        panic!(
+            "wasm-pack --version failed. Install: cargo install wasm-pack --version {} --locked",
+            versions::WASM_PACK_VERSION
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let line = stdout.lines().next().unwrap_or("").trim();
+    let expected = format!("wasm-pack {}", versions::WASM_PACK_VERSION);
+    if line != expected {
+        panic!(
+            "wasm-pack version mismatch: got {line:?}, expected {expected:?}. Install: cargo install wasm-pack --version {} --locked",
+            versions::WASM_PACK_VERSION
+        );
+    }
+}
+
 fn require_nightly() {
     let status = Command::new("rustup")
         .args(["run", "nightly", "rustc", "--version"])
@@ -78,10 +105,7 @@ fn require_nightly() {
 
 fn run_npm_wasm_precommit() {
     require_command("node", "Install Node.js (https://nodejs.org/).");
-    require_command(
-        "wasm-pack",
-        "Install wasm-pack: cargo install wasm-pack --version 0.14.0 --locked",
-    );
+    require_wasm_pack();
     let root = versions::workspace_root();
     let npm_dir = root.join(NPM_WASM_DIR);
     for script in ["build.js", "test.js"] {
@@ -117,14 +141,11 @@ fn run_mix_precommit() {
 
 fn run_vscode_precommit() {
     require_command("npm", "Install Node.js (https://nodejs.org/).");
+    require_command("npx", "Install Node.js (https://nodejs.org/).");
     let dir = versions::workspace_root().join(lsp::VSCODE_EXTENSION_REL);
-    let status = Command::new("npm")
-        .current_dir(&dir)
-        .args(["run", "precommit"])
-        .status()
-        .unwrap_or_else(|e| panic!("failed to run npm run precommit in {}: {e}", dir.display()));
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+    if let Err(e) = lsp::ci_compile_package(&dir) {
+        eprintln!("vscode package: {e}");
+        std::process::exit(1);
     }
 }
 
@@ -244,7 +265,7 @@ fn precommit(run_fuzz: bool) {
     run_versions_verify();
     eprintln!("xtask: mix precommit");
     run_mix_precommit();
-    eprintln!("xtask: vscode npm precommit");
+    eprintln!("xtask: vscode ci + compile + package");
     run_vscode_precommit();
     eprintln!("xtask: fmt --check");
     run(&["fmt", "--all", "--", "--check"]);
@@ -254,6 +275,33 @@ fn precommit(run_fuzz: bool) {
         "--workspace",
         "--all-targets",
         "--all-features",
+        "--",
+        "-D",
+        "warnings",
+    ]);
+    eprintln!("xtask: clippy wasm32");
+    let wasm_target_ok = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .any(|l| l.trim() == "wasm32-unknown-unknown")
+        })
+        .unwrap_or(false);
+    if !wasm_target_ok {
+        panic!(
+            "wasm32-unknown-unknown target not installed. Install with: rustup target add wasm32-unknown-unknown"
+        );
+    }
+    run(&[
+        "clippy",
+        "--target",
+        "wasm32-unknown-unknown",
+        "-p",
+        "lemma-lsp",
+        "-p",
+        "lemma-engine",
         "--",
         "-D",
         "warnings",
@@ -289,7 +337,7 @@ fn precommit(run_fuzz: bool) {
 
 fn usage() {
     eprintln!(
-        "usage:\n  cargo precommit [--fuzz] | cargo run -p xtask -- [precommit] [--fuzz]\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>\n  cargo coverage <engine|cli|all> [--check] | cargo run -p xtask -- coverage <engine|cli|all> [--check]\n  cargo run -p xtask -- schema\n  cargo run -p xtask -- maven-natives\n\n  --fuzz  after the gate, run engine/fuzz for 30 minutes total (split across targets; CI uses this)"
+        "usage:\n  cargo precommit [--fuzz] | cargo run -p xtask -- [precommit] [--fuzz]\n  cargo verify   | cargo run -p xtask -- versions-verify\n  cargo bump <version> | cargo run -p xtask -- versions-bump <version>\n  cargo changelog | cargo run -p xtask -- versions-diff [semver]\n  cargo lsp | cargo run -p xtask -- lsp [vsix|prepare|package|publish-marketplace|publish-openvsx|--help]\n  cargo run -p xtask -- hex-standalone\n  cargo benchmarks <engine|cli|all> | cargo run -p xtask -- benchmarks <engine|cli|all>\n  cargo coverage <engine|cli|all> [--check] | cargo run -p xtask -- coverage <engine|cli|all> [--check]\n  cargo run -p xtask -- schema\n  cargo run -p xtask -- maven-natives\n\n  --fuzz  after the gate, run engine/fuzz for 30 minutes total (split across targets; CI uses this)"
     );
 }
 

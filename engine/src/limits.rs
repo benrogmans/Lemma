@@ -97,3 +97,51 @@ impl Default for ResourceLimits {
         }
     }
 }
+
+impl ResourceLimits {
+    /// Apply one named limit override. Unknown keys return `Err`.
+    pub fn apply(&mut self, key: &str, value: usize) -> Result<(), String> {
+        match key {
+            "max_source_size_bytes" => self.max_source_size_bytes = value,
+            "max_expression_depth" => self.max_expression_depth = value,
+            "max_expression_count" => self.max_expression_count = value,
+            "max_data_value_bytes" => self.max_data_value_bytes = value,
+            "max_loaded_bytes" => self.max_loaded_bytes = value,
+            "max_sources" => self.max_sources = value,
+            "max_normalized_expression_nodes" => self.max_normalized_expression_nodes = value,
+            "max_spec_dependency_depth" => self.max_spec_dependency_depth = value,
+            "max_dag_specs" => self.max_dag_specs = value,
+            "max_normal_form_depth" => self.max_normal_form_depth = value,
+            other => return Err(format!("unknown limits key: '{other}'")),
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_sets_known_key() {
+        let mut limits = ResourceLimits::default();
+        limits.apply("max_sources", 7).expect("known key");
+        assert_eq!(limits.max_sources, 7);
+    }
+
+    #[test]
+    fn apply_sets_max_normal_form_depth() {
+        let mut limits = ResourceLimits::default();
+        limits
+            .apply("max_normal_form_depth", 99)
+            .expect("known key");
+        assert_eq!(limits.max_normal_form_depth, 99);
+    }
+
+    #[test]
+    fn apply_rejects_unknown_key() {
+        let mut limits = ResourceLimits::default();
+        let err = limits.apply("not_a_limit", 1).expect_err("unknown");
+        assert!(err.contains("unknown limits key"));
+    }
+}

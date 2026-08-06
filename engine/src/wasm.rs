@@ -27,6 +27,36 @@ impl WasmEngine {
         }
     }
 
+    /// Create an engine with custom [`crate::ResourceLimits`].
+    ///
+    /// Pass a plain object of limit keys (same names as Rust / Java). Unknown keys throw.
+    #[wasm_bindgen(js_name = withLimits)]
+    pub fn with_limits(limits: JsValue) -> Result<WasmEngine, JsValue> {
+        console_error_panic_hook::set_once();
+        let map: HashMap<String, f64> = serde_wasm_bindgen::from_value(limits)
+            .map_err(|e| js_err(format!("invalid limits: {e}")))?;
+        let mut resource_limits = crate::ResourceLimits::default();
+        for (key, value) in map {
+            if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
+                return Err(js_err(format!(
+                    "limits value for '{key}' must be a non-negative integer"
+                )));
+            }
+            let as_u64 = value as u64;
+            if value > 2f64.powi(53) || as_u64 as f64 != value {
+                return Err(js_err(format!(
+                    "limits value for '{key}' must be a non-negative integer within f64 safe range"
+                )));
+            }
+            resource_limits
+                .apply(&key, as_u64 as usize)
+                .map_err(js_err)?;
+        }
+        Ok(WasmEngine {
+            engine: Engine::with_limits(resource_limits),
+        })
+    }
+
     /// Load Lemma source(s).
     ///
     /// - string → one volatile workspace source

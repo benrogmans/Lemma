@@ -10,7 +10,6 @@ use tower_lsp::{LspService, Server};
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::stream::JsStream;
 
-use crate::registry;
 use crate::server;
 
 /// Re-export engine WASM bindings (`Engine` in JS).
@@ -59,7 +58,7 @@ pub async fn serve(config: ServerConfig) -> Result<(), JsValue> {
     let output = wasm_streams::WritableStream::from_raw(output);
     let output = output.try_into_async_write().map_err(|err| err.0)?;
 
-    let registry = registry::make_registry();
+    let registry = Box::new(lemma::LemmaBase::new());
     let (service, messages) =
         LspService::new(|client| server::LemmaLanguageServer::new(client, registry));
     Server::new(input, output, messages).serve(service).await;
