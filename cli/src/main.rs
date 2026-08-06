@@ -10,9 +10,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use formatter::{Formatter, RepositorySpecGroup};
 use lemma::DateTimeValue;
 use lemma::Engine;
-use lemma_cli::deps::{
-    dependency_identifier_from_dependency_path, lemma_deps_dir, relative_dependency_cache_path,
-};
+use lemma_cli::deps::{lemma_deps_dir, relative_dependency_cache_path};
+use lemma_cli::install;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -134,27 +133,31 @@ enum Commands {
         cors: bool,
     },
     /// Start Language Server Protocol server (stdio)
-    Lsp,
+    Lsp {
+        /// Accepted for vscode-languageclient compatibility (stdio is the only transport)
+        #[arg(long, hide = true)]
+        stdio: bool,
+    },
     /// Start MCP server for AI assistant integration (stdio)
     Mcp {
         /// Workspace directory or `.lemma` file (default: current directory)
         #[arg(long, value_name = "PATH")]
         prefix: Option<PathBuf>,
-        /// Enable admin tools: add_spec, update_spec, remove_spec, clear, fetch (read-only by default)
+        /// Enable admin tools: add_spec, update_spec, remove_spec, clear, install (read-only by default)
         #[arg(long)]
         admin: bool,
         /// Wall-clock timeout for a single request, in second
         #[arg(long, default_value = "10", value_name = "SECONDS")]
         request_timeout: u64,
     },
-    /// Fetch dependencies from the registry
-    Fetch {
-        /// Dependency to fetch (e.g. `@user/repo`)
+    /// Install dependencies from the registry into lemma_deps/
+    Install {
+        /// Dependency to install (e.g. `@user/repo`)
         dependency: Option<String>,
         /// Workspace directory or `.lemma` file (default: current directory)
         #[arg(long, value_name = "PATH")]
         prefix: Option<PathBuf>,
-        /// Fetch all @... references in the workspace
+        /// Install all @... references in the workspace
         #[arg(short = 'a', long)]
         all: bool,
         /// Overwrite existing registry dependencies when content has changed
@@ -313,13 +316,13 @@ fn main() {
             *eval_timeout,
             *cors,
         ),
-        Commands::Lsp => lsp_command(),
+        Commands::Lsp { stdio: _ } => lsp_command(),
         Commands::Mcp {
             prefix,
             admin,
             request_timeout,
         } => mcp_command(workspace_dir(prefix.as_ref()), *admin, *request_timeout),
-        Commands::Fetch {
+        Commands::Install {
             dependency,
             prefix,
             all,
@@ -331,13 +334,13 @@ fn main() {
             if dependency.is_none() && !*all {
                 let mut cmd = Cli::command();
                 cmd.build();
-                let fetch_cmd = cmd
-                    .find_subcommand_mut("fetch")
-                    .expect("BUG: Cli must define fetch subcommand");
-                let _ = fetch_cmd.print_help();
+                let install_cmd = cmd
+                    .find_subcommand_mut("install")
+                    .expect("BUG: Cli must define install subcommand");
+                let _ = install_cmd.print_help();
                 std::process::exit(1);
             }
-            fetch_command(
+            install_command(
                 workspace_dir(prefix.as_ref()),
                 dependency.as_deref(),
                 *force,
@@ -675,7 +678,9 @@ fn server_command(
 }
 
 fn lsp_command() -> Result<()> {
-    lemma_lsp::stdio::run_stdio().map_err(anyhow::Error::from)
+    let workspace_files: Arc<dyn lemma_lsp::workspace_files::WorkspaceFiles> =
+        Arc::new(lemma_cli::workspace::CliWorkspaceFiles);
+    lemma_lsp::stdio::run_stdio(Some(workspace_files)).map_err(anyhow::Error::from)
 }
 
 fn mcp_command(workdir: &Path, admin: bool, request_timeout_secs: u64) -> Result<()> {
@@ -703,126 +708,41 @@ fn mcp_command(workdir: &Path, admin: bool, request_timeout_secs: u64) -> Result
     Ok(())
 }
 
-fn fetch_command(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(fetch_command_async(source, spec_name, force))
-}
-
-async fn fetch_command_async(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
-    let registry = make_fetch_registry();
+fn install_command(source: &Path, spec_name: Option<&str>, force: bool) -> Result<()> {
+    let registry = lemma::LemmaBase::new();
 
     match spec_name {
-        Some(id) => fetch_repo(source, id, registry.as_ref(), force).await,
-        None => fetch_workspace_deps(source, registry.as_ref(), force).await,
+        Some(id) => install_repo(source, id, &registry, force),
+        None => install::block_on_registry(install_workspace_deps(source, &registry, force)),
     }
 }
 
-async fn fetch_repo(
+fn install_repo(
     workdir: &Path,
     raw_id: &str,
     registry: &dyn lemma::Registry,
     force: bool,
 ) -> Result<()> {
-    if raw_id.is_empty() {
-        anyhow::bail!("Empty repo identifier. Usage: lemma fetch @user/repo");
-    }
-
-    let bundle = registry
-        .get(raw_id)
-        .await
-        .map_err(|e| anyhow::anyhow!("Registry error for {}: {}", raw_id, e.message))?;
-
-    let attribute = raw_id;
-    let source_text = &bundle.source;
-    let deps_dir = lemma_deps_dir(workdir);
-    let limits = lemma::ResourceLimits::default();
-
-    let new_specs = lemma::parse(
-        source_text,
-        lemma::SourceType::Dependency(raw_id.to_string()),
-        &limits,
-    )
-    .map_err(|e| anyhow::anyhow!("Registry returned unparseable dependency: {}", e.message()))?
-    .into_flattened_specs();
-    let new_spec_names: std::collections::HashSet<String> =
-        new_specs.iter().map(|s| s.name.clone()).collect();
-
-    if deps_dir.exists() {
-        for entry in WalkDir::new(&deps_dir) {
-            let entry = entry?;
-            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
-                continue;
-            }
-            let path = entry.path();
-            let existing_content = fs::read_to_string(path)?;
-            if existing_content == *source_text {
-                eprintln!("Already up to date: {}.", raw_id);
-                return Ok(());
-            }
-            let existing_specs = match lemma::parse(
-                &existing_content,
-                lemma::SourceType::Path(Arc::new(path.to_path_buf())),
-                &limits,
-            ) {
-                Ok(r) => r.into_flattened_specs(),
-                Err(_) => continue,
-            };
-            let conflict: Vec<&str> = existing_specs
-                .iter()
-                .filter(|s| new_spec_names.contains(&s.name))
-                .map(|s| s.name.as_str())
-                .collect();
-            if !conflict.is_empty() {
-                if !force {
-                    anyhow::bail!(
-                        "Dependency containing spec(s) {} already exists in {}.\n\
-                         Content has changed on the registry. Re-run with --force to overwrite.",
-                        conflict.join(", "),
-                        path.display()
-                    );
-                }
-                fs::remove_file(path)?;
-                eprintln!("  removed: {}", path.display());
-            }
+    match install::install_registry_dependency(workdir, raw_id, force, registry) {
+        Ok(install::InstallOutcome::AlreadyUpToDate { .. }) => {
+            eprintln!("Already up to date: {}.", raw_id);
+            Ok(())
         }
-    }
-
-    lemma::parse_spec_set_id(raw_id).map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    let mut engine = Engine::new();
-    load_workspace(&mut engine, workdir)?;
-    engine
-        .load([(
-            lemma::SourceType::Dependency(raw_id.to_string()),
-            source_text.to_string(),
-        )])
-        .map_err(|load_err| {
-            for e in load_err.iter() {
-                eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
+        Ok(install::InstallOutcome::Written { relative_path, .. }) => {
+            eprintln!("  installed: {} -> {}", raw_id, relative_path.display());
+            Ok(())
+        }
+        Err(ref e @ install::InstallError::Plan(ref load_err)) => {
+            for err in load_err.iter() {
+                eprintln!("{}", error_formatter::format_error(err, &load_err.sources));
             }
-            anyhow::anyhow!(
-                "Planning fetched dependency failed ({} error(s))",
-                load_err.errors.len()
-            )
-        })?;
-
-    let dependency_destination_relative = relative_dependency_cache_path(attribute);
-    let destination_absolute = deps_dir.join(&dependency_destination_relative);
-
-    if let Some(parent_directory) = destination_absolute.parent() {
-        fs::create_dir_all(parent_directory)?;
+            Err(anyhow::anyhow!("{e}"))
+        }
+        Err(install::InstallError::Message(message)) => Err(anyhow::anyhow!("{message}")),
     }
-    fs::write(&destination_absolute, source_text)?;
-
-    eprintln!(
-        "  fetched: {} -> {}",
-        attribute,
-        dependency_destination_relative.display()
-    );
-    Ok(())
 }
 
-async fn fetch_workspace_deps(
+async fn install_workspace_deps(
     workdir: &Path,
     registry: &dyn lemma::Registry,
     force: bool,
@@ -883,7 +803,7 @@ async fn fetch_workspace_deps(
                 eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
             }
             anyhow::bail!(
-                "Planning fetched deps failed ({} error(s))",
+                "Planning installed deps failed ({} error(s))",
                 load_err.errors.len()
             );
         }
@@ -928,7 +848,7 @@ async fn fetch_workspace_deps(
         }
     }
 
-    let mut fetched_count = 0u32;
+    let mut installed_count = 0u32;
     let mut skipped_count = 0u32;
     let mut removed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
@@ -980,43 +900,37 @@ async fn fetch_workspace_deps(
             relative_dependency_cache_path(&registry_source_identifier_display);
         let destination_absolute = deps_dir.join(&dependency_destination_relative);
 
-        if let Some(parent_directory) = destination_absolute.parent() {
-            fs::create_dir_all(parent_directory)?;
-        }
-        fs::write(&destination_absolute, source_text)?;
-        fetched_count += 1;
+        install::atomic_write(&destination_absolute, source_text)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        installed_count += 1;
 
         eprintln!(
-            "  fetched: {} -> {}",
+            "  installed: {} -> {}",
             registry_source_identifier_display,
             dependency_destination_relative.display()
         );
     }
 
-    let plural = if fetched_count == 1 {
+    let plural = if installed_count == 1 {
         "dependency"
     } else {
         "dependencies"
     };
 
-    if fetched_count == 0 && skipped_count == 0 {
+    if installed_count == 0 && skipped_count == 0 {
         eprintln!("No dependencies found.");
-    } else if fetched_count == 0 {
+    } else if installed_count == 0 {
         eprintln!("All dependencies are up to date. Use --force to overwrite.");
     } else if skipped_count > 0 {
         eprintln!(
-            "Fetched {} {} ({} already up to date).",
-            fetched_count, plural, skipped_count
+            "Installed {} {} ({} already up to date).",
+            installed_count, plural, skipped_count
         );
     } else {
-        eprintln!("Fetched {} {}.", fetched_count, plural);
+        eprintln!("Installed {} {}.", installed_count, plural);
     }
 
     Ok(())
-}
-
-fn make_fetch_registry() -> Box<dyn lemma::Registry> {
-    Box::new(lemma::LemmaBase::new())
 }
 
 /// Load specs from a workspace directory (recursive walk) or a single `.lemma` path.
@@ -1025,46 +939,13 @@ fn make_fetch_registry() -> Box<dyn lemma::Registry> {
 ///
 /// Returns the loaded source batch (empty when the workspace has no `.lemma` files).
 fn load_workspace(engine: &mut Engine, workdir: &std::path::Path) -> Result<()> {
-    let mut workspace_paths: Vec<std::path::PathBuf> = Vec::new();
-    let mut deps_paths: Vec<std::path::PathBuf> = Vec::new();
-
-    if workdir.is_file() {
-        workspace_paths.push(workdir.to_path_buf());
-    } else {
-        let deps_dir = lemma_deps_dir(workdir);
-        for entry in WalkDir::new(workdir) {
-            let entry = entry?;
-            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
-                continue;
-            }
-            if entry.path().starts_with(&deps_dir) {
-                deps_paths.push(entry.path().to_path_buf());
-            } else {
-                workspace_paths.push(entry.path().to_path_buf());
-            }
+    match lemma_cli::workspace::load_workspace(engine, workdir) {
+        Ok(()) => Ok(()),
+        Err(lemma_cli::workspace::WorkspaceDiskError::EngineLoad(load_failures)) => {
+            bail_workspace_load_errors(&load_failures)
         }
+        Err(error) => Err(anyhow::Error::msg(error.to_string())),
     }
-
-    let mut sources = Vec::with_capacity(deps_paths.len().saturating_add(workspace_paths.len()));
-
-    for dep_path in &deps_paths {
-        let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
-        let content = fs::read_to_string(dep_path)?;
-        sources.push((
-            lemma::SourceType::Dependency(dependency_id.to_string()),
-            content,
-        ));
-    }
-    for path in &workspace_paths {
-        let content = fs::read_to_string(path)?;
-        sources.push((lemma::SourceType::Path(Arc::new(path.clone())), content));
-    }
-    if !sources.is_empty() {
-        if let Err(load_failures) = engine.load(sources) {
-            bail_workspace_load_errors(&load_failures)?;
-        }
-    }
-    Ok(())
 }
 
 /// Always fails after printing diagnostics.

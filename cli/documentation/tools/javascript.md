@@ -87,6 +87,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 
 | Method | Description |
 |--------|-------------|
+| `Engine.withLimits(limits)` | Static: create engine with named limit overrides (unknown keys throw) |
 | `load(code)` | Load inline Lemma source as a volatile workspace source |
 | `load(sources)` | Load multiple sources in one planning pass (object or `[label, code][]`; object keys keep insertion order, array form is the explicit ordered API; `@owner/name` keys tag registry dependencies) |
 | `fetch(name)` | Download registry source only; resolves with `{ source, id }`. Does not load. |
@@ -95,6 +96,7 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `source(repo?, spec?, effective?)` | Formatted Lemma source (omit `spec` for whole repo) |
 | `run(repo?, spec, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [api.v1.json](../schemas/api.v1.json). |
 | `remove(repo?, name, effective?)` | Remove a temporal spec slice. |
+| `update(repo?, spec, effective?, code, attribute?)` | Replace a temporal spec slice (atomic remove + load). |
 | `limits()` | Resource limits for this engine. |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 

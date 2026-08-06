@@ -5,7 +5,16 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 ## [Unreleased]
 
 - Fixed VS Code extension dependency
-- Corrected Maven docs
+- SDK docs: Java / Kotlin, not Maven; `/tools/maven` hidden stub links to it
+- Removed dead `engine/packages/npm/build-dev.js`
+- **`ResourceLimits::apply`**: single named-override path; Hex/JNI/WASM use it (Hex gains `max_normal_form_depth`)
+- **WASM `Engine.withLimits`**: named limit overrides without deserializing `ResourceLimits`
+- **SDK `update`**: Java and Elixir expose `Engine::update` (atomic replace); Hex also exposes `limits/1`
+- **CLI**: rename `fetch` → `install` (download + persist to `lemma_deps/`)
+- **MCP**: rename admin tool `fetch` → `install`; shares download/conflict helpers with CLI; still engine-then-persist like other admin mutators
+- **Install**: no `make_registry` / `LEMMA_REGISTRY_FIXTURES`; prod uses `LemmaBase::new()`, tests inject `LemmaBase::test()`; registry owns id validity (no local `@` gate); corrupt `lemma_deps` files hard-error
+- **`LemmaBase`**: registry identifiers must start with `@` (`source_url` / `get`); otherwise `RegistryError`
+- **Precommit / release**: vscode packaging via xtask (`npx @vscode/vsce@3.9.2`); extension bundled with esbuild; wasm-pack exact 0.15.0; wasm32 clippy `-D warnings`
 
 ## [0.9.3] - 2026-08-05
 
@@ -97,7 +106,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 
 ### Added
 
-- **Java Maven package** `com.lemmabase:lemma-engine`: JNI bridge (`lemma_jni`), `BigDecimal`-first API, `RunRequest`, AutoCloseable `Engine`, prebuilt natives in the JAR, Maven Central publish from release workflow. Docs: `cli/documentation/tools/maven.md`.
+- **Java Maven package** `com.lemmabase:lemma-engine`: JNI bridge (`lemma_jni`), `BigDecimal`-first API, `RunRequest`, AutoCloseable `Engine`, prebuilt natives in the JAR, Maven Central publish from release workflow. Docs: `cli/documentation/tools/java.md`.
 - **Range endpoint and width constraints**: `* range` data accept `-> lower` / `-> upper` (endpoint envelope) and `-> minimum` / `-> maximum` (span width). Measure/ratio bounds use the same mixed declaring-unit model as scalar measure. Date range width is duration or calendar (not both on one type); time range width is duration only. Named element min/max inherit as range lower/upper.
 - **`lemma units` catalog expansion**: SI scales (`nanosecond`, `nanometer`, …), derived compounds (`newton`, `pascal`, `joule`, `watt`, `hertz`, electrical), `area`/`volume`, imperial (`inch`, `pound`, `gallon`, …), and `information` (`bit`/`byte`/…); still no affine Celsius/Fahrenheit.
 - **`Engine::show(repository?, spec, effective?)`**: returns **`Show`** — interface + temporal window (no Lemma text).

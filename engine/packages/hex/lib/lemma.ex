@@ -32,6 +32,17 @@ defmodule Lemma do
   end
 
   @doc """
+  Returns the engine's configured resource limits.
+  """
+  @spec limits(engine()) :: {:ok, map()} | {:error, term()}
+  def limits(engine) do
+    case Lemma.Native.lemma_limits(engine) do
+      {:ok, binary} -> {:ok, Jason.decode!(binary)}
+      err -> err
+    end
+  end
+
+  @doc """
   Loads Lemma source(s).
 
   - binary → one volatile workspace source
@@ -110,6 +121,23 @@ defmodule Lemma do
           :ok | {:error, term()}
   def remove(engine, repository, spec, effective) do
     Lemma.Native.lemma_remove(engine, repository, spec, effective)
+  end
+
+  @doc """
+  Replaces a temporal spec slice with new source (atomic remove + load).
+
+  `attribute` is the source label (path or `@owner/repo`). Omit (`nil`) for a volatile source.
+  """
+  @spec update(
+          engine(),
+          repository(),
+          spec_name(),
+          String.t() | nil,
+          String.t(),
+          String.t() | nil
+        ) :: :ok | {:error, [map()]}
+  def update(engine, repository, spec, effective, code, attribute \\ nil) do
+    Lemma.Native.lemma_update(engine, repository, spec, effective, code, attribute)
   end
 
   @doc """

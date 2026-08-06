@@ -16,10 +16,7 @@
   "categories": [
     "Programming Languages"
   ],
-  "activationEvents": [
-    "onLanguage:lemma"
-  ],
-  "main": "./out/extension.js",
+  "main": "./dist/extension.js",
   "contributes": {
     "languages": [
       {
@@ -127,9 +124,10 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "package": "vsce package",
+    "check-types": "tsc --noEmit",
+    "compile": "npm run check-types && node esbuild.js --production",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "npm run compile",
     "precommit": "npm ci && npm run compile"
   },
   "dependencies": {
@@ -138,11 +136,7 @@
   "devDependencies": {
     "@types/node": "^26.0.0",
     "@types/vscode": "^1.91.0",
-    "typescript": "^7.0.2",
-    "@vscode/vsce": "^3.9.2"
-  },
-  "overrides": {
-    "glob": "^13.0.6",
-    "brace-expansion": "^5.0.9"
+    "esbuild": "^0.25.0",
+    "typescript": "^7.0.2"
   }
 }

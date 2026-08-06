@@ -1,5 +1,5 @@
 use lemma::{parse, Error, ParseResult, Recommendation, ResourceLimits, SourceType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
@@ -53,6 +53,10 @@ pub struct WorkspaceModel {
     workspace_root: Option<std::path::PathBuf>,
     /// Map from source attribute to tracked file state.
     files: HashMap<String, TrackedFile>,
+    /// Attributes last supplied by disk injection (CLI discover/watch).
+    disk_attributes: HashSet<String>,
+    /// Last disk text per attribute (for restoring after editor close).
+    disk_texts: HashMap<String, String>,
     /// Resource limits used during parsing.
     limits: ResourceLimits,
 }
@@ -151,6 +155,84 @@ impl WorkspaceModel {
     pub fn remove_file(&mut self, url: &Url) {
         let attribute = Self::attribute_for_url(url);
         self.files.remove(&attribute);
+        self.disk_attributes.remove(&attribute);
+        self.disk_texts.remove(&attribute);
+    }
+
+    /// Whether this URL was present in the last successful disk injection.
+    #[must_use]
+    pub fn is_disk_backed(&self, url: &Url) -> bool {
+        let attribute = Self::attribute_for_url(url);
+        self.disk_attributes.contains(&attribute)
+    }
+
+    /// Record the current buffer text as the disk baseline for close/restore.
+    ///
+    /// Called on `textDocument/didSave` so close restores the saved content even when
+    /// the filesystem watch does not cover that path.
+    pub fn record_saved_baseline(&mut self, url: &Url) {
+        let attribute = Self::attribute_for_url(url);
+        let Some(tracked) = self.files.get(&attribute) else {
+            panic!(
+                "BUG: didSave for untracked URI {}; open/change must precede save",
+                url
+            );
+        };
+        let text = tracked.text.clone();
+        self.disk_texts.insert(attribute.clone(), text);
+        self.disk_attributes.insert(attribute);
+    }
+
+    /// Restore tracked text from the last disk injection for this URL.
+    ///
+    /// Returns false when the URL is not disk-backed.
+    pub fn restore_disk_text(&mut self, url: &Url) -> bool {
+        let attribute = Self::attribute_for_url(url);
+        let Some(text) = self.disk_texts.get(&attribute).cloned() else {
+            return false;
+        };
+        self.update_file(url.clone(), text);
+        true
+    }
+
+    /// Replace disk-backed membership from a full disk payload.
+    ///
+    /// Updates disk metadata for every file in `files`. Applies `update_file` only
+    /// for attributes not listed in `open_attributes` (open buffers win). Removes
+    /// previously disk-backed entries that are absent from the payload and not open.
+    pub fn apply_disk_files(&mut self, files: &[(Url, String)], open_attributes: &HashSet<String>) {
+        let mut next_disk_attributes = HashSet::new();
+        let mut next_disk_texts = HashMap::new();
+
+        for (url, text) in files {
+            let attribute = Self::attribute_for_url(url);
+            next_disk_attributes.insert(attribute.clone());
+            next_disk_texts.insert(attribute.clone(), text.clone());
+            if !open_attributes.contains(&attribute) {
+                self.update_file(url.clone(), text.clone());
+            }
+        }
+
+        let removed: Vec<String> = self
+            .disk_attributes
+            .difference(&next_disk_attributes)
+            .cloned()
+            .collect();
+        for attribute in removed {
+            if open_attributes.contains(&attribute) {
+                continue;
+            }
+            self.files.remove(&attribute);
+        }
+
+        self.disk_attributes = next_disk_attributes;
+        self.disk_texts = next_disk_texts;
+    }
+
+    /// Stable attribute string for a URL (path or URL string).
+    #[must_use]
+    pub fn attribute_for_url_public(url: &Url) -> String {
+        Self::attribute_for_url(url)
     }
 
     /// Successful parse tree for a tracked file, if any.
@@ -345,6 +427,64 @@ mod tests {
 
         let results = workspace.validate_workspace();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn apply_disk_files_tracks_membership_and_skips_open_overlays() {
+        let mut workspace = WorkspaceModel::new();
+        let url_a = url_from_path("/tmp/disk_a.lemma");
+        let url_b = url_from_path("/tmp/disk_b.lemma");
+        let open =
+            std::collections::HashSet::from([WorkspaceModel::attribute_for_url_public(&url_a)]);
+
+        workspace.update_file(url_a.clone(), "spec a\ndata x: 1".to_string());
+        workspace.apply_disk_files(
+            &[
+                (url_a.clone(), "spec a\ndata x: 99".to_string()),
+                (url_b.clone(), "spec b\ndata y: 2".to_string()),
+            ],
+            &open,
+        );
+
+        assert!(workspace.is_disk_backed(&url_a));
+        assert!(workspace.is_disk_backed(&url_b));
+        assert_eq!(
+            workspace.get_file_text(&url_a),
+            Some("spec a\ndata x: 1"),
+            "open buffer must win over disk payload"
+        );
+        assert_eq!(workspace.get_file_text(&url_b), Some("spec b\ndata y: 2"));
+
+        workspace.apply_disk_files(&[(url_a.clone(), "spec a\ndata x: 3".to_string())], &open);
+        assert!(workspace.is_disk_backed(&url_a));
+        assert!(!workspace.is_disk_backed(&url_b));
+        assert!(
+            !workspace.contains_file(&url_b),
+            "removed disk file absent from open set must leave the model"
+        );
+    }
+
+    #[test]
+    fn restore_disk_text_after_overlay() {
+        let mut workspace = WorkspaceModel::new();
+        let url = url_from_path("/tmp/disk_restore.lemma");
+        let open = std::collections::HashSet::new();
+        workspace.apply_disk_files(&[(url.clone(), "spec a\ndata x: 1".to_string())], &open);
+        workspace.update_file(url.clone(), "spec a\ndata x: 2".to_string());
+        assert!(workspace.restore_disk_text(&url));
+        assert_eq!(workspace.get_file_text(&url), Some("spec a\ndata x: 1"));
+    }
+
+    #[test]
+    fn record_saved_baseline_updates_restore_text() {
+        let mut workspace = WorkspaceModel::new();
+        let url = url_from_path("/tmp/disk_save.lemma");
+        workspace.update_file(url.clone(), "spec a\ndata x: 1".to_string());
+        workspace.update_file(url.clone(), "spec a\ndata x: 2".to_string());
+        workspace.record_saved_baseline(&url);
+        workspace.update_file(url.clone(), "spec a\ndata x: 3".to_string());
+        assert!(workspace.restore_disk_text(&url));
+        assert_eq!(workspace.get_file_text(&url), Some("spec a\ndata x: 2"));
     }
 
     #[test]

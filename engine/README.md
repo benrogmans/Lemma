@@ -226,7 +226,7 @@ const engine = await Lemma();
 
 Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.md](packages/npm/README.md).
 
-### Maven (Java / Kotlin)
+### Java / Kotlin
 
 ```xml
 <dependency>

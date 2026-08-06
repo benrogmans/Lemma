@@ -15,7 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  WASM_PACK_VERSION: 0.14.0
+  WASM_PACK_VERSION: 0.15.0
 
 jobs:
   precommit:

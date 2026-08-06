@@ -6,6 +6,9 @@ pub mod semantic_tokens;
 pub mod server;
 pub mod workspace;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod workspace_files;
+
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 

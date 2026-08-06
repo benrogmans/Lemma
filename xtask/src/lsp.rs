@@ -1,9 +1,12 @@
-//! Build the Lemma CLI and prepare the VS Code / Cursor extension from this workspace.
+//! Build the Lemma CLI and prepare / package / publish the VS Code / Cursor extension.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const VSCODE_EXTENSION_REL: &str = "engine/lsp/editors/vscode";
+
+const VSCE: &str = "@vscode/vsce@3.9.2";
+const OVSX: &str = "ovsx@1.0.2";
 
 fn cargo_bin() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string())
@@ -31,6 +34,46 @@ fn run_npm(vscode_dir: &Path, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_npx_capture(vscode_dir: &Path, args: &[&str]) -> Result<String, String> {
+    let output = Command::new("npx")
+        .current_dir(vscode_dir)
+        .args(args)
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run npx {} in {}: {e}",
+                args.join(" "),
+                vscode_dir.display()
+            )
+        })?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{combined}");
+    if !output.status.success() {
+        return Err(format!(
+            "npx {} exited with status {:?}",
+            args.join(" "),
+            output.status.code()
+        ));
+    }
+    for line in combined.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("WARNING")
+            || trimmed.starts_with("npm warn")
+            || trimmed.starts_with("npm WARN")
+        {
+            return Err(format!(
+                "npx {} emitted warning (warnings are errors): {line}",
+                args.join(" ")
+            ));
+        }
+    }
+    Ok(combined)
+}
+
 fn build_release_lemma(root: &Path) -> Result<(), String> {
     let status = Command::new(cargo_bin())
         .current_dir(root)
@@ -53,6 +96,88 @@ fn prepare_extension(root: &Path, vscode_dir: &Path) -> Result<(), String> {
     run_npm(vscode_dir, &["ci"])?;
     eprintln!("xtask: npm run compile (vscode extension)");
     run_npm(vscode_dir, &["run", "compile"])?;
+    Ok(())
+}
+
+fn package_vsix(vscode_dir: &Path) -> Result<(), String> {
+    eprintln!("xtask: npx --yes {VSCE} package");
+    run_npx_capture(vscode_dir, &["--yes", VSCE, "package"])?;
+    match newest_vsix(vscode_dir) {
+        Some(p) => eprintln!("xtask: VSIX: {}", p.display()),
+        None => {
+            return Err(format!(
+                "npx {VSCE} package finished but no .vsix under {}",
+                vscode_dir.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `npm ci` + compile + package `.vsix` (no lemma binary build). Used by precommit and release.
+pub fn ci_compile_package(vscode_dir: &Path) -> Result<(), String> {
+    eprintln!("xtask: npm ci (vscode extension)");
+    run_npm(vscode_dir, &["ci"])?;
+    eprintln!("xtask: npm run compile (vscode extension)");
+    run_npm(vscode_dir, &["run", "compile"])?;
+    package_vsix(vscode_dir)
+}
+
+fn require_env(name: &str) -> Result<String, String> {
+    std::env::var(name).map_err(|_| format!("missing required env var {name}"))
+}
+
+fn publish_marketplace(vscode_dir: &Path) -> Result<(), String> {
+    let token = require_env("VSCE_PAT")?;
+    let vsix = newest_vsix(vscode_dir).ok_or_else(|| {
+        format!(
+            "no .vsix under {} — run `cargo lsp package` first",
+            vscode_dir.display()
+        )
+    })?;
+    eprintln!(
+        "xtask: npx --yes {VSCE} publish --packagePath {}",
+        vsix.display()
+    );
+    run_npx_capture(
+        vscode_dir,
+        &[
+            "--yes",
+            VSCE,
+            "publish",
+            "--packagePath",
+            vsix.file_name()
+                .and_then(|s| s.to_str())
+                .expect("BUG: vsix path must be UTF-8"),
+            "-p",
+            &token,
+        ],
+    )?;
+    Ok(())
+}
+
+fn publish_openvsx(vscode_dir: &Path) -> Result<(), String> {
+    let token = require_env("OPEN_VSX_TOKEN")?;
+    let vsix = newest_vsix(vscode_dir).ok_or_else(|| {
+        format!(
+            "no .vsix under {} — run `cargo lsp package` first",
+            vscode_dir.display()
+        )
+    })?;
+    eprintln!("xtask: npx --yes {OVSX} publish {}", vsix.display());
+    run_npx_capture(
+        vscode_dir,
+        &[
+            "--yes",
+            OVSX,
+            "publish",
+            vsix.file_name()
+                .and_then(|s| s.to_str())
+                .expect("BUG: vsix path must be UTF-8"),
+            "-p",
+            &token,
+        ],
+    )?;
     Ok(())
 }
 
@@ -86,7 +211,7 @@ fn print_paths(root: &Path, vscode_dir: &Path) {
     eprintln!("xtask: vscode extension dir: {}", vscode_dir.display());
 }
 
-/// `rest`: optional subcommand (`vsix`, `prepare`); empty means default prepare (binary + extension compile).
+/// `rest`: optional subcommand (`vsix`, `prepare`, `package`, publish-*); empty means default prepare.
 pub fn run(root: &Path, rest: &[String]) -> Result<(), String> {
     let vscode_dir = root.join(VSCODE_EXTENSION_REL);
 
@@ -105,6 +230,16 @@ pub fn run(root: &Path, rest: &[String]) -> Result<(), String> {
             prepare_extension(root, &vscode_dir)?;
             print_paths(root, &vscode_dir);
         }
+        Some("package") => {
+            if rest.len() != 1 {
+                return Err(format!(
+                    "`package` takes no extra arguments (got: {})",
+                    rest[1..].join(" ")
+                ));
+            }
+            ci_compile_package(&vscode_dir)?;
+            print_paths(root, &vscode_dir);
+        }
         Some("vsix") => {
             if rest.len() != 1 {
                 return Err(format!(
@@ -113,16 +248,26 @@ pub fn run(root: &Path, rest: &[String]) -> Result<(), String> {
                 ));
             }
             prepare_extension(root, &vscode_dir)?;
-            eprintln!("xtask: npm run package (vscode extension)");
-            run_npm(&vscode_dir, &["run", "package"])?;
-            match newest_vsix(&vscode_dir) {
-                Some(p) => eprintln!("xtask: VSIX: {}", p.display()),
-                None => eprintln!(
-                    "xtask: npm run package finished; look for *.vsix under {}",
-                    vscode_dir.display()
-                ),
-            }
+            package_vsix(&vscode_dir)?;
             print_paths(root, &vscode_dir);
+        }
+        Some("publish-marketplace") => {
+            if rest.len() != 1 {
+                return Err(format!(
+                    "`publish-marketplace` takes no extra arguments (got: {})",
+                    rest[1..].join(" ")
+                ));
+            }
+            publish_marketplace(&vscode_dir)?;
+        }
+        Some("publish-openvsx") => {
+            if rest.len() != 1 {
+                return Err(format!(
+                    "`publish-openvsx` takes no extra arguments (got: {})",
+                    rest[1..].join(" ")
+                ));
+            }
+            publish_openvsx(&vscode_dir)?;
         }
         Some("-h" | "--help" | "help") => {
             if rest.len() != 1 {
@@ -132,12 +277,17 @@ pub fn run(root: &Path, rest: &[String]) -> Result<(), String> {
                 ));
             }
             eprintln!(
-                "cargo lsp           — release-build `lemma` + npm ci && npm run compile in {}",
+                "cargo lsp                    — release-build `lemma` + npm ci && npm run compile in {}",
                 vscode_dir.display()
             );
             eprintln!(
-                "cargo lsp vsix      — same, then npm run package (install the .vsix in Cursor / VS Code)"
+                "cargo lsp package            — npm ci + compile + npx {VSCE} package (no lemma build)"
             );
+            eprintln!(
+                "cargo lsp vsix               — prepare + package .vsix (install via Extensions → Install from VSIX)"
+            );
+            eprintln!("cargo lsp publish-marketplace — npx {VSCE} publish (needs VSCE_PAT)");
+            eprintln!("cargo lsp publish-openvsx    — npx {OVSX} publish (needs OPEN_VSX_TOKEN)");
         }
         Some(other) => {
             return Err(format!(
@@ -161,6 +311,16 @@ mod tests {
         )
         .unwrap_err()
         .contains("prepare"));
+    }
+
+    #[test]
+    fn package_rejects_extra_arguments() {
+        assert!(run(
+            Path::new("/tmp"),
+            &["package".to_string(), "nope".to_string()]
+        )
+        .unwrap_err()
+        .contains("package"));
     }
 
     #[test]

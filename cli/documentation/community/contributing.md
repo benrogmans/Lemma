@@ -21,7 +21,7 @@ cargo nextest run --workspace
 For WASM development:
 
 ```bash
-cargo install wasm-pack
+cargo install wasm-pack --version 0.15.0 --locked
 ```
 
 For fuzzing (requires nightly Rust):

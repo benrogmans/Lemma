@@ -303,6 +303,68 @@ fn lemma_remove<'a>(
     }
 }
 
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lemma_update<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+    repository: Option<String>,
+    spec_name: String,
+    effective: Option<String>,
+    code: String,
+    attribute: Option<String>,
+) -> NifResult<Term<'a>> {
+    let mut engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+    let effective_dt = match effective {
+        None => None,
+        Some(s) => Some(s.parse::<DateTimeValue>().map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("Invalid effective date: {}", e)))
+        })?),
+    };
+    let repo = repository
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let source_type = match attribute
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => SourceType::Volatile,
+        Some(label) => SourceType::from_binding_label(label).map_err(|e| {
+            rustler::Error::RaiseTerm(Box::new(format!("update: label '{label}': {e}")))
+        })?,
+    };
+    match engine.update(repo, &spec_name, effective_dt.as_ref(), source_type, code) {
+        Ok(()) => Ok(rustler::Atom::from_str(env, "ok")?.encode(env)),
+        Err(load_err) => {
+            let list = error_encoding::encode_errors(env, &load_err.errors)?;
+            Ok((rustler::Atom::from_str(env, "error")?, list).encode(env))
+        }
+    }
+}
+
+#[rustler::nif]
+fn lemma_limits<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+) -> NifResult<Term<'a>> {
+    let engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+    let json = serde_json::to_vec(engine.limits()).map_err(|e| {
+        rustler::Error::RaiseTerm(Box::new(format!("BUG: limits serialization failed: {e}")))
+    })?;
+    let mut owned = OwnedBinary::new(json.len())
+        .ok_or_else(|| rustler::Error::RaiseTerm(Box::new("out of memory".to_string())))?;
+    owned.as_mut_slice().copy_from_slice(&json);
+    let binary = rustler::Binary::from_owned(owned, env);
+    Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
+}
+
 #[rustler::nif]
 fn lemma_format<'a>(env: Env<'a>, code: String) -> NifResult<Term<'a>> {
     match lemma::format_source(&code, SourceType::Volatile) {
@@ -398,20 +460,7 @@ fn limits_from_term(term: Term) -> Result<ResourceLimits, String> {
             ));
         }
         let value_usize = value_int as usize;
-        match key_str.as_str() {
-            "max_sources" => limits.max_sources = value_usize,
-            "max_loaded_bytes" => limits.max_loaded_bytes = value_usize,
-            "max_source_size_bytes" => limits.max_source_size_bytes = value_usize,
-            "max_expression_depth" => limits.max_expression_depth = value_usize,
-            "max_expression_count" => limits.max_expression_count = value_usize,
-            "max_data_value_bytes" => limits.max_data_value_bytes = value_usize,
-            "max_spec_dependency_depth" => limits.max_spec_dependency_depth = value_usize,
-            "max_dag_specs" => limits.max_dag_specs = value_usize,
-            "max_normalized_expression_nodes" => {
-                limits.max_normalized_expression_nodes = value_usize
-            }
-            _ => return Err(format!("unknown limits key: '{}'", key_str)),
-        }
+        limits.apply(&key_str, value_usize)?;
     }
     Ok(limits)
 }

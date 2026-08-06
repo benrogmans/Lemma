@@ -32,6 +32,11 @@ defmodule Lemma.Native do
   def lemma_remove(_resource, _repository, _spec_name, _effective),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def lemma_update(_resource, _repository, _spec, _effective, _code, _attribute),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def lemma_limits(_resource), do: :erlang.nif_error(:nif_not_loaded)
+
   def lemma_format(_code), do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_generate_openapi(_resource, _explanations_enabled, _effective_opt),

@@ -35,6 +35,18 @@ fn lsp_initialize_reports_capabilities() {
 }
 
 #[test]
+fn lsp_stdio_flag_initializes() {
+    let mut session = LspSession::spawn_lemma_lsp_with_stdio_flag();
+    let result = session.initialize(None);
+    session.initialized();
+    assert!(
+        result.get("capabilities").is_some(),
+        "lemma lsp --stdio must initialize: {result}"
+    );
+    session.shutdown();
+}
+
+#[test]
 fn lsp_parse_error_publishes_diagnostics() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = write_lemma_file(dir.path(), "broken.lemma", "not lemma syntax");

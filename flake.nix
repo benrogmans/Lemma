@@ -44,6 +44,8 @@
 
             shellHook = ''
               export LC_ALL=en_US.UTF-8
+              # Precommit requires wasm-pack 0.15.0 exactly (xtask WASM_PACK_VERSION).
+              # If pkgs.wasm-pack drifts, install: cargo install wasm-pack --version 0.15.0 --locked
             '';
           };
         }

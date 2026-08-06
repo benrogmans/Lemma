@@ -53,9 +53,46 @@ defmodule LemmaTest do
       assert is_reference(engine)
     end
 
+    test "creates engine with max_normal_form_depth" do
+      assert {:ok, engine} = Lemma.new(%{"max_normal_form_depth" => 99})
+      assert {:ok, limits} = Lemma.limits(engine)
+      assert limits["max_normal_form_depth"] == 99
+    end
+
     test "creates engine with nil limits (defaults)" do
       assert {:ok, engine} = Lemma.new(nil)
       assert is_reference(engine)
+    end
+  end
+
+  describe "limits/1" do
+    test "returns configured limits" do
+      assert {:ok, engine} = Lemma.new(%{"max_sources" => 12})
+      assert {:ok, limits} = Lemma.limits(engine)
+      assert limits["max_sources"] == 12
+    end
+  end
+
+  describe "update/6" do
+    test "replaces a temporal spec slice" do
+      {:ok, engine} = Lemma.new()
+
+      :ok =
+        Lemma.load(engine, """
+        spec pricing
+        data quantity: 1
+        rule total: quantity * 10
+        """)
+
+      :ok =
+        Lemma.update(engine, nil, "pricing", nil, """
+        spec pricing
+        data quantity: 1
+        rule total: quantity * 20
+        """)
+
+      assert {:ok, response} = Lemma.run(engine, %{spec: "pricing"}, %{data: %{}})
+      assert response["results"]["total"]["number"] == "20"
     end
   end
 

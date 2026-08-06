@@ -15,6 +15,8 @@ use crate::diagnostics;
 use crate::registry::Registry;
 use crate::semantic_tokens;
 use crate::workspace::WorkspaceModel;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::workspace_files::{DiskLemmaFile, WatchGuard, WorkspaceFiles, WorkspaceFilesError};
 use lemma::{DataValue, SpecRef};
 
 async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceModel) {
@@ -56,6 +58,11 @@ struct SharedState {
     debounce_notify: Notify,
     /// The workspace root URI, set during `initialize`.
     root_uri: RwLock<Option<Url>>,
+    /// Attributes of documents currently open in the editor.
+    open_attributes: RwLock<std::collections::HashSet<String>>,
+    /// Keeps the CLI filesystem watch alive for the process lifetime.
+    #[cfg(not(target_arch = "wasm32"))]
+    watch_guard: RwLock<Option<WatchGuard>>,
 }
 
 /// The Lemma Language Server.
@@ -67,10 +74,17 @@ pub struct LemmaLanguageServer {
     client: Client,
     state: Arc<SharedState>,
     registry: Arc<dyn Registry>,
+    /// Host-injected disk access (CLI). `None` on WASM / buffer-only mode.
+    #[cfg(not(target_arch = "wasm32"))]
+    workspace_files: Option<Arc<dyn WorkspaceFiles>>,
 }
 
 impl LemmaLanguageServer {
-    pub fn new(client: Client, registry: Box<dyn Registry>) -> Self {
+    pub fn new(
+        client: Client,
+        registry: Box<dyn Registry>,
+        #[cfg(not(target_arch = "wasm32"))] workspace_files: Option<Arc<dyn WorkspaceFiles>>,
+    ) -> Self {
         Self {
             client,
             state: Arc::new(SharedState {
@@ -78,8 +92,13 @@ impl LemmaLanguageServer {
                 #[cfg(not(target_arch = "wasm32"))]
                 debounce_notify: Notify::new(),
                 root_uri: RwLock::new(None),
+                open_attributes: RwLock::new(std::collections::HashSet::new()),
+                #[cfg(not(target_arch = "wasm32"))]
+                watch_guard: RwLock::new(None),
             }),
             registry: Arc::from(registry),
+            #[cfg(not(target_arch = "wasm32"))]
+            workspace_files,
         }
     }
 
@@ -87,6 +106,117 @@ impl LemmaLanguageServer {
     #[cfg(not(target_arch = "wasm32"))]
     fn request_workspace_validation(&self) {
         self.state.debounce_notify.notify_one();
+    }
+
+    /// Apply a full disk payload from the host into the workspace model.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn apply_disk_files_from_host(&self, files: Vec<DiskLemmaFile>) {
+        let mut disk_entries = Vec::with_capacity(files.len());
+        for file in files {
+            let url = match Url::from_file_path(&file.path) {
+                Ok(url) => url,
+                Err(()) => {
+                    panic!(
+                        "BUG: disk lemma path must be absolute for URL conversion: {}",
+                        file.path.display()
+                    );
+                }
+            };
+            disk_entries.push((url, file.text));
+        }
+
+        let open_attributes = self.state.open_attributes.read().await.clone();
+        {
+            let mut workspace = self.state.workspace.write().await;
+            workspace.apply_disk_files(&disk_entries, &open_attributes);
+        }
+        self.request_workspace_validation();
+    }
+
+    /// Load disk files for `root_path` via the injected host, then start watching.
+    #[cfg(not(target_arch = "wasm32"))]
+    async fn load_and_watch_workspace_disk(&self, root_path: &Path) {
+        let Some(workspace_files) = self.workspace_files.as_ref() else {
+            return;
+        };
+
+        {
+            let mut workspace = self.state.workspace.write().await;
+            workspace.set_workspace_root(root_path.to_path_buf());
+        }
+
+        match workspace_files.load(root_path) {
+            Ok(files) => self.apply_disk_files_from_host(files).await,
+            Err(error) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("Lemma workspace disk load failed: {error}"),
+                    )
+                    .await;
+                return;
+            }
+        }
+
+        let state = Arc::clone(&self.state);
+        let client = self.client.clone();
+        let workspace_files = Arc::clone(workspace_files);
+        let root_for_watch = root_path.to_path_buf();
+        let runtime = tokio::runtime::Handle::current();
+        let on_change: Arc<
+            dyn Fn(std::result::Result<Vec<DiskLemmaFile>, WorkspaceFilesError>) + Send + Sync,
+        > = Arc::new(move |result| match result {
+            Ok(files) => {
+                let state = Arc::clone(&state);
+                runtime.spawn(async move {
+                    let open_attributes = state.open_attributes.read().await.clone();
+                    let mut disk_entries = Vec::with_capacity(files.len());
+                    for file in files {
+                        let url = match Url::from_file_path(&file.path) {
+                            Ok(url) => url,
+                            Err(()) => {
+                                panic!(
+                                    "BUG: disk lemma path must be absolute for URL conversion: {}",
+                                    file.path.display()
+                                );
+                            }
+                        };
+                        disk_entries.push((url, file.text));
+                    }
+                    {
+                        let mut workspace = state.workspace.write().await;
+                        workspace.apply_disk_files(&disk_entries, &open_attributes);
+                    }
+                    state.debounce_notify.notify_one();
+                });
+            }
+            Err(error) => {
+                let client = client.clone();
+                runtime.spawn(async move {
+                    client
+                        .log_message(
+                            MessageType::ERROR,
+                            format!("Lemma workspace disk watch reload failed: {error}"),
+                        )
+                        .await;
+                });
+            }
+        });
+
+        match workspace_files.watch(root_for_watch, on_change) {
+            Ok(guard) => {
+                let mut watch_guard = self.state.watch_guard.write().await;
+                *watch_guard = Some(guard);
+            }
+            Err(error) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("Lemma workspace disk watch failed to start: {error}"),
+                    )
+                    .await;
+            }
+        }
     }
 
     /// Run full workspace validation inline and publish all diagnostics.
@@ -98,23 +228,6 @@ impl LemmaLanguageServer {
     async fn publish_full_diagnostics(&self) {
         let workspace = self.state.workspace.read().await;
         publish_workspace_diagnostics(&self.client, &workspace).await;
-    }
-
-    /// Discover all `.lemma` files under a directory and add them to the workspace.
-    /// No-op on WASM (no filesystem); the single spec is provided via didOpen.
-    #[cfg(not(target_arch = "wasm32"))]
-    async fn discover_workspace_files(&self, root_path: &Path) {
-        let lemma_files = find_lemma_files(root_path);
-        let mut workspace = self.state.workspace.write().await;
-        workspace.set_workspace_root(root_path.to_path_buf());
-
-        for file_path in lemma_files {
-            if let Ok(content) = std::fs::read_to_string(&file_path) {
-                if let Ok(url) = Url::from_file_path(&file_path) {
-                    workspace.update_file(url, content);
-                }
-            }
-        }
     }
 
     /// Spawn the background debounce task.
@@ -164,8 +277,16 @@ impl LanguageServer for LemmaLanguageServer {
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::FULL),
+                        save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+                            include_text: Some(true),
+                        })),
+                        will_save: None,
+                        will_save_wait_until: None,
+                    },
                 )),
                 document_link_provider: Some(DocumentLinkOptions {
                     resolve_provider: Some(false),
@@ -202,7 +323,7 @@ impl LanguageServer for LemmaLanguageServer {
         #[cfg(not(target_arch = "wasm32"))]
         self.spawn_debounce_task();
 
-        // Discover workspace `.lemma` files from the workspace root, if available (native only).
+        // Load workspace `.lemma` files via injected CLI disk access (native only).
         #[cfg(not(target_arch = "wasm32"))]
         {
             let root_uri = {
@@ -211,7 +332,7 @@ impl LanguageServer for LemmaLanguageServer {
             };
             if let Some(root_uri) = root_uri {
                 if let Ok(root_path) = root_uri.to_file_path() {
-                    self.discover_workspace_files(&root_path).await;
+                    self.load_and_watch_workspace_disk(&root_path).await;
                     let workspace = self.state.workspace.read().await;
                     publish_workspace_diagnostics(&self.client, &workspace).await;
                 }
@@ -230,7 +351,12 @@ impl LanguageServer for LemmaLanguageServer {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
+        let attribute = WorkspaceModel::attribute_for_url_public(&uri);
 
+        {
+            let mut open_attributes = self.state.open_attributes.write().await;
+            open_attributes.insert(attribute);
+        }
         {
             let mut workspace = self.state.workspace.write().await;
             workspace.update_file(uri.clone(), text);
@@ -258,22 +384,63 @@ impl LanguageServer for LemmaLanguageServer {
         self.publish_full_diagnostics().await;
     }
 
-    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
-
         {
             let mut workspace = self.state.workspace.write().await;
-            workspace.remove_file(&uri);
+            if let Some(text) = params.text {
+                workspace.update_file(uri.clone(), text);
+            }
+            workspace.record_saved_baseline(&uri);
         }
-
-        // Clear diagnostics for the closed file.
-        self.client.publish_diagnostics(uri, Vec::new(), None).await;
-
-        // Signal re-validation since removing a file may affect other files' diagnostics.
         #[cfg(not(target_arch = "wasm32"))]
         self.request_workspace_validation();
         #[cfg(target_arch = "wasm32")]
         self.publish_full_diagnostics().await;
+    }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        let attribute = WorkspaceModel::attribute_for_url_public(&uri);
+
+        {
+            let mut open_attributes = self.state.open_attributes.write().await;
+            open_attributes.remove(&attribute);
+        }
+
+        let disk_backed = {
+            let workspace = self.state.workspace.read().await;
+            workspace.is_disk_backed(&uri)
+        };
+
+        if disk_backed {
+            {
+                let mut workspace = self.state.workspace.write().await;
+                let restored = workspace.restore_disk_text(&uri);
+                if !restored {
+                    panic!(
+                        "BUG: disk-backed URI missing disk text after close: {}",
+                        uri
+                    );
+                }
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            self.request_workspace_validation();
+            #[cfg(target_arch = "wasm32")]
+            self.publish_full_diagnostics().await;
+        } else {
+            {
+                let mut workspace = self.state.workspace.write().await;
+                workspace.remove_file(&uri);
+            }
+            // Clear diagnostics for the closed open-only file.
+            self.client.publish_diagnostics(uri, Vec::new(), None).await;
+
+            #[cfg(not(target_arch = "wasm32"))]
+            self.request_workspace_validation();
+            #[cfg(target_arch = "wasm32")]
+            self.publish_full_diagnostics().await;
+        }
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -537,7 +704,7 @@ fn build_uses_document_link(
 
 /// Path under `<workspace>/lemma_deps/` where the LSP writes a view-only copy of the embedded
 /// units standard library for editor navigation. The `.std` extension keeps the file out of
-/// every `.lemma` discovery pass (CLI loaders, watchers, LSP workspace scan).
+/// every `.lemma` discovery pass (CLI loaders and watchers).
 #[cfg(not(target_arch = "wasm32"))]
 fn embedded_stdlib_view_path(workspace_root: &Path) -> std::path::PathBuf {
     lemma::deps::lemma_deps_dir(workspace_root).join("lemma.std")
@@ -564,41 +731,6 @@ fn ensure_embedded_stdlib_view(workspace_root: &Path) -> Option<std::path::PathB
     }
     std::fs::write(&destination, expected).ok()?;
     Some(destination)
-}
-
-/// Recursively find all `.lemma` files under a directory. Not used on WASM.
-#[cfg(not(target_arch = "wasm32"))]
-fn find_lemma_files(root: &Path) -> Vec<std::path::PathBuf> {
-    let mut results = Vec::new();
-    find_lemma_files_recursive(root, &mut results);
-    results
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn find_lemma_files_recursive(directory: &Path, results: &mut Vec<std::path::PathBuf>) {
-    let entries = match std::fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
-
-        let path = entry.path();
-
-        if path.is_dir() {
-            let dir_name = path.file_name().and_then(|name| name.to_str());
-            match dir_name {
-                Some(name) if name.starts_with('.') => {}
-                _ => find_lemma_files_recursive(&path, results),
-            }
-        } else if path.extension().and_then(|ext| ext.to_str()) == Some("lemma") {
-            results.push(path);
-        }
-    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

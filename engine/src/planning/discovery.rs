@@ -138,7 +138,7 @@ fn unknown_repository_qualifier_error(
 
     let suggestion = if qualifier.is_registry() {
         format!(
-            "Run `lemma fetch {}` to download the repository.",
+            "Run `lemma install {}` to download the repository.",
             qualifier.name
         )
     } else {
@@ -283,7 +283,7 @@ fn format_missing_spec_ref(
             (
                 message,
                 format!(
-                    "{} Or run `lemma fetch {}` to fetch it.",
+                    "{} Or run `lemma install {}` to install it.",
                     suggestion,
                     explicit_repository_qualifier
                         .expect("BUG: checked above")
@@ -305,7 +305,7 @@ fn format_missing_spec_ref(
         );
         let suggestion = if explicit_repository_qualifier.is_some_and(|q| q.is_registry()) {
             format!(
-                "Run `lemma fetch --all` or `lemma fetch {}` to fetch this dependency.",
+                "Run `lemma install --all` or `lemma install {}` to install this dependency.",
                 explicit_repository_qualifier
                     .expect("BUG: checked above")
                     .name
@@ -1255,7 +1255,7 @@ mod tests {
     }
 
     #[test]
-    fn dag_error_registry_dep_suggests_lemma_fetch() {
+    fn dag_error_registry_dep_suggests_lemma_install() {
         let mut ctx = Context::new();
         let repository = ctx.workspace();
         let registry_repository = Arc::new(LemmaRepository {
@@ -1298,8 +1298,8 @@ mod tests {
         assert_eq!(errs.len(), 1);
         let suggestion = errs[0].suggestion().expect("should have suggestion");
         assert!(
-            suggestion.contains("lemma fetch"),
-            "registry dep suggestion should include 'lemma fetch': {suggestion}"
+            suggestion.contains("lemma install"),
+            "registry dep suggestion should include 'lemma install': {suggestion}"
         );
     }
 

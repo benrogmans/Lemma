@@ -128,6 +128,27 @@ public final class Engine implements AutoCloseable {
     }
   }
 
+  /**
+   * Replace a temporal spec slice with new source (atomic remove + load).
+   *
+   * @param attribute source label (path or {@code @owner/repo}); {@code null} for volatile
+   */
+  public void update(
+      @Nullable String repository,
+      String spec,
+      @Nullable String effective,
+      String code,
+      @Nullable String attribute) {
+    Objects.requireNonNull(spec, "spec");
+    Objects.requireNonNull(code, "code");
+    state.lock.lock();
+    try {
+      Native.update(state.requireHandle(), repository, spec, effective, code, attribute);
+    } finally {
+      state.lock.unlock();
+    }
+  }
+
   public ResourceLimits limits() {
     String json;
     state.lock.lock();

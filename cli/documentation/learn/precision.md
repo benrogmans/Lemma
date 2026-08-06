@@ -69,9 +69,9 @@ All API surfaces enforce a uniform rule for numeric data inputs:
 | Decimal / float (native number) | **Rejected** | IEEE 754 f64 cannot represent most decimals exactly |
 | String `"0.1"`, `"99.50"` | Yes | Parsed as exact decimal → ℚ |
 
-This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elixir NIF, and the Java Maven package (`BigDecimal`). Non-integer numeric values are rejected with `"decimal values must be passed as strings to preserve exactness"` (JS/HTTP/Elixir). Rust callers using `Engine::run` directly are unaffected (they already provide string magnitudes). Java callers pass `BigDecimal` or decimal strings through `RunRequest.data(...)` — never `double`/`float` for domain decimals.
+This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elixir NIF, and the Java / Kotlin package (`BigDecimal`). Non-integer numeric values are rejected with `"decimal values must be passed as strings to preserve exactness"` (JS/HTTP/Elixir). Rust callers using `Engine::run` directly are unaffected (they already provide string magnitudes). Java callers pass `BigDecimal` or decimal strings through `RunRequest.data(...)` — never `double`/`float` for domain decimals.
 
-## Clients (JavaScript / HTTP / Maven)
+## Clients (JavaScript / HTTP / Java / Kotlin)
 
 **Sending data:** pass decimal values as strings, integers may be native numbers:
 
@@ -79,7 +79,7 @@ This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elix
 engine.run(null, "pricing", null, { quantity: 42, rate: "0.075" });
 ```
 
-HTTP/JSON uses the same rule (integers as numbers, decimals as strings in the request body). On Maven, pass `BigDecimal` or decimal strings in `RunRequest.data(...)` — see [Maven](../tools/maven.md).
+HTTP/JSON uses the same rule (integers as numbers, decimals as strings in the request body). On Java / Kotlin, pass `BigDecimal` or decimal strings in `RunRequest.data(...)` — see [Java / Kotlin](../tools/java.md).
 
 **Reading results:** parse numeric fields as decimal strings, not floats:
 
@@ -88,7 +88,7 @@ import Decimal from "decimal.js";
 const n = new Decimal(json.results.price.number);
 ```
 
-Never `Number()` / `parseFloat()` / `float()`. Precision breaks above ~9×10¹⁵. The same string magnitudes appear in HTTP JSON responses; parse them with a decimal library in your language. On Maven, rule magnitudes are already `BigDecimal`.
+Never `Number()` / `parseFloat()` / `float()`. Precision breaks above ~9×10¹⁵. The same string magnitudes appear in HTTP JSON responses; parse them with a decimal library in your language. On Java / Kotlin, rule magnitudes are already `BigDecimal`.
 
 ## Spec authors
 
