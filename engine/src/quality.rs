@@ -3,66 +3,102 @@
 //! Advisory only: never affects planning or evaluation. Distinct from [`Error`] /
 //! Veto / panic.
 
+use crate::error::EngineErrorSource;
 use crate::literals::Value;
 use crate::parsing::ast::{
     DataValue, Expression, ExpressionKind, LemmaData, LemmaRule, LemmaSpec, ParentType,
-    PrimitiveKind, TypeConstraintCommand,
+    PrimitiveKind, Span, TypeConstraintCommand,
 };
 use crate::parsing::source::{Source, SourceType};
 use crate::Engine;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Kind of structural quality Recommendation.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind")]
-pub enum RecommendationKind {
-    SpecMissingCommentary,
-    SpecMissingEffectiveDate,
-    DataMissingHelp { data: String },
-    TextDataWithoutOptions { data: String },
-    OpenInputWithoutSuggestion { data: String },
-    VetoAsRejectionCascade { rule: String },
-}
-
 /// One structural quality Recommendation from [`Engine::quality`].
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+///
+/// Wire JSON uses `source` ([`EngineErrorSource`]); runtime keeps [`Source`] as
+/// `source_location` for Display and analysis.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recommendation {
-    pub kind: RecommendationKind,
+    /// Advisory prose only. Does not encode which temporal slice was analyzed.
+    pub message: String,
     pub repository: Option<String>,
     pub spec: String,
+    pub effective_from: Option<crate::parsing::ast::DateTimeValue>,
     pub source_location: Source,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RecommendationWire {
+    message: String,
+    repository: Option<String>,
+    spec: String,
+    effective_from: Option<crate::parsing::ast::DateTimeValue>,
+    source: EngineErrorSource,
+}
+
+impl From<&Recommendation> for RecommendationWire {
+    fn from(r: &Recommendation) -> Self {
+        Self {
+            message: r.message.clone(),
+            repository: r.repository.clone(),
+            spec: r.spec.clone(),
+            effective_from: r.effective_from.clone(),
+            source: EngineErrorSource::from(&r.source_location),
+        }
+    }
+}
+
+impl From<RecommendationWire> for Recommendation {
+    fn from(w: RecommendationWire) -> Self {
+        let source_type =
+            SourceType::from_binding_label(&w.source.attribute).unwrap_or(SourceType::Volatile);
+        let end = w.source.length;
+        Self {
+            message: w.message,
+            repository: w.repository,
+            spec: w.spec,
+            effective_from: w.effective_from,
+            source_location: Source::new(
+                source_type,
+                Span {
+                    start: 0,
+                    end,
+                    line: w.source.line,
+                    col: w.source.column,
+                },
+            ),
+        }
+    }
+}
+
+impl Serialize for Recommendation {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        RecommendationWire::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Recommendation {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        RecommendationWire::deserialize(deserializer).map(Self::from)
+    }
 }
 
 impl fmt::Display for Recommendation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.kind {
-            RecommendationKind::SpecMissingCommentary => write!(
-                f,
-                "Spec '{}' has no commentary block. Add `\"\"\"...\"\"\"` immediately after the spec line so callers know what this policy covers.",
-                self.spec
-            ),
-            RecommendationKind::SpecMissingEffectiveDate => write!(
-                f,
-                "Spec '{}' has no effective date. If this encodes a dated policy, declare `spec {} YYYY-MM-DD` so temporal history stays answerable; if the policy is timeless, confirm with the author.",
-                self.spec, self.spec
-            ),
-            RecommendationKind::DataMissingHelp { data } => write!(
-                f,
-                "`{data}` has no `-> help`. Where does a user find this value? Confirm with the author, then document it."
-            ),
-            RecommendationKind::TextDataWithoutOptions { data } => write!(
-                f,
-                "`{data}` accepts any text. If the policy defines a closed set, declare them with `-> option`; if free text is intended, confirm with the author."
-            ),
-            RecommendationKind::OpenInputWithoutSuggestion { data } => write!(
-                f,
-                "`{data}` is an open input with no `-> suggest`. If a common default exists in the policy, declare it as a suggestion (UI hint only); otherwise confirm with the author."
-            ),
-            RecommendationKind::VetoAsRejectionCascade { rule } => write!(
-                f,
-                "`{rule}` defaults to a boolean and overrides only with veto. Denial is a valid answer (`false`), not an unanswerable question (veto). Prefer boolean sub-rules composed with `and`; confirm the intended outcome with the author."
-            ),
+        write!(f, "In spec '{}'", self.spec)?;
+        match &self.effective_from {
+            Some(dt) => write!(f, " (effective from {dt})")?,
+            None => write!(f, " (effective from beginning)")?,
         }
+        write!(f, ": {}", self.message)?;
+        write!(
+            f,
+            " at {}:{}:{}",
+            self.source_location.source_type,
+            self.source_location.span.line,
+            self.source_location.span.col
+        )
     }
 }
 
@@ -106,54 +142,24 @@ impl Engine {
 }
 
 fn analyze_spec(repository: Option<String>, spec: &LemmaSpec, out: &mut Vec<Recommendation>) {
-    let loc = spec_location(spec);
-    if spec.commentary.is_none() {
-        out.push(Recommendation {
-            kind: RecommendationKind::SpecMissingCommentary,
-            repository: repository.clone(),
-            spec: spec.name.clone(),
-            source_location: loc.clone(),
-        });
-    }
-    if spec.effective_from.is_origin() {
-        out.push(Recommendation {
-            kind: RecommendationKind::SpecMissingEffectiveDate,
-            repository: repository.clone(),
-            spec: spec.name.clone(),
-            source_location: loc,
-        });
-    }
-
     for data in &spec.data {
-        analyze_data(repository.clone(), &spec.name, data, out);
+        analyze_data(repository.clone(), spec, data, out);
     }
     for rule in &spec.rules {
-        analyze_rule(repository.clone(), &spec.name, rule, out);
+        analyze_rule(repository.clone(), spec, rule, out);
     }
-}
-
-fn spec_location(spec: &LemmaSpec) -> Source {
-    Source::new(
-        spec.source_type.clone().unwrap_or(SourceType::Volatile),
-        crate::parsing::ast::Span {
-            start: 0,
-            end: 0,
-            line: spec.start_line,
-            col: 0,
-        },
-    )
 }
 
 fn analyze_data(
     repository: Option<String>,
-    spec_name: &str,
+    spec: &LemmaSpec,
     data: &LemmaData,
     out: &mut Vec<Recommendation>,
 ) {
     let DataValue::Definition {
         base,
         constraints,
-        value,
+        value: _,
     } = &data.value
     else {
         return;
@@ -170,50 +176,86 @@ fn analyze_data(
             TypeConstraintCommand::Option | TypeConstraintCommand::Options
         )
     });
-    let has_suggest = constraints
+    let has_minimum = constraints
         .iter()
-        .any(|(c, _)| matches!(c, TypeConstraintCommand::Suggest));
+        .any(|(c, _)| matches!(c, TypeConstraintCommand::Minimum));
+    let has_maximum = constraints
+        .iter()
+        .any(|(c, _)| matches!(c, TypeConstraintCommand::Maximum));
 
     if !has_help {
         out.push(Recommendation {
-            kind: RecommendationKind::DataMissingHelp { data: name.clone() },
+            message: format!(
+                "`{name}` has no `-> help`. Consider adding a message to help users understand this data."
+            ),
             repository: repository.clone(),
-            spec: spec_name.to_string(),
+            spec: spec.name.clone(),
+            effective_from: spec.effective_from.to_option(),
+            source_location: data.source_location.clone(),
+        });
+    }
+
+    if is_primitive_bounded_quantity(base.as_ref()) && (!has_minimum || !has_maximum) {
+        let gap = match (has_minimum, has_maximum) {
+            (false, false) => "no `-> minimum` or `-> maximum`",
+            (true, false) => "no `-> maximum`",
+            (false, true) => "no `-> minimum`",
+            (true, true) => unreachable!("BUG: both bounds present but entered missing-bounds arm"),
+        };
+        out.push(Recommendation {
+            message: format!(
+                "`{name}` has {gap}. Consider adding bounds so out-of-range values are rejected."
+            ),
+            repository: repository.clone(),
+            spec: spec.name.clone(),
+            effective_from: spec.effective_from.to_option(),
             source_location: data.source_location.clone(),
         });
     }
 
     if is_primitive_text(base.as_ref()) && !has_option {
         out.push(Recommendation {
-            kind: RecommendationKind::TextDataWithoutOptions { data: name.clone() },
-            repository: repository.clone(),
-            spec: spec_name.to_string(),
-            source_location: data.source_location.clone(),
-        });
-    }
-
-    if value.is_none() && !has_suggest {
-        out.push(Recommendation {
-            kind: RecommendationKind::OpenInputWithoutSuggestion { data: name },
+            message: format!(
+                "`{name}` accepts any text. Adding `-> option` values allows forms and APIs to offer choices."
+            ),
             repository,
-            spec: spec_name.to_string(),
+            spec: spec.name.clone(),
+            effective_from: spec.effective_from.to_option(),
             source_location: data.source_location.clone(),
         });
     }
 }
 
+fn unwrap_parent_type(base: Option<&ParentType>) -> Option<&ParentType> {
+    match base {
+        Some(ParentType::Qualified { inner, .. } | ParentType::Ranged { inner }) => {
+            unwrap_parent_type(Some(inner.as_ref()))
+        }
+        other => other,
+    }
+}
+
 fn is_primitive_text(base: Option<&ParentType>) -> bool {
     matches!(
-        base,
+        unwrap_parent_type(base),
         Some(ParentType::Primitive {
             primitive: PrimitiveKind::Text
         })
     )
 }
 
+fn is_primitive_bounded_quantity(base: Option<&ParentType>) -> bool {
+    matches!(
+        unwrap_parent_type(base),
+        Some(ParentType::Primitive {
+            primitive: PrimitiveKind::Number | PrimitiveKind::Measure | PrimitiveKind::Ratio
+        })
+    )
+}
+
 fn analyze_rule(
     repository: Option<String>,
-    spec_name: &str,
+    spec: &LemmaSpec,
     rule: &LemmaRule,
     out: &mut Vec<Recommendation>,
 ) {
@@ -231,11 +273,13 @@ fn analyze_rule(
         return;
     }
     out.push(Recommendation {
-        kind: RecommendationKind::VetoAsRejectionCascade {
-            rule: rule.name.clone(),
-        },
+        message: format!(
+            "`{}` treats a yes/no outcome as veto. Consider `false` or `no` when denying — veto means there is no answer, and it blocks every rule that depends on this one.",
+            rule.name
+        ),
         repository,
-        spec: spec_name.to_string(),
+        spec: spec.name.clone(),
+        effective_from: spec.effective_from.to_option(),
         source_location: rule.source_location.clone(),
     });
 }
@@ -260,16 +304,33 @@ mod tests {
         engine
     }
 
-    fn kinds(engine: &Engine) -> Vec<RecommendationKind> {
-        engine.quality().into_iter().map(|r| r.kind).collect()
+    fn effective_display(r: &Recommendation) -> Option<String> {
+        r.effective_from.as_ref().map(|d| d.to_string())
     }
 
     #[test]
-    fn missing_commentary_and_effective_date() {
+    fn origin_without_commentary_does_not_flag_optional_gaps() {
         let engine = load("spec pricing\ndata x: number\nrule y: x\n");
-        let ks = kinds(&engine);
-        assert!(ks.contains(&RecommendationKind::SpecMissingCommentary));
-        assert!(ks.contains(&RecommendationKind::SpecMissingEffectiveDate));
+        let recs = engine.quality();
+        assert!(
+            recs.iter().all(|r| {
+                !r.message.contains("commentary")
+                    && !r.message.contains("effective date")
+                    && !r.message.contains("-> suggest")
+            }),
+            "optional gaps must not be recommended: {recs:?}"
+        );
+        let help = recs
+            .iter()
+            .find(|r| r.message.contains("no `-> help`") && r.message.contains("x"))
+            .expect("missing help");
+        assert!(
+            help.message.contains("Consider adding a message"),
+            "got: {}",
+            help.message
+        );
+        assert_eq!(help.spec, "pricing");
+        assert_eq!(help.effective_from, None);
     }
 
     #[test]
@@ -282,13 +343,171 @@ Bulk pricing.
 
 data qty: number
   -> minimum 0
+  -> maximum 1000000
   -> help "Order quantity."
-  -> suggest 10
 
 rule total: qty
 "#,
         );
         assert!(engine.quality().is_empty(), "got: {:?}", engine.quality());
+    }
+
+    #[test]
+    fn number_without_bounds() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data qty: number
+  -> help "Order quantity."
+rule total: qty
+"#,
+        );
+        let hit = engine
+            .quality()
+            .into_iter()
+            .find(|r| {
+                r.message.contains("no `-> minimum` or `-> maximum`") && r.message.contains("qty")
+            })
+            .expect("missing bounds");
+        assert!(
+            hit.message.contains("Consider adding bounds"),
+            "got: {}",
+            hit.message
+        );
+    }
+
+    #[test]
+    fn number_with_only_minimum_still_flagged() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data qty: number
+  -> minimum 0
+  -> help "Order quantity."
+rule total: qty
+"#,
+        );
+        assert!(
+            engine.quality().iter().any(|r| {
+                r.message.contains("no `-> maximum`")
+                    && !r.message.contains("no `-> minimum` or")
+                    && r.message.contains("qty")
+            }),
+            "only minimum must flag missing maximum: {:?}",
+            engine.quality()
+        );
+    }
+
+    #[test]
+    fn number_with_only_maximum_still_flagged() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data qty: number
+  -> maximum 100
+  -> help "Order quantity."
+rule total: qty
+"#,
+        );
+        assert!(
+            engine.quality().iter().any(|r| {
+                r.message.contains("no `-> minimum`")
+                    && !r.message.contains("or `-> maximum`")
+                    && r.message.contains("qty")
+            }),
+            "only maximum must flag missing minimum: {:?}",
+            engine.quality()
+        );
+    }
+
+    #[test]
+    fn number_with_min_and_max_clean() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data qty: number
+  -> minimum 0
+  -> maximum 100
+  -> help "Order quantity."
+rule total: qty
+"#,
+        );
+        assert!(
+            !engine
+                .quality()
+                .iter()
+                .any(|r| r.message.contains("no `-> minimum` or `-> maximum`")),
+            "min+max must not flag bounds: {:?}",
+            engine.quality()
+        );
+    }
+
+    #[test]
+    fn measure_and_ratio_without_bounds() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data price: measure
+  -> unit eur 1
+  -> help "Unit price."
+data discount: ratio
+  -> help "Discount rate."
+rule total: price
+rule rate: discount
+"#,
+        );
+        let recs = engine.quality();
+        assert!(
+            recs.iter().any(|r| {
+                r.message.contains("no `-> minimum` or `-> maximum`") && r.message.contains("price")
+            }),
+            "measure must flag: {recs:?}"
+        );
+        assert!(
+            recs.iter().any(|r| {
+                r.message.contains("no `-> minimum` or `-> maximum`")
+                    && r.message.contains("discount")
+            }),
+            "ratio must flag: {recs:?}"
+        );
+    }
+
+    #[test]
+    fn text_not_flagged_for_bounds() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data status: text
+  -> help "Status."
+rule ok: status is "active"
+"#,
+        );
+        assert!(
+            !engine
+                .quality()
+                .iter()
+                .any(|r| r.message.contains("no `-> minimum` or `-> maximum`")),
+            "text must not get bounds rec: {:?}",
+            engine.quality()
+        );
     }
 
     #[test]
@@ -299,14 +518,34 @@ rule total: qty
 x
 """
 
-data qty: number -> suggest 1
+data qty: number
 rule total: qty
 "#,
         );
-        assert!(kinds(&engine).iter().any(|k| matches!(
-            k,
-            RecommendationKind::DataMissingHelp { data } if data == "qty"
-        )));
+        let hit = engine
+            .quality()
+            .into_iter()
+            .find(|r| r.message.contains("no `-> help`") && r.message.contains("qty"))
+            .expect("missing help");
+        assert!(
+            hit.message.contains("Consider adding a message"),
+            "got: {}",
+            hit.message
+        );
+        assert_eq!(hit.spec, "pricing");
+        assert_eq!(effective_display(&hit).as_deref(), Some("2026-01-01"));
+        assert!(
+            hit.to_string().starts_with(
+                "In spec 'pricing' (effective from 2026-01-01): `qty` has no `-> help`"
+            ),
+            "Display must include effective_from, got: {}",
+            hit
+        );
+        assert!(
+            hit.to_string().contains(" at test.lemma:"),
+            "Display must append source location, got: {}",
+            hit
+        );
     }
 
     #[test]
@@ -319,33 +558,21 @@ x
 
 data status: text
   -> help "Status."
-  -> suggest "active"
 rule ok: status is "active"
 "#,
         );
-        assert!(kinds(&engine).iter().any(|k| matches!(
-            k,
-            RecommendationKind::TextDataWithoutOptions { data } if data == "status"
-        )));
-    }
-
-    #[test]
-    fn open_input_without_suggestion() {
-        let engine = load(
-            r#"spec pricing 2026-01-01
-"""
-x
-"""
-
-data qty: number
-  -> help "Quantity."
-rule total: qty
-"#,
+        let hit = engine
+            .quality()
+            .into_iter()
+            .find(|r| r.message.contains("accepts any text") && r.message.contains("status"))
+            .expect("text without options");
+        assert!(
+            hit.message.contains("offer choices"),
+            "got: {}",
+            hit.message
         );
-        assert!(kinds(&engine).iter().any(|k| matches!(
-            k,
-            RecommendationKind::OpenInputWithoutSuggestion { data } if data == "qty"
-        )));
+        assert_eq!(hit.spec, "pricing");
+        assert_eq!(effective_display(&hit).as_deref(), Some("2026-01-01"));
     }
 
     #[test]
@@ -358,16 +585,21 @@ Age gate.
 
 data age: number
   -> help "Customer age."
-  -> suggest 30
 
 rule is_eligible: true
   unless age < 18 then veto "Must be 18+"
 "#,
         );
-        assert!(kinds(&engine).iter().any(|k| matches!(
-            k,
-            RecommendationKind::VetoAsRejectionCascade { rule } if rule == "is_eligible"
-        )));
+        let hit = engine
+            .quality()
+            .into_iter()
+            .find(|r| {
+                r.message.contains("treats a yes/no outcome as veto")
+                    && r.message.contains("is_eligible")
+            })
+            .expect("veto cascade");
+        assert_eq!(hit.spec, "eligibility");
+        assert_eq!(effective_display(&hit).as_deref(), Some("2026-01-01"));
     }
 
     #[test]
@@ -380,15 +612,15 @@ Age gate.
 
 data age: number
   -> help "Customer age."
-  -> suggest 30
 
 rule is_eligible: true
   unless age < 18 then false
 "#,
         );
-        assert!(!kinds(&engine)
+        assert!(!engine
+            .quality()
             .iter()
-            .any(|k| matches!(k, RecommendationKind::VetoAsRejectionCascade { .. })));
+            .any(|r| r.message.contains("treats a yes/no outcome as veto")));
     }
 
     #[test]
@@ -403,7 +635,6 @@ uses lemma units
 
 data package_weight: units.mass
   -> help "Package weight."
-  -> suggest 1 kilogram
 
 rule heavy: package_weight > 20 kilogram
 "#,
@@ -413,5 +644,93 @@ rule heavy: package_weight > 20 kilogram
             recs.iter().all(|r| r.spec != "units"),
             "stdlib units must not appear: {recs:?}"
         );
+    }
+
+    #[test]
+    fn temporal_slices_distinct_by_effective_from() {
+        let engine = load(
+            r#"spec pricing 1933-01-01
+"""
+Old.
+"""
+
+data qty: number
+rule total: qty
+
+spec pricing 2026-01-01
+"""
+New.
+"""
+
+data qty: number
+rule total: qty
+"#,
+        );
+        let helps: Vec<_> = engine
+            .quality()
+            .into_iter()
+            .filter(|r| r.message.contains("no `-> help`"))
+            .collect();
+        assert_eq!(helps.len(), 2, "got: {helps:?}");
+        assert!(
+            helps.iter().any(|r| {
+                r.spec == "pricing" && effective_display(r).as_deref() == Some("1933-01-01")
+            }),
+            "missing 1933 slice: {helps:?}"
+        );
+        assert!(
+            helps.iter().any(|r| {
+                r.spec == "pricing" && effective_display(r).as_deref() == Some("2026-01-01")
+            }),
+            "missing 2026 slice: {helps:?}"
+        );
+        assert!(
+            helps
+                .iter()
+                .all(|r| !r.message.contains("1933") && !r.message.contains("2026")),
+            "message must not carry temporal identity: {helps:?}"
+        );
+        let displays: Vec<String> = helps.iter().map(|r| r.to_string()).collect();
+        assert!(
+            displays
+                .iter()
+                .any(|s| s.contains("In spec 'pricing' (effective from 1933-01-01)")),
+            "Display missing 1933: {displays:?}"
+        );
+        assert!(
+            displays
+                .iter()
+                .any(|s| s.contains("In spec 'pricing' (effective from 2026-01-01)")),
+            "Display missing 2026: {displays:?}"
+        );
+    }
+
+    #[test]
+    fn recommendation_wire_json_uses_source_not_source_location() {
+        let engine = load(
+            r#"spec pricing 2026-01-01
+"""
+x
+"""
+
+data qty: number
+rule total: qty
+"#,
+        );
+        let hit = engine
+            .quality()
+            .into_iter()
+            .find(|r| r.message.contains("no `-> help`"))
+            .expect("missing help");
+        let json = serde_json::to_value(&hit).expect("serialize");
+        assert!(json.get("source").is_some(), "wire must use source: {json}");
+        assert!(
+            json.get("source_location").is_none(),
+            "wire must not expose source_location: {json}"
+        );
+        assert_eq!(json["source"]["attribute"], serde_json::json!("test.lemma"));
+        let round: Recommendation = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(round.spec, "pricing");
+        assert!(round.message.contains("no `-> help`"));
     }
 }

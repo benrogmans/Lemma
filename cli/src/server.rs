@@ -665,46 +665,56 @@ pub mod http {
 
     fn start_file_watcher(shared_engine: SharedEngine, workdir: PathBuf) -> anyhow::Result<()> {
         let watch_dir = workdir.clone();
-        let on_change = Arc::new(move || {
-            info!("Detected .lemma file changes, reloading...");
-            let engine_clone = shared_engine.clone();
-            let workdir_clone = workdir.clone();
-
-            // Spawn a dedicated OS thread for reloading. The notify
-            // callback is synchronous, so we create a fresh tokio
-            // runtime on a new thread to run the async reload.
-            std::thread::spawn(move || {
-                let runtime = match tokio::runtime::Runtime::new() {
-                    Ok(rt) => rt,
-                    Err(err) => {
-                        error!("Failed to create tokio runtime for reload: {}", err);
-                        return;
+        let on_change =
+            Arc::new(
+                move |watch_result: Result<(), lemma_cli::workspace::WorkspaceDiskError>| {
+                    match watch_result {
+                        Ok(()) => {}
+                        Err(error) => {
+                            error!("Workspace watch failed: {}", error);
+                            return;
+                        }
                     }
-                };
+                    info!("Detected .lemma file changes, reloading...");
+                    let engine_clone = shared_engine.clone();
+                    let workdir_clone = workdir.clone();
 
-                runtime.block_on(async {
-                    match reload_engine(&workdir_clone).await {
-                        Ok(new_engine) => {
-                            let workspace_specs = new_engine
+                    // Spawn a dedicated OS thread for reloading. The notify
+                    // callback is synchronous, so we create a fresh tokio
+                    // runtime on a new thread to run the async reload.
+                    std::thread::spawn(move || {
+                        let runtime = match tokio::runtime::Runtime::new() {
+                            Ok(rt) => rt,
+                            Err(err) => {
+                                error!("Failed to create tokio runtime for reload: {}", err);
+                                return;
+                            }
+                        };
+
+                        runtime.block_on(async {
+                            match reload_engine(&workdir_clone).await {
+                                Ok(new_engine) => {
+                                    let workspace_specs = new_engine
                                 .list()
                                 .into_iter()
                                 .find(|repository_group| repository_group.repository.is_none())
                                 .expect("BUG: workspace repository must exist after Engine::new")
                                 .specs;
-                            let unique_specs: std::collections::BTreeSet<&str> =
-                                workspace_specs.iter().map(|ls| ls.name.as_str()).collect();
-                            let spec_count = unique_specs.len();
-                            // Write lock held only for the Arc swap.
-                            *engine_clone.write().await = Arc::new(new_engine);
-                            info!("Reloaded engine with {} spec(s)", spec_count);
-                        }
-                        Err(err) => {
-                            warn!("Reload failed (keeping previous state): {}", err);
-                        }
-                    }
-                });
-            });
-        });
+                                    let unique_specs: std::collections::BTreeSet<&str> =
+                                        workspace_specs.iter().map(|ls| ls.name.as_str()).collect();
+                                    let spec_count = unique_specs.len();
+                                    // Write lock held only for the Arc swap.
+                                    *engine_clone.write().await = Arc::new(new_engine);
+                                    info!("Reloaded engine with {} spec(s)", spec_count);
+                                }
+                                Err(err) => {
+                                    warn!("Reload failed (keeping previous state): {}", err);
+                                }
+                            }
+                        });
+                    });
+                },
+            );
 
         let guard = lemma_cli::workspace::watch_lemma_workspace(watch_dir.clone(), on_change)
             .map_err(|error| anyhow::Error::msg(error.to_string()))?;

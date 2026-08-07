@@ -43,6 +43,17 @@ defmodule Lemma do
   end
 
   @doc """
+  Structural quality recommendations across loaded specs. Advisory only.
+  """
+  @spec quality(engine()) :: {:ok, [map()]} | {:error, term()}
+  def quality(engine) do
+    case Lemma.Native.lemma_quality(engine) do
+      {:ok, binary} -> {:ok, Jason.decode!(binary)}
+      err -> err
+    end
+  end
+
+  @doc """
   Loads Lemma source(s).
 
   - binary → one volatile workspace source

@@ -36,6 +36,54 @@ final class EngineContractTest {
   }
 
   @Test
+  void qualityReportsMissingHelp() {
+    try (Engine engine = Engine.create()) {
+      engine.load(
+          """
+          spec pricing 2026-01-01
+          \"\"\"
+          Bulk pricing.
+          \"\"\"
+
+          data qty: number
+          rule total: qty
+          """);
+      List<Recommendation> recs = engine.quality();
+      assertFalse(recs.isEmpty());
+      Recommendation hit =
+          recs.stream()
+              .filter(r -> r.message().contains("no `-> help`"))
+              .findFirst()
+              .orElseThrow();
+      assertEquals("pricing", hit.spec());
+      assertEquals("2026-01-01", hit.effectiveFrom());
+      assertTrue(hit.source().attribute().length() > 0);
+      assertTrue(hit.source().line() > 0);
+    }
+  }
+
+  @Test
+  void qualityEmptyForCleanSpec() {
+    try (Engine engine = Engine.create()) {
+      engine.load(
+          """
+          spec pricing 2026-01-01
+          \"\"\"
+          Bulk pricing.
+          \"\"\"
+
+          data qty: number
+            -> minimum 0
+            -> maximum 1000000
+            -> help "Order quantity."
+
+          rule total: qty
+          """);
+      assertTrue(engine.quality().isEmpty());
+    }
+  }
+
+  @Test
   void rejectsDoubleRunDataValues() {
     try (Engine engine = Engine.create()) {
       engine.load(

@@ -640,6 +640,23 @@ pub extern "system" fn Java_com_lemmabase_lemma_Native_limits(
     })
 }
 
+#[no_mangle]
+pub extern "system" fn Java_com_lemmabase_lemma_Native_quality(
+    mut unowned: EnvUnowned,
+    _class: JClass,
+    handle: jlong,
+) -> jstring {
+    with_catch(&mut unowned, |env| {
+        let engine = handle_from_jlong(handle)?;
+        let guard = engine
+            .lock()
+            .map_err(|_| "BUG: Engine lock poisoned".to_string())?;
+        let json = serde_json::to_string(&guard.quality())
+            .map_err(|e| format!("BUG: quality serialization failed: {e}"))?;
+        Ok(return_string(env, json))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

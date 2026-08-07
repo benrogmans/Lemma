@@ -10,7 +10,6 @@ use clap::{CommandFactory, Parser, Subcommand};
 use formatter::{Formatter, RepositorySpecGroup};
 use lemma::DateTimeValue;
 use lemma::Engine;
-use lemma_cli::deps::{lemma_deps_dir, relative_dependency_cache_path};
 use lemma_cli::install;
 use std::collections::HashMap;
 use std::fs;
@@ -738,7 +737,7 @@ fn install_repo(
             }
             Err(anyhow::anyhow!("{e}"))
         }
-        Err(install::InstallError::Message(message)) => Err(anyhow::anyhow!("{message}")),
+        Err(error) => Err(anyhow::anyhow!("{error}")),
     }
 }
 
@@ -751,24 +750,19 @@ async fn install_workspace_deps(
     let mut sources: HashMap<lemma::SourceType, String> = HashMap::new();
     let limits = lemma::ResourceLimits::default();
 
-    for entry in WalkDir::new(workdir) {
-        let entry = entry?;
-        if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
-            continue;
-        }
-        let path = entry.path();
+    let discovered = lemma_cli::workspace::discover_lemma_paths(workdir)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    for path in &discovered.workspace_paths {
         let code = fs::read_to_string(path)?;
-        let source_type = lemma::SourceType::Path(Arc::new(path.to_path_buf()));
+        let source_type = lemma::SourceType::Path(Arc::new(path.clone()));
         match lemma::parse(&code, source_type.clone(), &limits) {
             Ok(result) => {
                 for (parsed_repo, specs) in &result.repositories {
                     let repository_arc = std::sync::Arc::clone(parsed_repo);
                     for spec in specs {
-                        if let Err(e) =
-                            ctx.insert_spec(std::sync::Arc::clone(&repository_arc), spec.clone())
-                        {
-                            eprintln!("warning: {}", e);
-                        }
+                        ctx.insert_spec(std::sync::Arc::clone(&repository_arc), spec.clone())
+                            .map_err(|error| anyhow::anyhow!("{error}"))?;
                     }
                 }
                 sources.insert(source_type, code);
@@ -793,122 +787,37 @@ async fn install_workspace_deps(
         anyhow::bail!("Registry resolution failed ({} error(s))", errs.len());
     }
 
-    let mut validate_engine = Engine::new();
-    for (source_id, code) in &sources {
-        if local_workspace_sources.contains(source_id) {
-            continue;
-        }
-        if let Err(load_err) = validate_engine.load([(source_id.clone(), code.clone())]) {
-            for e in load_err.iter() {
-                eprintln!("{}", error_formatter::format_error(e, &load_err.sources));
-            }
-            anyhow::bail!(
-                "Planning installed deps failed ({} error(s))",
-                load_err.errors.len()
-            );
-        }
-    }
-    let deps_dir = lemma_deps_dir(workdir);
-
-    // Build index of spec names already on disk
-    let mut existing_specs_by_name: HashMap<String, PathBuf> = HashMap::new();
-    let mut existing_content_by_path: HashMap<PathBuf, String> = HashMap::new();
-    if deps_dir.exists() {
-        for entry in WalkDir::new(&deps_dir) {
-            let entry = entry?;
-            if entry.path().extension().and_then(|s| s.to_str()) != Some("lemma") {
-                continue;
-            }
-            let path = entry.path().to_path_buf();
-            let content = fs::read_to_string(&path)?;
-            match lemma::parse(
-                &content,
-                lemma::SourceType::Path(Arc::new(path.clone())),
-                &limits,
-            ) {
-                Ok(result) => {
-                    for spec in result.flatten_specs() {
-                        existing_specs_by_name.insert(spec.name.clone(), path.clone());
-                    }
-                }
-                Err(e) => {
-                    let mut m = std::collections::HashMap::new();
-                    m.insert(
-                        lemma::SourceType::Path(Arc::new(path.clone())),
-                        content.clone(),
-                    );
-                    eprintln!(
-                        "warning: ignoring invalid cached dependency {}:\n{}",
-                        path.display(),
-                        error_formatter::format_error(&e, &m)
-                    );
-                }
-            }
-            existing_content_by_path.insert(path, content);
-        }
-    }
-
     let mut installed_count = 0u32;
     let mut skipped_count = 0u32;
-    let mut removed: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
 
     for (attribute, source_text) in &sources {
         if local_workspace_sources.contains(attribute) {
             continue;
         }
 
-        // Check if identical content already on disk
-        let already_on_disk = existing_content_by_path.values().any(|c| c == source_text);
-        if already_on_disk && !force {
-            skipped_count += 1;
-            continue;
-        }
-
-        let new_specs = match lemma::parse(source_text, attribute.clone(), &limits) {
-            Ok(r) => r.into_flattened_specs(),
-            Err(e) => {
-                let mut m = std::collections::HashMap::new();
-                m.insert(attribute.clone(), source_text.clone());
-                eprintln!("{}", error_formatter::format_error(&e, &m));
-                anyhow::bail!("Parse error in registry dependency {}", attribute);
+        let id = match attribute {
+            lemma::SourceType::Dependency(id) => id.as_str(),
+            other => {
+                panic!("BUG: resolve_registry_references inserted non-Dependency source: {other}")
             }
         };
 
-        // Check for conflicting existing files by spec name
-        for spec in &new_specs {
-            if let Some(old_path) = existing_specs_by_name.get(&spec.name) {
-                if removed.contains(old_path) {
-                    continue;
-                }
-                if !force {
-                    anyhow::bail!(
-                        "Dependency containing spec {} already exists in {}.\n\
-                         Content has changed on the registry. Re-run with --force to overwrite.",
-                        spec.name,
-                        old_path.display()
-                    );
-                }
-                fs::remove_file(old_path)?;
-                eprintln!("  removed: {}", old_path.display());
-                removed.insert(old_path.clone());
+        match install::persist_registry_dependency(workdir, id, source_text, force) {
+            Ok(install::InstallOutcome::AlreadyUpToDate { .. }) => {
+                skipped_count += 1;
             }
+            Ok(install::InstallOutcome::Written { relative_path, .. }) => {
+                installed_count += 1;
+                eprintln!("  installed: {} -> {}", id, relative_path.display());
+            }
+            Err(ref e @ install::InstallError::Plan(ref load_err)) => {
+                for err in load_err.iter() {
+                    eprintln!("{}", error_formatter::format_error(err, &load_err.sources));
+                }
+                return Err(anyhow::anyhow!("{e}"));
+            }
+            Err(error) => return Err(anyhow::anyhow!("{error}")),
         }
-
-        let registry_source_identifier_display = attribute.to_string();
-
-        let dependency_destination_relative =
-            relative_dependency_cache_path(&registry_source_identifier_display);
-        let destination_absolute = deps_dir.join(&dependency_destination_relative);
-
-        install::atomic_write(&destination_absolute, source_text)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
-        installed_count += 1;
-
-        eprintln!(
-            "  installed: {} -> {}",
-            registry_source_identifier_display,
-            dependency_destination_relative.display()
-        );
     }
 
     let plural = if installed_count == 1 {

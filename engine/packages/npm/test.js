@@ -198,11 +198,18 @@ export async function test() {
       assert(threwFrac, 'fractional max_sources must throw');
       let threwUnsafe = false;
       try {
-        Engine.withLimits({ max_sources: 2 ** 54 });
+        Engine.withLimits({ max_sources: 2 ** 53 });
       } catch {
         threwUnsafe = true;
       }
-      assert(threwUnsafe, 'max_sources beyond f64 safe integer range must throw');
+      assert(threwUnsafe, 'max_sources at 2**53 must throw (above MAX_SAFE_INTEGER)');
+      let threwAbove = false;
+      try {
+        Engine.withLimits({ max_sources: 2 ** 54 });
+      } catch {
+        threwAbove = true;
+      }
+      assert(threwAbove, 'max_sources beyond f64 safe integer range must throw');
     });
 
     await run('embedded lemma in list + source', () => {
@@ -623,6 +630,87 @@ rule m: bps` });
         's2.lemma': 'spec spec2\ndata y: 2',
       });
       assert(specNames(engine.list()).length >= 2);
+    });
+
+    await run('quality empty for clean spec', () => {
+      const fresh = new Engine();
+      fresh.load({
+        'pricing.lemma': `spec pricing 2026-01-01
+"""
+Bulk pricing.
+"""
+
+data qty: number
+  -> minimum 0
+  -> maximum 1000000
+  -> help "Order quantity."
+
+rule total: qty
+`,
+      });
+      const recs = fresh.quality();
+      assert(Array.isArray(recs), 'quality() must return array');
+      assert(recs.length === 0, `clean spec must have no recommendations, got: ${JSON.stringify(recs)}`);
+    });
+
+    await run('quality reports missing help with effective_from', () => {
+      const fresh = new Engine();
+      fresh.load({
+        'pricing.lemma': `spec pricing 2026-01-01
+"""
+Bulk pricing.
+"""
+
+data qty: number
+rule total: qty
+`,
+      });
+      const recs = fresh.quality();
+      assert(Array.isArray(recs) && recs.length > 0, 'must return recommendations');
+      const hit = recs.find((r) => r.message && r.message.includes('no `-> help`'));
+      assert(hit, `expected missing-help recommendation, got: ${JSON.stringify(recs)}`);
+      assert(hit.spec === 'pricing', `spec must be pricing, got ${hit.spec}`);
+      assert(
+        hit.effective_from === '2026-01-01',
+        `effective_from must be 2026-01-01, got ${hit.effective_from}`
+      );
+      assert(typeof hit.message === 'string', 'message must be string');
+      assert(hit.message.includes('Consider adding a message'), `got: ${hit.message}`);
+      assert(!hit.message.includes('2026'), 'message must not embed effective_from');
+      assert(hit.source && typeof hit.source.attribute === 'string', 'source.attribute required');
+      assert(typeof hit.source.line === 'number', 'source.line required');
+    });
+
+    await run('quality distinguishes temporal slices by effective_from', () => {
+      const fresh = new Engine();
+      fresh.load({
+        'pricing.lemma': `spec pricing 1933-01-01
+"""
+Old.
+"""
+
+data qty: number
+rule total: qty
+
+spec pricing 2026-01-01
+"""
+New.
+"""
+
+data qty: number
+rule total: qty
+`,
+      });
+      const helps = fresh.quality().filter((r) => r.message && r.message.includes('no `-> help`'));
+      assert(helps.length === 2, `expected 2 missing-help recs, got: ${JSON.stringify(helps)}`);
+      assert(
+        helps.some((r) => r.spec === 'pricing' && r.effective_from === '1933-01-01'),
+        `missing 1933 slice: ${JSON.stringify(helps)}`
+      );
+      assert(
+        helps.some((r) => r.spec === 'pricing' && r.effective_from === '2026-01-01'),
+        `missing 2026 slice: ${JSON.stringify(helps)}`
+      );
     });
 
     console.log(`\nAll ${passed} cases passed.`);

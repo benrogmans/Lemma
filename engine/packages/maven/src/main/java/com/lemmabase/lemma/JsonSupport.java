@@ -47,6 +47,14 @@ final class JsonSupport {
     }
   }
 
+  static List<Recommendation> parseRecommendations(String json) {
+    try (JsonParser p = JsonReading.parserFor(json)) {
+      return JsonReading.readList(p, Recommendation::read);
+    } catch (IOException e) {
+      throw new LemmaBugError("BUG: failed to parse Recommendation JSON: " + e.getMessage());
+    }
+  }
+
   static String limitsToJson(ResourceLimits limits) {
     return limits.toJson();
   }

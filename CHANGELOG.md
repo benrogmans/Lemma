@@ -2,19 +2,30 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
-## [Unreleased]
+## [0.9.4] - 2026-08-07
 
-- Fixed VS Code extension dependency
-- SDK docs: Java / Kotlin, not Maven; `/tools/maven` hidden stub links to it
-- Removed dead `engine/packages/npm/build-dev.js`
-- **`ResourceLimits::apply`**: single named-override path; Hex/JNI/WASM use it (Hex gains `max_normal_form_depth`)
-- **WASM `Engine.withLimits`**: named limit overrides without deserializing `ResourceLimits`
-- **SDK `update`**: Java and Elixir expose `Engine::update` (atomic replace); Hex also exposes `limits/1`
-- **CLI**: rename `fetch` → `install` (download + persist to `lemma_deps/`)
-- **MCP**: rename admin tool `fetch` → `install`; shares download/conflict helpers with CLI; still engine-then-persist like other admin mutators
-- **Install**: no `make_registry` / `LEMMA_REGISTRY_FIXTURES`; prod uses `LemmaBase::new()`, tests inject `LemmaBase::test()`; registry owns id validity (no local `@` gate); corrupt `lemma_deps` files hard-error
-- **`LemmaBase`**: registry identifiers must start with `@` (`source_url` / `get`); otherwise `RegistryError`
-- **Precommit / release**: vscode packaging via xtask (`npx @vscode/vsce@3.9.2`); extension bundled with esbuild; wasm-pack exact 0.15.0; wasm32 clippy `-D warnings`
+0.9.4 renames registry download to `install`, aligns SDK limit/update surfaces, reshapes structural quality recommendations, and exposes `Engine.quality()` on npm, Hex, and Maven.
+
+### Added
+
+- **`lemma install`**: download a registry package and persist it under `lemma_deps/` (replaces `lemma fetch`).
+- **MCP `install`**: admin tool shares the same download/conflict helpers as the CLI.
+- **SDK `update`**: Java and Elixir expose transactional `Engine::update`. Hex also exposes `limits/1`.
+- **Named limit overrides**: `ResourceLimits::apply` is the single path; Hex/JNI/npm use it (Hex gains `max_normal_form_depth`). npm `Engine.withLimits(...)` takes named overrides without deserializing full `ResourceLimits`.
+- **`Engine.quality()`**: npm, Hex, and Maven return structural quality recommendations (message, `effective_from`, repository, `source`).
+- **Java / Kotlin docs** at `/tools/java` (Maven path is a hidden stub that links there).
+
+### Changed
+
+- **[breaking] CLI / MCP**: `fetch` renamed to `install`.
+- **[breaking] `Recommendation`**: tagged `kind` removed; wire shape is advisory `message` plus `spec`, `effective_from`, `repository`, and `source`. Checks focus on missing `-> help`, open text without `-> option`, quantity bounds without `-> minimum`/`-> maximum`, and veto-as-rejection cascades (no longer flags missing commentary, effective date, or `-> suggest`).
+- **LSP**: quality recommendations are no longer published as Hint diagnostics.
+- **`LemmaBase`**: registry identifiers must start with `@`; corrupt `lemma_deps` files hard-error.
+- **Release / precommit**: VS Code packaging via xtask (esbuild bundle, pinned vsce); wasm-pack 0.15.0; wasm32 clippy `-D warnings`.
+
+### Fixed
+
+- VS Code extension dependency / packaging build.
 
 ## [0.9.3] - 2026-08-05
 

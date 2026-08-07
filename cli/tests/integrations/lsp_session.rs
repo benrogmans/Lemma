@@ -5,8 +5,6 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-pub const DEBOUNCE_WAIT: Duration = Duration::from_millis(350);
-
 pub struct LspSession {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -126,15 +124,14 @@ impl LspSession {
         );
     }
 
-    pub fn wait_for_diagnostics(&mut self, uri: &str, timeout: Duration) -> Value {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            let msg = match self.recv_message(remaining) {
-                Ok(m) => m,
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => {
-                    panic!("LSP reader disconnected while waiting for publishDiagnostics");
+    /// Block until `textDocument/publishDiagnostics` for `uri` arrives.
+    pub fn wait_for_diagnostics(&mut self, uri: &str) -> Value {
+        loop {
+            let msg = match self.receiver.recv() {
+                Ok(Ok(m)) => m,
+                Ok(Err(e)) => panic!("LSP reader error: {e}"),
+                Err(_) => {
+                    panic!("LSP reader disconnected while waiting for publishDiagnostics for {uri}")
                 }
             };
             if msg.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics")
@@ -143,7 +140,6 @@ impl LspSession {
                 return msg;
             }
         }
-        panic!("timed out waiting for publishDiagnostics for {uri}");
     }
 
     pub fn shutdown(&mut self) {

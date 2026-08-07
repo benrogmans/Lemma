@@ -366,6 +366,25 @@ fn lemma_limits<'a>(
 }
 
 #[rustler::nif]
+fn lemma_quality<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<LemmaEngineResource>,
+) -> NifResult<Term<'a>> {
+    let engine = resource
+        .0
+        .lock()
+        .map_err(|_| rustler::Error::RaiseTerm(Box::new("Engine lock poisoned".to_string())))?;
+    let json = serde_json::to_vec(&engine.quality()).map_err(|e| {
+        rustler::Error::RaiseTerm(Box::new(format!("BUG: quality serialization failed: {e}")))
+    })?;
+    let mut owned = OwnedBinary::new(json.len())
+        .ok_or_else(|| rustler::Error::RaiseTerm(Box::new("out of memory".to_string())))?;
+    owned.as_mut_slice().copy_from_slice(&json);
+    let binary = rustler::Binary::from_owned(owned, env);
+    Ok((rustler::Atom::from_str(env, "ok")?, binary).encode(env))
+}
+
+#[rustler::nif]
 fn lemma_format<'a>(env: Env<'a>, code: String) -> NifResult<Term<'a>> {
     match lemma::format_source(&code, SourceType::Volatile) {
         Ok(formatted) => Ok((rustler::Atom::from_str(env, "ok")?, formatted).encode(env)),

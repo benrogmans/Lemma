@@ -537,6 +537,22 @@ pub fn api_v1_schema() -> Value {
                 "length": {"type": "integer"}
             }
         },
+        "Recommendation": {
+            "type": "object",
+            "required": ["message", "spec", "effective_from", "repository", "source"],
+            "additionalProperties": false,
+            "description": "Structural quality recommendation from Engine::quality. Advisory only.",
+            "properties": {
+                "message": {"type": "string"},
+                "spec": {"type": "string"},
+                "effective_from": {
+                    "type": ["string", "null"],
+                    "description": "Declared temporal start of the analyzed slice, or null for Origin."
+                },
+                "repository": {"type": ["string", "null"]},
+                "source": {"$ref": "#/$defs/EngineErrorSource"}
+            }
+        },
         "EngineError": {
             "type": "object",
             "required": [

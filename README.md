@@ -325,7 +325,7 @@ See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.3</version>
+  <version>0.9.4</version>
 </dependency>
 ```
 

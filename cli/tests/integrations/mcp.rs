@@ -2729,6 +2729,10 @@ rule is_eligible: true
         text.contains("is_eligible") && text.contains("veto"),
         "must report veto-as-rejection cascade, got: {text}"
     );
+    assert!(
+        text.contains("In spec 'eligibility' (effective from 2026-01-01)"),
+        "must identify temporal slice in Display output, got: {text}"
+    );
 }
 
 #[test]
@@ -2741,6 +2745,7 @@ Bulk pricing.
 
 data qty: number
   -> minimum 0
+  -> maximum 1000000
   -> help "Order quantity."
   -> suggest 10
 

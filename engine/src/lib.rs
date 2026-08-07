@@ -74,7 +74,7 @@ pub use parsing::ast::{
 pub use parsing::lexer::{Lexer, TokenKind};
 pub use parsing::source::Source;
 pub use parsing::{parse, ParseResult};
-pub use quality::{Recommendation, RecommendationKind};
+pub use quality::Recommendation;
 
 // Tier 2 — registry network (feature-gated)
 #[cfg(feature = "registry")]

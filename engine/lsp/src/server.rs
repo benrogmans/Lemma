@@ -35,16 +35,11 @@ async fn publish_workspace_diagnostics(client: &Client, workspace: &WorkspaceMod
         }
     };
     for file_diag in file_diagnostics {
-        let mut lsp_diagnostics = diagnostics::errors_to_diagnostics(
+        let lsp_diagnostics = diagnostics::errors_to_diagnostics(
             &file_diag.errors,
             &file_diag.text,
             &file_diag.attribute,
         );
-        lsp_diagnostics.extend(diagnostics::recommendations_to_diagnostics(
-            &file_diag.recommendations,
-            &file_diag.text,
-            &file_diag.attribute,
-        ));
         client
             .publish_diagnostics(file_diag.url, lsp_diagnostics, None)
             .await;
@@ -408,14 +403,9 @@ impl LanguageServer for LemmaLanguageServer {
             open_attributes.remove(&attribute);
         }
 
-        let disk_backed = {
-            let workspace = self.state.workspace.read().await;
-            workspace.is_disk_backed(&uri)
-        };
-
-        if disk_backed {
-            {
-                let mut workspace = self.state.workspace.write().await;
+        let cleared_open_only = {
+            let mut workspace = self.state.workspace.write().await;
+            if workspace.is_disk_backed(&uri) {
                 let restored = workspace.restore_disk_text(&uri);
                 if !restored {
                     panic!(
@@ -423,24 +413,21 @@ impl LanguageServer for LemmaLanguageServer {
                         uri
                     );
                 }
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            self.request_workspace_validation();
-            #[cfg(target_arch = "wasm32")]
-            self.publish_full_diagnostics().await;
-        } else {
-            {
-                let mut workspace = self.state.workspace.write().await;
+                false
+            } else {
                 workspace.remove_file(&uri);
+                true
             }
-            // Clear diagnostics for the closed open-only file.
-            self.client.publish_diagnostics(uri, Vec::new(), None).await;
+        };
 
-            #[cfg(not(target_arch = "wasm32"))]
-            self.request_workspace_validation();
-            #[cfg(target_arch = "wasm32")]
-            self.publish_full_diagnostics().await;
+        if cleared_open_only {
+            self.client.publish_diagnostics(uri, Vec::new(), None).await;
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.request_workspace_validation();
+        #[cfg(target_arch = "wasm32")]
+        self.publish_full_diagnostics().await;
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {

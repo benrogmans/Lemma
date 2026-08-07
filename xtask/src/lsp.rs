@@ -5,8 +5,8 @@ use std::process::Command;
 
 pub const VSCODE_EXTENSION_REL: &str = "engine/lsp/editors/vscode";
 
-const VSCE: &str = "@vscode/vsce@3.9.2";
-const OVSX: &str = "ovsx@1.0.2";
+const VSCE_BIN: &str = "vsce";
+const OVSX_BIN: &str = "ovsx";
 
 fn cargo_bin() -> String {
     std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string())
@@ -34,14 +34,24 @@ fn run_npm(vscode_dir: &Path, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn run_npx_capture(vscode_dir: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("npx")
+fn line_is_warning(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("WARNING")
+        || trimmed.starts_with("npm warn")
+        || trimmed.starts_with("npm WARN")
+}
+
+/// Run a locked local bin via `npm exec --no` (no network install). Warnings are errors.
+fn run_npm_exec_capture(vscode_dir: &Path, bin: &str, args: &[&str]) -> Result<String, String> {
+    let mut cmd_args = vec!["exec", "--no", "--", bin];
+    cmd_args.extend_from_slice(args);
+    let output = Command::new("npm")
         .current_dir(vscode_dir)
-        .args(args)
+        .args(&cmd_args)
         .output()
         .map_err(|e| {
             format!(
-                "failed to run npx {} in {}: {e}",
+                "failed to run npm exec --no -- {bin} {} in {}: {e}",
                 args.join(" "),
                 vscode_dir.display()
             )
@@ -52,22 +62,17 @@ fn run_npx_capture(vscode_dir: &Path, args: &[&str]) -> Result<String, String> {
         String::from_utf8_lossy(&output.stderr)
     );
     print!("{combined}");
+    let label = format!("npm exec --no -- {bin} {}", args.join(" "));
     if !output.status.success() {
         return Err(format!(
-            "npx {} exited with status {:?}",
-            args.join(" "),
+            "{label} exited with status {:?}",
             output.status.code()
         ));
     }
     for line in combined.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("WARNING")
-            || trimmed.starts_with("npm warn")
-            || trimmed.starts_with("npm WARN")
-        {
+        if line_is_warning(line) {
             return Err(format!(
-                "npx {} emitted warning (warnings are errors): {line}",
-                args.join(" ")
+                "{label} emitted warning (warnings are errors): {line}"
             ));
         }
     }
@@ -100,13 +105,13 @@ fn prepare_extension(root: &Path, vscode_dir: &Path) -> Result<(), String> {
 }
 
 fn package_vsix(vscode_dir: &Path) -> Result<(), String> {
-    eprintln!("xtask: npx --yes {VSCE} package");
-    run_npx_capture(vscode_dir, &["--yes", VSCE, "package"])?;
+    eprintln!("xtask: npm exec --no -- {VSCE_BIN} package");
+    run_npm_exec_capture(vscode_dir, VSCE_BIN, &["package"])?;
     match newest_vsix(vscode_dir) {
         Some(p) => eprintln!("xtask: VSIX: {}", p.display()),
         None => {
             return Err(format!(
-                "npx {VSCE} package finished but no .vsix under {}",
+                "npm exec --no -- {VSCE_BIN} package finished but no .vsix under {}",
                 vscode_dir.display()
             ));
         }
@@ -135,23 +140,15 @@ fn publish_marketplace(vscode_dir: &Path) -> Result<(), String> {
             vscode_dir.display()
         )
     })?;
-    eprintln!(
-        "xtask: npx --yes {VSCE} publish --packagePath {}",
-        vsix.display()
-    );
-    run_npx_capture(
+    let vsix_name = vsix
+        .file_name()
+        .and_then(|s| s.to_str())
+        .expect("BUG: vsix path must be UTF-8");
+    eprintln!("xtask: npm exec --no -- {VSCE_BIN} publish --packagePath {vsix_name}");
+    run_npm_exec_capture(
         vscode_dir,
-        &[
-            "--yes",
-            VSCE,
-            "publish",
-            "--packagePath",
-            vsix.file_name()
-                .and_then(|s| s.to_str())
-                .expect("BUG: vsix path must be UTF-8"),
-            "-p",
-            &token,
-        ],
+        VSCE_BIN,
+        &["publish", "--packagePath", vsix_name, "-p", &token],
     )?;
     Ok(())
 }
@@ -164,20 +161,12 @@ fn publish_openvsx(vscode_dir: &Path) -> Result<(), String> {
             vscode_dir.display()
         )
     })?;
-    eprintln!("xtask: npx --yes {OVSX} publish {}", vsix.display());
-    run_npx_capture(
-        vscode_dir,
-        &[
-            "--yes",
-            OVSX,
-            "publish",
-            vsix.file_name()
-                .and_then(|s| s.to_str())
-                .expect("BUG: vsix path must be UTF-8"),
-            "-p",
-            &token,
-        ],
-    )?;
+    let vsix_name = vsix
+        .file_name()
+        .and_then(|s| s.to_str())
+        .expect("BUG: vsix path must be UTF-8");
+    eprintln!("xtask: npm exec --no -- {OVSX_BIN} publish {vsix_name}");
+    run_npm_exec_capture(vscode_dir, OVSX_BIN, &["publish", vsix_name, "-p", &token])?;
     Ok(())
 }
 
@@ -281,13 +270,17 @@ pub fn run(root: &Path, rest: &[String]) -> Result<(), String> {
                 vscode_dir.display()
             );
             eprintln!(
-                "cargo lsp package            — npm ci + compile + npx {VSCE} package (no lemma build)"
+                "cargo lsp package            — npm ci + compile + npm exec --no -- {VSCE_BIN} package (no lemma build)"
             );
             eprintln!(
                 "cargo lsp vsix               — prepare + package .vsix (install via Extensions → Install from VSIX)"
             );
-            eprintln!("cargo lsp publish-marketplace — npx {VSCE} publish (needs VSCE_PAT)");
-            eprintln!("cargo lsp publish-openvsx    — npx {OVSX} publish (needs OPEN_VSX_TOKEN)");
+            eprintln!(
+                "cargo lsp publish-marketplace — npm exec --no -- {VSCE_BIN} publish (needs VSCE_PAT)"
+            );
+            eprintln!(
+                "cargo lsp publish-openvsx    — npm exec --no -- {OVSX_BIN} publish (needs OPEN_VSX_TOKEN)"
+            );
         }
         Some(other) => {
             return Err(format!(
@@ -328,5 +321,21 @@ mod tests {
         assert!(run(Path::new("/tmp"), &["not-a-command".to_string()])
             .unwrap_err()
             .contains("unknown"));
+    }
+
+    #[test]
+    fn warning_gate_rejects_npm_warn_and_warning() {
+        assert!(line_is_warning(
+            "npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes"
+        ));
+        assert!(line_is_warning(
+            "npm WARN deprecated prebuild-install@7.1.3"
+        ));
+        assert!(line_is_warning("WARNING Something went wrong"));
+        assert!(line_is_warning("  npm warn indented"));
+        assert!(!line_is_warning(
+            " DONE  Packaged: /tmp/lemma-language-0.9.4.vsix"
+        ));
+        assert!(!line_is_warning("INFO  Files included in the VSIX:"));
     }
 }

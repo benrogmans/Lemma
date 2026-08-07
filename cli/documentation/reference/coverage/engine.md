@@ -41,14 +41,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 34458 | 40477 | 85.13% |
-| Functions | 2607 | 2966 | 87.90% |
-| Regions | 50967 | 60778 | 83.86% |
+| Lines | 34767 | 40795 | 85.22% |
+| Functions | 2643 | 3001 | 88.07% |
+| Regions | 51272 | 61107 | 83.91% |
 
 ## Test run
 
-- Total: 2364
-- Passed: 2364
+- Total: 2375
+- Passed: 2375
 - Skipped: 2
 - Failed: 0
 
@@ -67,7 +67,7 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `computation/arithmetic.rs` | 74.95 | 87.50 | 74.95 | 718/958 |
 | `planning/explanation.rs` | 78.57 | 75.00 | 77.27 | 22/28 |
 | `computation/bigint/signed.rs` | 79.12 | 81.08 | 73.87 | 197/249 |
-| `parsing/ast.rs` | 79.35 | 85.71 | 70.91 | 980/1235 |
+| `parsing/ast.rs` | 79.51 | 85.71 | 71.01 | 982/1235 |
 | `error.rs` | 80.32 | 79.63 | 74.93 | 453/564 |
 | `computation/units.rs` | 80.82 | 100.00 | 79.36 | 177/219 |
 | `planning/execution_plan.rs` | 80.96 | 82.41 | 76.91 | 1862/2300 |
@@ -90,19 +90,19 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `evaluation/conversion_trace.rs` | 91.25 | 100.00 | 91.75 | 146/160 |
 | `evaluation/tree.rs` | 91.32 | 92.86 | 92.19 | 1126/1233 |
 | `engine.rs` | 91.72 | 91.45 | 92.44 | 1429/1558 |
-| `quality.rs` | 91.96 | 89.66 | 89.91 | 286/311 |
 | `parsing/mod.rs` | 92.84 | 98.86 | 90.43 | 1257/1354 |
 | `evaluation/branch_semantics.rs` | 92.86 | 100.00 | 81.82 | 39/42 |
 | `planning/discovery.rs` | 93.13 | 97.06 | 93.96 | 1220/1310 |
 | `planning/unit_index.rs` | 93.19 | 97.78 | 94.39 | 424/455 |
+| `limits.rs` | 93.27 | 100.00 | 85.40 | 97/104 |
 | `planning/mod.rs` | 93.94 | 97.56 | 95.02 | 496/528 |
 | `registry.rs` | 94.08 | 90.71 | 93.50 | 1128/1199 |
 | `evaluation/mod.rs` | 94.76 | 95.45 | 95.83 | 271/286 |
+| `quality.rs` | 95.09 | 96.61 | 92.15 | 562/591 |
 | `deps.rs` | 96.23 | 100.00 | 96.47 | 51/53 |
 | `evaluation/response.rs` | 99.19 | 91.67 | 98.62 | 492/496 |
 | `computation/bigint/alloc.rs` | 100.00 | 100.00 | 97.37 | 20/20 |
 | `lib.rs` | 100.00 | 100.00 | 100.00 | 4/4 |
-| `limits.rs` | 100.00 | 100.00 | 90.00 | 66/66 |
 | `parsing/source.rs` | 100.00 | 100.00 | 99.46 | 125/125 |
 
 ## Related docs
@@ -110,4 +110,4 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 - [Engine integration test catalog](../../../engine/tests/README.md) — qualitative map of scenarios and subsystem overlap clusters
 - [CLI test coverage](cli.md)
 - [Engine benchmarks](../benchmarks/engine.md)
-<!-- coverage-input-digest: 5894bd7f8eed1f26 -->
+<!-- coverage-input-digest: 9e365107c0d7cea7 -->

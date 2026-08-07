@@ -720,7 +720,7 @@ impl Error {
 
 /// Source location attached to an [`EngineError`]. Line and column are 1-based;
 /// `length` is the UTF-8 byte length of the offending span.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EngineErrorSource {
     pub attribute: String,
     pub line: usize,
