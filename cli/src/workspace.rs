@@ -146,6 +146,18 @@ pub fn discover_lemma_paths(workdir: &Path) -> Result<DiscoveredPaths, Workspace
 
 /// Load discovered sources into `engine` (same provenance rules as the CLI always used).
 pub fn load_workspace(engine: &mut Engine, workdir: &Path) -> Result<(), WorkspaceDiskError> {
+    load_workspace_excluding(engine, workdir, &[])
+}
+
+/// Like [`load_workspace`], but skips paths in `exclude` (compared as [`Path`]).
+///
+/// Used by install plan probe so `destination_absolute` and pending force
+/// `conflict_paths` are not loaded; the candidate is loaded separately.
+pub fn load_workspace_excluding(
+    engine: &mut Engine,
+    workdir: &Path,
+    exclude: &[&Path],
+) -> Result<(), WorkspaceDiskError> {
     let discovered = discover_lemma_paths(workdir)?;
     let mut sources = Vec::with_capacity(
         discovered
@@ -155,6 +167,9 @@ pub fn load_workspace(engine: &mut Engine, workdir: &Path) -> Result<(), Workspa
     );
 
     for dep_path in &discovered.dependency_paths {
+        if exclude.contains(&dep_path.as_path()) {
+            continue;
+        }
         let dependency_id = dependency_identifier_from_dependency_path(workdir, dep_path);
         let content = fs::read_to_string(dep_path)?;
         sources.push((
@@ -163,6 +178,9 @@ pub fn load_workspace(engine: &mut Engine, workdir: &Path) -> Result<(), Workspa
         ));
     }
     for path in &discovered.workspace_paths {
+        if exclude.contains(&path.as_path()) {
+            continue;
+        }
         let content = fs::read_to_string(path)?;
         sources.push((
             lemma::SourceType::Path(std::sync::Arc::new(path.clone())),
@@ -196,6 +214,23 @@ fn collect_modified_times(workdir: &Path) -> Result<ModifiedSnapshot, WorkspaceD
 /// Watch target: path plus whether the watch is recursive.
 type WatchTarget = (PathBuf, bool);
 
+fn push_ancestor_dirs(targets: &mut Vec<WatchTarget>, workdir: &Path, file_path: &Path) {
+    let mut current = match file_path.parent() {
+        Some(parent) => parent,
+        None => return,
+    };
+    loop {
+        targets.push((current.to_path_buf(), false));
+        if current == workdir {
+            break;
+        }
+        match current.parent() {
+            Some(parent) if parent != current => current = parent,
+            _ => break,
+        }
+    }
+}
+
 fn desired_watch_targets(workdir: &Path) -> Result<Vec<WatchTarget>, WorkspaceDiskError> {
     let mut targets = Vec::new();
 
@@ -207,12 +242,35 @@ fn desired_watch_targets(workdir: &Path) -> Result<Vec<WatchTarget>, WorkspaceDi
 
     let deps_dir = lemma_deps_dir(workdir);
     if deps_dir.is_dir() {
-        targets.push((deps_dir, true));
+        targets.push((deps_dir.clone(), true));
     }
 
     let discovered = discover_lemma_paths(workdir)?;
-    for path in discovered.workspace_paths {
-        targets.push((path, false));
+    for path in &discovered.workspace_paths {
+        push_ancestor_dirs(&mut targets, workdir, path);
+    }
+
+    // Dynamic expand: non-recursive watch on every non-ignored directory under
+    // workdir (except lemma_deps, covered recursively). New child dirs become
+    // visible on the next plant after the parent wakes.
+    if workdir.is_dir() {
+        for entry in ignore::WalkBuilder::new(workdir)
+            .hidden(true)
+            .git_ignore(true)
+            .git_global(false)
+            .git_exclude(false)
+            .require_git(false)
+            .build()
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.starts_with(&deps_dir) {
+                continue;
+            }
+            if path.is_dir() {
+                targets.push((path.to_path_buf(), false));
+            }
+        }
     }
 
     targets.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
@@ -257,15 +315,16 @@ pub struct WatchGuard {
 
 /// Watch discovered `.lemma` paths under `workdir` (not the whole tree recursively).
 ///
-/// Plants watches from [`discover_lemma_paths`] only: each workspace `.lemma` file
-/// (non-recursive), plus `lemma_deps/` recursively when that directory exists, plus
-/// a non-recursive watch on `workdir` so `lemma_deps/` creation is visible.
+/// Plants non-recursive watches on `workdir`, on every non-ignored directory under
+/// it, and on ancestors of discovered workspace `.lemma` files; plus `lemma_deps/`
+/// recursively when that directory exists.
 ///
-/// `on_change` runs on the notify debouncer thread when the discover snapshot changes.
-/// Callers that need async work must spawn their own runtime/thread.
+/// `on_change` runs on the notify debouncer thread: `Ok(())` when the discover
+/// snapshot changed; `Err` when discover/watch maintenance failed. Callers that
+/// need async work must spawn their own runtime/thread.
 pub fn watch_lemma_workspace(
     workdir: PathBuf,
-    on_change: Arc<dyn Fn() + Send + Sync + 'static>,
+    on_change: Arc<dyn Fn(Result<(), WorkspaceDiskError>) + Send + Sync + 'static>,
 ) -> Result<WatchGuard, WorkspaceDiskError> {
     let initial_snapshot = collect_modified_times(&workdir)?;
     let last_snapshot: Arc<Mutex<ModifiedSnapshot>> = Arc::new(Mutex::new(initial_snapshot));
@@ -274,23 +333,28 @@ pub fn watch_lemma_workspace(
     let debouncer_slot: Arc<
         Mutex<Option<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
     > = Arc::new(Mutex::new(None));
+    let on_change = Arc::clone(&on_change);
 
     let workdir_for_callback = workdir.clone();
     let snapshot_for_callback = Arc::clone(&last_snapshot);
     let watched_for_callback = Arc::clone(&currently_watched);
     let slot_for_callback = Arc::clone(&debouncer_slot);
+    let on_change_for_callback = Arc::clone(&on_change);
 
     let mut debouncer = notify_debouncer_mini::new_debouncer(
         Duration::from_millis(500),
         move |result: Result<Vec<notify_debouncer_mini::DebouncedEvent>, notify::Error>| {
-            match result {
-                Ok(_events) => {}
-                Err(_) => return,
+            if let Err(error) = result {
+                on_change_for_callback(Err(WorkspaceDiskError::Io(std::io::Error::other(error))));
+                return;
             }
 
             let current_snapshot = match collect_modified_times(&workdir_for_callback) {
                 Ok(snapshot) => snapshot,
-                Err(_) => return,
+                Err(error) => {
+                    on_change_for_callback(Err(error));
+                    return;
+                }
             };
 
             let files_changed = {
@@ -301,17 +365,19 @@ pub fn watch_lemma_workspace(
                 current_snapshot != *previous
             };
             if !files_changed {
-                // Still refresh watches when `lemma_deps/` appears without new .lemma yet.
+                // Still refresh watches when `lemma_deps/` or nested dirs appear.
                 let mut slot = match slot_for_callback.lock() {
                     Ok(guard) => guard,
                     Err(poisoned) => poisoned.into_inner(),
                 };
                 if let Some(debouncer) = slot.as_mut() {
-                    let _ = plant_watches(
+                    if let Err(error) = plant_watches(
                         debouncer.watcher(),
                         &workdir_for_callback,
                         &watched_for_callback,
-                    );
+                    ) {
+                        on_change_for_callback(Err(error));
+                    }
                 }
                 return;
             }
@@ -324,18 +390,20 @@ pub fn watch_lemma_workspace(
                 *previous = current_snapshot;
             }
 
-            on_change();
+            on_change_for_callback(Ok(()));
 
             let mut slot = match slot_for_callback.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => poisoned.into_inner(),
             };
             if let Some(debouncer) = slot.as_mut() {
-                let _ = plant_watches(
+                if let Err(error) = plant_watches(
                     debouncer.watcher(),
                     &workdir_for_callback,
                     &watched_for_callback,
-                );
+                ) {
+                    on_change_for_callback(Err(error));
+                }
             }
         },
     )
@@ -357,7 +425,9 @@ pub fn watch_lemma_workspace(
 }
 
 /// Read all discovered `.lemma` files for LSP / tooling injection.
-pub fn read_disk_lemma_files(workdir: &Path) -> Result<Vec<DiskLemmaFile>, WorkspaceDiskError> {
+pub fn read_disk_lemma_files(
+    workdir: &Path,
+) -> Result<Vec<lemma_lsp::workspace_files::DiskLemmaFile>, WorkspaceDiskError> {
     let discovered = discover_lemma_paths(workdir)?;
     let mut files = Vec::with_capacity(
         discovered
@@ -368,26 +438,19 @@ pub fn read_disk_lemma_files(workdir: &Path) -> Result<Vec<DiskLemmaFile>, Works
 
     for path in &discovered.dependency_paths {
         let text = fs::read_to_string(path)?;
-        files.push(DiskLemmaFile {
+        files.push(lemma_lsp::workspace_files::DiskLemmaFile {
             path: path.clone(),
             text,
         });
     }
     for path in &discovered.workspace_paths {
         let text = fs::read_to_string(path)?;
-        files.push(DiskLemmaFile {
+        files.push(lemma_lsp::workspace_files::DiskLemmaFile {
             path: path.clone(),
             text,
         });
     }
     Ok(files)
-}
-
-/// One on-disk `.lemma` file with contents, for injection into the LSP.
-#[derive(Debug, Clone)]
-pub struct DiskLemmaFile {
-    pub path: PathBuf,
-    pub text: String,
 }
 
 /// CLI implementation of [`lemma_lsp::workspace_files::WorkspaceFiles`].
@@ -401,16 +464,9 @@ impl lemma_lsp::workspace_files::WorkspaceFiles for CliWorkspaceFiles {
         Vec<lemma_lsp::workspace_files::DiskLemmaFile>,
         lemma_lsp::workspace_files::WorkspaceFilesError,
     > {
-        let files = read_disk_lemma_files(root).map_err(|error| {
+        read_disk_lemma_files(root).map_err(|error| {
             lemma_lsp::workspace_files::WorkspaceFilesError::new(error.to_string())
-        })?;
-        Ok(files
-            .into_iter()
-            .map(|file| lemma_lsp::workspace_files::DiskLemmaFile {
-                path: file.path,
-                text: file.text,
-            })
-            .collect())
+        })
     }
 
     fn watch(
@@ -432,20 +488,18 @@ impl lemma_lsp::workspace_files::WorkspaceFiles for CliWorkspaceFiles {
         let root_for_callback = root.clone();
         let guard = watch_lemma_workspace(
             root,
-            Arc::new(move || {
-                let result = match read_disk_lemma_files(&root_for_callback) {
-                    Ok(files) => Ok(files
-                        .into_iter()
-                        .map(|file| lemma_lsp::workspace_files::DiskLemmaFile {
-                            path: file.path,
-                            text: file.text,
-                        })
-                        .collect()),
-                    Err(error) => Err(lemma_lsp::workspace_files::WorkspaceFilesError::new(
+            Arc::new(move |watch_result| match watch_result {
+                Ok(()) => {
+                    let result = read_disk_lemma_files(&root_for_callback).map_err(|error| {
+                        lemma_lsp::workspace_files::WorkspaceFilesError::new(error.to_string())
+                    });
+                    on_change(result);
+                }
+                Err(error) => {
+                    on_change(Err(lemma_lsp::workspace_files::WorkspaceFilesError::new(
                         error.to_string(),
-                    )),
-                };
-                on_change(result);
+                    )));
+                }
             }),
         )
         .map_err(|error| lemma_lsp::workspace_files::WorkspaceFilesError::new(error.to_string()))?;
@@ -468,6 +522,17 @@ mod tests {
             fs::create_dir_all(parent).expect("create parent");
         }
         fs::write(path, contents).expect("write file");
+    }
+
+    fn wait_until_fired(fired: &AtomicBool, message: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            if fired.load(Ordering::SeqCst) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("{message}");
     }
 
     #[test]
@@ -502,8 +567,10 @@ mod tests {
         let fired_flag = Arc::clone(&fired);
         let _guard = watch_lemma_workspace(
             root.path().to_path_buf(),
-            Arc::new(move || {
-                fired_flag.store(true, Ordering::SeqCst);
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
             }),
         )
         .expect("start watch");
@@ -513,14 +580,7 @@ mod tests {
             "spec dep\ndata x: 1\n",
         );
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while std::time::Instant::now() < deadline {
-            if fired.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        panic!("watch did not fire after creating lemma_deps file");
+        wait_until_fired(&fired, "watch did not fire after creating lemma_deps file");
     }
 
     #[test]
@@ -534,8 +594,10 @@ mod tests {
         let fired_flag = Arc::clone(&fired);
         let _guard = watch_lemma_workspace(
             root.path().to_path_buf(),
-            Arc::new(move || {
-                fired_flag.store(true, Ordering::SeqCst);
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
             }),
         )
         .expect("start watch");
@@ -562,22 +624,78 @@ mod tests {
         let fired_flag = Arc::clone(&fired);
         let _guard = watch_lemma_workspace(
             root.path().to_path_buf(),
-            Arc::new(move || {
-                fired_flag.store(true, Ordering::SeqCst);
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
             }),
         )
         .expect("start watch");
 
         write_file(&app, "spec app\ndata x: 2\n");
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while std::time::Instant::now() < deadline {
-            if fired.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        panic!("watch did not fire after modifying discovered workspace file");
+        wait_until_fired(
+            &fired,
+            "watch did not fire after modifying discovered workspace file",
+        );
+    }
+
+    #[test]
+    fn watch_fires_when_sibling_workspace_file_appears() {
+        let root = tempfile::tempdir().expect("tempdir");
+        write_file(&root.path().join("src/app.lemma"), "spec app\ndata x: 1\n");
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_flag = Arc::clone(&fired);
+        let _guard = watch_lemma_workspace(
+            root.path().to_path_buf(),
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
+            }),
+        )
+        .expect("start watch");
+
+        write_file(
+            &root.path().join("src/other.lemma"),
+            "spec other\ndata y: 2\n",
+        );
+
+        wait_until_fired(
+            &fired,
+            "watch did not fire after creating sibling workspace file",
+        );
+    }
+
+    #[test]
+    fn watch_fires_when_nested_workspace_file_appears() {
+        let root = tempfile::tempdir().expect("tempdir");
+        write_file(&root.path().join("src/app.lemma"), "spec app\ndata x: 1\n");
+
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_flag = Arc::clone(&fired);
+        let _guard = watch_lemma_workspace(
+            root.path().to_path_buf(),
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
+            }),
+        )
+        .expect("start watch");
+
+        fs::create_dir_all(root.path().join("src/nested")).expect("create nested");
+        std::thread::sleep(Duration::from_millis(600));
+        write_file(
+            &root.path().join("src/nested/foo.lemma"),
+            "spec foo\ndata z: 3\n",
+        );
+
+        wait_until_fired(
+            &fired,
+            "watch did not fire after creating nested workspace file",
+        );
     }
 
     #[test]
@@ -590,8 +708,10 @@ mod tests {
         let fired_flag = Arc::clone(&fired);
         let _guard = watch_lemma_workspace(
             root.path().to_path_buf(),
-            Arc::new(move || {
-                fired_flag.store(true, Ordering::SeqCst);
+            Arc::new(move |result| {
+                if result.is_ok() {
+                    fired_flag.store(true, Ordering::SeqCst);
+                }
             }),
         )
         .expect("start watch");
@@ -603,13 +723,9 @@ mod tests {
             "spec dep\ndata x: 1\n",
         );
 
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while std::time::Instant::now() < deadline {
-            if fired.load(Ordering::SeqCst) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        panic!("watch did not fire after creating lemma_deps then a dep file");
+        wait_until_fired(
+            &fired,
+            "watch did not fire after creating lemma_deps then a dep file",
+        );
     }
 }

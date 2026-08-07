@@ -37,20 +37,8 @@ impl WasmEngine {
             .map_err(|e| js_err(format!("invalid limits: {e}")))?;
         let mut resource_limits = crate::ResourceLimits::default();
         for (key, value) in map {
-            if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
-                return Err(js_err(format!(
-                    "limits value for '{key}' must be a non-negative integer"
-                )));
-            }
-            let as_u64 = value as u64;
-            if value > 2f64.powi(53) || as_u64 as f64 != value {
-                return Err(js_err(format!(
-                    "limits value for '{key}' must be a non-negative integer within f64 safe range"
-                )));
-            }
-            resource_limits
-                .apply(&key, as_u64 as usize)
-                .map_err(js_err)?;
+            let n = crate::limits::usize_limit_from_f64(&key, value).map_err(js_err)?;
+            resource_limits.apply(&key, n).map_err(js_err)?;
         }
         Ok(WasmEngine {
             engine: Engine::with_limits(resource_limits),
@@ -267,6 +255,12 @@ impl WasmEngine {
             Err(e) => Err(error_to_js(&e)),
         }
     }
+
+    /// Structural quality recommendations across loaded specs. Advisory only.
+    #[wasm_bindgen(js_name = quality)]
+    pub fn quality_wasm(&self) -> Result<JsValue, JsValue> {
+        serialize_engine_json(&self.engine.quality())
+    }
 }
 
 fn parse_repo_and_effective(
@@ -284,7 +278,6 @@ fn parse_repo_and_effective(
     Ok((repo, effective_dt))
 }
 
-/// Options for [`WasmEngine::run`].
 #[derive(Deserialize)]
 struct RunOptions {
     spec: String,

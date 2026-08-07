@@ -160,6 +160,18 @@ public final class Engine implements AutoCloseable {
     return JsonSupport.parseLimits(json);
   }
 
+  /** Structural quality recommendations across loaded specs. Advisory only. */
+  public List<Recommendation> quality() {
+    String json;
+    state.lock.lock();
+    try {
+      json = Native.quality(state.requireHandle());
+    } finally {
+      state.lock.unlock();
+    }
+    return JsonSupport.parseRecommendations(json);
+  }
+
   @Override
   public void close() {
     state.lock.lock();

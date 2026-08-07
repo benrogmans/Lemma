@@ -118,6 +118,31 @@ impl ResourceLimits {
     }
 }
 
+/// Convert a JS/JSON number to a [`usize`] limit. Rejects non-integers, negatives,
+/// values outside the f64 safe-integer range, and values that do not fit in `usize`
+/// (e.g. large safe integers on wasm32).
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn usize_limit_from_f64(key: &str, value: f64) -> Result<usize, String> {
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
+        return Err(format!(
+            "limits value for '{key}' must be a non-negative integer"
+        ));
+    }
+    let as_u64 = value as u64;
+    if value >= 2f64.powi(53) || as_u64 as f64 != value {
+        return Err(format!(
+            "limits value for '{key}' must be a non-negative integer within f64 safe range"
+        ));
+    }
+    if as_u64 > usize::MAX as u64 {
+        return Err(format!(
+            "limits value for '{key}' exceeds platform usize maximum ({})",
+            usize::MAX
+        ));
+    }
+    Ok(as_u64 as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +168,33 @@ mod tests {
         let mut limits = ResourceLimits::default();
         let err = limits.apply("not_a_limit", 1).expect_err("unknown");
         assert!(err.contains("unknown limits key"));
+    }
+
+    #[test]
+    fn usize_limit_from_f64_accepts_integer() {
+        assert_eq!(usize_limit_from_f64("max_sources", 7.0).unwrap(), 7);
+    }
+
+    #[test]
+    fn usize_limit_from_f64_rejects_fraction() {
+        let err = usize_limit_from_f64("max_sources", 1.5).expect_err("fraction");
+        assert!(err.contains("non-negative integer"));
+    }
+
+    #[test]
+    fn usize_limit_from_f64_rejects_above_safe_integer() {
+        let err = usize_limit_from_f64("max_sources", 2f64.powi(53)).expect_err("unsafe");
+        assert!(err.contains("f64 safe range"));
+    }
+
+    #[test]
+    fn usize_limit_from_f64_rejects_above_usize_max() {
+        // On 64-bit hosts usize::MAX is outside f64 safe integers, so the safe-range
+        // check fires first. On 32-bit, a safe integer above u32::MAX must error here.
+        if (usize::MAX as u64) < (1u64 << 53) {
+            let too_big = (usize::MAX as u64).saturating_add(1) as f64;
+            let err = usize_limit_from_f64("max_loaded_bytes", too_big).expect_err("overflow");
+            assert!(err.contains("exceeds platform usize maximum"), "got: {err}");
+        }
     }
 }

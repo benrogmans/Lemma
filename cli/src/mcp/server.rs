@@ -1070,32 +1070,25 @@ mod imp {
                 Err(lemma_cli::install::InstallError::Plan(load_err)) => {
                     return Ok(Self::load_diagnostics_tool_result(load_err));
                 }
-                Err(lemma_cli::install::InstallError::Message(message)) => {
-                    if message.starts_with("Registry error")
-                        || message.starts_with("Registry returned unparseable")
-                    {
-                        return Err(McpError::internal_error(message));
-                    }
-                    return Err(McpError::invalid_params(message));
+                Err(lemma_cli::install::InstallError::Registry(error)) => {
+                    return Err(McpError::internal_error(format!(
+                        "Registry error for {dependency}: {}",
+                        error.message
+                    )));
+                }
+                Err(lemma_cli::install::InstallError::UnparseableRegistry(error)) => {
+                    return Err(McpError::internal_error(format!(
+                        "Registry returned unparseable dependency: {error}"
+                    )));
+                }
+                Err(
+                    error @ (lemma_cli::install::InstallError::Conflict { .. }
+                    | lemma_cli::install::InstallError::Io(_)
+                    | lemma_cli::install::InstallError::Workspace(_)),
+                ) => {
+                    return Err(McpError::invalid_params(error.to_string()));
                 }
             };
-
-            if !freshly_written {
-                if !Self::dependency_in_engine(&self.engine, dependency) {
-                    if let Err(load_err) = self.engine.load([(source_type, source)]) {
-                        return Ok(Self::load_diagnostics_tool_result(load_err));
-                    }
-                }
-                let message = format!(
-                    "Already up to date: {} -> {}",
-                    dependency,
-                    relative_path.display()
-                );
-                info!("{message}");
-                return Ok(serde_json::json!({
-                    "content": [{ "type": "text", "text": message }]
-                }));
-            }
 
             let already_loaded = Self::dependency_in_engine(&self.engine, dependency);
             let rollback_source = if already_loaded {
@@ -1128,7 +1121,15 @@ mod imp {
                 return Ok(Self::load_diagnostics_tool_result(load_err));
             }
 
-            let message = format!("Installed {} -> {}", dependency, relative_path.display());
+            let message = if freshly_written {
+                format!("Installed {} -> {}", dependency, relative_path.display())
+            } else {
+                format!(
+                    "Already up to date: {} -> {}",
+                    dependency,
+                    relative_path.display()
+                )
+            };
             info!("{message}");
             Ok(serde_json::json!({
                 "content": [{ "type": "text", "text": message }]
@@ -1988,7 +1989,7 @@ mod imp {
         }
 
         #[test]
-        fn install_identical_content_elsewhere_is_up_to_date() {
+        fn install_identical_content_elsewhere_conflicts_without_force() {
             let dir = tempfile::tempdir().unwrap();
             let fixture = fs::read_to_string(
                 lemma::LemmaBase::test_fixtures_dir()
@@ -2008,15 +2009,12 @@ mod imp {
                     serde_json::json!({ "dependency": "@iso/countries" }),
                 ))
                 .expect("response");
+            let err = resp.error.expect("overlapping foreign copy must conflict");
             assert!(
-                resp.error.is_none(),
-                "identical content must not conflict, got error: {:?}",
-                resp.error
+                err.message.contains("already exists") || err.message.contains("force"),
+                "got: {}",
+                err.message
             );
-            let text = resp.result.as_ref().unwrap()["content"][0]["text"]
-                .as_str()
-                .unwrap();
-            assert!(text.contains("Already up to date"), "got: {text}");
             assert!(!dir.path().join("lemma_deps/@iso/countries.lemma").exists());
         }
 

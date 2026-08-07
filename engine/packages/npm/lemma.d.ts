@@ -87,6 +87,11 @@ declare module './lemma.bindings.js' {
     format(code: string, attribute?: string | null): string;
 
     /**
+     * Structural quality recommendations across loaded specs. Advisory only.
+     */
+    quality(): Recommendation[];
+
+    /**
      * Evaluate a spec. Pass integers as numbers, decimals as strings in `data`.
      */
     run(options: RunOptions): Response;
@@ -487,4 +492,23 @@ export interface ResourceLimits {
   max_spec_dependency_depth: number;
   max_dag_specs: number;
   max_normal_form_depth: number;
+}
+
+/** Source location on a quality recommendation. Same shape as {@link EngineErrorSource}. */
+export interface RecommendationSource {
+  attribute: string;
+  line: number;
+  column: number;
+  length: number;
+}
+
+/** One structural quality recommendation from {@link Engine.quality}. */
+export interface Recommendation {
+  /** Advisory prose only. Temporal identity is in `spec` + `effective_from`. */
+  message: string;
+  spec: string;
+  /** Declared temporal start of the analyzed slice, or null for Origin. */
+  effective_from: string | null;
+  repository: string | null;
+  source: RecommendationSource;
 }

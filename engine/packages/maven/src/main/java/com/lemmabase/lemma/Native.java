@@ -60,6 +60,8 @@ final class Native {
 
   static native String limits(long handle);
 
+  static native String quality(long handle);
+
   private static void loadLibrary() {
     String triple = rustTargetTriple();
     String libName = libraryFileName();

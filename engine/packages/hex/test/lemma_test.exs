@@ -73,6 +73,53 @@ defmodule LemmaTest do
     end
   end
 
+  describe "quality/1" do
+    test "clean spec has no recommendations" do
+      {:ok, engine} = Lemma.new()
+
+      :ok =
+        Lemma.load(engine, """
+        spec pricing 2026-01-01
+        \"\"\"
+        Bulk pricing.
+        \"\"\"
+
+        data qty: number
+          -> minimum 0
+          -> maximum 1000000
+          -> help "Order quantity."
+
+        rule total: qty
+        """)
+
+      assert {:ok, []} = Lemma.quality(engine)
+    end
+
+    test "reports missing help with effective_from and source" do
+      {:ok, engine} = Lemma.new()
+
+      :ok =
+        Lemma.load(engine, """
+        spec pricing 2026-01-01
+        \"\"\"
+        Bulk.
+        \"\"\"
+
+        data qty: number
+        rule total: qty
+        """)
+
+      assert {:ok, recs} = Lemma.quality(engine)
+      hit = Enum.find(recs, fn r -> String.contains?(r["message"], "no `-> help`") end)
+      assert hit
+      assert hit["spec"] == "pricing"
+      assert hit["effective_from"] == "2026-01-01"
+      assert is_map(hit["source"])
+      assert is_binary(hit["source"]["attribute"])
+      assert is_integer(hit["source"]["line"])
+    end
+  end
+
   describe "update/6" do
     test "replaces a temporal spec slice" do
       {:ok, engine} = Lemma.new()

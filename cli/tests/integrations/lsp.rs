@@ -1,4 +1,4 @@
-use super::lsp_session::{path_to_uri, write_lemma_file, LspSession, DEBOUNCE_WAIT};
+use super::lsp_session::{path_to_uri, write_lemma_file, LspSession};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -57,7 +57,7 @@ fn lsp_parse_error_publishes_diagnostics() {
     session.initialized();
     session.did_open(&uri, "not lemma syntax");
 
-    let notification = session.wait_for_diagnostics(&uri, DEBOUNCE_WAIT);
+    let notification = session.wait_for_diagnostics(&uri);
     let diagnostics = notification["params"]["diagnostics"]
         .as_array()
         .expect("diagnostics array");
@@ -84,6 +84,7 @@ Bulk pricing.
 
 data qty: number
   -> minimum 0
+  -> maximum 1000000
   -> help "Order quantity."
   -> suggest 10
 
@@ -97,7 +98,7 @@ rule total: qty
     session.initialized();
     session.did_open(&uri, source);
 
-    let notification = session.wait_for_diagnostics(&uri, DEBOUNCE_WAIT);
+    let notification = session.wait_for_diagnostics(&uri);
     let diagnostics = notification["params"]["diagnostics"]
         .as_array()
         .expect("diagnostics array");
@@ -208,7 +209,7 @@ fn lsp_did_close_clears_diagnostics() {
     session.initialized();
     session.did_open(&uri, broken);
 
-    let with_errors = session.wait_for_diagnostics(&uri, DEBOUNCE_WAIT);
+    let with_errors = session.wait_for_diagnostics(&uri);
     assert!(
         !with_errors["params"]["diagnostics"]
             .as_array()
@@ -218,7 +219,7 @@ fn lsp_did_close_clears_diagnostics() {
     );
 
     session.did_close(&uri);
-    let cleared = session.wait_for_diagnostics(&uri, DEBOUNCE_WAIT);
+    let cleared = session.wait_for_diagnostics(&uri);
     let diagnostics = cleared["params"]["diagnostics"]
         .as_array()
         .expect("diagnostics array");
@@ -242,7 +243,7 @@ fn lsp_workspace_missing_ref_diagnostic() {
     session.initialize(Some(&root_uri));
     session.initialized();
 
-    let notification = session.wait_for_diagnostics(&uri, DEBOUNCE_WAIT);
+    let notification = session.wait_for_diagnostics(&uri);
     let diagnostics = notification["params"]["diagnostics"]
         .as_array()
         .expect("diagnostics array");
