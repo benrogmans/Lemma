@@ -90,6 +90,12 @@ impl OperationResult {
         matches!(self, OperationResult::Veto(_))
     }
 
+    /// True when this result is a [`VetoType::MissingData`] veto.
+    #[must_use]
+    pub fn is_missing_data(&self) -> bool {
+        matches!(self, OperationResult::Veto(VetoType::MissingData { .. }))
+    }
+
     #[must_use]
     pub fn value(&self) -> Option<&LiteralValue> {
         match self {

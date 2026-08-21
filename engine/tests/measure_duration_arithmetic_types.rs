@@ -29,13 +29,18 @@ fn eval(engine: &Engine, spec: &str, rule: &str, data: HashMap<String, String>) 
     let response = engine
         .run(None, spec, Some(&now), data, None, false)
         .expect("Should evaluate");
-    response
+    let result = response
         .results
         .get(rule)
-        .unwrap_or_else(|| panic!("Rule '{}' should exist", rule))
-        .display()
-        .expect("display")
-        .to_string()
+        .unwrap_or_else(|| panic!("Rule '{}' should exist", rule));
+    if result.vetoed {
+        panic!(
+            "Rule '{}' vetoed: {}",
+            rule,
+            result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    result.display().expect("display").to_string()
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -89,8 +94,8 @@ data b: 5 eur
 rule result: a * b"#,
     );
     assert!(
-        !err.is_empty(),
-        "Measure * Measure should be rejected at plan time"
+        err.contains("anonymous intermediate"),
+        "Measure * Measure should be rejected as anonymous intermediate, got: {err}"
     );
 }
 
@@ -169,8 +174,8 @@ data b: 3 hour
 rule result: a * b"#,
     );
     assert!(
-        !err.is_empty(),
-        "Duration * Duration should be rejected at plan time"
+        err.contains("anonymous intermediate") || err.contains("Cannot apply"),
+        "Duration * Duration should be rejected at plan time, got: {err}"
     );
 }
 
@@ -269,8 +274,10 @@ data r: 50%
 rule result: a ^ r"#,
     );
     assert!(
-        !err.is_empty(),
-        "Measure ^ Ratio should be rejected at plan time"
+        err.contains("fractional or variable exponent")
+            || err.contains("Cannot apply")
+            || err.contains("ratio"),
+        "Measure ^ Ratio should be rejected at plan time, got: {err}"
     );
 }
 
@@ -285,8 +292,8 @@ data r: 25%
 rule result: a % r"#,
     );
     assert!(
-        !err.is_empty(),
-        "Measure % Ratio should be rejected at plan time"
+        err.contains("modulo") && err.to_lowercase().contains("ratio"),
+        "Measure % Ratio should be rejected at plan time, got: {err}"
     );
 }
 

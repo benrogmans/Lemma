@@ -6,9 +6,15 @@
 [![Documentation](https://docs.rs/lemma-engine/badge.svg)](https://docs.rs/lemma-engine)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-> **A pure, declarative language for business rules.**
+## **A pure, declarative language for business rules.**
 
-Lemma reads like the documents people already write — pricing, tax, eligibility, contracts, policies, law. Stakeholders read the specs; systems evaluate them deterministically. Same spec, same data, same instant: same result. Opt in to an explanation tree you can audit (`--explain` / `explain: true`).
+Lemma is a language for business rules, such as pricing, product terms, tax legislation, eligibility, etc. Applications and AI agents embed the **Lemma engine** to ask it for answers. Lemma provides those quickly, precisely and proves them with explanations, that show which rules applied and thus why a certain outcome was given.
+
+A **spec** is a set of **data** (inputs) and **rules** (expressions). Specs can be composed neatly to facilitate even the most complex rulesets, modeled around business domains.
+
+When **loading** Specs, the engine analyses them and verifies that they are valid. If loading fails, the engine is unaffected. When it succeeds, the specs and rules can be **evaluated** to compute each requested rule. Evaluation does not error and always returns a value, but that value might be a **veto** result, which explains why a certain rule had no valid outcome.
+
+Evaluate Lemma with `--explain` or `explain: true`, to make the engine return explanations.
 
 ```lemma
 spec pricing 2026-01-01
@@ -25,13 +31,13 @@ rule price: quantity * 20
 rule discounted_price: price - price * discount
 ```
 
-The last matching `unless` wins, mirroring how business rules, legal documents, and SOPs are written: "In principle X applies, unless Y, unless Z..."
+The last matching `unless` wins, mirroring how business rules, legal documents, and SOPs are written: "In principle X applies, unless Y, then Z..."
 
 
 ## Why Lemma?
 Laws, policies, and business rules traditionally exist in natural language. While humans must understand these rules, we rely on systems to enforce them. Over time, organizations have built massive IT infrastructures to house these rules; however, as both the regulations and the systems evolve, they become harder to manage and the disconnect between them grows.
 
-Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis — invalid specs are rejected before evaluation ever runs. Furthermore, Lemma provides unrivaled auditability: when explanations are requested, each result includes a structured tree of how rules were applied.
+Lemma provides a single source of truth. Rules written in Lemma are human-readable, time-aware, and pure. Its logic engine guarantees deterministic and logically consistent outcomes through static analysis. Invalid specs are rejected before evaluation ever runs. Furthermore, Lemma provides unrivaled auditability: when explanations are requested, each result includes a structured tree of how rules were applied.
 
 This allows you to implement policy changes rapidly without compromising compliance. Lemma requires no database and maintains no state; by design, it is secure, able to run within existing applications and yes, it is blazingly fast.
 
@@ -147,7 +153,7 @@ data discount: ratio
   -> maximum 100%
 ```
 
-**Primitive types:** `boolean`, `number`, `measure` (with units; elapsed time and calendar periods via `uses lemma units` — `units.duration`, `units.calendar`, …), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `measure range`, `ratio range`, plus named `<type> range`).
+**Primitive types:** `boolean`, `number`, `measure` (with units; elapsed time and calendar periods via `uses lemma units`: `units.duration`, `units.calendar`, …)), `text`, `date`, `time`, `ratio`, and **ranges** (`date range`, `time range`, `number range`, `measure range`, `ratio range`, plus named `<type> range`).
 
 ### Spec composition
 
@@ -325,7 +331,7 @@ See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.4</version>
+  <version>0.9.5</version>
 </dependency>
 ```
 

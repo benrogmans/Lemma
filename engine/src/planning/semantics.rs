@@ -1681,11 +1681,13 @@ impl TypeSpecification {
     /// Apply a single constraint command to this spec.
     ///
     /// The `declared_suggestion` out-parameter receives the default value (if the command
-    /// is `Default`), encoded as [`RawSuggestion`]. Defaults are owned by the data binding
+    /// is `Suggest`), encoded as [`RawSuggestion`]. Defaults are owned by the data binding
     /// or typedef entry, not by the type specification itself; callers thread a single
-    /// `&mut Option<RawSuggestion>` across all constraint applications for one type so the
-    /// latest `-> suggest` command wins. Measure scalars stay raw until unit factors
-    /// are resolved; callers convert via [`value_kind_from_raw_suggestion`].
+    /// `&mut Option<RawSuggestion>` across constraint applications for one declaration.
+    /// Duplicate `-> suggest` / `minimum` / `maximum` / `decimals` on the same declaration
+    /// are rejected by the caller seen-set before this runs. A child typedef may override an
+    /// inherited suggest or bound with one command of that kind. Measure scalars stay raw
+    /// until unit factors are resolved; callers convert via [`value_kind_from_raw_suggestion`].
     pub fn apply_constraint(
         &mut self,
         type_name: &str,

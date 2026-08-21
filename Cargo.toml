@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "xtask",
     "cli",
+    "mcp",
     "engine",
     "engine/lsp",
     "engine/packages/hex/native/lemma_hex",
@@ -13,7 +14,7 @@ default-members = ["cli"]
 exclude = ["engine/fuzz"]
 
 [workspace.package]
-version = "0.9.4"
+version = "0.9.5"
 edition = "2021"
 authors = ["Ben Rogmans <ben@lemmabase.com>"]
 description = "A pure, declarative language for business rules."

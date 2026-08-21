@@ -1,10 +1,8 @@
-//! Red TDD: per-rule `RuleResult.missing_data` from `Engine::run`.
+//! Per-rule `RuleResult.missing_data` from `Engine::run`.
 //!
 //! Asserts on Rust `Response` / `RuleResult` structures (not JSON).
-//! Until implementation fills `missing_data`, cases that expect non-empty
-//! lists fail asserts.
 
-use lemma::{DateTimeValue, Engine, RuleResult};
+use lemma::{DateTimeValue, Engine, ExplanationNode, RuleResult};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -37,7 +35,7 @@ fn rule<'a>(response: &'a lemma::Response, name: &str) -> &'a RuleResult {
 }
 
 fn missing<'a>(response: &'a lemma::Response, name: &str) -> &'a [String] {
-    rule(response, name).missing_data.as_slice()
+    rule(response, name).missing_data()
 }
 
 fn show_has(engine: &Engine, spec: &str, key: &str) {
@@ -301,9 +299,9 @@ rule main: a + b
         main.veto_reason
     );
     assert!(
-        main.missing_data.is_empty(),
+        main.missing_data().is_empty(),
         "expected empty missing_data, got {:?}",
-        main.missing_data
+        main.missing_data()
     );
 }
 
@@ -699,6 +697,727 @@ rule main: a + b + c
     assert!(md.contains(&"c".to_string()), "{md:?}");
 }
 
+/// Product left MissingData must still walk the loading embed so unless last-match
+/// dead edges record. `is_smoker=true` (last unless) prunes former/years.
+#[test]
+fn d3_product_missing_left_still_prunes_unless_under_right_embed() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_factor: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: missing_factor * loading
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("is_smoker".to_string(), "true".to_string());
+    let response = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    let md = missing(&response, "main");
+    assert!(
+        md.contains(&"missing_factor".to_string()),
+        "live unbound product operand must remain: {md:?}"
+    );
+    assert!(
+        !md.contains(&"is_former_smoker".to_string()),
+        "former arm must be dead when last unless is_smoker=true: {md:?}"
+    );
+    assert!(
+        !md.contains(&"years_since_quit".to_string()),
+        "years_since_quit must be dead when last unless is_smoker=true: {md:?}"
+    );
+}
+
+/// And Propagate (left MissingData) must still eval right so nested unless records.
+#[test]
+fn d4_and_propagate_still_prunes_unless_under_right_conjunct() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_flag: boolean
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: missing_flag and (loading > 0)
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("is_smoker".to_string(), "true".to_string());
+    let response = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    let md = missing(&response, "main");
+    assert!(
+        md.contains(&"missing_flag".to_string()),
+        "propagating left MissingData must remain listed: {md:?}"
+    );
+    assert!(
+        !md.contains(&"is_former_smoker".to_string()),
+        "former arm must be dead when last unless is_smoker=true: {md:?}"
+    );
+    assert!(
+        !md.contains(&"years_since_quit".to_string()),
+        "years_since_quit must be dead when last unless is_smoker=true: {md:?}"
+    );
+}
+
+/// Definitive Computation veto must not continue sibling walk for missing_data —
+/// settled answer ⇒ empty missing_data even if later operands stay unbound.
+#[test]
+fn d5_product_computation_veto_empties_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data denom: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: (1 / denom) * loading
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("denom".to_string(), "0".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed, "div by zero must veto");
+    assert!(
+        main.missing_data().is_empty(),
+        "settled Computation must report empty missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity for settled empty missing_data"
+    );
+}
+
+/// UserDefined early factor likewise settles — no leftover loading keys.
+#[test]
+fn d6_product_user_defined_veto_empties_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data age: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: base * loading
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let response = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    let main = rule(&response, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "{:?}",
+        main.veto_reason
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled UserDefined must report empty missing_data: {:?}",
+        main.missing_data()
+    );
+}
+
+/// Later definitive veto wins over earlier MissingData during continue-eval
+/// (life_plus-shaped: unbound sum factor + age UserDefined via base).
+#[test]
+fn d7_later_definitive_veto_wins_over_earlier_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_factor: number
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: missing_factor * base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "definitive base veto must win over missing_factor MissingData: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// And left MissingData + right definitive: MissingData wins intake (`false` can still answer).
+/// Right still walks for explain / nested prune (parity with d4).
+#[test]
+fn d8_and_missing_left_awaits_despite_later_definitive_veto() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_flag: boolean
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: missing_flag and (base > 0)
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.awaits_missing_data(),
+        "unbound left And must await MissingData even when right settles veto: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        main.missing_data().contains(&"missing_flag".to_string()),
+        "missing_flag must remain outcome-relevant: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        main.veto_reason.as_deref(),
+        Some("Missing data: missing_flag"),
+        "And result must stay MissingData-shaped, not settle on no rate alone: {:?}",
+        main.veto_reason
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// `false and veto` answers false: unbound left is outcome-relevant because a false binding
+/// does not need the right conjunct.
+#[test]
+fn d8c_false_and_later_definitive_veto_answers_false() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_flag: boolean
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: missing_flag and (base > 0)
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("missing_flag".to_string(), "false".to_string());
+    data.insert("age".to_string(), "80".to_string());
+    let response = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    let main = rule(&response, "main");
+    assert!(
+        !main.vetoed,
+        "false and … must answer false, not inherit right veto: {:?}",
+        main.veto_reason
+    );
+    assert!(!main.awaits_missing_data(), "false And is settled");
+    assert!(
+        main.missing_data().is_empty(),
+        "settled false must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        main.value.as_ref().and_then(|v| v.boolean),
+        Some(false),
+        "false and veto must be boolean false, got {:?}",
+        main.display()
+    );
+}
+
+/// Both conjuncts explore when each is a definitive user veto (`veto and veto`).
+#[test]
+fn d8b_and_explores_both_definitive_user_vetoes() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+rule x: veto "left veto"
+rule y: veto "right veto"
+rule z: x and y
+"#,
+    );
+    let plain = run(
+        &engine,
+        "demo",
+        HashMap::new(),
+        Some(&["z".to_string()]),
+        false,
+    );
+    let explained = run(
+        &engine,
+        "demo",
+        HashMap::new(),
+        Some(&["z".to_string()]),
+        true,
+    );
+    let z = rule(&plain, "z");
+    assert!(z.vetoed, "z must veto when both conjuncts veto");
+    assert!(
+        !z.awaits_missing_data(),
+        "definitive And must not await MissingData"
+    );
+    assert!(
+        z.missing_data().is_empty(),
+        "definitive And must clear missing_data: {:?}",
+        z.missing_data()
+    );
+    assert_eq!(
+        z.veto_reason.as_deref(),
+        Some("left veto"),
+        "And settles on left definitive veto: {:?}",
+        z.veto_reason
+    );
+    let explanation = explained
+        .results
+        .get("z")
+        .expect("z")
+        .explanation
+        .as_ref()
+        .expect("explain on");
+    let names = explanation_rule_names(&explanation.children);
+    assert!(
+        names.iter().any(|n| n == "x"),
+        "left conjunct x must be an explanation child: {names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n == "y"),
+        "right conjunct y must be explored as an explanation child: {names:?}"
+    );
+}
+
+fn explanation_rule_names(nodes: &[ExplanationNode]) -> Vec<String> {
+    let mut names = Vec::new();
+    fn walk(node: &ExplanationNode, names: &mut Vec<String>) {
+        match node {
+            ExplanationNode::Rule { name, children, .. } => {
+                names.push(name.rule.clone());
+                for child in children {
+                    walk(child, names);
+                }
+            }
+            ExplanationNode::Compose { operands, .. }
+            | ExplanationNode::Conversion { operands, .. } => {
+                for child in operands {
+                    walk(child, names);
+                }
+            }
+            ExplanationNode::Data { .. }
+            | ExplanationNode::DataUnused { .. }
+            | ExplanationNode::Veto { .. }
+            | ExplanationNode::Piecewise { .. } => {}
+        }
+    }
+    for node in nodes {
+        walk(node, &mut names);
+    }
+    names
+}
+
+/// Comparison left MissingData must still walk right embed so unless last-match prunes
+/// (parity with d3 product operand order).
+#[test]
+fn d9_comparison_missing_left_still_prunes_unless_under_right_embed() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_threshold: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: missing_threshold > loading
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("is_smoker".to_string(), "true".to_string());
+    let response = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    let md = missing(&response, "main");
+    assert!(
+        md.contains(&"missing_threshold".to_string()),
+        "live unbound comparison left must remain: {md:?}"
+    );
+    assert!(
+        !md.contains(&"is_former_smoker".to_string()),
+        "former arm must be dead when last unless is_smoker=true: {md:?}"
+    );
+    assert!(
+        !md.contains(&"years_since_quit".to_string()),
+        "years_since_quit must be dead when last unless is_smoker=true: {md:?}"
+    );
+}
+
+/// Comparison left MissingData + right definitive: definitive must win (parity with d7).
+#[test]
+fn d10_comparison_later_definitive_veto_wins_over_earlier_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_threshold: number
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: missing_threshold > base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "definitive base veto must win over missing_threshold MissingData: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// RangeLiteral left MissingData + right definitive: definitive must win (parity with d10).
+#[test]
+fn d11_range_literal_later_definitive_veto_wins_over_earlier_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_threshold: number
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: missing_threshold...base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "definitive base veto must win over missing_threshold MissingData: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// RangeContainment left MissingData + right definitive: definitive must win (parity with d10).
+#[test]
+fn d12_range_containment_later_definitive_veto_wins_over_earlier_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_threshold: number
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: missing_threshold in 0...base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "definitive base veto must win over missing_threshold MissingData: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// Settled comparison left + right definitive veto: right veto wins via evaluate_binary compose.
+#[test]
+fn d13_comparison_settled_left_right_definitive_veto() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: 100 > base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "right embed veto must win when left is settled: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// Settled RangeLiteral left + right definitive veto (parity with d13).
+#[test]
+fn d14_range_literal_settled_left_right_definitive_veto() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: 0...base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "right embed veto must win when left is settled: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
+/// Settled RangeContainment value + right definitive veto (parity with d13).
+#[test]
+fn d15_range_containment_settled_left_right_definitive_veto() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: 50 in 0...base
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let plain = run(
+        &engine,
+        "demo",
+        data.clone(),
+        Some(&["main".to_string()]),
+        false,
+    );
+    let explained = run(&engine, "demo", data, Some(&["main".to_string()]), true);
+    let main = rule(&plain, "main");
+    assert!(main.vetoed);
+    assert!(
+        main.veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no rate")),
+        "right embed veto must win when left is settled: {:?}",
+        main.veto_reason
+    );
+    assert!(
+        !main.awaits_missing_data(),
+        "rule must be settled, not awaiting MissingData"
+    );
+    assert!(
+        main.missing_data().is_empty(),
+        "settled definitive must clear missing_data: {:?}",
+        main.missing_data()
+    );
+    assert_eq!(
+        missing(&plain, "main"),
+        missing(&explained, "main"),
+        "explain parity"
+    );
+}
+
 // --- E. Embeds / references ---
 
 #[test]
@@ -923,6 +1642,163 @@ rule name: prev.name
         !reason.contains("prev"),
         "veto must not expose internal reference path; got: {reason}"
     );
+}
+
+fn assert_attach_invariant(response: &lemma::Response) {
+    use lemma::VetoType;
+    for result in response.results.values() {
+        if !result.awaits_missing_data() {
+            continue;
+        }
+        assert!(
+            !result.missing_data().is_empty(),
+            "awaiting rule '{}' must not attach empty missing_data",
+            result.rule.name
+        );
+        let VetoType::MissingData { data, .. } = result
+            .veto_detail
+            .as_ref()
+            .expect("BUG: awaits_missing_data without MissingData veto_detail")
+        else {
+            panic!("BUG: awaits_missing_data without MissingData veto_detail");
+        };
+        let key = data.input_key();
+        assert!(
+            result.missing_data().iter().any(|listed| listed == &key),
+            "veto path {key} must appear in missing_data {:?} for rule '{}'",
+            result.missing_data(),
+            result.rule.name
+        );
+    }
+}
+
+/// Continue-eval paths that still settle MissingData must satisfy attach: veto path ∈ list.
+#[test]
+fn g4_attach_invariant_holds_after_continue_eval() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_threshold: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: missing_threshold > loading
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("is_smoker".to_string(), "true".to_string());
+    let comparison = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    assert_attach_invariant(&comparison);
+    assert!(
+        missing(&comparison, "main").contains(&"missing_threshold".to_string()),
+        "comparison continue-eval must keep live unbound left: {:?}",
+        missing(&comparison, "main")
+    );
+
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_flag: boolean
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: missing_flag and (loading > 0)
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("is_smoker".to_string(), "true".to_string());
+    let and_case = run(&engine, "demo", data, Some(&["main".to_string()]), false);
+    assert_attach_invariant(&and_case);
+    assert!(
+        missing(&and_case, "main").contains(&"missing_flag".to_string()),
+        "and continue-eval must keep live unbound left: {:?}",
+        missing(&and_case, "main")
+    );
+
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data a: number
+data b: number
+data c: number
+rule main: a + b + c
+"#,
+    );
+    let product = run(&engine, "demo", HashMap::new(), None, false);
+    assert_attach_invariant(&product);
+    assert!(
+        missing(&product, "main").contains(&"a".to_string()),
+        "product continue-eval must keep first missing operand: {:?}",
+        missing(&product, "main")
+    );
+}
+
+/// Engine::run must never attach awaiting MissingData with empty or mismatched missing_data.
+#[test]
+fn g5_engine_run_never_awaits_with_empty_missing_data() {
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data a: number
+data b: number
+rule main: a + b
+"#,
+    );
+    assert_attach_invariant(&run(&engine, "demo", HashMap::new(), None, false));
+
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec demo
+data missing_threshold: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule main: missing_threshold > loading
+"#,
+    );
+    let mut data = HashMap::new();
+    data.insert("is_smoker".to_string(), "true".to_string());
+    assert_attach_invariant(&run(
+        &engine,
+        "demo",
+        data,
+        Some(&["main".to_string()]),
+        false,
+    ));
+
+    let mut engine = Engine::new();
+    load(
+        &mut engine,
+        r#"
+spec inner
+data slot: number
+rule half: slot / 2
+
+spec outer
+uses i: inner
+rule r: i.half + 1
+"#,
+    );
+    assert_attach_invariant(&run(&engine, "outer", HashMap::new(), None, false));
 }
 
 #[test]

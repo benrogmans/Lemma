@@ -1134,9 +1134,8 @@ impl std::str::FromStr for TimeValue {
 
 /// Number literal with Lemma rules (strip _ and , separators).
 ///
-/// `Decimal::from_str` rounds excess fractional digits to [`Decimal::MAX_SCALE`]
-/// significant digits (truncate at input); an integer magnitude that
-/// cannot be represented is an error.
+/// Fractional digit count beyond [`Decimal::MAX_SCALE`] is rejected (no silent
+/// truncate). An integer magnitude that cannot be represented is an error.
 pub(crate) struct NumberLiteral(pub Decimal);
 
 impl std::str::FromStr for NumberLiteral {
@@ -1144,6 +1143,17 @@ impl std::str::FromStr for NumberLiteral {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let clean = s.trim().replace(['_', ','], "");
+        if let Some(dot) = clean.find('.') {
+            let frac = &clean[dot + 1..];
+            let frac_digits = frac.chars().take_while(|c| c.is_ascii_digit()).count();
+            if frac_digits > Decimal::MAX_SCALE as usize {
+                return Err(format!(
+                    "Invalid number '{}': too many fractional digits (max {})",
+                    s,
+                    Decimal::MAX_SCALE
+                ));
+            }
+        }
         Decimal::from_str(&clean)
             .map_err(|_| format!("Invalid number: '{}'", s))
             .map(NumberLiteral)

@@ -50,11 +50,11 @@ Each command supports `--help` for full usage details.
 
 ## Features
 
-- **Deterministic evaluations** – same audit trail as the engine library
-- **Interactive mode** – select specs, rules, and data without typing full paths
-- **HTTP server** – evaluate specs over REST, perfect for integration tests and dashboards
-- **MCP server** – expose Lemma to AI assistants via the Model Context Protocol
-- **Machine-readable output** – `--json` flag for tooling and pipelines
+- **Deterministic evaluations**: same audit trail as the engine library
+- **Interactive mode**: select specs, rules, and data without typing full paths
+- **HTTP server**: evaluate specs over REST, perfect for integration tests and dashboards
+- **MCP server**: expose Lemma to AI assistants via the Model Context Protocol
+- **Machine-readable output**: `--json` flag for tooling and pipelines
 
 ## Example session
 

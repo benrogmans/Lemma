@@ -111,6 +111,33 @@ rule total: qty
 }
 
 #[test]
+fn lsp_quality_issues_are_not_hint_diagnostics() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = r#"spec pricing
+data qty: number
+rule total: qty
+"#;
+    let path = write_lemma_file(dir.path(), "quality_gaps.lemma", source);
+    let uri = path_to_uri(&path);
+
+    let mut session = LspSession::spawn_lemma_lsp();
+    session.initialize(None);
+    session.initialized();
+    session.did_open(&uri, source);
+
+    let notification = session.wait_for_diagnostics(&uri);
+    let diagnostics = notification["params"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array");
+    assert!(
+        diagnostics.is_empty(),
+        "quality recommendations must not publish as LSP diagnostics, got: {diagnostics:?}"
+    );
+
+    session.shutdown();
+}
+
+#[test]
 fn lsp_formatting_returns_edit() {
     let dir = tempfile::tempdir().expect("tempdir");
     let messy = "spec messy\ndata   x:1\nrule y:x+1\n";

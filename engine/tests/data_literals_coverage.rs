@@ -478,9 +478,7 @@ rule r: d
 }
 
 #[test]
-fn duration_literal_negative_rejected_or_supported_consistently() {
-    // Negative durations are a semantic edge. Pin: either the parser
-    // accepts and stores -5, or rejects. Silent coercion to 0 or +5 is a bug.
+fn duration_literal_negative_preserves_sign() {
     let code = r#"
 spec s
 uses lemma units
@@ -488,31 +486,12 @@ data d: -5 day
 rule r: d
 "#;
     let mut engine = Engine::new();
-    match engine.load([(
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "literals.lemma",
-        ))),
-        code.to_string(),
-    )]) {
-        Ok(()) => {
-            let out = rule_value(&run(&engine, "s"), "r");
-            assert!(
-                out.contains("-5") && out.contains("day"),
-                "if -5 day is accepted, it must preserve the sign; got: {out}"
-            );
-        }
-        Err(errs) => {
-            let joined = errs
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                !joined.is_empty(),
-                "rejection must carry a message, not empty errors"
-            );
-        }
-    }
+    load_ok(&mut engine, code);
+    let out = rule_value(&run(&engine, "s"), "r");
+    assert!(
+        out.contains("-5") && out.contains("day"),
+        "negative duration literal must preserve sign; got: {out}"
+    );
 }
 
 // ─── Ratio literals ───────────────────────────────────────────────────

@@ -36,10 +36,17 @@ fn eval_display(code: &str, spec: &str, rule: &str, data: HashMap<String, String
     let response = engine
         .run(None, spec, None, data, None, false)
         .expect("spec must evaluate");
-    response
+    let result = response
         .results
         .get(rule)
-        .unwrap_or_else(|| panic!("rule '{rule}' missing"))
+        .unwrap_or_else(|| panic!("rule '{rule}' missing"));
+    if result.vetoed {
+        panic!(
+            "rule '{rule}' vetoed: {}",
+            result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    result
         .display()
         .expect("rule must have display value")
         .to_string()

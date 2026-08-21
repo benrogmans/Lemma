@@ -613,7 +613,19 @@ rule result: weight
     assert!(
         response.is_ok(),
         "1500 gram (= 1.5 kg) should pass maximum 2 kg, got: {:?}",
-        response.unwrap_err()
+        response.as_ref().err()
+    );
+    let response = response.expect("run Ok");
+    let rule = response.results.get("result").expect("result");
+    assert!(
+        !rule.vetoed,
+        "1500 gram under maximum 2 kg must not veto, got: {:?}",
+        rule.veto_reason
+    );
+    assert_eq!(
+        rule.display().expect("display"),
+        "1500 gram",
+        "accepted overlay must surface the supplied measure"
     );
 }
 
@@ -650,7 +662,19 @@ rule result: weight
     assert!(
         response.is_ok(),
         "1500 gram (= 1.5 kg) should pass minimum 1 kg, got: {:?}",
-        response.unwrap_err()
+        response.as_ref().err()
+    );
+    let response = response.expect("run Ok");
+    let rule = response.results.get("result").expect("result");
+    assert!(
+        !rule.vetoed,
+        "1500 gram above minimum 1 kg must not veto, got: {:?}",
+        rule.veto_reason
+    );
+    assert_eq!(
+        rule.display().expect("display"),
+        "1500 gram",
+        "accepted overlay must surface the supplied measure"
     );
 }
 
@@ -691,7 +715,7 @@ rule result: weight
 }
 
 #[test]
-fn measure_below_minimum_error_uses_per_unit_not_canonical() {
+fn measure_below_minimum_veto_uses_per_unit_not_canonical() {
     let code = r#"
 spec s
 data money: measure -> unit eur 1 -> unit usd 0.91
@@ -732,7 +756,7 @@ rule out: cost_per_unit
 }
 
 #[test]
-fn measure_below_minimum_error_respects_type_decimals() {
+fn measure_below_minimum_veto_respects_type_decimals() {
     let code = r#"
 spec s
 data money: measure -> unit eur 1 -> unit usd 0.91
@@ -815,6 +839,18 @@ fn compound_measure_below_maximum_in_other_unit_passes() {
         response.is_ok(),
         "2.01 usd_per_tonne is below converted maximum of 2.00 eur_per_kilo, got: {:?}",
         response.as_ref().err()
+    );
+    let response = response.expect("run Ok");
+    let rule = response.results.get("out").expect("out");
+    assert!(
+        !rule.vetoed,
+        "2.01 usd_per_tonne under converted maximum must not veto, got: {:?}",
+        rule.veto_reason
+    );
+    assert_eq!(
+        rule.display().expect("display"),
+        "2.01 usd_per_tonne",
+        "accepted overlay must surface the supplied measure"
     );
 }
 
@@ -899,6 +935,18 @@ fn tri_compound_measure_below_maximum_in_other_unit_passes() {
         "2.01 usd_per_ton_hour is below converted maximum of 2.00 eur_per_kilo_hour, got: {:?}",
         response.as_ref().err()
     );
+    let response = response.expect("run Ok");
+    let rule = response.results.get("out").expect("out");
+    assert!(
+        !rule.vetoed,
+        "2.01 usd_per_ton_hour under converted maximum must not veto, got: {:?}",
+        rule.veto_reason
+    );
+    assert_eq!(
+        rule.display().expect("display"),
+        "2.01 usd_per_ton_hour",
+        "accepted overlay must surface the supplied measure"
+    );
 }
 
 #[test]
@@ -935,7 +983,7 @@ fn tri_compound_measure_above_maximum_shows_converted_bound_in_user_unit() {
 }
 
 #[test]
-fn measure_below_minimum_cross_unit_error_message() {
+fn measure_below_minimum_cross_unit_veto_message() {
     let code = r#"
 spec physics
 data mass: measure

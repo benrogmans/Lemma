@@ -1,8 +1,4 @@
-//! Phase 0 integration tests for the unit-agnostic plan-time architecture.
-//!
-//! Every test here pins a user-observable contract from the plan. Tests that
-//! exercise behavior not yet implemented fail today and turn green as the
-//! structural changes land.
+//! Integration tests for unit-agnostic plan-time arithmetic and calendar units.
 
 use lemma::{Engine, LiteralValue, ValueKind};
 use std::collections::HashMap;
@@ -574,7 +570,6 @@ rule quarterly: monthly * 3 month"#;
 
 /// Inverse of `q_times_calendar_uses_builtin_calendar_factor`:
 /// `300 eur / 100 eur_per_month as month` must plan and evaluate to 3 month.
-/// Fails until `uses lemma units` + trait calendar exist (replace-calendar plan).
 #[test]
 fn q_divide_rate_yields_months() {
     let code = r#"spec runway_inverse
@@ -642,7 +637,7 @@ data duration: measure
 }
 
 /// Companion to `user_declared_unit_named_after_calendar_unit_is_rejected`:
-/// month must be declared on `uses lemma units`, not per-spec. Stdlib missing today.
+/// month must be declared on `uses lemma units`, not per-spec.
 #[test]
 fn uses_lemma_calendar_stdlib_loads() {
     let code = r#"spec calendar_smoke

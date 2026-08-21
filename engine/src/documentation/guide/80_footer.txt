@@ -1,0 +1,8 @@
+## See also
+
+- [Learn guide](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md)
+- [Reference](https://github.com/lemma/lemma/blob/main/cli/documentation/reference/readme.md)
+- [LemmaBase search](https://lemmabase.com/search?q=)
+- [Examples](https://github.com/lemma/lemma/tree/main/cli/documentation/examples)
+
+Decimals at JSON boundaries: pass as strings. Detail: [Numeric precision](https://github.com/lemma/lemma/blob/main/cli/documentation/learn/precision.md).

@@ -5,7 +5,7 @@
 //! `RatioLiteral::parse`. Pins exact `ValueKind::Ratio(decimal, optional_unit)`,
 //! not substrings of `Display`, so a 100x off value cannot pass.
 //!
-//! Also includes a Measure-side regression: `"5%"` against a Measure type must error
+//! Also includes a Measure-side regression: `"5%"` against a Measure type must veto
 //! with the friendly Measure message (no leftover `%`/`%%` handling in the Measure
 //! literal parser).
 
@@ -72,7 +72,7 @@ fn run_rational(engine: &Engine, spec: &str, raw: &str) -> (Decimal, Option<Stri
     }
 }
 
-fn run_err(engine: &Engine, spec: &str, raw: &str) -> String {
+fn run_veto_reason(engine: &Engine, spec: &str, raw: &str) -> String {
     let mut data = HashMap::new();
     data.insert("r".to_string(), raw.to_string());
     let now = DateTimeValue::now();
@@ -105,9 +105,9 @@ rule out: r
 fn rejects_bare_zero() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let msg = run_err(&engine, "s", "0");
+    let msg = run_veto_reason(&engine, "s", "0");
     assert!(
-        msg.to_lowercase().contains("unit"),
+        msg.contains("Ratio value requires a unit"),
         "expected unit requirement, got: {msg}"
     );
 }
@@ -116,14 +116,22 @@ fn rejects_bare_zero() {
 fn rejects_bare_decimal() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "0.5");
+    let msg = run_veto_reason(&engine, "s", "0.5");
+    assert!(
+        msg.contains("Ratio value requires a unit"),
+        "expected unit requirement, got: {msg}"
+    );
 }
 
 #[test]
 fn rejects_bare_negative() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "-0.25");
+    let msg = run_veto_reason(&engine, "s", "-0.25");
+    assert!(
+        msg.contains("Ratio value requires a unit"),
+        "expected unit requirement, got: {msg}"
+    );
 }
 
 // ─── Accepted: percent sigil ──────────────────────────────────────────
@@ -264,10 +272,10 @@ fn permille_sigil_and_keyword_produce_same_value() {
 fn rejects_empty() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let msg = run_err(&engine, "s", "");
+    let msg = run_veto_reason(&engine, "s", "");
     assert!(
-        msg.to_lowercase().contains("empty") || msg.to_lowercase().contains("ratio"),
-        "expected empty/ratio message, got: {msg}"
+        msg.contains("Ratio value cannot be empty"),
+        "expected empty ratio message, got: {msg}"
     );
 }
 
@@ -275,7 +283,11 @@ fn rejects_empty() {
 fn rejects_whitespace_only() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "   ");
+    let msg = run_veto_reason(&engine, "s", "   ");
+    assert!(
+        msg.contains("Ratio value cannot be empty"),
+        "expected empty ratio message, got: {msg}"
+    );
 }
 
 // ─── Rejected: sigil without number ───────────────────────────────────
@@ -284,22 +296,32 @@ fn rejects_whitespace_only() {
 fn rejects_bare_percent_sigil() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "%");
+    let msg = run_veto_reason(&engine, "s", "%");
+    assert!(msg.contains("'%' must follow a number"), "got: {msg}");
 }
 
 #[test]
 fn rejects_bare_permille_sigil() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "%%");
+    let msg = run_veto_reason(&engine, "s", "%%");
+    assert!(msg.contains("'%%' must follow a number"), "got: {msg}");
 }
 
 #[test]
 fn rejects_sigil_before_number() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "%5");
-    let _msg = run_err(&engine, "s", "%%5");
+    let percent = run_veto_reason(&engine, "s", "%5");
+    assert!(
+        percent.contains("Invalid ratio value") && percent.contains("%5"),
+        "got: {percent}"
+    );
+    let permille = run_veto_reason(&engine, "s", "%%5");
+    assert!(
+        permille.contains("Invalid ratio value") && permille.contains("%%5"),
+        "got: {permille}"
+    );
 }
 
 // ─── Rejected: sigil with separator (strict glue rule) ────────────────
@@ -308,10 +330,10 @@ fn rejects_sigil_before_number() {
 fn rejects_percent_sigil_with_space() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let msg = run_err(&engine, "s", "5 %");
+    let msg = run_veto_reason(&engine, "s", "5 %");
     assert!(
-        msg.contains("glued") || msg.contains("'%'"),
-        "expected explicit glue-rule error, got: {msg}"
+        msg.contains("must be glued to the number") && msg.contains("'%'"),
+        "expected explicit glue-rule veto reason, got: {msg}"
     );
 }
 
@@ -319,10 +341,10 @@ fn rejects_percent_sigil_with_space() {
 fn rejects_permille_sigil_with_space() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let msg = run_err(&engine, "s", "5  %%");
+    let msg = run_veto_reason(&engine, "s", "5  %%");
     assert!(
-        msg.contains("glued") || msg.contains("'%%'"),
-        "expected explicit glue-rule error, got: {msg}"
+        msg.contains("must be glued to the number") && msg.contains("'%%'"),
+        "expected explicit glue-rule veto reason, got: {msg}"
     );
 }
 
@@ -332,21 +354,33 @@ fn rejects_permille_sigil_with_space() {
 fn rejects_digit_after_percent_sigil() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "5%5");
+    let msg = run_veto_reason(&engine, "s", "5%5");
+    assert!(
+        msg.contains("Invalid ratio value") && msg.contains("5%5"),
+        "got: {msg}"
+    );
 }
 
 #[test]
 fn rejects_digit_after_permille_sigil() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "5%%5");
+    let msg = run_veto_reason(&engine, "s", "5%%5");
+    assert!(
+        msg.contains("Invalid ratio value") && msg.contains("5%%5"),
+        "got: {msg}"
+    );
 }
 
 #[test]
 fn rejects_sigil_glued_to_keyword() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let _msg = run_err(&engine, "s", "5%percent");
+    let msg = run_veto_reason(&engine, "s", "5%percent");
+    assert!(
+        msg.contains("Invalid ratio value") && msg.contains("5%percent"),
+        "got: {msg}"
+    );
 }
 
 // ─── Rejected: trailing junk ──────────────────────────────────────────
@@ -355,10 +389,10 @@ fn rejects_sigil_glued_to_keyword() {
 fn rejects_trailing_token_after_keyword() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let msg = run_err(&engine, "s", "50 percent extra");
+    let msg = run_veto_reason(&engine, "s", "50 percent extra");
     assert!(
-        msg.to_lowercase().contains("extra") || msg.to_lowercase().contains("expected"),
-        "expected extra-token error, got: {msg}"
+        msg.contains("Expected '<number>', '<number>%', '<number>%%', or '<number> <unit>'"),
+        "expected extra-token veto reason, got: {msg}"
     );
 }
 
@@ -368,10 +402,10 @@ fn rejects_trailing_token_after_keyword() {
 fn rejects_unknown_unit_name() {
     let mut engine = Engine::new();
     load(&mut engine, percent_spec());
-    let msg = run_err(&engine, "s", "50 fictional");
+    let msg = run_veto_reason(&engine, "s", "50 fictional");
     assert!(
         msg.contains("Unknown unit") && msg.contains("Valid units"),
-        "expected `Unknown unit … Valid units …` error, got: {msg}"
+        "expected `Unknown unit … Valid units …` veto reason, got: {msg}"
     );
     assert!(
         msg.contains("fictional"),
@@ -390,12 +424,10 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
-    let msg = run_err(&engine, "s", "5%");
+    let msg = run_veto_reason(&engine, "s", "5%");
     assert!(
-        msg.contains("Measure value")
-            || msg.contains("must include a unit")
-            || msg.contains("Invalid measure"),
-        "expected friendly Measure-unit error, got: {msg}"
+        msg.contains("Measure value must include a unit"),
+        "expected friendly Measure-unit veto reason, got: {msg}"
     );
     assert!(
         !msg.contains("Unknown unit 'percent'"),
@@ -412,7 +444,11 @@ rule out: r
 "#;
     let mut engine = Engine::new();
     load(&mut engine, code);
-    let msg = run_err(&engine, "s", "5%%");
+    let msg = run_veto_reason(&engine, "s", "5%%");
+    assert!(
+        msg.contains("Measure value must include a unit"),
+        "expected friendly Measure-unit veto reason, got: {msg}"
+    );
     assert!(
         !msg.contains("Unknown unit 'permille'"),
         "Measure path must not leak a 'permille' unit lookup, got: {msg}"

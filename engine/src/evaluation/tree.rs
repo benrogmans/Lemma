@@ -1167,22 +1167,23 @@ fn eval_kind(
             compose_unary(id, result, value, explain, plan)
         }
         NormalFormKind::Comparison(left, op, right) => {
-            let left_e = eval(*left, plan, ctx, explain);
-            if left_e.result.vetoed() {
-                return left_e;
-            }
-            let right_e = eval(*right, plan, ctx, explain);
-            if right_e.result.vetoed() {
-                return right_e;
-            }
             let unit_ctx = UnitResolutionContext::WithIndex(&plan.resolved_types.unit_index);
-            let result = comparison_operation(
-                borrow_value(&left_e.result, "left operand"),
-                op,
-                borrow_value(&right_e.result, "right operand"),
-                unit_ctx,
-            );
-            compose_binary(id, result, left_e, right_e, explain, plan)
+            evaluate_binary(
+                *left,
+                *right,
+                plan,
+                ctx,
+                explain,
+                id,
+                |left_result, right_result| {
+                    comparison_operation(
+                        borrow_value(left_result, "left operand"),
+                        op,
+                        borrow_value(&right_result, "right operand"),
+                        unit_ctx,
+                    )
+                },
+            )
         }
         NormalFormKind::And(children) => evaluate_and(children, plan, ctx, explain, id),
         NormalFormKind::Not(inner) => {
@@ -1297,22 +1298,21 @@ fn eval_kind(
             );
             compose_unary(id, result, inner_e, explain, plan)
         }
-        NormalFormKind::RangeLiteral(left, right) => {
-            let left_e = eval(*left, plan, ctx, explain);
-            if left_e.result.vetoed() {
-                return left_e;
-            }
-            let right_e = eval(*right, plan, ctx, explain);
-            if right_e.result.vetoed() {
-                return right_e;
-            }
-            let range = LiteralValue::range(
-                own_literal(left_e.result.clone(), "left endpoint"),
-                own_literal(right_e.result.clone(), "right endpoint"),
-            );
-            let result = OperationResult::from_literal(range);
-            compose_binary(id, result, left_e, right_e, explain, plan)
-        }
+        NormalFormKind::RangeLiteral(left, right) => evaluate_binary(
+            *left,
+            *right,
+            plan,
+            ctx,
+            explain,
+            id,
+            |left_result, right_result| {
+                let range = LiteralValue::range(
+                    own_literal(left_result.clone(), "left endpoint"),
+                    own_literal(right_result, "right endpoint"),
+                );
+                OperationResult::from_literal(range)
+            },
+        ),
         NormalFormKind::PastFutureRange(kind, inner) => {
             let inner_e = eval(*inner, plan, ctx, explain);
             if inner_e.result.vetoed() {
@@ -1325,28 +1325,29 @@ fn eval_kind(
             );
             compose_unary(id, result, inner_e, explain, plan)
         }
-        NormalFormKind::RangeContainment(value, range) => {
-            let value_e = eval(*value, plan, ctx, explain);
-            if value_e.result.vetoed() {
-                return value_e;
-            }
-            let range_e = eval(*range, plan, ctx, explain);
-            if range_e.result.vetoed() {
-                return range_e;
-            }
-            let range_literal = borrow_value(&range_e.result, "range operand");
-            let result = match &range_literal.value {
-                ValueKind::Range(range_left, range_right) => {
-                    crate::computation::range::check_containment(
-                        borrow_value(&value_e.result, "value operand"),
-                        range_left.as_ref(),
-                        range_right.as_ref(),
-                    )
+        NormalFormKind::RangeContainment(value, range) => evaluate_binary(
+            *value,
+            *range,
+            plan,
+            ctx,
+            explain,
+            id,
+            |value_result, range_result| {
+                let range_literal = borrow_value(&range_result, "range operand");
+                match &range_literal.value {
+                    ValueKind::Range(range_left, range_right) => {
+                        crate::computation::range::check_containment(
+                            borrow_value(value_result, "value operand"),
+                            range_left.as_ref(),
+                            range_right.as_ref(),
+                        )
+                    }
+                    other => {
+                        panic!("BUG: range containment expected range operand, got {other:?}")
+                    }
                 }
-                other => panic!("BUG: range containment expected range operand, got {other:?}"),
-            };
-            compose_binary(id, result, value_e, range_e, explain, plan)
-        }
+            },
+        ),
         NormalFormKind::ResultIsVeto(inner) => {
             let inner_e = eval(*inner, plan, ctx, explain);
             let result =
@@ -1429,30 +1430,50 @@ fn fold_nary_arithmetic(
 ) -> Explained {
     assert!(!children.is_empty(), "BUG: empty n-ary arithmetic");
     let mut operands = Vec::new();
-    let mut acc = eval(children[0], plan, ctx, explain);
-    if let Some(n) = acc.as_operand.take() {
-        operands.push(n);
-    }
-    if acc.result.vetoed() {
-        let veto = acc.result;
-        return finish_nary(id, veto, operands, explain, plan);
-    }
-    for child in children.iter().skip(1) {
-        let right = eval(*child, plan, ctx, explain);
-        if let Some(n) = right.as_operand {
+    // MissingData: continue siblings for prune recording. If a later sibling is a
+    // definitive veto, that answer wins over the earlier MissingData.
+    let mut first_veto: Option<OperationResult> = None;
+    let mut continue_for_recording = false;
+    let mut acc: Option<OperationResult> = None;
+
+    for child in children {
+        if first_veto.is_some() && !continue_for_recording {
+            break;
+        }
+        let explained = eval(*child, plan, ctx, explain);
+        if let Some(n) = explained.as_operand {
             operands.push(n);
         }
-        if right.result.vetoed() {
-            let veto = right.result;
-            return finish_nary(id, veto, operands, explain, plan);
+        if first_veto.is_some() {
+            if explained.result.vetoed() && !explained.result.is_missing_data() {
+                first_veto = Some(explained.result);
+                continue_for_recording = false;
+            }
+            continue;
         }
-        acc.result = binary_arithmetic_result(&acc.result, right.result, op.clone(), plan);
-        if acc.result.vetoed() {
-            let veto = acc.result;
-            return finish_nary(id, veto, operands, explain, plan);
+        if explained.result.vetoed() {
+            continue_for_recording = explained.result.is_missing_data();
+            first_veto = Some(explained.result);
+            continue;
+        }
+        match acc.take() {
+            None => acc = Some(explained.result),
+            Some(left) => {
+                let combined = binary_arithmetic_result(&left, explained.result, op.clone(), plan);
+                if combined.vetoed() {
+                    continue_for_recording = combined.is_missing_data();
+                    first_veto = Some(combined);
+                } else {
+                    acc = Some(combined);
+                }
+            }
         }
     }
-    finish_nary(id, acc.result, operands, explain, plan)
+
+    let result = first_veto
+        .or(acc)
+        .expect("BUG: n-ary arithmetic produced neither value nor veto after evaluating children");
+    finish_nary(id, result, operands, explain, plan)
 }
 
 fn finish_nary(
@@ -1480,6 +1501,37 @@ fn finish_nary(
     }
 }
 
+fn evaluate_binary<F>(
+    left: NormalFormId,
+    right: NormalFormId,
+    plan: &ExecutionPlan,
+    ctx: &mut EvaluationContext,
+    explain: bool,
+    id: NormalFormId,
+    combine: F,
+) -> Explained
+where
+    F: FnOnce(&OperationResult, OperationResult) -> OperationResult,
+{
+    let left_e = eval(left, plan, ctx, explain);
+    if left_e.result.vetoed() {
+        if !left_e.result.is_missing_data() {
+            return left_e;
+        }
+        let right_e = eval(right, plan, ctx, explain);
+        if right_e.result.vetoed() && !right_e.result.is_missing_data() {
+            return compose_binary(id, right_e.result.clone(), left_e, right_e, explain, plan);
+        }
+        return compose_binary(id, left_e.result.clone(), left_e, right_e, explain, plan);
+    }
+    let right_e = eval(right, plan, ctx, explain);
+    if right_e.result.vetoed() {
+        return compose_binary(id, right_e.result.clone(), left_e, right_e, explain, plan);
+    }
+    let result = combine(&left_e.result, right_e.result.clone());
+    compose_binary(id, result, left_e, right_e, explain, plan)
+}
+
 fn binary_arithmetic(
     left: NormalFormId,
     right: NormalFormId,
@@ -1489,16 +1541,15 @@ fn binary_arithmetic(
     explain: bool,
     id: NormalFormId,
 ) -> Explained {
-    let left_e = eval(left, plan, ctx, explain);
-    if left_e.result.vetoed() {
-        return left_e;
-    }
-    let right_e = eval(right, plan, ctx, explain);
-    if right_e.result.vetoed() {
-        return right_e;
-    }
-    let result = binary_arithmetic_result(&left_e.result, right_e.result.clone(), op, plan);
-    compose_binary(id, result, left_e, right_e, explain, plan)
+    evaluate_binary(
+        left,
+        right,
+        plan,
+        ctx,
+        explain,
+        id,
+        |left_result, right_result| binary_arithmetic_result(left_result, right_result, op, plan),
+    )
 }
 
 fn binary_arithmetic_result(
@@ -1534,7 +1585,18 @@ fn evaluate_and(
             }
             match condition_outcome(&conjunct.result) {
                 BranchOutcome::Propagate(result) => {
-                    return finish_nary(id, result, operands, explain, plan);
+                    // Keep walking later conjuncts for explain / nested control prune.
+                    // Intake: MissingData left stays MissingData (a false binding can still
+                    // answer). Definitive left stays that veto; later MissingData must not
+                    // reopen intake (veto and _ is still veto).
+                    let answer = result;
+                    for later in children.iter().skip(i + 1) {
+                        let later_e = eval(*later, plan, ctx, explain);
+                        if let Some(n) = later_e.as_operand {
+                            operands.push(n);
+                        }
+                    }
+                    return finish_nary(id, answer, operands, explain, plan);
                 }
                 BranchOutcome::NotTaken => {
                     assert!(

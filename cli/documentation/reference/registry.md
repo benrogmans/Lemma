@@ -56,7 +56,7 @@ engine.load(batch)?;
 
 ## Bundle requirements
 
-A bundle is just ordinary Lemma source. A published registry bundle opens with a `repo` line whose name matches the registry id, for example `repo @iso/countries` for the `@iso/countries` dependency—that `@` name is assigned when the bundle is published, not chosen freely in a local workspace. Once everything is loaded, the engine keeps dependencies isolated from each other: a repository loaded as a dependency will never merge with your workspace or with another dependency, and every spec in a repository must come from the same place.
+A bundle is just ordinary Lemma source. A published registry bundle opens with a `repo` line whose name matches the registry id, for example `repo @iso/countries` for the `@iso/countries` dependency. That `@` name is assigned when the bundle is published, not chosen freely in a local workspace. Once everything is loaded, the engine keeps dependencies isolated from each other: a repository loaded as a dependency will never merge with your workspace or with another dependency, and every spec in a repository must come from the same place.
 
 Within a bundle, spec names are just normal identifiers. You write `spec billing` or `spec rates` exactly as you would in a local file. When one bundle needs something from another registry repository, you qualify the import with `@`, as in `uses rates: @acme/finance rates` or `uses iso: @iso/countries alpha2`. An unqualified import like `uses x: rates` only looks inside the same repository as the spec doing the importing. In your own workspace files, declare local repos without `@` (`repo finance`).
 

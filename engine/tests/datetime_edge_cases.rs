@@ -101,7 +101,7 @@ rule next_day: start_date + 1 day
 }
 
 #[test]
-fn test_add_month_with_day_overflow_jan_31_to_feb() {
+fn test_add_month_with_day_clamp_jan_31_to_feb() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
@@ -125,7 +125,7 @@ rule next_month: start_date + 1 month
 }
 
 #[test]
-fn test_add_month_with_day_overflow_jan_31_to_feb_non_leap() {
+fn test_add_month_with_day_clamp_jan_31_to_feb_non_leap() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
@@ -403,7 +403,7 @@ rule later: start_time + 90 minute
 }
 
 #[test]
-fn test_add_seconds_overflow_to_minutes() {
+fn test_add_seconds_carry_to_minutes() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
@@ -598,7 +598,7 @@ rule april: start_date + 1 month
 }
 
 #[test]
-fn time_plus_extreme_duration_vetoes_instead_of_panic() {
+fn time_plus_extreme_duration_conversion_fails() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
@@ -622,10 +622,18 @@ rule result: t + 9999999999999 second
         .expect("run");
     let rule_result = response.get("result").expect("rule exists");
     assert!(rule_result.vetoed, "extreme duration must veto, not panic");
+    assert!(
+        rule_result
+            .veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("Duration conversion failed")),
+        "huge second count must fail duration→chrono conversion: {:?}",
+        rule_result.veto_reason
+    );
 }
 
 #[test]
-fn time_minus_extreme_duration_vetoes_instead_of_panic() {
+fn time_minus_extreme_duration_conversion_fails() {
     let mut engine = Engine::new();
     let code = r#"
 spec test
@@ -651,6 +659,81 @@ rule result: t - 9999999999999 second
     assert!(
         rule_result.vetoed,
         "extreme duration subtraction must veto, not panic"
+    );
+    assert!(
+        rule_result
+            .veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("Duration conversion failed")),
+        "huge second count must fail duration→chrono conversion: {:?}",
+        rule_result.veto_reason
+    );
+}
+
+#[test]
+fn time_plus_convertible_duration_time_overflow() {
+    let mut engine = Engine::new();
+    // Converts to chrono Duration (fits i64 micros) but overflows Time epoch arithmetic.
+    let code = r#"
+spec test
+uses lemma units
+data t: 12:00:00+00:00
+rule result: t + 9223372036854 second
+    "#;
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("parse");
+    let now = lemma::DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            std::collections::HashMap::new(),
+            Some(&["result".to_string()]),
+            false,
+        )
+        .expect("run");
+    let rule_result = response.get("result").expect("rule exists");
+    assert!(rule_result.vetoed, "must veto, not panic");
+    assert_eq!(
+        rule_result.veto_reason.as_deref(),
+        Some("Time overflow"),
+        "convertible extreme duration must hit Time overflow: {:?}",
+        rule_result.veto_reason
+    );
+}
+
+#[test]
+fn time_minus_convertible_duration_time_overflow() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+data t: 12:00:00+00:00
+rule result: t - 9223372036854 second
+    "#;
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("parse");
+    let now = lemma::DateTimeValue::now();
+    let response = engine
+        .run(
+            None,
+            "test",
+            Some(&now),
+            std::collections::HashMap::new(),
+            Some(&["result".to_string()]),
+            false,
+        )
+        .expect("run");
+    let rule_result = response.get("result").expect("rule exists");
+    assert!(rule_result.vetoed, "must veto, not panic");
+    assert_eq!(
+        rule_result.veto_reason.as_deref(),
+        Some("Time overflow"),
+        "convertible extreme duration must hit Time overflow: {:?}",
+        rule_result.veto_reason
     );
 }
 

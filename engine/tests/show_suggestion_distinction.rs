@@ -30,11 +30,11 @@ fn run_plan_does_not_commit_typedecl_suggestion() {
             .results
             .get("r")
             .expect("rule r")
-            .missing_data
+            .missing_data()
             .iter()
             .any(|p| p == "n"),
         "suggestion does not commit; n remains missing until supplied: {:?}",
-        response.results.get("r").map(|r| &r.missing_data)
+        response.results.get("r").map(|r| r.missing_data())
     );
 
     let rule = response.results.get("r").expect("rule r");
@@ -54,7 +54,7 @@ fn run_plan_does_not_commit_typedecl_suggestion() {
             .results
             .get("r")
             .expect("rule r")
-            .missing_data
+            .missing_data()
             .is_empty(),
         "n must not be missing once supplied in run data"
     );

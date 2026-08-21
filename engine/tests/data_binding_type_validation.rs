@@ -361,10 +361,8 @@ rule r: when
 }
 
 #[test]
-fn number_decimals_constraint_truncation_or_rejection() {
-    // `decimals 2` on a number: pin behavior. Either the value is stored as
-    // at most 2 decimals (rounded/truncated) or the override is rejected.
-    // Silent precision gain (keeping 3.14159) is a bug.
+fn number_decimals_constraint_vetoes_excess_precision() {
+    // `decimals 2` on a number: excess fractional digits veto that data.
     let code = r#"
 spec s
 data n: number -> decimals 2
@@ -382,25 +380,11 @@ rule r: n
     data.insert("n".to_string(), "3.14159".to_string());
 
     let now = DateTimeValue::now();
-    match engine.run(None, "s", Some(&now), data, None, true) {
-        Ok(resp) => {
-            let rr = resp.results.get("r").expect("rule 'r'");
-            if rr.vetoed {
-                let reason = rr.veto_reason.as_deref().expect("veto reason");
-                assert!(
-                    reason.contains("decimals"),
-                    "rejection must reference the decimals constraint, got: {reason}"
-                );
-            } else {
-                let s = rr.display().expect("display");
-                assert!(
-                    !s.contains("3.14159"),
-                    "decimals 2 must not preserve 5 decimals; got: {s}"
-                );
-            }
-        }
-        Err(e) => panic!("run must complete with veto or value, not Error: {e}"),
-    }
+    assert_run_completes_with_veto_on_rule(
+        engine.run(None, "s", Some(&now), data, None, true),
+        "r",
+        "decimals",
+    );
 }
 
 #[test]

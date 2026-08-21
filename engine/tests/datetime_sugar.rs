@@ -1063,6 +1063,50 @@ rule check: event_date in calendar year
 // type checking errors
 // =============================================================================
 
+#[test]
+fn number_in_past_is_planning_error() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+rule bad: 5 in past
+"#;
+    let err = engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect_err("number in past must be planning Error");
+    let combined = err
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.contains("requires a date expression"),
+        "got: {combined}"
+    );
+}
+
+#[test]
+fn text_in_past_calendar_week_is_planning_error() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+rule bad: "x" in past calendar week
+"#;
+    let err = engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect_err("text in calendar sugar must be planning Error");
+    let combined = err
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.contains("Calendar sugar requires a date expression"),
+        "got: {combined}"
+    );
+}
+
 // =============================================================================
 // calendar month edge cases
 // =============================================================================

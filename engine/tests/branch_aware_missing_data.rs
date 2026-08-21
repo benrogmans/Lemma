@@ -84,10 +84,10 @@ fn missing_data_empty_when_all_datas_provided() {
         .expect("run");
     for result in response.results.values() {
         assert!(
-            result.missing_data.is_empty(),
+            result.missing_data().is_empty(),
             "all data provided: {} {:?}",
             result.rule.name,
-            result.missing_data
+            result.missing_data()
         );
     }
 }
@@ -115,15 +115,23 @@ fn missing_data_includes_product_when_no_inputs() {
         )
         .expect("run");
 
-    let union: Vec<&String> = response
-        .results
-        .values()
-        .flat_map(|r| r.missing_data.iter())
-        .collect();
+    let base_price = rule_by_name(&response, "base_price");
     assert!(
-        union.iter().any(|k| *k == "product"),
-        "expected product among missing_data, got {:?}",
-        union
+        base_price.awaits_missing_data(),
+        "base_price must await MissingData when product is unbound: {:?}",
+        base_price.veto_reason
+    );
+    assert_eq!(
+        base_price.missing_data(),
+        ["product".to_string()].as_slice(),
+        "base_price missing_data must list product, got {:?}",
+        base_price.missing_data()
+    );
+    assert_eq!(
+        base_price.veto_reason.as_deref(),
+        Some("Missing data: product"),
+        "got {:?}",
+        base_price.veto_reason
     );
 }
 

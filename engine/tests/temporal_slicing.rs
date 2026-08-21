@@ -3,9 +3,6 @@
 //! When a spec's active range spans dependency spec boundaries,
 //! planning must produce one ExecutionPlan per temporal slice and each
 //! slice must independently validate.
-//!
-//! These tests define the target behavior. Many will fail until the
-//! temporal slicing implementation is complete.
 
 use lemma::{DateGranularity, DateTimeValue, Engine};
 use std::collections::HashMap;

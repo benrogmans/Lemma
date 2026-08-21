@@ -8,6 +8,7 @@
 mod tests;
 
 pub(crate) mod computation;
+pub mod documentation;
 pub(crate) mod engine;
 pub(crate) mod error;
 pub(crate) mod evaluation;

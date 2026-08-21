@@ -204,25 +204,36 @@ fn d4_same_measure_self_reference_rejected() {
     let code = r#"spec d4
 uses lemma units
 data velocity: measure -> unit mps velocity/second"#;
-    expect_plan_error(code, "");
+    let mut engine = Engine::new();
+    let result = engine.load([(source(), code.to_string())]);
+    let errors = result.expect_err("self-referential compound unit must fail planning");
+    let combined = errors
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        combined.contains("Unknown unit") || combined.contains("not in scope"),
+        "expected unknown-unit-in-scope rejection, got: {combined}"
+    );
 }
 
 // =============================================================================
-// D5: `uses` does NOT contribute base measure types for compound unit declarations
+// D5: `uses` puts used-spec units in scope; compound still needs every factor
 // =============================================================================
 
 #[test]
 fn d5_uses_does_not_import_measure_types_for_compound_units() {
-    // `uses spec_b` only imports rule references and data binding — not type definitions.
-    // Compound unit `meter/second` in `velocity` requires `meter` to be an in-scope measure unit,
-    // but `uses` only brings in spec references, so this should fail.
+    // `uses lb: spec_b` brings `meter` from `spec_b` into scope for compounds.
+    // `second` is not defined on either user spec, so planning fails on `second`
+    // (not on `meter`). Contrast d6, which adds `uses lemma units` + typed import.
     let code = r#"spec spec_b
 data length: measure -> unit meter 1
 
 spec spec_a
 uses lb: spec_b
 data velocity: measure -> unit mps meter/second"#;
-    expect_plan_error(code, "");
+    expect_plan_error(code, "second");
 }
 
 // =============================================================================
@@ -559,7 +570,7 @@ data money: measure -> unit eur 1.00
 data a: 10 eur
 data b: 5 eur
 rule product: a * b"#;
-    expect_plan_error(code, "");
+    expect_plan_error(code, "anonymous intermediate");
 }
 
 #[test]
@@ -606,7 +617,7 @@ data money: measure -> unit eur 1.00
 data dist: 100 meter
 data elapsed: 20 second
 rule speed_as_eur: (dist / elapsed) as eur"#;
-    expect_plan_error(code, "");
+    expect_plan_error(code, "Cannot convert");
 }
 
 // =============================================================================

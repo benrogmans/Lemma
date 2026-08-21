@@ -53,11 +53,18 @@ fn eval_rule_measure_unit(
     let response = engine
         .run(None, spec_name, Some(&now), data, None, false)
         .expect("Should evaluate");
-    response
+    let rule = response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .value
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name));
+    if rule.vetoed {
+        panic!(
+            "Rule '{}' vetoed: {}",
+            rule_name,
+            rule.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    rule.value
         .as_ref()
         .and_then(|v| v.measure.as_ref())
         .and_then(|m| m.get(unit))

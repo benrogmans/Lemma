@@ -53,7 +53,8 @@ impl Formatter {
         let missing: Vec<&str> = response
             .results
             .values()
-            .flat_map(|result| result.missing_data.iter().map(String::as_str))
+            .filter(|result| result.awaits_missing_data())
+            .flat_map(|result| result.missing_data().iter().map(String::as_str))
             .collect();
         if !missing.is_empty() {
             output.push_str("Missing data\n");

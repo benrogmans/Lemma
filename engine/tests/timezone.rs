@@ -1,29 +1,13 @@
-use lemma::{DateTimeValue, Engine};
+#[path = "support/get_rule_value.rs"]
+mod get_rule_value;
+
+use get_rule_value::get_rule_value;
+use lemma::Engine;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
 use std::str::FromStr;
 
 fn decimal_lit(s: &str) -> Decimal {
     Decimal::from_str(s).expect("BUG: test decimal literal must parse")
-}
-
-fn get_rule_value(engine: &Engine, spec_name: &str, rule_name: &str) -> lemma::LiteralValue {
-    let now = DateTimeValue::now();
-    let response = engine
-        .run(None, spec_name, Some(&now), HashMap::new(), None, true)
-        .unwrap();
-    response
-        .results
-        .values()
-        .find(|r| r.rule.name == rule_name)
-        .unwrap()
-        .explanation
-        .as_ref()
-        .expect("explanation")
-        .result
-        .value()
-        .unwrap()
-        .clone()
 }
 
 #[test]

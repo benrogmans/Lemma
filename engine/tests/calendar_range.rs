@@ -45,11 +45,18 @@ fn eval_bool_with_data(
             true,
         )
         .expect("Should evaluate");
-    response
+    let rule = response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .value
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name));
+    if rule.vetoed {
+        panic!(
+            "Rule '{}' vetoed: {}",
+            rule_name,
+            rule.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    rule.value
         .as_ref()
         .expect("rule result value")
         .boolean
@@ -72,11 +79,18 @@ fn eval_bool(code: &str, spec_name: &str, rule_name: &str) -> bool {
             true,
         )
         .expect("Should evaluate");
-    response
+    let rule = response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .value
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name));
+    if rule.vetoed {
+        panic!(
+            "Rule '{}' vetoed: {}",
+            rule_name,
+            rule.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    rule.value
         .as_ref()
         .expect("rule result value")
         .boolean
@@ -99,16 +113,23 @@ fn eval_literal(code: &str, spec_name: &str, rule_name: &str) -> LiteralValue {
             true,
         )
         .expect("Should evaluate");
-    response
+    let rule = response
         .results
         .get(rule_name)
-        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name))
-        .explanation
+        .unwrap_or_else(|| panic!("Rule '{}' not found", rule_name));
+    if rule.vetoed {
+        panic!(
+            "Rule '{}' vetoed: {}",
+            rule_name,
+            rule.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    rule.explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
-        .unwrap_or_else(|| panic!("Rule '{}' returned non-value", rule_name))
+        .expect("BUG: non-vetoed rule missing value")
         .clone()
 }
 

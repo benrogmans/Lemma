@@ -9,7 +9,6 @@ use crate::parsing::lexer::{
 use crate::parsing::source::Source;
 use indexmap::IndexMap;
 use rust_decimal::Decimal;
-use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -1247,18 +1246,7 @@ impl Parser {
         // `-> unit kmh 3.6 meter/second`).
         let numeric_prefix: Option<Decimal> = if self.at(&TokenKind::NumberLit)? {
             let num_tok = self.next()?;
-            match Decimal::from_str(&num_tok.text) {
-                Ok(d) => Some(d),
-                Err(_) => {
-                    return Err(self.error_at_token(
-                        &num_tok,
-                        format!(
-                            "Invalid numeric factor '{}' in unit declaration",
-                            num_tok.text
-                        ),
-                    ));
-                }
-            }
+            Some(parse_decimal_string(&num_tok.text, &num_tok.span, self)?)
         } else {
             None
         };
@@ -2862,17 +2850,11 @@ fn unquote_string(s: &str) -> String {
 }
 
 fn parse_decimal_string(text: &str, span: &Span, parser: &Parser) -> Result<Decimal, Error> {
-    let clean = text.replace(['_', ','], "");
-    Decimal::from_str(&clean).map_err(|_| {
-        Error::parsing(
-            format!(
-                "Invalid number: '{}'. Expected a valid decimal number (e.g., 42, 3.14, 1_000_000)",
-                text
-            ),
-            parser.make_source(span.clone()),
-            None::<String>,
-        )
-    })
+    text.parse::<crate::literals::NumberLiteral>()
+        .map(|parsed| parsed.0)
+        .map_err(|message| {
+            Error::parsing(message, parser.make_source(span.clone()), None::<String>)
+        })
 }
 
 /// Negate a numeric literal value. Returns `Err(value)` when the value is not a number.

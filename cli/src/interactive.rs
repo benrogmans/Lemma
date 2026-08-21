@@ -38,6 +38,15 @@ struct NumericConstraints {
     help: String,
 }
 
+/// Prompt title: `name [type]` unless type label equals the field name (adds nothing).
+fn prompt_label(data_name: &str, type_label: &str) -> String {
+    if type_label == data_name {
+        data_name.to_string()
+    } else {
+        format!("{data_name} [{type_label}]")
+    }
+}
+
 fn load_static_show(
     engine: &Engine,
     repo: Option<&str>,
@@ -222,12 +231,8 @@ fn prompt_data(
             .run(repo, spec_name, Some(now), trial, rules_for_request, false)
             .context(format!("Spec '{}' not found", spec_name))?;
 
-        let next_name = response
-            .results
-            .values()
-            .flat_map(|result| result.missing_data.iter())
-            .find(|name| !provided_data.contains_key(*name) && !collected.contains_key(*name))
-            .cloned();
+        let next_name =
+            next_prompt_name_from_results(response.results.values(), provided_data, &collected);
 
         let name = match next_name {
             Some(name) => name,
@@ -282,6 +287,34 @@ fn prompt_data(
     Ok(collected)
 }
 
+fn next_prompt_name_from_results<'a>(
+    results: impl IntoIterator<Item = &'a lemma::RuleResult>,
+    provided_data: &HashMap<String, String>,
+    collected: &HashMap<String, String>,
+) -> Option<String> {
+    let mut next = None;
+    let mut any_awaiting = false;
+    for result in results {
+        if !result.awaits_missing_data() {
+            continue;
+        }
+        any_awaiting = true;
+        if let Some(name) = result
+            .missing_data()
+            .iter()
+            .find(|name| !provided_data.contains_key(*name) && !collected.contains_key(*name))
+        {
+            if next.is_none() {
+                next = Some(name.clone());
+            }
+        }
+    }
+    if any_awaiting && next.is_none() {
+        panic!("BUG: MissingData awaits but no unbound key left to prompt");
+    }
+    next
+}
+
 fn computation_veto_reason_for_trial_input(response: &Response) -> Option<String> {
     for rule_result in response.results.values() {
         if !rule_result.vetoed {
@@ -316,7 +349,7 @@ fn prompt_value_for_type(
                 if options.len() == 1 {
                     return Ok(options[0].clone());
                 }
-                let prompt_message = format!("{} [{}]", data_name, type_str);
+                let prompt_message = prompt_label(data_name, &type_str);
                 let mut prompt =
                     Select::new(&prompt_message, options.clone()).with_help_message(help.as_str());
                 if let Some(lit) = suggestion {
@@ -446,7 +479,7 @@ fn prompt_date_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Resul
         "Use arrow keys to navigate, Enter to select"
     };
 
-    let prompt_title = format!("{} [date]", data_name);
+    let prompt_title = prompt_label(data_name, "date");
     let mut ds = DateSelect::new(&prompt_title).with_help_message(help_message);
 
     if let Some(lit) = suggestion {
@@ -485,7 +518,7 @@ fn prompt_boolean_data(data_name: &str, suggestion: Option<&LiteralValue>) -> Re
         "Use arrow keys to select, Enter to confirm".to_string()
     };
 
-    let selected = Select::new(&format!("{} [boolean]", data_name), options)
+    let selected = Select::new(&prompt_label(data_name, "boolean"), options)
         .with_help_message(&help_message)
         .with_starting_cursor(default_index)
         .prompt()
@@ -502,7 +535,7 @@ fn prompt_text_data_with_constraints(
     constraints: &TextConstraints,
 ) -> Result<String> {
     let default_str = suggestion.map(|l| l.to_string());
-    let prompt_message = format!("{} [{}]", data_name, type_str);
+    let prompt_message = prompt_label(data_name, type_str);
     let example = lemma_type.example_value();
 
     let TextConstraints { length, help } = constraints.clone();
@@ -546,7 +579,7 @@ fn prompt_simple_text(
     help: &str,
     example: &str,
 ) -> Result<String> {
-    let prompt_message = format!("{} [{}]", data_name, type_str);
+    let prompt_message = prompt_label(data_name, type_str);
     let validator = |input: &str| {
         if input.trim().is_empty() {
             Ok(Validation::Invalid("Value is required".into()))
@@ -618,7 +651,7 @@ fn prompt_number_data(
     constraints: &NumericConstraints,
 ) -> Result<String> {
     let default_str = suggestion.map(|l| l.to_string());
-    let prompt_message = format!("{} [{}]", data_name, type_str);
+    let prompt_message = prompt_label(data_name, type_str);
     prompt_decimal_input(&prompt_message, default_str.as_deref(), constraints, "10")
 }
 
@@ -637,7 +670,7 @@ fn prompt_measure_data(
         _ => None,
     });
 
-    let prompt_message = format!("{} [{}]", data_name, type_str);
+    let prompt_message = prompt_label(data_name, type_str);
 
     if units.is_empty() {
         let default_str = suggestion.and_then(|lit| lit.magnitude_suggestion_for_decimal_prompt());
@@ -689,7 +722,7 @@ fn prompt_ratio_data(
     maximum: Option<Decimal>,
     help: &str,
 ) -> Result<String> {
-    let prompt_message = format!("{} [{}]", data_name, type_str);
+    let prompt_message = prompt_label(data_name, type_str);
     let selected_unit = if units.len() == 1 {
         units
             .iter()
@@ -800,4 +833,246 @@ fn prompt_decimal_input(
         prompt_message
     ))?;
     Ok(raw.trim().replace(['_', ','], ""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_prompt_name_from_results, prompt_label};
+    use lemma::{DateTimeValue, Engine, SourceType, VetoType};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn prompt_label_omits_bracket_when_type_equals_name() {
+        assert_eq!(
+            prompt_label("applicant_age", "applicant_age"),
+            "applicant_age"
+        );
+        assert_eq!(
+            prompt_label("gender", "gender_code"),
+            "gender [gender_code]"
+        );
+        assert_eq!(prompt_label("age", "number"), "age [number]");
+    }
+
+    fn run(
+        engine: &Engine,
+        spec: &str,
+        data: HashMap<String, String>,
+        rules: Option<&[String]>,
+    ) -> lemma::Response {
+        let now = DateTimeValue::now();
+        engine
+            .run(None, spec, Some(&now), data, rules, false)
+            .expect("evaluation must succeed")
+    }
+
+    #[test]
+    fn awaits_missing_data_only_for_missing_data_veto() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Volatile,
+                r#"
+spec demo
+data a: number
+data age: number
+data extra: number
+rule need: a
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule premium: base * extra
+"#
+                .to_string(),
+            )])
+            .expect("load");
+
+        let missing = run(&engine, "demo", HashMap::new(), Some(&["need".to_string()]));
+        assert!(
+            missing
+                .results
+                .get("need")
+                .expect("need")
+                .awaits_missing_data(),
+            "MissingData veto must stay open for prompts"
+        );
+
+        let mut age_high = HashMap::new();
+        age_high.insert("age".to_string(), "80".to_string());
+        let user = run(&engine, "demo", age_high, Some(&["base".to_string()]));
+        let base = user.results.get("base").expect("base");
+        assert!(
+            matches!(
+                base.veto_detail.as_ref(),
+                Some(VetoType::UserDefined { .. })
+            ),
+            "default veto arm must be UserDefined: {:?}",
+            base.veto_detail
+        );
+        assert!(
+            !base.awaits_missing_data(),
+            "UserDefined veto must be settled for prompts"
+        );
+
+        let mut engine2 = Engine::new();
+        engine2
+            .load([(
+                SourceType::Volatile,
+                r#"
+spec demo2
+data denom: number
+data extra: number
+rule premium: (1 / denom) * extra
+"#
+                .to_string(),
+            )])
+            .expect("load");
+        let mut data = HashMap::new();
+        data.insert("denom".to_string(), "0".to_string());
+        let settled = run(&engine2, "demo2", data, Some(&["premium".to_string()]));
+        let premium = settled.results.get("premium").expect("premium");
+        assert!(
+            matches!(
+                premium.veto_detail.as_ref(),
+                Some(VetoType::Computation { .. })
+            ),
+            "div by zero must computation-veto: {:?}",
+            premium.veto_detail
+        );
+        assert!(
+            !premium.awaits_missing_data(),
+            "Computation veto must be settled for prompts"
+        );
+    }
+
+    #[test]
+    fn next_prompt_skips_settled_computation_leftover_missing_data() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Volatile,
+                r#"
+spec demo
+data denom: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule premium: (1 / denom) * loading
+"#
+                .to_string(),
+            )])
+            .expect("load");
+
+        let mut data = HashMap::new();
+        data.insert("denom".to_string(), "0".to_string());
+        let response = run(&engine, "demo", data, Some(&["premium".to_string()]));
+        let premium = response.results.get("premium").expect("premium");
+        assert!(
+            matches!(
+                premium.veto_detail.as_ref(),
+                Some(VetoType::Computation { .. })
+            ),
+            "{:?}",
+            premium.veto_detail
+        );
+        assert!(
+            premium.missing_data().is_empty(),
+            "settled Computation must clear missing_data: {:?}",
+            premium.missing_data()
+        );
+
+        let empty = HashMap::new();
+        assert_eq!(
+            next_prompt_name_from_results(response.results.values(), &empty, &empty),
+            None,
+            "settled Computation must not drive prompts"
+        );
+    }
+
+    #[test]
+    fn next_prompt_uses_only_unsettled_rule_missing_data() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Path(Arc::new(std::path::PathBuf::from("prompt_settle.lemma"))),
+                r#"
+spec demo
+data denom: number
+data need: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule premium: (1 / denom) * loading
+rule other: need
+"#
+                .to_string(),
+            )])
+            .expect("load");
+
+        let mut data = HashMap::new();
+        data.insert("denom".to_string(), "0".to_string());
+        let response = run(
+            &engine,
+            "demo",
+            data,
+            Some(&["premium".to_string(), "other".to_string()]),
+        );
+
+        let premium = response.results.get("premium").expect("premium");
+        assert!(!premium.awaits_missing_data());
+        assert!(
+            premium.missing_data().is_empty(),
+            "settled premium must clear missing_data: {:?}",
+            premium.missing_data()
+        );
+
+        let other = response.results.get("other").expect("other");
+        assert!(other.awaits_missing_data());
+        assert_eq!(other.missing_data(), vec!["need".to_string()]);
+
+        let empty = HashMap::new();
+        assert_eq!(
+            next_prompt_name_from_results(response.results.values(), &empty, &empty),
+            Some("need".to_string()),
+            "only unsettled other.need must be next"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: MissingData awaits but no unbound key left to prompt")]
+    fn next_prompt_panics_when_awaiting_but_all_keys_already_provided() {
+        let mut engine = Engine::new();
+        engine
+            .load([(
+                SourceType::Volatile,
+                r#"
+spec demo
+data need: number
+rule other: need
+"#
+                .to_string(),
+            )])
+            .expect("load");
+
+        let response = run(
+            &engine,
+            "demo",
+            HashMap::new(),
+            Some(&["other".to_string()]),
+        );
+        let other = response.results.get("other").expect("other");
+        assert!(other.awaits_missing_data());
+        assert_eq!(other.missing_data(), vec!["need".to_string()]);
+
+        let mut provided = HashMap::new();
+        provided.insert("need".to_string(), "42".to_string());
+        let collected = HashMap::new();
+        next_prompt_name_from_results(std::slice::from_ref(other), &provided, &collected);
+    }
 }

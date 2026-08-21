@@ -64,12 +64,12 @@ rule total: rules.final_total
     let msg_str = total_rule.veto_reason.as_deref().expect("veto reason");
     assert!(
         msg_str.contains("Missing data"),
-        "Error message should contain 'Missing data', but got: {}",
+        "Veto reason should contain 'Missing data', but got: {}",
         msg_str
     );
     assert!(
         !msg_str.contains("not found"),
-        "Error message should NOT contain 'not found', but got: {}",
+        "Veto reason should NOT contain 'not found', but got: {}",
         msg_str
     );
 }

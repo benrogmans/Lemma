@@ -1,6 +1,6 @@
 # @lemmabase/lemma-engine
 
-> [Lemma](https://github.com/lemma/lemma) is a declarative language for business rules. **This package is the Lemma engine for JavaScript and TypeScript** — browser, Node, Bun, Deno, Cloudflare Workers, Vercel Edge, etc.
+> [Lemma](https://github.com/lemma/lemma) is a declarative language for business rules. **This package is the Lemma engine for JavaScript and TypeScript**: browser, Node, Bun, Deno, Cloudflare Workers, Vercel Edge, etc.
 
 Pricing tiers, tax brackets, leave entitlement, eligibility checks, discount stacks: the rules that change, that auditors ask about, that legal writes in PDFs and engineers re-implement in operational code... Lemma is a language built specifically for your business rules. It is readable by stakeholders, executable anywhere, and impossible to drift out of sync.
 
@@ -35,7 +35,7 @@ const response = engine.run({ spec: 'pricing', data: { quantity: 50, is_vip: fal
 // response.results.total      → 800 eur
 ```
 
-The `Response` carries every rule's value (or `veto` if no result could be computed). When inputs are still unbound, that rule includes `missing_data` (`string[]` input keys). Types, prefilled literals, and suggestions are on `engine.show(...)` (`Show.data`) only — not on the evaluate response.
+The `Response` carries every rule's value (or `veto` if no result could be computed). When inputs are still unbound, that rule includes `missing_data` (`string[]` input keys). Types, prefilled literals, and suggestions are on `engine.show(...)` (`Show.data`) only, not on the evaluate response.
 
 ## Why use it from JavaScript?
 
@@ -62,7 +62,7 @@ const engine = await Lemma();
 
 `Lemma()` initializes the engine once and returns an `Engine`. Serve over **http(s)**, not `file://`. For manual control: `init()` then `new Engine()`.
 
-If your bundler emits IIFE, can't resolve `import.meta.url`, or refuses to ship the engine module as a separate asset, use the inlined entry — everything ships in one JS bundle:
+If your bundler emits IIFE, can't resolve `import.meta.url`, or refuses to ship the engine module as a separate asset, use the inlined entry. Everything ships in one JS bundle:
 
 ```javascript
 import { Lemma } from '@lemmabase/lemma-engine/iife';
@@ -145,7 +145,7 @@ Lemma is pre-1.0. The JavaScript API is stable for most use cases, but breaking 
 
 ### Runtime traps (internal bugs)
 
-An internal invariant violation (a bug in the engine) traps the runtime. The call throws a `RuntimeError` which you can catch with `try/catch`, but the loaded module is poisoned — constructing a new `Engine()` from the same initialization is not safe. To recover, call `init()` again or run the engine in a Web Worker and respawn the worker on trap. Domain failures (invalid specs, bad data, impossible rules) are reported as `EngineError[]` or vetoes and never cause traps.
+An internal invariant violation (a bug in the engine) traps the runtime. The call throws a `RuntimeError` which you can catch with `try/catch`, but the loaded module is poisoned: constructing a new `Engine()` from the same initialization is not safe. To recover, call `init()` again or run the engine in a Web Worker and respawn the worker on trap. Domain failures (invalid specs, bad data, impossible rules) are reported as `EngineError[]` or vetoes and never cause traps.
 
 ## Related
 

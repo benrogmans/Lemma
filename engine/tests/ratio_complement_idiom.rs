@@ -129,16 +129,24 @@ rule result: x ^ 50%"#;
 
 #[test]
 fn number_power_ratio_decimal_fallback() {
+    use rust_decimal::Decimal;
     let code = r#"spec t
 data x: 2
 rule result: x ^ 50%"#;
     let val = eval(code, "t", "result");
-    let parsed: f64 = val.parse().expect("should be a number");
-    let expected = 2f64.sqrt();
+    let actual: Decimal = val
+        .parse()
+        .unwrap_or_else(|_| panic!("2^50% display must be decimal, got {val}"));
+    let expected = Decimal::new(1414213562373095, 15);
+    let tol = Decimal::new(1, 12);
+    let diff = if actual > expected {
+        actual - expected
+    } else {
+        expected - actual
+    };
     assert!(
-        (parsed - expected).abs() < 0.001,
-        "2^50% ≈ sqrt(2), got: {}",
-        val
+        diff <= tol,
+        "2^50% ≈ sqrt(2) as Decimal (±{tol}), got {actual} (diff {diff})"
     );
 }
 

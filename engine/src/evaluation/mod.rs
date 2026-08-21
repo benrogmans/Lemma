@@ -325,7 +325,12 @@ impl Evaluator {
                 (tree::evaluate_rule(exec_rule, plan, &mut context), None)
             };
 
-            let missing_data = context.missing_data_for_rule(plan, exec_rule.normal_form);
+            let missing_data = match &result {
+                OperationResult::Veto(VetoType::MissingData { .. }) => {
+                    context.missing_data_for_rule(plan, exec_rule.normal_form)
+                }
+                _ => Vec::new(),
+            };
 
             response.add_result(RuleResult::from_operation_result(
                 EvaluatedRule {

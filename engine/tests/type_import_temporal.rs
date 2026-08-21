@@ -129,8 +129,8 @@ rule doubled: price * 2
 }
 
 /// `uses f: finance 2025-02-01` pins to finance v1 (eur only). Using a unit from
-/// v2 (usd) must produce a validation error even after the v2 boundary, because
-/// the pin freezes the type at the qualified instant.
+/// v2 (usd) must veto even after the v2 boundary, because the pin freezes the
+/// type at the qualified instant.
 #[test]
 fn qualified_data_import_rejects_unit_from_later_version() {
     let mut engine = Engine::new();
@@ -182,7 +182,7 @@ rule doubled: price * 2
         "20.00 eur",
     );
 
-    // usd must fail: pin locks to finance v1 which only has eur
+    // usd must veto: pin locks to finance v1 which only has eur
     let effective = date(2025, 9, 1);
     let response = engine
         .run(
@@ -467,7 +467,7 @@ rule doubled: price * 2
 /// Regression: qualified pin to early dep version must NOT silently bind to a
 /// later body. Two finance versions with incompatible types (v1=eur only,
 /// v2=eur+usd). Consumer pins to v1 via `uses f: finance 2025-02-01`.
-/// Evaluating with `usd` in a later slice must fail (v1 has no usd).
+/// Evaluating with `usd` in a later slice must veto (v1 has no usd).
 #[test]
 fn qualified_pin_must_not_leak_later_version_types() {
     let mut engine = Engine::new();
@@ -507,36 +507,23 @@ rule doubled: price * 2
         )])
         .unwrap();
 
-    // Evaluate after boundary with usd — must error because pin locks to v1 (no usd).
+    // Evaluate after boundary with usd — must veto because pin locks to v1 (no usd).
     let effective = date(2025, 9, 1);
-    let result = engine.run(
-        None,
-        "shop",
-        Some(&effective),
-        HashMap::from([("price".to_string(), "10.00 usd".to_string())]),
-        None,
-        false,
+    let response = engine
+        .run(
+            None,
+            "shop",
+            Some(&effective),
+            HashMap::from([("price".to_string(), "10.00 usd".to_string())]),
+            None,
+            false,
+        )
+        .expect("usd override must complete with veto, not Error");
+    let doubled = response.results.get("doubled").expect("doubled");
+    assert!(doubled.vetoed, "usd should be rejected by pinned v1 type");
+    let reason = doubled.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("Unknown unit") && reason.contains("usd"),
+        "veto should mention unknown unit 'usd', got: {reason}"
     );
-    match &result {
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("usd") || msg.contains("unit") || msg.contains("unknown"),
-                "error should mention the rejected unit, got: {msg}"
-            );
-        }
-        Ok(resp) => {
-            // If the engine returns Ok, every rule result must NOT have a successful
-            // value using usd — that would mean the pin leaked v2's types.
-            for (rule, r) in &resp.results {
-                if !r.vetoed {
-                    let s = r.display().unwrap_or("");
-                    assert!(
-                        !s.contains("usd"),
-                        "rule '{rule}' produced {s} — usd must not be accepted when pinned to finance v1"
-                    );
-                }
-            }
-        }
-    }
 }

@@ -145,7 +145,7 @@ fn an_unbound_scrutinee_propagates_as_missing_data() {
         "an unbound scrutinee must veto, got {result:?}"
     );
     assert_eq!(
-        result.missing_data,
+        result.missing_data(),
         vec!["code".to_string()],
         "the scrutinee is the only thing the rule still needs"
     );
@@ -167,10 +167,10 @@ rule rate: 0
 "#,
     );
     let response = run(&engine, "routing", &[("code", "NL")], false);
-    let missing = &rule(&response, "rate").missing_data;
+    let missing = rule(&response, "rate").missing_data();
     assert_eq!(
         missing,
-        &vec!["dutch_rate".to_string()],
+        ["dutch_rate".to_string()].as_slice(),
         "only the selected region's data is still needed, got {missing:?}"
     );
 }
@@ -190,9 +190,9 @@ rule rate: 0
     );
     let response = run(&engine, "routing", &[("code", "ZZ")], false);
     assert!(
-        rule(&response, "rate").missing_data.is_empty(),
+        rule(&response, "rate").missing_data().is_empty(),
         "no arm can win, so neither rate is needed: {:?}",
-        rule(&response, "rate").missing_data
+        rule(&response, "rate").missing_data()
     );
 }
 
@@ -211,7 +211,7 @@ rule rate: 0
     );
     let response = run(&engine, "shared", &[("code", "BE")], false);
     assert_eq!(
-        rule(&response, "rate").missing_data,
+        rule(&response, "rate").missing_data(),
         vec!["special".to_string()],
         "the selected region needs it, so it must not be released"
     );

@@ -1,4 +1,4 @@
-# Lemma Language – VS Code / Cursor extension
+# Lemma Language: VS Code / Cursor extension
 
 Syntax highlighting, inline diagnostics, and **format on save** for `.lemma` files. The extension runs `lemma lsp`; formatting and diagnostics come from the LSP.
 
