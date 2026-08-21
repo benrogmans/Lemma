@@ -6,7 +6,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Pure Lemma MCP tool catalog and handlers"
-publish = false
 
 [lib]
 name = "lemma_mcp"
