@@ -45,4 +45,14 @@ defmodule Lemma.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   def lemma_temporal_api_sources(_resource), do: :erlang.nif_error(:nif_not_loaded)
+
+  def mcp_list_tools, do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_list_resources, do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_read_resource(_uri), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_evaluate(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_list(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_show(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_source(_resource, _args_json), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_check(_args_json), do: :erlang.nif_error(:nif_not_loaded)
+  def mcp_guide(_args_json), do: :erlang.nif_error(:nif_not_loaded)
 end

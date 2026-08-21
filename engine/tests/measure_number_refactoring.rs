@@ -377,16 +377,26 @@ rule power: a ^ 2"#;
 
     // Measure * Measure must be rejected at plan time
     let mut engine2 = Engine::new();
-    let result = engine2.load([(
-        lemma::SourceType::Volatile,
-        r#"spec test2
+    let errs = engine2
+        .load([(
+            lemma::SourceType::Volatile,
+            r#"spec test2
 data money: measure -> unit eur 1.00
 data a: money
 data b: money
 rule multiply: a * b"#
-            .to_string(),
-    )]);
-    assert!(result.is_err(), "Measure * Measure must fail at plan time");
+                .to_string(),
+        )])
+        .expect_err("Measure * Measure must fail at plan time");
+    let joined = errs
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("; ");
+    assert!(
+        joined.contains("anonymous intermediate"),
+        "Measure * Measure must reject as anonymous intermediate, got: {joined}"
+    );
 }
 
 #[test]

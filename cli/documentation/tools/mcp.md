@@ -6,7 +6,7 @@ nav_order: 70
 
 # MCP
 
-Connect Claude, Gemini CLI, or Cursor to your Lemma specs over the [Model Context Protocol](https://modelcontextprotocol.io/). Ask an assistant to evaluate rules, explain results, inspect specs, and — when you allow it — draft or update specs in your workspace.
+Connect Claude, Gemini CLI, or Cursor to your Lemma specs over the [Model Context Protocol](https://modelcontextprotocol.io/). Ask an assistant to evaluate rules, explain results, inspect specs, and, when you allow it, draft or update specs in your workspace.
 
 ## Prerequisites
 
@@ -27,9 +27,11 @@ Shared shape:
 }
 ```
 
+Older MCP clients use `initialize` / `notifications/initialized` (protocol `2025-11-25`; later `tools/list` / `tools/call` need no per-request `_meta`). Clients on `2026-07-28` send `_meta.io.modelcontextprotocol/protocolVersion` on every request and may call `server/discover` first.
+
 ### Claude
 
-**Claude Desktop** — Settings → Developer → Edit Config. Add a server under `mcpServers` in `claude_desktop_config.json`, then fully restart Claude Desktop:
+**Claude Desktop**: Settings → Developer → Edit Config. Add a server under `mcpServers` in `claude_desktop_config.json`, then fully restart Claude Desktop:
 
 ```json
 {
@@ -42,7 +44,7 @@ Shared shape:
 }
 ```
 
-**Claude Code** — from a terminal:
+**Claude Code**: from a terminal:
 
 ```bash
 claude mcp add --transport stdio lemma -- lemma mcp --prefix /path/to/workspace
@@ -114,7 +116,7 @@ Pass `--admin` when you want the assistant to load or replace specs, remove them
 
 ## See also
 
-- [Lemma CLI](../reference/cli.md) — `lemma mcp` flags
-- [Learn](../learn/readme.md) — language guide
-- [LLMs.txt](../llms.md) — authoring Lemma from business logic
+- [Lemma CLI](../reference/cli.md): `lemma mcp` flags
+- [Learn](../learn/readme.md): language guide
+- [LLMs.txt](../llms.md): authoring Lemma from business logic
 - [Installation](../installation.md)

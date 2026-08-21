@@ -4,12 +4,12 @@ Language Server Protocol implementation for [Lemma](https://github.com/lemma/lem
 
 ## Features
 
-- **Diagnostics** — Parse and planning (semantic) errors are published as you type. Parse errors are shown immediately; a debounced (250ms) full workspace validation adds planning errors. Errors use source spans where available; diagnostics are cleared when a file is closed.
-- **Workspace validation** — On native, when the client provides a workspace root, the CLI injects disk discovery (same gitignore-aware policy as `lemma list`, always including `lemma_deps/`) and a filesystem watch into the LSP. The watch is planted only on discovered workspace `.lemma` files and `lemma_deps/` (not a recursive whole-tree watch). Cross-spec planning diagnostics are reported per file. Open/change/save/close update the editor buffer overlay; disk create/change under watched paths (for example after `lemma install`) is picked up by the CLI watch. On WASM, only the open file is validated (no filesystem).
-- **Registry links** — `@`-prefixed Registry references (e.g. `spec @user/workspace/somespec`, `type ... from @iso/countries/alpha2`) are turned into clickable links when the Registry (LemmaBase) provides a URL. Works even when the file has parse errors (text-based scan).
-- **Registry hover** — Hovering on a registry `uses` reference (qualifier or spec name) shows a popup with exactly two navigation entries: a hover-markdown link to the LemmaBase page for the repository, and the `DocumentLink` Ctrl+Click hint to the locally fetched bundle under `<workspace>/lemma_deps/<qualifier>.lemma` at the resolved `spec ...` line.
-- **Embedded stdlib navigation** — `uses lemma units` (and any other reserved `repo lemma` import) becomes a clickable link to a view-only snapshot at `<workspace>/lemma_deps/lemma.std`. The file is written lazily the first time `document_link` runs on a spec that imports it, and is excluded from every `.lemma` discovery pass because of its `.std` extension. The repository qualifier link opens the file; the spec name link opens it at the `spec ...` line. The VS Code extension registers the `lemma.std` filename so the snapshot still gets full Lemma syntax highlighting.
-- **Text document sync** — Full file sync on open, change, and close; no incremental sync.
+- **Diagnostics**: Parse and planning (semantic) errors are published as you type. Parse errors are shown immediately; a debounced (250ms) full workspace validation adds planning errors. Errors use source spans where available; diagnostics are cleared when a file is closed.
+- **Workspace validation**: On native, when the client provides a workspace root, the CLI injects disk discovery (same gitignore-aware policy as `lemma list`, always including `lemma_deps/`) and a filesystem watch into the LSP. The watch is planted only on discovered workspace `.lemma` files and `lemma_deps/` (not a recursive whole-tree watch). Cross-spec planning diagnostics are reported per file. Open/change/save/close update the editor buffer overlay; disk create/change under watched paths (for example after `lemma install`) is picked up by the CLI watch. On WASM, only the open file is validated (no filesystem).
+- **Registry links**: `@`-prefixed Registry references (e.g. `spec @user/workspace/somespec`, `type ... from @iso/countries/alpha2`) are turned into clickable links when the Registry (LemmaBase) provides a URL. Works even when the file has parse errors (text-based scan).
+- **Registry hover**: Hovering on a registry `uses` reference (qualifier or spec name) shows a popup with exactly two navigation entries: a hover-markdown link to the LemmaBase page for the repository, and the `DocumentLink` Ctrl+Click hint to the locally fetched bundle under `<workspace>/lemma_deps/<qualifier>.lemma` at the resolved `spec ...` line.
+- **Embedded stdlib navigation**: `uses lemma units` (and any other reserved `repo lemma` import) becomes a clickable link to a view-only snapshot at `<workspace>/lemma_deps/lemma.std`. The file is written lazily the first time `document_link` runs on a spec that imports it, and is excluded from every `.lemma` discovery pass because of its `.std` extension. The repository qualifier link opens the file; the spec name link opens it at the `spec ...` line. The VS Code extension registers the `lemma.std` filename so the snapshot still gets full Lemma syntax highlighting.
+- **Text document sync**: Full file sync on open, change, and close; no incremental sync.
 
 The server uses the Lemma engine with **registry** support (LemmaBase) for resolving `@...` identifiers and communicates over stdio (native) or browser streams (WASM).
 
@@ -33,10 +33,10 @@ Run the server over stdio:
 lemma lsp
 ```
 
-- **VS Code / Cursor** — Use the extension under [editors/vscode](editors/vscode). It runs `lemma lsp` automatically and looks for `target/release/lemma` when the workspace root is the Lemma repo, or uses the `lemma.lspServerPath` setting. Format-on-save and diagnostics only work when the LSP is running; see [editors/vscode/README.md](editors/vscode/README.md) if format on save does nothing.
-- **Other editors** — Point your editor’s LSP client at `lemma` with argument `lsp` and stdio transport.
+- **VS Code / Cursor**: Use the extension under [editors/vscode](editors/vscode). It runs `lemma lsp` automatically and looks for `target/release/lemma` when the workspace root is the Lemma repo, or uses the `lemma.lspServerPath` setting. Format-on-save and diagnostics only work when the LSP is running; see [editors/vscode/README.md](editors/vscode/README.md) if format on save does nothing.
+- **Other editors**: Point your editor’s LSP client at `lemma` with argument `lsp` and stdio transport.
 
 ## Layout
 
-- **`src/`** — LSP server (tower-lsp): server, diagnostics, registry links, workspace model, registry integration.
-- **`editors/`** — Editor-specific clients and config (e.g. VS Code extension); see [editors/README.md](editors/README.md).
+- **`src/`**: LSP server (tower-lsp): server, diagnostics, registry links, workspace model, registry integration.
+- **`editors/`**: Editor-specific clients and config (e.g. VS Code extension); see [editors/README.md](editors/README.md).

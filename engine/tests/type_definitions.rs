@@ -283,8 +283,8 @@ fn test_run_returns_data_in_definition_order() {
         .results
         .get("total")
         .expect("total rule")
-        .missing_data
-        .clone();
+        .missing_data()
+        .to_vec();
     assert_eq!(
         data_names,
         vec!["zebra", "alpha", "middle"],

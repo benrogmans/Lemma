@@ -70,7 +70,7 @@ Constraints chain with `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> d
 lemma show loan_application
 ```
 
-Which inputs a partial `run` still needs is run-data-aware — inspect each rule's `missing_data` on the evaluation response; static types and suggestions are on `show` only. See [CLI reference](../reference/cli.md).
+Which inputs a partial `run` still needs is run-data-aware: inspect each rule's `missing_data` on the evaluation response; static types and suggestions are on `show` only. See [CLI reference](../reference/cli.md).
 
 See [Data in the language reference](../reference/readme.md#data).
 

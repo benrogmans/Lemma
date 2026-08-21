@@ -1,6 +1,4 @@
 //! Repository (`repo …`) scope integration tests.
-//!
-//! Failures are intentional signal until semantics are fully implemented.
 
 use lemma::{DateTimeValue, Engine, SourceType};
 use std::collections::{HashMap, HashSet};

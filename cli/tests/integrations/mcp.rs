@@ -85,7 +85,19 @@ fn mcp_session_with_env(
     responses
 }
 
-fn make_request(id: u64, method: &str, params: serde_json::Value) -> serde_json::Value {
+fn make_request(id: u64, method: &str, mut params: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = params.as_object_mut() {
+        object.entry("_meta").or_insert_with(|| {
+            json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "lemma-mcp-test",
+                    "version": "0"
+                },
+                "io.modelcontextprotocol/clientCapabilities": {}
+            })
+        });
+    }
     json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -102,6 +114,95 @@ fn write_spec(dir: &std::path::Path, filename: &str, content: &str) {
     std::fs::write(dir.join(filename), content).unwrap();
 }
 
+/// Legacy `initialize` without `_meta` (MCP `2025-11-25` and earlier handshake).
+fn legacy_initialize(
+    id: serde_json::Value,
+    protocol_version: &str,
+    include_capabilities: bool,
+) -> serde_json::Value {
+    let mut params = json!({
+        "protocolVersion": protocol_version,
+        "clientInfo": {
+            "name": "lemma-mcp-test",
+            "version": "0"
+        }
+    });
+    if include_capabilities {
+        params
+            .as_object_mut()
+            .expect("params object")
+            .insert("capabilities".to_string(), json!({}));
+    }
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": params
+    })
+}
+
+fn assert_initialize_result(response: &serde_json::Value, expected_id: &serde_json::Value) {
+    assert!(
+        response["error"].is_null(),
+        "initialize must succeed, got error: {}",
+        response["error"]
+    );
+    assert!(
+        response.get("error").is_none() || response["error"].is_null(),
+        "initialize must not carry error field with data.requested"
+    );
+    assert_eq!(&response["id"], expected_id);
+
+    let result = &response["result"];
+    assert!(result.is_object(), "initialize must return result object");
+
+    let negotiated = result["protocolVersion"]
+        .as_str()
+        .expect("InitializeResult.protocolVersion");
+    assert_eq!(
+        negotiated, "2025-11-25",
+        "initialize must negotiate legacy 2025-11-25, got: {negotiated}"
+    );
+
+    assert!(
+        result["capabilities"]["tools"].is_object(),
+        "initialize must advertise tools capability"
+    );
+    assert!(
+        result["capabilities"]["resources"].is_object(),
+        "initialize must advertise resources capability"
+    );
+    assert!(
+        result["capabilities"].get("prompts").is_none(),
+        "Lemma must not advertise prompts"
+    );
+    assert!(
+        result["capabilities"].get("logging").is_none(),
+        "Lemma must not advertise logging"
+    );
+    assert!(
+        result["capabilities"].get("tasks").is_none(),
+        "Lemma must not advertise tasks"
+    );
+
+    assert_eq!(result["serverInfo"]["name"], "lemma-mcp-server");
+    assert!(
+        result["serverInfo"]["version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()),
+        "serverInfo.version must be non-empty"
+    );
+}
+
+fn tool_names(tools_list_response: &serde_json::Value) -> Vec<String> {
+    tools_list_response["result"]["tools"]
+        .as_array()
+        .expect("tools/list result.tools")
+        .iter()
+        .map(|t| t["name"].as_str().expect("tool name").to_string())
+        .collect()
+}
+
 #[test]
 fn test_mcp_list_returns_list() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -111,7 +212,7 @@ fn test_mcp_list_returns_list() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
             make_request(
                 3,
@@ -159,7 +260,7 @@ fn test_mcp_evaluate_includes_reasoning() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -196,6 +297,10 @@ fn test_mcp_evaluate_includes_reasoning() {
         text.contains("quantity: 25"),
         "Should show the data value that drove the conditions, got: {text}"
     );
+    assert!(
+        text.contains("10%") || text.contains("10 percent"),
+        "last-wins unless for quantity=25 must be 10 percent, got: {text}"
+    );
 }
 
 #[test]
@@ -211,7 +316,7 @@ fn test_mcp_evaluate_reports_missing_data_when_partial() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -266,6 +371,58 @@ fn test_mcp_evaluate_reports_missing_data_when_partial() {
 }
 
 #[test]
+fn test_mcp_evaluate_omits_missing_data_when_rule_already_answered_with_veto() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(
+        temp_dir.path(),
+        "settle.lemma",
+        r#"spec settle
+data denom: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule premium: (1 / denom) * loading
+"#,
+    );
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            make_request(1, "server/discover", json!({})),
+            make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "evaluate",
+                    "arguments": {
+                        "spec": "settle",
+                        "rule": "premium",
+                        "data": ["denom=0"]
+                    }
+                }),
+            ),
+        ],
+    );
+
+    assert!(responses.len() >= 2);
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("evaluate text");
+    assert!(
+        text.contains("premium:"),
+        "settled evaluate must show rule answer, got: {text}"
+    );
+    assert!(
+        !text.contains("missing_data:"),
+        "settled Computation must not print missing_data for leftover live keys, got: {text}"
+    );
+}
+
+#[test]
 fn test_mcp_evaluate_missing_data_includes_help() {
     let temp_dir = tempfile::tempdir().unwrap();
     write_spec(
@@ -283,7 +440,7 @@ rule total: quantity * price
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -325,7 +482,7 @@ fn test_mcp_read_only_by_default() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
             make_request(
                 3,
@@ -405,7 +562,7 @@ fn test_mcp_admin_enables_add_spec() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
             make_request(
                 3,
@@ -477,7 +634,7 @@ fn test_mcp_source() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -518,7 +675,7 @@ fn test_mcp_source_embedded_lemma_repository() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -557,7 +714,7 @@ fn test_mcp_source_without_admin() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -582,24 +739,29 @@ fn test_mcp_source_without_admin() {
     );
 }
 
-// ── initialize ──────────────────────────────────────────────────────────
+// ── server/discover ─────────────────────────────────────────────────────
 
 #[test]
-fn test_mcp_initialize_response() {
+fn test_mcp_discover_response() {
     let temp_dir = tempfile::tempdir().unwrap();
 
     let responses = mcp_session(
         Some(temp_dir.path()),
         false,
-        &[make_request(1, "initialize", json!({}))],
+        &[make_request(1, "server/discover", json!({}))],
     );
 
     assert_eq!(responses.len(), 1);
     let result = &responses[0]["result"];
-    assert_eq!(result["protocolVersion"], "2024-11-05");
-    assert_eq!(result["serverInfo"]["name"], "lemma-mcp-server");
+    assert_eq!(result["supportedVersions"][0], "2026-07-28");
+    assert_eq!(
+        result["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+        "lemma-mcp-server"
+    );
     assert!(
-        result["serverInfo"]["version"].as_str().is_some(),
+        result["_meta"]["io.modelcontextprotocol/serverInfo"]["version"]
+            .as_str()
+            .is_some(),
         "Should include server version"
     );
     assert!(
@@ -623,7 +785,7 @@ fn test_mcp_show_full_spec() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -669,7 +831,7 @@ fn test_mcp_show_full_spec_rules() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -701,7 +863,7 @@ fn test_mcp_show_missing_spec() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -731,7 +893,7 @@ fn test_mcp_show_empty_spec_name() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -766,7 +928,7 @@ fn test_mcp_evaluate_all_rules() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -803,7 +965,7 @@ fn test_mcp_evaluate_missing_spec() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -828,7 +990,7 @@ fn test_mcp_evaluate_empty_spec_name() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -866,7 +1028,7 @@ fn test_mcp_evaluate_veto_result() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -906,7 +1068,7 @@ fn test_mcp_evaluate_with_effective_datetime() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -946,7 +1108,7 @@ fn test_mcp_list_empty_workspace() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -985,7 +1147,7 @@ fn test_mcp_list_empty_workspace_admin_suggests_add() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1021,7 +1183,7 @@ fn test_mcp_defaults_prefix_to_cwd() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1054,6 +1216,270 @@ fn test_mcp_defaults_prefix_to_cwd() {
     );
 }
 
+// ── handshake / protocol ────────────────────────────────────────────────
+
+#[test]
+fn test_mcp_legacy_initialize_then_tools_list_read_only() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            legacy_initialize(json!(0), "2025-11-25", true),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {}
+            }),
+        ],
+    );
+
+    assert_eq!(
+        responses.len(),
+        2,
+        "initialize + tools/list only; initialized is silent"
+    );
+    assert_initialize_result(&responses[0], &json!(0));
+
+    let names = tool_names(&responses[1]);
+    for required in ["evaluate", "list", "show"] {
+        assert!(
+            names.iter().any(|n| n == required),
+            "tools/list after initialize must include {required}, got: {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|n| n == "add_spec"),
+        "read-only must not list add_spec, got: {names:?}"
+    );
+}
+
+#[test]
+fn test_mcp_legacy_initialize_then_tools_list_admin() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[
+            legacy_initialize(json!(0), "2025-11-25", true),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/list",
+                "params": {}
+            }),
+        ],
+    );
+
+    assert_eq!(responses.len(), 2);
+    assert_initialize_result(&responses[0], &json!(0));
+
+    let names = tool_names(&responses[1]);
+    for required in ["evaluate", "list", "show", "add_spec"] {
+        assert!(
+            names.iter().any(|n| n == required),
+            "admin tools/list after initialize must include {required}, got: {names:?}"
+        );
+    }
+}
+
+#[test]
+fn test_mcp_initialize_protocol_version_2024_11_05() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[legacy_initialize(json!(1), "2024-11-05", true)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!(1));
+}
+
+#[test]
+fn test_mcp_initialize_protocol_version_2025_03_26() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[legacy_initialize(json!(1), "2025-03-26", true)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!(1));
+}
+
+#[test]
+fn test_mcp_initialize_protocol_version_2025_11_25_echoes() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[legacy_initialize(json!(1), "2025-11-25", true)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!(1));
+    assert_eq!(
+        responses[0]["result"]["protocolVersion"], "2025-11-25",
+        "when client asks 2025-11-25 and server speaks it, result must echo"
+    );
+}
+
+#[test]
+fn test_mcp_initialize_without_capabilities_field() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[legacy_initialize(json!(1), "2025-11-25", false)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!(1));
+}
+
+#[test]
+fn test_mcp_initialize_string_id() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[legacy_initialize(json!("init-1"), "2025-11-25", true)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!("init-1"));
+}
+
+#[test]
+fn test_mcp_initialize_with_admin_flag_independent() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        true,
+        &[legacy_initialize(json!(0), "2025-11-25", true)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!(0));
+}
+
+#[test]
+fn test_mcp_initialize_requesting_modern_version_still_legacy_result() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[legacy_initialize(json!(1), "2026-07-28", true)],
+    );
+    assert_eq!(responses.len(), 1);
+    assert_initialize_result(&responses[0], &json!(1));
+}
+
+#[test]
+fn test_mcp_tools_call_list_without_meta_after_initialize() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    write_spec(temp_dir.path(), "pricing.lemma", pricing_spec());
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[
+            legacy_initialize(json!(0), "2025-11-25", true),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "list",
+                    "arguments": {}
+                }
+            }),
+        ],
+    );
+
+    assert_eq!(responses.len(), 2);
+    assert_initialize_result(&responses[0], &json!(0));
+    assert!(
+        responses[1]["error"].is_null() || responses[1].get("error").is_none(),
+        "tools/call without _meta after initialize must not error: {}",
+        responses[1]["error"]
+    );
+    let text = responses[1]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("list tool text");
+    assert!(
+        text.contains("pricing"),
+        "list after legacy handshake must return workspace specs, got: {text}"
+    );
+}
+
+#[test]
+fn test_mcp_tools_list_without_initialize_or_meta_errors() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        })],
+    );
+
+    assert_eq!(responses.len(), 1);
+    let error = &responses[0]["error"];
+    assert!(
+        error.is_object(),
+        "tools/list with neither initialize nor _meta must error"
+    );
+    assert!(
+        responses[0].get("result").is_none() || responses[0]["result"].is_null(),
+        "must not return a tool catalog before era is chosen"
+    );
+    if let Some(requested) = error["data"]["requested"].as_str() {
+        assert!(
+            !requested.is_empty(),
+            "must not use empty-string requested as the diagnostic for missing era"
+        );
+    }
+}
+
+#[test]
+fn test_mcp_tools_list_with_modern_meta_no_initialize() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    let responses = mcp_session(
+        Some(temp_dir.path()),
+        false,
+        &[make_request(1, "tools/list", json!({}))],
+    );
+
+    assert_eq!(responses.len(), 1);
+    assert!(
+        responses[0]["error"].is_null() || responses[0].get("error").is_none(),
+        "modern tools/list with _meta and no initialize must succeed: {}",
+        responses[0]["error"]
+    );
+    let names = tool_names(&responses[0]);
+    assert!(
+        names.iter().any(|n| n == "evaluate"),
+        "modern tools/list must include evaluate, got: {names:?}"
+    );
+}
+
 // ── error handling ──────────────────────────────────────────────────────
 
 #[test]
@@ -1066,7 +1492,7 @@ fn test_mcp_invalid_jsonrpc_version() {
         &[json!({
             "jsonrpc": "1.0",
             "id": 1,
-            "method": "initialize",
+            "method": "server/discover",
             "params": {}
         })],
     );
@@ -1151,7 +1577,7 @@ fn test_mcp_tools_call_missing_params() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
@@ -1164,9 +1590,12 @@ fn test_mcp_tools_call_missing_params() {
     let error = &responses[1]["error"];
     assert!(
         error.is_object(),
-        "Should return an error for missing params"
+        "tools/call without params must be a JSON-RPC error, not a tool result"
     );
-    assert_eq!(error["code"], -32602, "Should be invalid params code");
+    assert!(
+        responses[1].get("result").is_none() || responses[1]["result"].is_null(),
+        "must not return a tools/call result when params are absent"
+    );
 }
 
 #[test]
@@ -1177,7 +1606,7 @@ fn test_mcp_tools_call_missing_tool_name() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/call", json!({ "arguments": {} })),
         ],
     );
@@ -1199,7 +1628,7 @@ fn test_mcp_tools_call_unknown_tool() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1213,13 +1642,15 @@ fn test_mcp_tools_call_unknown_tool() {
 
     assert!(responses.len() >= 2);
     let error = &responses[1]["error"];
-    assert!(error.is_object(), "Should return an error for unknown tool");
     assert!(
-        error["message"]
-            .as_str()
-            .unwrap()
-            .contains("nonexistent_tool"),
-        "Error should name the unknown tool, got: {}",
+        error.is_object(),
+        "unknown tool is a host bug (caught panic)"
+    );
+    assert_eq!(error["code"], -32603, "caught panic is internal error");
+    assert_eq!(
+        error["message"].as_str().unwrap(),
+        "internal engine error",
+        "got: {}",
         error["message"]
     );
 }
@@ -1247,7 +1678,7 @@ fn test_mcp_oversized_line_rejected_then_recovers() {
     input.resize(10 * 1024 * 1024 + 1, b'x');
     input.push(b'\n');
     input.extend_from_slice(
-        serde_json::to_string(&make_request(1, "initialize", json!({})))
+        serde_json::to_string(&make_request(1, "server/discover", json!({})))
             .unwrap()
             .as_bytes(),
     );
@@ -1267,7 +1698,7 @@ fn test_mcp_oversized_line_rejected_then_recovers() {
     }
     child.wait().unwrap();
 
-    assert_eq!(responses.len(), 2, "expected error + initialize response");
+    assert_eq!(responses.len(), 2, "expected error + discover response");
     assert_eq!(
         responses[0]["error"]["code"], -32700,
         "oversized line must yield parse error: {}",
@@ -1364,7 +1795,7 @@ fn test_mcp_add_spec_empty_code() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1394,7 +1825,7 @@ fn test_mcp_add_spec_invalid_code() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1440,7 +1871,7 @@ fn test_mcp_tools_list_read_only_tools() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
         ],
     );
@@ -1476,7 +1907,7 @@ fn test_mcp_remove_spec_and_clear() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1582,7 +2013,7 @@ fn test_mcp_remove_spec_rewrites_shared_path_file() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1639,7 +2070,7 @@ fn test_mcp_remove_spec_deletes_startup_loaded_file() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1684,7 +2115,7 @@ fn test_mcp_clear_deletes_startup_loaded_workspace_files() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/call", json!({ "name": "list", "arguments": {} })),
             make_request(3, "tools/call", json!({ "name": "clear", "arguments": {} })),
             make_request(4, "tools/call", json!({ "name": "list", "arguments": {} })),
@@ -1725,7 +2156,7 @@ fn test_mcp_clear_description_leads_with_remove_all() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
         ],
     );
@@ -1749,7 +2180,7 @@ fn test_mcp_remove_spec_blocked_without_admin() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1795,7 +2226,7 @@ fn test_mcp_install_blocked_without_admin() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1832,7 +2263,7 @@ fn test_mcp_tools_list_admin_tools() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
         ],
     );
@@ -1888,7 +2319,7 @@ fn test_mcp_tools_have_input_schemas() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/list", json!({})),
         ],
     );
@@ -1929,7 +2360,7 @@ fn test_mcp_evaluate_with_data_overrides() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -1969,7 +2400,7 @@ fn test_mcp_add_spec_then_evaluate() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2033,7 +2464,7 @@ rule total: d.value
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2086,7 +2517,7 @@ fn test_add_spec_persists_to_disk() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2133,7 +2564,7 @@ fn test_update_spec_persists_to_disk() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2174,7 +2605,7 @@ fn test_add_spec_path_traversal_rejected() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2220,7 +2651,7 @@ fn test_add_spec_write_failure_rolls_back_engine() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2282,7 +2713,7 @@ fn test_mcp_source_missing_spec() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2319,7 +2750,7 @@ fn test_mcp_evaluate_invalid_effective() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2371,7 +2802,7 @@ rule total: base
             Some(temp_dir.path()),
             false,
             &[
-                make_request(1, "initialize", json!({})),
+                make_request(1, "server/discover", json!({})),
                 make_request(
                     2,
                     "tools/call",
@@ -2420,7 +2851,7 @@ fn test_mcp_response_ids_match_request_ids() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(10, "initialize", json!({})),
+            make_request(10, "server/discover", json!({})),
             make_request(20, "tools/list", json!({})),
             make_request(
                 30,
@@ -2447,7 +2878,7 @@ fn mcp_add_spec_without_source_id_must_require_source_id() {
         Some(temp_dir.path()),
         true,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2482,7 +2913,7 @@ fn mcp_evaluate_veto_must_not_invent_vetoed_placeholder() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2515,7 +2946,7 @@ fn test_mcp_check_invalid_returns_diagnostics() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2555,7 +2986,7 @@ fn test_mcp_check_does_not_mutate_list() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "tools/call", json!({ "name": "list", "arguments": {} })),
             make_request(
                 3,
@@ -2613,7 +3044,7 @@ fn test_mcp_check_resolves_workspace_and_units() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2651,7 +3082,7 @@ fn test_mcp_check_resolves_registry_dependency() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2696,7 +3127,7 @@ rule is_eligible: true
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2756,7 +3187,7 @@ rule total: qty
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2792,7 +3223,7 @@ fn test_mcp_check_invalid_skips_recommendations() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2824,7 +3255,7 @@ fn test_mcp_check_rejects_duplicate_source_label() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2864,7 +3295,7 @@ fn test_mcp_show_json_includes_rule_units() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2900,7 +3331,7 @@ fn test_mcp_evaluate_renders_unit_map() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -2918,7 +3349,7 @@ fn test_mcp_evaluate_renders_unit_map() {
 
     assert!(
         responses.len() >= 2,
-        "expected initialize + evaluate responses, got: {responses:?}"
+        "expected discover + evaluate responses, got: {responses:?}"
     );
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
@@ -2949,7 +3380,7 @@ fn test_mcp_guide_topics() {
         "evaluate",
         "full",
     ];
-    let mut messages = vec![make_request(1, "initialize", json!({}))];
+    let mut messages = vec![make_request(1, "server/discover", json!({}))];
     for (i, topic) in topics.iter().enumerate() {
         messages.push(make_request(
             (i + 2) as u64,
@@ -3175,7 +3606,7 @@ fn test_mcp_guide_default_is_evaluate() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -3248,7 +3679,7 @@ fn test_mcp_guide_full_topic_is_authoring() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(
                 2,
                 "tools/call",
@@ -3298,7 +3729,7 @@ fn test_mcp_resources_list_and_read() {
         Some(temp_dir.path()),
         false,
         &[
-            make_request(1, "initialize", json!({})),
+            make_request(1, "server/discover", json!({})),
             make_request(2, "resources/list", json!({})),
             make_request(
                 3,

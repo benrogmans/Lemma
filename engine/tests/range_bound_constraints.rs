@@ -198,9 +198,12 @@ fn custom_measure_range_overlay_vetoes_endpoint() {
     let response = engine
         .run(None, "s", Some(&now()), data, None, false)
         .expect("run must complete with veto, not Error");
+    let out = response.results.get("out").expect("out");
+    assert!(out.vetoed, "overlay below lower must veto rule out");
+    let reason = out.veto_reason.as_deref().expect("veto reason");
     assert!(
-        response.results.values().any(|r| r.vetoed),
-        "overlay below lower must veto"
+        reason.contains("is below minimum"),
+        "endpoint veto must be element minimum, got: {reason}"
     );
 }
 
@@ -215,9 +218,12 @@ fn custom_measure_range_overlay_vetoes_width() {
     let response = engine
         .run(None, "s", Some(&now()), data, None, false)
         .expect("run must complete with veto, not Error");
+    let out = response.results.get("out").expect("out");
+    assert!(out.vetoed, "overlay below width minimum must veto rule out");
+    let reason = out.veto_reason.as_deref().expect("veto reason");
     assert!(
-        response.results.values().any(|r| r.vetoed),
-        "overlay below width minimum must veto"
+        reason.contains("span is below minimum width"),
+        "width veto reason must be span minimum, got: {reason}"
     );
 }
 
@@ -622,7 +628,16 @@ rule out: tier
     let response = engine
         .run(None, "s", Some(&now()), data, None, false)
         .expect("run must complete");
-    assert!(response.results.values().any(|r| r.vetoed));
+    let out = response.results.get("out").expect("out");
+    assert!(
+        out.vetoed,
+        "out-of-bound number range overlay must veto rule out"
+    );
+    let reason = out.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("span is below minimum width"),
+        "range overlay veto reason must be span minimum, got: {reason}"
+    );
 }
 
 // ─── E. Named inheritance ───────────────────────────────────────────────────

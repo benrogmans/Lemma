@@ -93,9 +93,16 @@ fn below_minimum_number_override_completes_with_veto_not_validation_error() {
         "age=-5 (below minimum 0)",
     );
 
+    let age_discount = response.results.get("age_discount").expect("age_discount");
     assert!(
-        response.results.values().any(|r| r.vetoed),
-        "below-minimum age must produce at least one vetoed rule"
+        age_discount.vetoed,
+        "below-minimum age must veto age_discount, got {:?}",
+        age_discount.display()
+    );
+    let reason = age_discount.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.to_lowercase().contains("minimum") || reason.contains("at least"),
+        "veto reason must mention minimum, got: {reason}"
     );
 }
 
@@ -141,9 +148,19 @@ fn below_minimum_typedecl_override_completes_with_veto_not_validation_error() {
         "desired_servings=0 (below minimum 1)",
     );
 
+    let scaling_factor = response
+        .results
+        .get("scaling_factor")
+        .expect("scaling_factor");
     assert!(
-        response.results.values().any(|r| r.vetoed),
-        "below-minimum desired_servings must produce veto on dependent rules"
+        scaling_factor.vetoed,
+        "below-minimum desired_servings must veto scaling_factor, got {:?}",
+        scaling_factor.display()
+    );
+    let reason = scaling_factor.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.to_lowercase().contains("minimum") || reason.contains("at least"),
+        "veto reason must mention minimum, got: {reason}"
     );
 }
 

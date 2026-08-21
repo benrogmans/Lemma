@@ -19,6 +19,20 @@ fn expect_plan_error(code: &str, expected_fragment: &str) {
     );
 }
 
+fn assert_display(response: &lemma::Response, rule: &str, expected: &str) {
+    let result = response
+        .results
+        .get(rule)
+        .unwrap_or_else(|| panic!("rule '{rule}' missing"));
+    if result.vetoed {
+        panic!(
+            "rule '{rule}' vetoed: {}",
+            result.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    assert_eq!(result.display().expect("display").to_string(), expected);
+}
+
 #[test]
 fn test_money_minus_percentage_rejected() {
     let code = r#"
@@ -79,11 +93,8 @@ rule test_passes: result is expected
         )
         .unwrap();
 
-    let result = response.results.get("result").unwrap();
-    assert_eq!(result.display().expect("display").to_string(), "150");
-
-    let test_passes = response.results.get("test_passes").unwrap();
-    assert_eq!(test_passes.display().expect("display").to_string(), "true");
+    assert_display(&response, "result", "150");
+    assert_display(&response, "test_passes", "true");
 }
 
 #[test]
@@ -121,14 +132,8 @@ rule test_passes: final_price is expected
         )
         .unwrap();
 
-    let discount_amount = response.results.get("discount_amount").unwrap();
-    assert_eq!(
-        discount_amount.display().expect("display").to_string(),
-        "50"
-    );
-
-    let final_price = response.results.get("final_price").unwrap();
-    assert_eq!(final_price.display().expect("display").to_string(), "150");
+    assert_display(&response, "discount_amount", "50");
+    assert_display(&response, "final_price", "150");
 }
 
 #[test]

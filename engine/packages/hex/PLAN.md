@@ -1,4 +1,4 @@
-# Hex package (Rustler) — current surface
+# Hex package (Rustler): current surface
 
 Elixir/Erlang bindings via Rustler NIFs. Public API lives in `lib/lemma.ex`; NIFs in `native/lemma_hex/src/lib.rs`.
 

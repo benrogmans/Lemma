@@ -353,6 +353,94 @@ rule doubled: base_value * 2
 }
 
 #[test]
+fn test_cli_explain_omits_missing_data_when_rule_already_answered_with_veto() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec settle
+data denom: number
+data is_smoker: boolean
+data is_former_smoker: boolean
+data years_since_quit: number
+rule loading: 1
+  unless is_former_smoker then years_since_quit + 1
+  unless is_smoker then 2
+rule premium: (1 / denom) * loading
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("settle")
+        .arg("--rules=premium")
+        .arg("denom=0")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Rules"),
+        "explain must show Rules section, got:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.lines().any(|line| line == "Missing data"),
+        "settled Computation must not print Missing data section for leftover live keys, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_cli_explain_still_prints_missing_data_when_awaiting_input() {
+    let temp_dir = TempDir::new().unwrap();
+    fs::write(
+        temp_dir.path().join("test.lemma"),
+        r#"
+spec open
+data a: number
+data b: number
+rule main: a + b
+"#,
+    )
+    .unwrap();
+
+    let mut cmd = cargo_bin_cmd!("lemma");
+    cmd.arg("run")
+        .arg("--prefix")
+        .arg(temp_dir.path())
+        .arg("open")
+        .arg("--rules=main")
+        .arg("--explain");
+
+    let output = cmd.output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "run --explain should succeed: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Missing data"),
+        "true MissingData must still print Missing data, got:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("a") && stdout.contains("b"),
+        "Missing data must list unbound operands, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn test_cli_explain_shows_all_operands_in_nested_arithmetic() {
     let temp_dir = TempDir::new().unwrap();
     fs::write(

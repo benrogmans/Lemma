@@ -42,7 +42,7 @@ data pi: 3.14"#,
                 tess = r#"repo @benrogmans/tess
 
 spec x
-rule placeholder: true"#,
+rule ready: true"#,
                 collide = r#"repo collide
 
 spec finance

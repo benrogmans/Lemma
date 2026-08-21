@@ -154,9 +154,10 @@ rule band_out: band
 }
 
 #[test]
-fn data_binding_with_excess_fractional_digits_truncates_at_input() {
-    // 40 fractional digits: input is truncated (rounded) to the 28 significant
-    // digits a Decimal holds, then evaluation proceeds normally.
+fn data_binding_at_max_fractional_digits_evaluates() {
+    let scale = rust_decimal::Decimal::MAX_SCALE as usize;
+    let frac = "1".repeat(scale);
+    let literal = format!("0.{frac}");
     let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
     let mut engine = Engine::new();
     engine
@@ -168,10 +169,7 @@ fn data_binding_with_excess_fractional_digits_truncates_at_input() {
         )])
         .unwrap();
     let mut data = HashMap::new();
-    data.insert(
-        "x".to_string(),
-        "0.1234567890123456789012345678901234567890".to_string(),
-    );
+    data.insert("x".to_string(), literal.clone());
     let now = DateTimeValue::now();
     let response = engine
         .run(None, "fuzz_test", Some(&now), data, None, false)
@@ -179,9 +177,10 @@ fn data_binding_with_excess_fractional_digits_truncates_at_input() {
     let doubled = response.results.get("doubled").expect("doubled");
     assert!(
         !doubled.vetoed,
-        "truncated input must evaluate, got veto: {:?}",
+        "max-scale input must evaluate, got {:?}",
         doubled.veto_reason
     );
+    let expected = format!("0.{}", "2".repeat(scale));
     assert_eq!(
         doubled
             .value
@@ -189,7 +188,41 @@ fn data_binding_with_excess_fractional_digits_truncates_at_input() {
             .expect("rule result value")
             .number
             .as_deref(),
-        Some("0.2469135780246913578024691358"),
-        "doubled truncated input"
+        Some(expected.as_str()),
+        "doubled 0.(1×{scale}) must be 0.(2×{scale})"
+    );
+}
+
+#[test]
+fn data_binding_with_excess_fractional_digits_vetoes_at_input() {
+    let scale = rust_decimal::Decimal::MAX_SCALE as usize;
+    let frac = "1".repeat(scale + 1);
+    let literal = format!("0.{frac}");
+    let code = "spec fuzz_test\ndata x: number\nrule doubled: x * 2\n";
+    let mut engine = Engine::new();
+    engine
+        .load([(
+            SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "fuzz_binding",
+            ))),
+            code.to_string(),
+        )])
+        .unwrap();
+    let mut data = HashMap::new();
+    data.insert("x".to_string(), literal.clone());
+    let now = DateTimeValue::now();
+    let response = engine
+        .run(None, "fuzz_test", Some(&now), data, None, false)
+        .expect("run must complete with veto, not Error");
+    let doubled = response.results.get("doubled").expect("doubled");
+    assert!(
+        doubled.vetoed,
+        "excess fractional digits must veto, got {:?}",
+        doubled.display()
+    );
+    let reason = doubled.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        reason.contains("Invalid number") && reason.contains("too many fractional digits"),
+        "expected parse-failure veto for over-scale input, got: {reason}"
     );
 }

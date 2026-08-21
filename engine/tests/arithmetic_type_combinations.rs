@@ -227,37 +227,25 @@ rule result: price ^ 3"#;
 #[test]
 fn measure_power_variable_exponent_rejected() {
     // Variable exponent for Measure ^ Number must be rejected at plan time.
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
 data money: measure -> unit eur 1.00
 data price: 2 eur
 data n: 3
-rule result: price ^ n"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Measure ^ variable_exponent should be rejected at plan time"
+rule result: price ^ n"#,
+        "variable exponent",
     );
 }
 
 #[test]
 fn measure_power_fractional_exponent_rejected() {
     // Fractional literal exponents for Measure ^ Number must also be rejected.
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
 data money: measure -> unit eur 1.00
 data price: 4 eur
-rule result: price ^ 0.5"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Measure ^ fractional_exponent should be rejected at plan time"
+rule result: price ^ 0.5"#,
+        "fractional",
     );
 }
 
@@ -344,55 +332,40 @@ rule result: price / rate"#;
 fn measure_multiply_duration_rejected_at_rule_boundary() {
     // Duration * Measure and Measure * Duration produce anonymous intermediates with unresolved
     // dimensions. These are forbidden at rule boundaries; give the rule a named measure type with units.
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
+uses lemma units
 data money: measure -> unit eur 1.00
 data rate: 50 eur
 data hour: 8 hour
-rule result: rate * hour"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Measure * Duration at rule boundary should be rejected: anonymous intermediate {{money:1, duration:1}}"
+rule result: rate * hour"#,
+        "anonymous intermediate",
     );
 }
 
 #[test]
 fn duration_multiply_measure_rejected_at_rule_boundary() {
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
+uses lemma units
 data money: measure -> unit eur 1.00
 data hour: 8 hour
 data rate: 50 eur
-rule result: hour * rate"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Duration * Measure at rule boundary should be rejected: anonymous intermediate {{duration:1, money:1}}"
+rule result: hour * rate"#,
+        "anonymous intermediate",
     );
 }
 
 #[test]
 fn measure_divide_duration_rejected_at_rule_boundary() {
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
+uses lemma units
 data money: measure -> unit eur 1.00
 data total: 400 eur
 data hour: 8 hour
-rule result: total / hour"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Measure / Duration at rule boundary should be rejected: anonymous intermediate {{money:1, duration:-1}}"
+rule result: total / hour"#,
+        "anonymous intermediate",
     );
 }
 
@@ -478,18 +451,13 @@ rule result: d ^ 3"#;
 #[test]
 fn duration_power_variable_exponent_rejected() {
     // Variable exponent for Duration ^ Number must be rejected at plan time.
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
+uses lemma units
 data d: 2 hour
 data n: 3
-rule result: d ^ n"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Duration ^ variable_exponent should be rejected at plan time"
+rule result: d ^ n"#,
+        "variable exponent",
     );
 }
 
@@ -939,10 +907,9 @@ data total: 10 eur
 data unit_price: 5 eur
 rule price_ratio: total / unit_price"#;
     let val = eval_rule(code, "t", "price_ratio", HashMap::new());
-    assert!(
-        val == "2" || val == "2.00" || val.starts_with("2.0"),
-        "10 eur / 5 eur should be dimensionless 2, got: {}",
-        val
+    assert_eq!(
+        val, "2",
+        "10 eur / 5 eur should be dimensionless 2, got: {val}"
     );
     assert!(
         !val.to_lowercase().contains("eur"),
@@ -961,11 +928,7 @@ data cost: 50 eur
 rule margin_factor: revenue / cost
 rule doubled: margin_factor * 10"#;
     let val = eval_rule(code, "t", "doubled", HashMap::new());
-    assert!(
-        val == "20" || val.starts_with("20"),
-        "margin_factor=2, doubled=20, got: {}",
-        val
-    );
+    assert_eq!(val, "20", "margin_factor=2, doubled=20, got: {val}");
     assert!(
         !val.to_lowercase().contains("eur"),
         "number * number should not have unit, got: {}",
@@ -986,10 +949,9 @@ data count: 20
 data price: 10 eur
 rule units_per_eur: count / price"#;
     let val = eval_rule(code, "t", "units_per_eur", HashMap::new());
-    assert!(
-        val == "2" || val == "2.00" || val.starts_with("2.0"),
-        "20 / 10 eur should be dimensionless 2, got: {}",
-        val
+    assert_eq!(
+        val, "2",
+        "20 / 10 eur should be dimensionless 2, got: {val}"
     );
     assert!(
         !val.to_lowercase().contains("eur"),
@@ -1005,19 +967,13 @@ rule units_per_eur: count / price"#;
 
 #[test]
 fn measure_multiply_measure_rejected_at_plan_time() {
-    let mut engine = Engine::new();
-    let result = engine.load([(
-        lemma::SourceType::Volatile,
+    expect_plan_error(
         r#"spec t
 data money: measure -> unit eur 1.00
 data a: 10 eur
 data b: 5 eur
-rule product: a * b"#
-            .to_string(),
-    )]);
-    assert!(
-        result.is_err(),
-        "Measure * Measure should be rejected at plan time"
+rule product: a * b"#,
+        "anonymous intermediate",
     );
 }
 

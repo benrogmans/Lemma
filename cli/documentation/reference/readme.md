@@ -13,11 +13,11 @@ Lemma can be written in `.lemma` files however you like. The CLI ignores file na
 
 ### `repo`
 
-A `repo <name>` declaration groups the specs that follow, until the next `repo` line. You can leave out a `repo` statement and the specs in your file join the default repository with everything else that has no name. The name `lemma` is reserved for the embedded units stdlib (`uses lemma units`). See [Composing specs — Repositories](../learn/composing_specs.md#repositories).
+A `repo <name>` declaration groups the specs that follow, until the next `repo` line. You can leave out a `repo` statement and the specs in your file join the default repository with everything else that has no name. The name `lemma` is reserved for the embedded units stdlib (`uses lemma units`). See [Composing specs: Repositories](../learn/composing_specs.md#repositories).
 
 ### `spec`
 
-`spec <name>` starts a namespace for data and rules. An optional effective datetime on the same line (`spec pricing 2026-01-01`) places that body on a temporal timeline. Names may use `/`, `.`, and `-` segments (`spec employee/contract`, `spec nl.tax.brackets`). Versioning is temporal only — there is no version tag in the name. A file may contain several specs.
+`spec <name>` starts a namespace for data and rules. An optional effective datetime on the same line (`spec pricing 2026-01-01`) places that body on a temporal timeline. Names may use `/`, `.`, and `-` segments (`spec employee/contract`, `spec nl.tax.brackets`). Versioning is temporal only: there is no version tag in the name. A file may contain several specs.
 
 ### Commentary
 
@@ -37,7 +37,7 @@ Commentary after `data`, `rule`, or any other keyword is a parse error.
 
 ### `meta`
 
-`meta` attaches documentation metadata to a spec—citations, gazette references, case law, and similar links that explain where a rule comes from. Values are not used in evaluation. They appear on `show.meta`.
+`meta` attaches documentation metadata to a spec: citations, gazette references, case law, and similar links that explain where a rule comes from. Values are not used in evaluation. They appear on `show.meta`.
 
 ```lemma
 spec overtime_pay 2004-08-02
@@ -45,7 +45,7 @@ spec overtime_pay 2004-08-02
 Maximum average weekly working time.
 """
 
-meta title: "Working time — weekly average"
+meta title: "Working time: weekly average"
 meta directive: "Directive 2003/88/EC, Article 6"
 
 data hours_per_week: number
@@ -168,7 +168,7 @@ Chained casts nest from left to right: `expr as unit as unit … as number`.
 | `as <unit>` | Convert, relabel, or construct a measure/ratio in that unit                         | `mass as gram`, `5 as eur`, `rate as hour`  |
 | `as number` | Strip to raw magnitude (requires explicit unit on prior step for quantities/ranges) | `10 eur as number`, `span as day as number` |
 
-`<unit>` may be bare (`eur`) or qualified (`money.eur`, `units.kilogram`, `units.mass.kilogram`). Optionally qualify; must qualify when the bare name is ambiguous in scope — see [Qualifying units](#qualifying-units).
+`<unit>` may be bare (`eur`) or qualified (`money.eur`, `units.kilogram`, `units.mass.kilogram`). Optionally qualify; must qualify when the bare name is ambiguous in scope: see [Qualifying units](#qualifying-units).
 
 Same-family conversion applies factors (`2 kilogram as gram` → `2000 gram`). Cross-family relabel keeps magnitude (`5 eur as kg` → `5 kg`).
 
@@ -242,7 +242,7 @@ Evaluating `order` before 2025-01-01 uses `base_points: 100`; from 2025-01-01 on
 | **Run instant**   | `lemma run points --effective 2025-03-01` (CLI) or **Accept-Datetime** (HTTP) | Picks which temporal row of the **root spec** is active           |
 
 
-Bare year on a pin (`2025`) means that year's Jan 1 00:00, same as datetime literals. HTTP details for Accept-Datetime, `Vary`, and `Memento-Datetime`: [CLI — API Defaults](cli.md#api-defaults).
+Bare year on a pin (`2025`) means that year's Jan 1 00:00, same as datetime literals. HTTP details for Accept-Datetime, `Vary`, and `Memento-Datetime`: [CLI: API Defaults](cli.md#api-defaults).
 
 ### Self-reference restriction
 
@@ -303,11 +303,11 @@ uses inv: accounting invoice
 rule total: inv.amount
 ```
 
-`uses inv: accounting invoice` imports `invoice` from the `accounting` repository. Registry imports keep the `@` form (`uses iso: @iso/countries alpha2`). See [Composing specs — Repositories](../learn/composing_specs.md#repositories).
+`uses inv: accounting invoice` imports `invoice` from the `accounting` repository. Registry imports keep the `@` form (`uses iso: @iso/countries alpha2`). See [Composing specs: Repositories](../learn/composing_specs.md#repositories).
 
 ### Unpinned vs pinned imports
 
-An **unpinned** import (`uses p: policy`) follows the dependency's timeline: planning may split the consumer into temporal slices at dependency `effective_from` boundaries, and resolved values can change when the dependency gains a new row. A **pinned** import (`uses f: finance 2025-06-01`) freezes that edge (and its transitive imports) to the body active at that instant. Coverage gaps and interface compatibility across slices are checked at planning — details in [Composing specs](../learn/composing_specs.md#unpinned-vs-pinned-uses).
+An **unpinned** import (`uses p: policy`) follows the dependency's timeline: planning may split the consumer into temporal slices at dependency `effective_from` boundaries, and resolved values can change when the dependency gains a new row. A **pinned** import (`uses f: finance 2025-06-01`) freezes that edge (and its transitive imports) to the body active at that instant. Coverage gaps and interface compatibility across slices are checked at planning: details in [Composing specs](../learn/composing_specs.md#unpinned-vs-pinned-uses).
 
 ### `uses` and qualified parents
 
@@ -636,7 +636,7 @@ data amount: measure
 
 A literal on the right-hand side prefills the slot. A type alone leaves it open. `-> suggest` is only a suggestion for callers or UIs; it does not prefill and so the  engine still requires the value to be provided. 
 
-Constraints such as `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, and `-> help` depend on the primitive — see [Data commands](#data-commands). At evaluation, an open input with no supplied value yields a missing-data veto when the rule needs it; a bad value (wrong type, failed constraint, disallowed option, excess decimals) vetoes that data. Duplicate names that canonicalize to the same identifier (for example `Age` and `age`) are a request error.
+Constraints such as `-> minimum`, `-> maximum`, `-> option`, `-> unit`, `-> decimals`, `-> suggest`, and `-> help` depend on the primitive: see [Data commands](#data-commands). At evaluation, an open input with no supplied value yields a missing-data veto when the rule needs it; a bad value (wrong type, failed constraint, disallowed option, excess decimals) vetoes that data. Duplicate names that canonicalize to the same identifier (for example `Age` and `age`) are a request error.
 
 ### Named types
 
@@ -767,12 +767,12 @@ Optionally qualify units; must qualify when the bare name is ambiguous in scope.
 
 | Form | Meaning |
 |------|---------|
-| `kilogram` | Bare — exactly one in-scope owner |
+| `kilogram` | Bare: exactly one in-scope owner |
 | `my_weight.kilogram` | Local owning type |
 | `units.mass.kilogram` | Import alias + type |
-| `units.kilogram` | Import sugar — unique under that alias |
+| `units.kilogram` | Import sugar: unique under that alias |
 
-Bare literals and `as` targets plan when the unit name has a unique owner. Qualified paths are allowed whenever they uniquely identify an owner. Ambiguous bare use is a planning error that lists legal qualifiers. The same rule applies to each factor in a compound unit expression. Two measure types may declare the same unit name; the spec still loads — clash surfaces only at a bare use site.
+Bare literals and `as` targets plan when the unit name has a unique owner. Qualified paths are allowed whenever they uniquely identify an owner. Ambiguous bare use is a planning error that lists legal qualifiers. The same rule applies to each factor in a compound unit expression. Two measure types may declare the same unit name; the spec still loads: clash surfaces only at a bare use site.
 
 Wire shapes for `run` / `show` measure maps stay bare declared unit names. Qualification is source syntax only.
 
@@ -806,7 +806,7 @@ Layer compounds: a later unit may reference an earlier named compound (`eur_per_
 
 `Engine::new()` embeds `repo lemma` / `spec units`. Import with `uses lemma units` (or `uses si: lemma units`).
 
-Unit names are **singular only** (`8 hour`, not `8 hours`). Length uses American spelling (`meter`, not `metre`). Thermodynamic temperature is `kelvin` only (no Celsius/Fahrenheit — affine scales need a local single-unit type).
+Unit names are **singular only** (`8 hour`, not `8 hours`). Length uses American spelling (`meter`, not `metre`). Thermodynamic temperature is `kelvin` only (no Celsius/Fahrenheit: affine scales need a local single-unit type).
 
 | Type | Role | Notes |
 | ---- | ---- | ----- |
@@ -1024,7 +1024,7 @@ rule discount_as_percent: 0.25 as percent
 
 ## Evaluate JSON / explanations
 
-Evaluate responses (`lemma run --json`, HTTP POST, SDK `run`) carry per-rule values, optional `missing_data`, and — when explanations are opted in — a per-rule `explanation` tree. Shape: [`api.v1.json`](../schemas/api.v1.json) (root and nested rules use `"type":"rule"` + `"name"`; bound data `"type":"data"`; unused cause paths `"type":"data_unused"`). See [CLI — Explanations](cli.md#api-defaults).
+Evaluate responses (`lemma run --json`, HTTP POST, SDK `run`) carry per-rule values, optional `missing_data`, and, when explanations are opted in, a per-rule `explanation` tree. Shape: [`api.v1.json`](../schemas/api.v1.json) (root and nested rules use `"type":"rule"` + `"name"`; bound data `"type":"data"`; unused cause paths `"type":"data_unused"`). See [CLI: Explanations](cli.md#api-defaults).
 
 ## Test coverage
 

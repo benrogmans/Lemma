@@ -9,8 +9,8 @@ fn missing(response: &lemma::Response, rule: &str) -> Vec<String> {
         .results
         .get(rule)
         .unwrap_or_else(|| panic!("rule {rule}"))
-        .missing_data
-        .clone()
+        .missing_data()
+        .to_vec()
 }
 
 const CHOOSER_LEMMA: &str = r#"

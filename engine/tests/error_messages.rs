@@ -159,11 +159,11 @@ fn test_duplicate_data_shows_name() {
 }
 
 // ============================================================================
-// RUNTIME ERRORS - Division by Zero (now returns Veto, not Error)
+// RUNTIME VETO - Division by Zero
 // ============================================================================
 
 #[test]
-fn test_runtime_error_division_by_zero() {
+fn test_runtime_veto_division_by_zero() {
     let mut engine = Engine::new();
 
     engine
@@ -205,10 +205,8 @@ fn test_runtime_error_division_by_zero() {
 }
 
 // ============================================================================
-// RUNTIME ERRORS - Circular Dependencies
+// Circular Dependencies
 // ============================================================================
-// Note: Cross-rule circular dependencies currently cause Prolog to hang
-// Testing is limited to self-referencing rules which are caught at transpilation time
 
 #[test]
 fn test_transpile_error_self_referencing_rule() {

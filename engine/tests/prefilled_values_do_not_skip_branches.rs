@@ -25,7 +25,7 @@ fn missing_data_union(response: &lemma::Response) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     let mut names = Vec::new();
     for result in response.results.values() {
-        for key in &result.missing_data {
+        for key in result.missing_data() {
             if seen.insert(key.clone()) {
                 names.push(key.clone());
             }

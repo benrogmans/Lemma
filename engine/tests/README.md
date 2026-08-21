@@ -252,7 +252,7 @@ Prefer adding **unit** tests beside the module when testing private helpers; add
 
 ### Overlap clusters (consolidation candidates)
 
-When changing behavior, run the whole cluster — scenarios often duplicate.
+When changing behavior, run the whole cluster: scenarios often duplicate.
 
 | Cluster | Files |
 |---------|--------|
@@ -274,7 +274,7 @@ When changing behavior, run the whole cluster — scenarios often duplicate.
 |------|--------|
 | `spec_name_repository_plan_collision.rs` | **Passes** when `get_plan` returns distinct plans per repository for same basename; **fails** if `plan_sets` aliases by name only (see module doc) |
 | `repro_finance_dual_slice_registry_uses.rs` | Same for WASM batch `load` + duplicate `finance` basename |
-| `data_literals_coverage.rs` | Pins literal RHS invariants; header says some cases may stay red — currently all green |
+| `data_literals_coverage.rs` | Pins literal RHS invariants; header says some cases may stay red; currently all green |
 | `data_type_declarations_coverage.rs`, `data_binding_type_validation.rs`, `data_references.rs` | Constraint matrices; do not weaken assertions |
 | `temporal_slicing.rs` | TDD guard for multi-slice planning |
 | `repo_keyword.rs` | Signals until `repo` semantics complete |
@@ -289,13 +289,13 @@ No integration file uses `#[should_panic]`.
 | No `computation/*` unit tests except datetime/rational/units | Add unit tests beside `arithmetic.rs` / `comparison.rs` for edge cases; keep integration matrix |
 | Thin `Engine::invert` integration surface | Extend when changing inversion UX; unit tests in `inversion/` are primary |
 | `evaluation/expression.rs` untested in isolation | Unit-test eval of individual ops; integration already heavy via `run` |
-| Duplicate example runners | `integration_examples` vs CLI `documentation_examples` — different roots; keep both |
+| Duplicate example runners | `integration_examples` vs CLI `documentation_examples`: different roots; keep both |
 | Stale “must fail” comments | `spec_name_*` / `repro_finance_*` **pass** when fixed; comments describe failure mode if bug returns |
 
 ### CLI integration map
 
-See [cli/tests/README.md](../../cli/tests/README.md): `run`, `mcp`, `server`, `examples` — 57 tests, black-box on the `lemma` binary.
+See [cli/tests/README.md](../../cli/tests/README.md): `run`, `mcp`, `server`, `examples`: 57 tests, black-box on the `lemma` binary.
 
 ### Shared integration helpers
 
-[support/](support/) — per-file helpers (`get_rule_value`, `eval_rule_bool`, `make_effective*`). Each integration test imports only the files it needs via `#[path = "support/..."]`.
+[support/](support/): per-file helpers (`get_rule_value`, `eval_rule_bool`, `make_effective*`). Each integration test imports only the files it needs via `#[path = "support/..."]`.

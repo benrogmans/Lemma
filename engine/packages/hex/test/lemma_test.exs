@@ -624,4 +624,44 @@ defmodule LemmaTest do
                comparable_rule_result(r2["results"]["z"])
     end
   end
+
+  describe "mcp" do
+    test "list_tools includes evaluate list show source check guide" do
+      assert {:ok, tools} = Lemma.Mcp.list_tools()
+      names = Enum.map(tools, & &1["name"])
+
+      assert names == ["evaluate", "list", "show", "source", "check", "guide"]
+      refute "add_spec" in names
+      assert hd(tools)["inputSchema"]["required"] == ["spec"]
+    end
+
+    test "evaluate and list on a loaded engine" do
+      {:ok, engine} = Lemma.new()
+      :ok = Lemma.load(engine, @simple_spec)
+
+      assert {:ok, text} =
+               Lemma.Mcp.evaluate(engine, %{
+                 "spec" => "pricing",
+                 "rule" => "total",
+                 "data" => ["quantity=3"]
+               })
+
+      assert text =~ "total:"
+      assert text =~ "30"
+      assert {:ok, list} = Lemma.Mcp.list(engine, %{})
+      assert list =~ "pricing"
+    end
+
+    test "check diagnostics for invalid source" do
+      assert {:error, :diagnostics, json} =
+               Lemma.Mcp.check(%{"sources" => [["bad.lemma", "not lemma"]]})
+
+      assert Jason.decode!(json) |> is_list()
+    end
+
+    test "guide default is evaluate guide" do
+      assert {:ok, text} = Lemma.Mcp.guide(%{})
+      assert text =~ "Talk like a consultant"
+    end
+  end
 end

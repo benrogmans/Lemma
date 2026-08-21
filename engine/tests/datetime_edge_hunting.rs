@@ -54,6 +54,13 @@ fn eval_bool_with_datas(
         .values()
         .find(|r| r.rule.name == rule)
         .unwrap_or_else(|| panic!("rule '{}' not found", rule));
+    if rr.vetoed {
+        panic!(
+            "rule '{}' vetoed: {}",
+            rule,
+            rr.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
     rr.value
         .as_ref()
         .expect("rule result value")
@@ -70,17 +77,24 @@ fn eval_value(
     let response = engine
         .run(None, spec_name, Some(eff), HashMap::new(), None, true)
         .unwrap();
-    response
+    let rr = response
         .results
         .values()
         .find(|r| r.rule.name == rule)
-        .unwrap_or_else(|| panic!("rule '{}' not found", rule))
-        .explanation
+        .unwrap_or_else(|| panic!("rule '{}' not found", rule));
+    if rr.vetoed {
+        panic!(
+            "rule '{}' vetoed: {}",
+            rule,
+            rr.veto_reason.as_deref().unwrap_or("Vetoed")
+        );
+    }
+    rr.explanation
         .as_ref()
         .expect("explanation")
         .result
         .value()
-        .unwrap()
+        .expect("BUG: non-vetoed rule missing value")
         .clone()
 }
 
@@ -334,6 +348,80 @@ rule is_past: past_point in past
 // =============================================================================
 // veto propagation through date sugar
 // =============================================================================
+
+#[test]
+fn vetoed_date_dependency_propagates_through_in_past() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+rule event_date: veto "no event"
+rule check: event_date in past
+"#;
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("pure-veto date sugar must plan");
+    let eff = effective(2026, 3, 7, 12, 0, 0);
+    let response = engine
+        .run(None, "test", Some(&eff), HashMap::new(), None, false)
+        .expect("run");
+    let check = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "check")
+        .expect("check");
+    assert!(
+        check.vetoed,
+        "check must veto when event_date vetoes: {:?}",
+        check.veto_reason
+    );
+    assert!(
+        check
+            .veto_reason
+            .as_deref()
+            .is_some_and(|r| r.contains("no event")),
+        "veto reason must propagate through date sugar: {:?}",
+        check.veto_reason
+    );
+}
+
+#[test]
+fn vetoed_date_dependency_propagates_through_calendar_and_tolerance_sugar() {
+    let mut engine = Engine::new();
+    let code = r#"
+spec test
+uses lemma units
+rule event_date: veto "no event"
+rule calendar_check: event_date in past calendar week
+rule tolerance_check: event_date in past 1 day
+"#;
+    engine
+        .load([(lemma::SourceType::Volatile, code.to_string())])
+        .expect("pure-veto calendar/tolerance sugar must plan");
+    let eff = effective(2026, 3, 7, 12, 0, 0);
+    let response = engine
+        .run(None, "test", Some(&eff), HashMap::new(), None, false)
+        .expect("run");
+    for name in ["calendar_check", "tolerance_check"] {
+        let rule = response
+            .results
+            .values()
+            .find(|r| r.rule.name == name)
+            .unwrap_or_else(|| panic!("{name}"));
+        assert!(
+            rule.vetoed,
+            "{name} must veto when event_date vetoes: {:?}",
+            rule.veto_reason
+        );
+        assert!(
+            rule.veto_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("no event")),
+            "{name} veto reason must propagate: {:?}",
+            rule.veto_reason
+        );
+    }
+}
 
 // =============================================================================
 // tolerance unit varieties

@@ -57,7 +57,7 @@ pub struct RuleResult {
     /// Unbound caller data paths still live for this rule under the current run data
     /// (`DataPath::input_key` strings, same keys as `Show.data`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub missing_data: Vec<String>,
+    missing_data: Vec<String>,
 }
 
 impl RuleResult {
@@ -67,6 +67,24 @@ impl RuleResult {
         self.value
             .as_ref()
             .and_then(|value| value.display.as_deref())
+    }
+
+    /// True when this rule still waits on unbound inputs (`MissingData` veto).
+    ///
+    /// Value and non-`MissingData` vetoes are settled answers; leftover live keys in
+    /// [`Self::missing_data`] must not drive prompts or human "Missing data" display.
+    #[must_use]
+    pub fn awaits_missing_data(&self) -> bool {
+        matches!(
+            self.veto_detail.as_ref(),
+            Some(VetoType::MissingData { .. })
+        )
+    }
+
+    /// Unbound caller data paths still live for this rule (`DataPath::input_key`).
+    #[must_use]
+    pub fn missing_data(&self) -> &[String] {
+        &self.missing_data
     }
 
     /// Build a [`RuleResult`] for API output from a rule evaluation result.
@@ -79,6 +97,21 @@ impl RuleResult {
         explanation: Option<Explanation>,
         missing_data: Vec<String>,
     ) -> Self {
+        match operation_result {
+            OperationResult::Veto(VetoType::MissingData { data, .. }) => {
+                let key = data.input_key();
+                if !missing_data.iter().any(|listed| listed == &key) {
+                    panic!("BUG: MissingData path {key} not in missing_data {missing_data:?}");
+                }
+            }
+            _ => {
+                if !missing_data.is_empty() {
+                    panic!(
+                        "BUG: missing_data must be empty when result is not MissingData: {missing_data:?}"
+                    );
+                }
+            }
+        }
         let rule_type_name = rule_type.name().to_string();
         match operation_result {
             OperationResult::Veto(veto) => Self {
@@ -108,7 +141,7 @@ impl RuleResult {
                     },
                     Err(failure) => vetoed_rule_result_for_rule_result_value_failure(
                         rule,
-                        rule_type_name,
+                        rule_type,
                         explanation,
                         failure,
                         missing_data,
@@ -137,22 +170,20 @@ impl RuleResult {
 
 fn vetoed_rule_result_for_rule_result_value_failure(
     rule: EvaluatedRule,
-    rule_type_name: String,
+    rule_type: &LemmaType,
     explanation: Option<Explanation>,
     failure: RuleResultValueFailure,
     missing_data: Vec<String>,
 ) -> RuleResult {
-    let veto = VetoType::computation(rule_result_value_failure_message(failure).to_string());
-    RuleResult {
+    RuleResult::from_operation_result(
         rule,
-        veto_detail: Some(veto.clone()),
-        vetoed: true,
-        veto_reason: Some(veto.to_string()),
-        rule_type: rule_type_name,
-        value: None,
+        &OperationResult::Veto(VetoType::computation(
+            rule_result_value_failure_message(failure).to_string(),
+        )),
+        rule_type,
         explanation,
         missing_data,
-    }
+    )
 }
 
 impl Response {
@@ -290,7 +321,7 @@ mod tests {
             )),
             &LemmaType::veto_type(),
             None,
-            Vec::new(),
+            vec!["data1".to_string()],
         );
         assert!(missing.vetoed);
         assert!(missing.veto_reason.as_ref().unwrap().contains("data1"));
@@ -307,11 +338,56 @@ mod tests {
         assert_eq!(veto.veto_reason.as_deref(), Some("Vetoed"));
     }
 
+    /// Attach hole: MissingData + empty missing_data is a BUG, not a silent stall.
+    #[test]
+    #[should_panic(expected = "BUG: MissingData")]
+    fn missing_data_veto_must_not_attach_empty_missing_data_list() {
+        RuleResult::from_operation_result(
+            dummy_evaluated_rule("rule3", &LemmaType::veto_type()),
+            &OperationResult::Veto(VetoType::missing_data(
+                DataPath::new(vec![], "data1".to_string()),
+                None,
+            )),
+            &LemmaType::veto_type(),
+            None,
+            Vec::new(),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: MissingData")]
+    fn missing_data_veto_must_include_veto_path_in_list() {
+        RuleResult::from_operation_result(
+            dummy_evaluated_rule("rule3", &LemmaType::veto_type()),
+            &OperationResult::Veto(VetoType::missing_data(
+                DataPath::new(vec![], "data1".to_string()),
+                None,
+            )),
+            &LemmaType::veto_type(),
+            None,
+            vec!["other".to_string()],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "BUG: missing_data must be empty")]
+    fn non_missing_data_result_must_not_attach_leftover_missing_data() {
+        RuleResult::from_operation_result(
+            dummy_evaluated_rule("rule4", &LemmaType::veto_type()),
+            &OperationResult::Veto(VetoType::UserDefined {
+                message: Some("Vetoed".to_string()),
+            }),
+            &LemmaType::veto_type(),
+            None,
+            vec!["leftover".to_string()],
+        );
+    }
+
     #[test]
     fn rule_result_value_out_of_memory_is_not_decimal_limit_veto() {
         let result = vetoed_rule_result_for_rule_result_value_failure(
             dummy_evaluated_rule("rule", primitive_number_arc().as_ref()),
-            "number".to_string(),
+            primitive_number_arc().as_ref(),
             None,
             RuleResultValueFailure::OutOfMemory,
             Vec::new(),
@@ -327,7 +403,7 @@ mod tests {
     fn rule_result_value_decimal_limit_uses_commit_message() {
         let result = vetoed_rule_result_for_rule_result_value_failure(
             dummy_evaluated_rule("rule", primitive_number_arc().as_ref()),
-            "number".to_string(),
+            primitive_number_arc().as_ref(),
             None,
             RuleResultValueFailure::DecimalLimit,
             Vec::new(),

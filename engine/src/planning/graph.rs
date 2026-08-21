@@ -1100,6 +1100,8 @@ fn apply_constraints_to_spec(
     let mut errors = Vec::new();
 
     let mut seen_unit_names: std::collections::HashSet<String> = Default::default();
+    let mut seen_singleton_commands: std::collections::HashSet<TypeConstraintCommand> =
+        Default::default();
     for (command, args) in constraints.iter() {
         if *command == TypeConstraintCommand::Unit {
             if let Some(CommandArg::Label(name)) = args.first() {
@@ -1116,6 +1118,24 @@ fn apply_constraints_to_spec(
                     ));
                 }
             }
+        }
+        if matches!(
+            *command,
+            TypeConstraintCommand::Minimum
+                | TypeConstraintCommand::Maximum
+                | TypeConstraintCommand::Decimals
+                | TypeConstraintCommand::Suggest
+        ) && !seen_singleton_commands.insert(*command)
+        {
+            errors.push(Error::validation_with_context(
+                format!(
+                    "Duplicate '{command}' constraint: each may appear at most once per type declaration"
+                ),
+                Some(source.clone()),
+                None::<String>,
+                Some(spec),
+                None,
+            ));
         }
     }
     if !errors.is_empty() {
@@ -3730,9 +3750,26 @@ fn infer_expression_type(
 
         ExpressionKind::Now => primitive_date_arc().clone(),
 
-        ExpressionKind::DateRelative(..)
-        | ExpressionKind::DateCalendar(..)
-        | ExpressionKind::RangeContainment(..) => primitive_boolean_arc().clone(),
+        ExpressionKind::DateRelative(_, date_expr)
+        | ExpressionKind::DateCalendar(_, _, date_expr) => {
+            let date_type =
+                infer_expression_type(date_expr, graph, computed_rule_types, resolved_types, spec);
+            if date_type.vetoed() {
+                return Arc::new(LemmaType::veto_type());
+            }
+            primitive_boolean_arc().clone()
+        }
+
+        ExpressionKind::RangeContainment(value, range) => {
+            let value_type =
+                infer_expression_type(value, graph, computed_rule_types, resolved_types, spec);
+            let range_type =
+                infer_expression_type(range, graph, computed_rule_types, resolved_types, spec);
+            if value_type.vetoed() || range_type.vetoed() {
+                return Arc::new(LemmaType::veto_type());
+            }
+            primitive_boolean_arc().clone()
+        }
 
         ExpressionKind::RangeLiteral(left, right) => {
             let left_type =
@@ -3748,7 +3785,19 @@ fn infer_expression_type(
             infer_range_type_from_endpoint_types(left_type.as_ref(), right_type.as_ref())
         }
 
-        ExpressionKind::PastFutureRange(..) => primitive_date_range_arc().clone(),
+        ExpressionKind::PastFutureRange(_, offset_expr) => {
+            let offset_type = infer_expression_type(
+                offset_expr,
+                graph,
+                computed_rule_types,
+                resolved_types,
+                spec,
+            );
+            if offset_type.vetoed() {
+                return Arc::new(LemmaType::veto_type());
+            }
+            primitive_date_range_arc().clone()
+        }
 
         ExpressionKind::Piecewise(arms) => {
             let mut result_type: Option<Arc<LemmaType>> = None;
@@ -5257,7 +5306,7 @@ fn check_expression(
 
             let date_type =
                 infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec);
-            if !date_type.is_date() {
+            if !date_type.vetoed() && !date_type.is_date() {
                 let expr_source = expression
                     .source_location
                     .as_ref()
@@ -5281,7 +5330,7 @@ fn check_expression(
 
             let date_type =
                 infer_expression_type(date_expr, graph, inferred_types, resolved_types, spec);
-            if !date_type.is_date() {
+            if !date_type.vetoed() && !date_type.is_date() {
                 let expr_source = expression
                     .source_location
                     .as_ref()
@@ -5316,30 +5365,33 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
 
-            let inferred_range_type = infer_range_type_from_endpoint_types(&left_type, &right_type);
-            if inferred_range_type.is_undetermined() {
-                errors.push(engine_error_at_graph(
-                    graph,
-                    expr_source,
-                    format!(
-                        "Cannot create a range from {} and {}.",
-                        left_type.name(),
-                        right_type.name()
-                    ),
-                ));
-            } else if inferred_range_type.is_time_range() {
-                if let (ExpressionKind::Literal(left_lit), ExpressionKind::Literal(right_lit)) =
-                    (&left.kind, &right.kind)
-                {
-                    if let (ValueKind::Time(left_time), ValueKind::Time(right_time)) =
-                        (&left_lit.value, &right_lit.value)
+            if !(left_type.vetoed() || right_type.vetoed()) {
+                let inferred_range_type =
+                    infer_range_type_from_endpoint_types(&left_type, &right_type);
+                if inferred_range_type.is_undetermined() {
+                    errors.push(engine_error_at_graph(
+                        graph,
+                        expr_source,
+                        format!(
+                            "Cannot create a range from {} and {}.",
+                            left_type.name(),
+                            right_type.name()
+                        ),
+                    ));
+                } else if inferred_range_type.is_time_range() {
+                    if let (ExpressionKind::Literal(left_lit), ExpressionKind::Literal(right_lit)) =
+                        (&left.kind, &right.kind)
                     {
-                        if !time_range_endpoints_share_timezone(left_time, right_time) {
-                            errors.push(engine_error_at_graph(
-                                graph,
-                                expr_source,
-                                "Time range endpoints must use the same timezone".to_string(),
-                            ));
+                        if let (ValueKind::Time(left_time), ValueKind::Time(right_time)) =
+                            (&left_lit.value, &right_lit.value)
+                        {
+                            if !time_range_endpoints_share_timezone(left_time, right_time) {
+                                errors.push(engine_error_at_graph(
+                                    graph,
+                                    expr_source,
+                                    "Time range endpoints must use the same timezone".to_string(),
+                                ));
+                            }
                         }
                     }
                 }
@@ -5354,7 +5406,10 @@ fn check_expression(
 
             let offset_type =
                 infer_expression_type(offset_expr, graph, inferred_types, resolved_types, spec);
-            if !offset_type.is_duration_like() && !offset_type.is_calendar_like() {
+            if !offset_type.vetoed()
+                && !offset_type.is_duration_like()
+                && !offset_type.is_calendar_like()
+            {
                 let expr_source = expression
                     .source_location
                     .as_ref()
@@ -5389,34 +5444,36 @@ fn check_expression(
                 .as_ref()
                 .expect("BUG: expression missing source in check_expression");
 
-            if !range_type.is_range() {
-                errors.push(engine_error_at_graph(
-                    graph,
-                    expr_source,
-                    format!(
-                        "Right side of 'in' must be a range, got type '{}'",
-                        range_type.name()
-                    ),
-                ));
-            } else {
-                let compatible = (range_type.is_date_range() && value_type.is_date())
-                    || (range_type.is_time_range() && value_type.is_time())
-                    || (range_type.is_number_range() && value_type.is_number())
-                    || (range_type.is_measure_range()
-                        && value_type.is_measure()
-                        && measure_range_matches_measure(&range_type, &value_type))
-                    || (range_type.is_ratio_range() && value_type.is_ratio())
-                    || (range_type.is_calendar_like_range() && value_type.is_calendar_like());
-                if !compatible {
+            if !(value_type.vetoed() || range_type.vetoed()) {
+                if !range_type.is_range() {
                     errors.push(engine_error_at_graph(
                         graph,
                         expr_source,
                         format!(
-                            "Cannot test whether {} is in {}.",
-                            value_type.name(),
+                            "Right side of 'in' must be a range, got type '{}'",
                             range_type.name()
                         ),
                     ));
+                } else {
+                    let compatible = (range_type.is_date_range() && value_type.is_date())
+                        || (range_type.is_time_range() && value_type.is_time())
+                        || (range_type.is_number_range() && value_type.is_number())
+                        || (range_type.is_measure_range()
+                            && value_type.is_measure()
+                            && measure_range_matches_measure(&range_type, &value_type))
+                        || (range_type.is_ratio_range() && value_type.is_ratio())
+                        || (range_type.is_calendar_like_range() && value_type.is_calendar_like());
+                    if !compatible {
+                        errors.push(engine_error_at_graph(
+                            graph,
+                            expr_source,
+                            format!(
+                                "Cannot test whether {} is in {}.",
+                                value_type.name(),
+                                range_type.name()
+                            ),
+                        ));
+                    }
                 }
             }
         }
@@ -5433,7 +5490,7 @@ fn check_expression(
                 );
                 let condition_type =
                     infer_expression_type(condition, graph, inferred_types, resolved_types, spec);
-                if !condition_type.is_boolean() {
+                if !condition_type.vetoed() && !condition_type.is_boolean() {
                     let expr_source = condition
                         .source_location
                         .as_ref()
@@ -5543,7 +5600,10 @@ fn check_rule_types(
                     resolved_types,
                     spec,
                 );
-                if !condition_type.is_boolean() && !condition_type.is_undetermined() {
+                if !condition_type.vetoed()
+                    && !condition_type.is_boolean()
+                    && !condition_type.is_undetermined()
+                {
                     let condition_source = condition_expression
                         .source_location
                         .as_ref()
@@ -10536,6 +10596,17 @@ impl<'a> TypeResolver<'a> {
                             return Err(vec![Error::validation_with_context(
                                 format!(
                                     "'{name}' names a spec import alias, not a type: use `data x: {name}.TypeName` after `uses`"
+                                ),
+                                Some(source.clone()),
+                                None::<String>,
+                                Some(spec),
+                                None,
+                            )]);
+                        }
+                        if spec.rules.iter().any(|rule| rule.name == name.as_str()) {
+                            return Err(vec![Error::validation_with_context(
+                                format!(
+                                    "Unknown parent '{parent}' for data definition: '{name}' is a local rule, not a type. Use a type name, or a reference expression if you meant the rule's value."
                                 ),
                                 Some(source.clone()),
                                 None::<String>,

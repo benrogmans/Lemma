@@ -58,9 +58,9 @@ rule total: calc.total
         .expect("run must succeed");
     let total = response.results.get("total").expect("total rule");
     assert!(
-        total.missing_data.iter().any(|k| k == "calc.price"),
+        total.missing_data().iter().any(|k| k == "calc.price"),
         "unbound calc.price must appear in total.missing_data: {:?}",
-        total.missing_data
+        total.missing_data()
     );
     let show_price_type = &show_all.data.get("calc.price").unwrap().lemma_type;
     assert_eq!(

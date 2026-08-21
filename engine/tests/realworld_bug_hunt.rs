@@ -368,16 +368,11 @@ rule result: 0
         )])
         .unwrap();
 
-    // input=2000: validated vetoes. The unless condition `validated > 50` references
-    // a vetoed rule. The condition should be treated as non-matching.
+    // input=2000: validated vetoes. `validated > 50` does not match (vetoed compare).
+    // Last-wins `unless validated is veto then 0` matches → result 0.
     let resp = run_spec(&engine, "unless_veto_cond", &[("input", "2000")]);
-    // If validated vetoes, the condition `validated > 50` can't be evaluated.
-    // The default (0) should apply since the condition is indeterminate.
     let display = rule_display(&resp, "result");
-    assert_eq!(
-        display, "0",
-        "vetoed condition should not match → default applies"
-    );
+    assert_eq!(display, "0", "is veto arm must win when validated vetoes");
 
     // input=100: validated = 100. 100 > 50 → result = 100
     let resp = run_spec(&engine, "unless_veto_cond", &[("input", "100")]);
@@ -435,9 +430,10 @@ rule mult_first: a * b + c
 #[test]
 fn hunt_text_empty_string() {
     let mut engine = Engine::new();
-    let result = engine.load([(
-        src("empty.lemma"),
-        r#"
+    engine
+        .load([(
+            src("empty.lemma"),
+            r#"
 spec empty_text
 
 data label: text
@@ -447,22 +443,13 @@ data label: text
 rule is_empty: label is ""
 rule is_hello: label is "hello"
 "#
-        .to_string(),
-    )]);
+            .to_string(),
+        )])
+        .expect("empty string in -> option must be a valid Spec");
 
-    // This might fail at parse time if empty strings aren't supported
-    match result {
-        Ok(_) => {
-            let resp = run_spec(&engine, "empty_text", &[("label", "")]);
-            assert_eq!(rule_display(&resp, "is_empty"), "true");
-            assert_eq!(rule_display(&resp, "is_hello"), "false");
-        }
-        Err(_) => {
-            // If empty string options are rejected, that's also acceptable behavior
-            // (document it as a finding)
-            panic!("Empty string in -> option is rejected at parse time — is this intended?");
-        }
-    }
+    let resp = run_spec(&engine, "empty_text", &[("label", "")]);
+    assert_eq!(rule_display(&resp, "is_empty"), "true");
+    assert_eq!(rule_display(&resp, "is_hello"), "false");
 }
 
 // ===========================================================================

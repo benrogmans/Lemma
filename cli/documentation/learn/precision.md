@@ -69,7 +69,7 @@ All API surfaces enforce a uniform rule for numeric data inputs:
 | Decimal / float (native number) | **Rejected** | IEEE 754 f64 cannot represent most decimals exactly |
 | String `"0.1"`, `"99.50"` | Yes | Parsed as exact decimal → ℚ |
 
-This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elixir NIF, and the Java / Kotlin package (`BigDecimal`). Non-integer numeric values are rejected with `"decimal values must be passed as strings to preserve exactness"` (JS/HTTP/Elixir). Rust callers using `Engine::run` directly are unaffected (they already provide string magnitudes). Java callers pass `BigDecimal` or decimal strings through `RunRequest.data(...)` — never `double`/`float` for domain decimals.
+This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elixir NIF, and the Java / Kotlin package (`BigDecimal`). Non-integer numeric values are rejected with `"decimal values must be passed as strings to preserve exactness"` (JS/HTTP/Elixir). Rust callers using `Engine::run` directly are unaffected (they already provide string magnitudes). Java callers pass `BigDecimal` or decimal strings through `RunRequest.data(...)`, never `double`/`float` for domain decimals.
 
 ## Clients (JavaScript / HTTP / Java / Kotlin)
 
@@ -79,7 +79,7 @@ This applies identically to the WASM/JavaScript API, the HTTP/JSON API, the Elix
 engine.run(null, "pricing", null, { quantity: 42, rate: "0.075" });
 ```
 
-HTTP/JSON uses the same rule (integers as numbers, decimals as strings in the request body). On Java / Kotlin, pass `BigDecimal` or decimal strings in `RunRequest.data(...)` — see [Java / Kotlin](../tools/java.md).
+HTTP/JSON uses the same rule (integers as numbers, decimals as strings in the request body). On Java / Kotlin, pass `BigDecimal` or decimal strings in `RunRequest.data(...)`: see [Java / Kotlin](../tools/java.md).
 
 **Reading results:** parse numeric fields as decimal strings, not floats:
 

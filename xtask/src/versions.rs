@@ -12,6 +12,7 @@ mod tracked {
         "cli/Cargo.toml",
         "openapi/Cargo.toml",
         "engine/lsp/Cargo.toml",
+        "mcp/Cargo.toml",
     ];
 
     pub const HEX_MIX: &str = "engine/packages/hex/mix.exs";

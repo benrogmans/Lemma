@@ -58,6 +58,48 @@ fn run(
     engine.run(None, spec, Some(&now), data, None, false)
 }
 
+fn assert_awaits_missing(rr: &lemma::RuleResult, key: &str) {
+    assert!(rr.vetoed, "unbound {key} must veto, got {:?}", rr.display());
+    assert!(
+        rr.awaits_missing_data(),
+        "unbound {key} must be MissingData, got {:?}",
+        rr.veto_reason
+    );
+    assert_eq!(
+        rr.missing_data(),
+        [key.to_string()].as_slice(),
+        "missing_data must list only {key}"
+    );
+    let expected = format!("Missing data: {key}");
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some(expected.as_str()),
+        "MissingData reason must name {key}"
+    );
+}
+
+fn assert_duplicate_constraint_error(joined: &str, command: &str) {
+    assert!(
+        joined.contains(&format!("Duplicate '{command}' constraint"))
+            && joined.contains("at most once"),
+        "duplicate -> {command} must say Duplicate/at most once, got: {joined}"
+    );
+}
+
+fn assert_inverted_bounds_error(joined: &str, type_name: &str, min: &str, max: &str) {
+    let expected = format!(
+        "Type '{type_name}' has invalid range: minimum {min} is greater than maximum {max}"
+    );
+    assert!(
+        joined.contains(&expected),
+        "inverted min/max must report {expected}, got: {joined}"
+    );
+}
+
+fn fraction_ones(n: usize) -> String {
+    "1".repeat(n)
+}
+
 // ─── Type-only data + missing at runtime → MissingData veto ──────────
 
 #[test]
@@ -70,12 +112,7 @@ rule r: x
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    let rr = resp.results.get("r").unwrap();
-    assert!(
-        rr.vetoed,
-        "type-only number data missing at runtime must produce MissingData veto, got: {:?}",
-        rr.veto_reason
-    );
+    assert_awaits_missing(resp.results.get("r").expect("r"), "x");
 }
 
 #[test]
@@ -88,12 +125,7 @@ rule r: x
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    let rr = resp.results.get("r").unwrap();
-    assert!(
-        rr.vetoed,
-        "type-only text missing must produce MissingData veto, got: {:?}",
-        rr.veto_reason
-    );
+    assert_awaits_missing(resp.results.get("r").expect("r"), "x");
 }
 
 #[test]
@@ -106,8 +138,7 @@ rule r: b
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    let rr = resp.results.get("r").unwrap();
-    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
+    assert_awaits_missing(resp.results.get("r").expect("r"), "b");
 }
 
 #[test]
@@ -120,8 +151,7 @@ rule r: d
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    let rr = resp.results.get("r").unwrap();
-    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
+    assert_awaits_missing(resp.results.get("r").expect("r"), "d");
 }
 
 #[test]
@@ -135,8 +165,7 @@ rule r: d
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    let rr = resp.results.get("r").unwrap();
-    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
+    assert_awaits_missing(resp.results.get("r").expect("r"), "d");
 }
 
 #[test]
@@ -149,8 +178,7 @@ rule r: p
     let mut engine = Engine::new();
     load_ok(&mut engine, code);
     let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
-    let rr = resp.results.get("r").unwrap();
-    assert!(rr.vetoed, "got: {:?}", rr.veto_reason);
+    assert_awaits_missing(resp.results.get("r").expect("r"), "p");
 }
 
 // ─── Constraint × primitive compatibility matrix ─────────────────────
@@ -170,10 +198,11 @@ rule r: n
     let resp = run(&engine, "s", data).expect("5 < 10 must complete with veto");
     let rr = resp.results.get("r").expect("rule r");
     assert!(rr.vetoed, "5 < 10 must veto rule r");
-    let reason = rr.veto_reason.as_deref().expect("veto reason");
-    assert!(
-        reason.contains("minimum") || reason.contains("at least"),
-        "expected minimum constraint veto, got: {reason}"
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some("5 is below minimum 10"),
+        "got: {:?}",
+        rr.veto_reason
     );
 }
 
@@ -191,10 +220,11 @@ rule r: n
     let resp = run(&engine, "s", data).expect("10 > 5 must complete with veto");
     let rr = resp.results.get("r").expect("rule r");
     assert!(rr.vetoed, "10 > 5 must veto rule r");
-    let reason = rr.veto_reason.as_deref().expect("veto reason");
-    assert!(
-        reason.contains("maximum") || reason.contains("at most") || reason.contains("exceeds"),
-        "expected maximum constraint veto, got: {reason}"
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some("10 is above maximum 5"),
+        "got: {:?}",
+        rr.veto_reason
     );
 }
 
@@ -369,44 +399,151 @@ rule r: n
 // ─── Chained constraints ─────────────────────────────────────────────
 
 #[test]
-fn chained_tightening_minimum_is_consistent() {
-    // `-> minimum 5 -> minimum 10` — pin behavior. Either last-wins
-    // (effective min 10) or plan error. Silent loss is wrong.
+fn chained_duplicate_minimum_is_planning_error() {
     let code = r#"
 spec s
 data n: number -> minimum 5 -> minimum 10
 rule r: n
 "#;
     let mut engine = Engine::new();
-    match engine.load([(
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from("types.lemma"))),
-        code.to_string(),
-    )]) {
-        Ok(()) => {
-            let mut data = HashMap::new();
-            data.insert("n".to_string(), "7".to_string());
-            let resp = run(&engine, "s", data)
-                .expect("either last-wins (7<10 veto) or this case should have been a plan error");
-            let rr = resp.results.get("r").expect("rule r");
-            assert!(rr.vetoed, "7 < effective minimum 10 must veto rule r");
-            let reason = rr.veto_reason.as_deref().expect("veto reason");
-            assert!(
-                reason.contains("minimum") || reason.contains("at least"),
-                "expected minimum violation; got: {reason}"
-            );
-        }
-        Err(errs) => {
-            let joined = errs
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                joined.contains("minimum"),
-                "chained minimum rejection must mention minimum, got: {joined}"
-            );
-        }
-    }
+    assert_duplicate_constraint_error(&load_err_joined(&mut engine, code), "minimum");
+}
+
+#[test]
+fn chained_duplicate_maximum_is_planning_error() {
+    let code = r#"
+spec s
+data n: number -> maximum 10 -> maximum 5
+"#;
+    let mut engine = Engine::new();
+    assert_duplicate_constraint_error(&load_err_joined(&mut engine, code), "maximum");
+}
+
+#[test]
+fn chained_duplicate_decimals_is_planning_error() {
+    let code = r#"
+spec s
+data n: number -> decimals 2 -> decimals 4
+"#;
+    let mut engine = Engine::new();
+    assert_duplicate_constraint_error(&load_err_joined(&mut engine, code), "decimals");
+}
+
+#[test]
+fn chained_duplicate_suggest_is_planning_error() {
+    let code = r#"
+spec s
+data n: number -> suggest 1 -> suggest 2
+"#;
+    let mut engine = Engine::new();
+    assert_duplicate_constraint_error(&load_err_joined(&mut engine, code), "suggest");
+}
+
+#[test]
+fn child_overrides_inherited_minimum_parent_maximum_still_applies() {
+    let code = r#"
+spec s
+data y: number -> minimum 5 -> maximum 10
+data z: y -> minimum 3
+rule r: z
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code);
+
+    let mut above_child = HashMap::new();
+    above_child.insert("z".to_string(), "4".to_string());
+    let resp = run(&engine, "s", above_child).expect("4 >= child min 3");
+    assert_eq!(rule_value(&resp, "r"), "4");
+
+    let mut below_child = HashMap::new();
+    below_child.insert("z".to_string(), "2".to_string());
+    let resp = run(&engine, "s", below_child).expect("2 < child min 3 must veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "2 < child min 3 must veto");
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some("2 is below minimum 3"),
+        "child min veto must name 2 and 3, got: {:?}",
+        rr.veto_reason
+    );
+
+    let mut above_parent_max = HashMap::new();
+    above_parent_max.insert("z".to_string(), "11".to_string());
+    let resp = run(&engine, "s", above_parent_max).expect("11 > inherited max 10 must veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "11 > inherited max 10 must veto");
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some("11 is above maximum 10"),
+        "inherited max veto must name 11 and 10, got: {:?}",
+        rr.veto_reason
+    );
+}
+
+#[test]
+fn child_overrides_inherited_maximum() {
+    let code = r#"
+spec s
+data big_number: number -> minimum 0 -> maximum 1000
+data small_number: big_number -> maximum 100
+rule r: small_number
+"#;
+    let mut engine = Engine::new();
+    load_ok(&mut engine, code);
+    let mut data = HashMap::new();
+    data.insert("small_number".to_string(), "200".to_string());
+    let resp = run(&engine, "s", data).expect("overridden max 100 must complete with veto");
+    let rr = resp.results.get("r").expect("rule r");
+    assert!(rr.vetoed, "overridden max 100 must reject 200");
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some("200 is above maximum 100"),
+        "child max veto must name 200 and 100, got: {:?}",
+        rr.veto_reason
+    );
+}
+
+#[test]
+fn same_declaration_minimum_greater_than_maximum_is_planning_error() {
+    let code = r#"
+spec s
+data n: number -> minimum 5 -> maximum 4
+"#;
+    let mut engine = Engine::new();
+    assert_inverted_bounds_error(&load_err_joined(&mut engine, code), "n", "5", "4");
+}
+
+#[test]
+fn child_inherit_minimum_override_maximum_inverted_is_planning_error() {
+    let code = r#"
+spec s
+data y: number -> minimum 5
+data z: y -> maximum 4
+"#;
+    let mut engine = Engine::new();
+    assert_inverted_bounds_error(&load_err_joined(&mut engine, code), "z", "5", "4");
+}
+
+#[test]
+fn child_inherit_maximum_override_minimum_inverted_is_planning_error() {
+    let code = r#"
+spec s
+data y: number -> maximum 10
+data z: y -> minimum 11
+"#;
+    let mut engine = Engine::new();
+    assert_inverted_bounds_error(&load_err_joined(&mut engine, code), "z", "11", "10");
+}
+
+#[test]
+fn child_overrides_both_bounds_to_inverted_pair_is_planning_error() {
+    let code = r#"
+spec s
+data y: number -> minimum 0 -> maximum 100
+data z: y -> minimum 8 -> maximum 7
+"#;
+    let mut engine = Engine::new();
+    assert_inverted_bounds_error(&load_err_joined(&mut engine, code), "z", "8", "7");
 }
 
 // ─── Named typedef reference ─────────────────────────────────────────
@@ -442,10 +579,11 @@ rule r: person_age
     let resp = run(&engine, "s", data).expect("200 > 150 must complete with veto");
     let rr = resp.results.get("r").expect("rule r");
     assert!(rr.vetoed, "200 > 150 must veto via inherited max");
-    let reason = rr.veto_reason.as_deref().expect("veto reason");
-    assert!(
-        reason.contains("maximum") || reason.contains("150") || reason.contains("at most"),
-        "expected inherited max veto; got: {reason}"
+    assert_eq!(
+        rr.veto_reason.as_deref(),
+        Some("200 is above maximum 150"),
+        "inherited max veto must name 200 and 150, got: {:?}",
+        rr.veto_reason
     );
 }
 
@@ -464,45 +602,46 @@ rule r: x
     );
 }
 
-/// UX LANDMINE: `data x: myrule` where `myrule` is a local rule currently
+/// UX LANDMINE: `data x: answer` where `answer` is a local rule currently
 /// surfaces as "Unknown parent … for data definition". Users likely meant a value-copy reference.
-/// The error should mention the rule or suggest `x.something: myrule`
-/// binding form. This test pins the friendlier-error intent; it is expected
-/// to fail until the planner suggests the rule alternative.
 #[test]
 fn data_referencing_local_rule_name_suggests_reference_syntax() {
     let code = r#"
 spec s
-rule myrule: 42
-data x: myrule
+rule answer: 42
+data x: answer
 "#;
     let mut engine = Engine::new();
     let joined = load_err_joined(&mut engine, code);
     assert!(
-        joined.to_lowercase().contains("rule"),
-        "error for `data x: <rule-name>` should mention rules/references; got: {joined}"
+        joined.contains("answer") && joined.contains("local rule"),
+        "error must name parent 'answer' as a local rule, got: {joined}"
     );
 }
 
 #[test]
-fn typedef_chain_narrowing_child_constraints_is_ok() {
-    let code = r#"
-spec s
-data big_number: number -> minimum 0 -> maximum 1000
-data small_number: big_number -> maximum 100
-rule r: small_number
-"#;
+fn number_literal_at_max_fractional_digits_plans() {
+    let scale = rust_decimal::Decimal::MAX_SCALE as usize;
+    let frac = fraction_ones(scale);
+    let literal = format!("0.{frac}");
+    let code = format!("spec s\ndata n: {literal}\nrule r: n\n");
     let mut engine = Engine::new();
-    load_ok(&mut engine, code);
-    let mut data = HashMap::new();
-    data.insert("small_number".to_string(), "200".to_string());
-    let resp = run(&engine, "s", data).expect("narrowed max 100 must complete with veto");
-    let rr = resp.results.get("r").expect("rule r");
-    assert!(rr.vetoed, "narrowed max 100 must reject 200");
-    let reason = rr.veto_reason.as_deref().expect("veto reason");
+    load_ok(&mut engine, &code);
+    let resp = run(&engine, "s", HashMap::new()).expect("evaluates");
+    assert_eq!(rule_value(&resp, "r"), literal);
+}
+
+#[test]
+fn number_literal_over_max_fractional_digits_is_planning_error() {
+    let scale = rust_decimal::Decimal::MAX_SCALE as usize;
+    let frac = fraction_ones(scale + 1);
+    let literal = format!("0.{frac}");
+    let code = format!("spec s\ndata n: {literal}\nrule r: n\n");
+    let mut engine = Engine::new();
+    let joined = load_err_joined(&mut engine, &code);
     assert!(
-        reason.contains("maximum") || reason.contains("100") || reason.contains("at most"),
-        "narrowed max must veto; got: {reason}"
+        joined.contains("too many fractional digits") && joined.contains(&format!("max {scale}")),
+        "spec literal over scale must be planning Error, got: {joined}"
     );
 }
 

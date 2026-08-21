@@ -10,11 +10,11 @@ Lemma is pre-1.0. The language and APIs are stable for most use cases, but break
 
 ## Why Lemma?
 
-- **Readable by business stakeholders** – rules look like the policies people already write
-- **Deterministic and auditable** – opt in to a full explanation tree with `explain: true`
-- **Type-aware** – dates, percentages, units, and automatic conversions are first-class
-- **Composable** – specs extend and reference each other without boilerplate
-- **Multi-platform** – use the engine from Rust, power the CLI/HTTP server, ship via WebAssembly, or embed on the JVM
+- **Readable by business stakeholders**: rules look like the policies people already write
+- **Deterministic and auditable**: opt in to a full explanation tree with `explain: true`
+- **Type-aware**: dates, percentages, units, and automatic conversions are first-class
+- **Composable**: specs extend and reference each other without boilerplate
+- **Multi-platform**: use the engine from Rust, power the CLI/HTTP server, ship via WebAssembly, or embed on the JVM
 
 ## Quick start
 
@@ -22,7 +22,7 @@ Add the crate:
 
 ```toml
 [dependencies]
-lemma-engine = "0.9.4"
+lemma-engine = "0.9.5"
 ```
 
 ### Minimal example
@@ -153,7 +153,7 @@ engine.load([(
 
 `Engine::new()` loads the embedded `repo lemma` / `spec units` standard library internally via `SourceType::Dependency("lemma")`. It always appears in `Engine::list`. Formatted source: `engine.source(Some("lemma"), None, None)?`.
 
-Public `load` rejects `SourceType::Dependency("lemma")` — that id is reserved for the embedded stdlib.
+Public `load` rejects `SourceType::Dependency("lemma")`: that id is reserved for the embedded stdlib.
 
 ## Public Engine API
 
@@ -172,22 +172,22 @@ Free function: `lemma::resolve_effective`.
 
 ## Consumer API tiers
 
-**Tier 1 — always available** (all targets, `registry` feature optional): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), API types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult` — explanation JSON uses `"type"` + `"name"`; see [`api.v1.json`](schemas/api.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests — not a minimal “verbs only” crate.
+**Tier 1: always available** (all targets, `registry` feature optional): consumer verbs (`Engine`, `load`, `list`, `show`, `source`, `run`, `remove`), API types (`Show`, `Response`, `DataPath`, `ListedSpec`, `ResolvedRepository`, `DateTimeValue`, `TimezoneValue`, `Explanation`, `Cause`, `ExplanationNode`, `OperationResult`; explanation JSON uses `"type"` + `"name"`; see [`api.v1.json`](schemas/api.v1.json)), language surface for tooling (`parse`, `ParseResult`, `Lexer`, `TokenKind`, `DataValue`, `SpecRef`, `Span`, `Source`, `format_source`, `format_specs`, `format_parse_result`, `type_detail_lines`), limit constants (`MAX_*_NAME_LENGTH`). Language-surface exports are intentional for CLI/LSP/tests, not a minimal “verbs only” crate.
 
-**Tier 2 — `registry` feature:** `Registry`, `LemmaBase`, `RegistryBundle`, `RegistryError*`, `Context`, `LemmaRepository`, `LemmaSpec`, `LemmaSpecSet`, and native `resolve_registry_references`.
+**Tier 2: `registry` feature:** `Registry`, `LemmaBase`, `RegistryBundle`, `RegistryError*`, `Context`, `LemmaRepository`, `LemmaSpec`, `LemmaSpecSet`, and native `resolve_registry_references`.
 
-**Tier 3 — native only (`not(wasm32)`):** `lemma::deps` for filesystem dependency cache paths.
+**Tier 3: native only (`not(wasm32)`):** `lemma::deps` for filesystem dependency cache paths.
 
 `EffectiveDate` is planning-internal and not exported. Language-surface `Span` and `Source` are exported (parse/AST). LSP and CLI use `DateTimeValue` and `SpecRef::resolved_instant` at temporal boundaries.
 
 ## Features
 
-- **Rich type system** – percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
-- **Automatic unit conversions** – convert between units inside expressions without extra code
-- **Page composition** – extend specs, bind data, and reuse rules across modules
-- **Audit trail** – with `explain: true`, each rule result carries a structured explanation (see [`engine/schemas/api.v1.json`](schemas/api.v1.json))
-- **JavaScript / TypeScript** – `npm install @lemmabase/lemma-engine` for browser, Node, and edge runtimes
-- **Java / Kotlin** – `com.lemmabase:lemma-engine` on Maven Central (`BigDecimal`-first JNI binding)
+- **Rich type system**: percentages, mass, length, duration, temperature, pressure, power, energy, frequency, and data sizes
+- **Automatic unit conversions**: convert between units inside expressions without extra code
+- **Page composition**: extend specs, bind data, and reuse rules across modules
+- **Audit trail**: with `explain: true`, each rule result carries a structured explanation (see [`engine/schemas/api.v1.json`](schemas/api.v1.json))
+- **JavaScript / TypeScript**: `npm install @lemmabase/lemma-engine` for browser, Node, and edge runtimes
+- **Java / Kotlin**: `com.lemmabase:lemma-engine` on Maven Central (`BigDecimal`-first JNI binding)
 
 Constraint-style **inversion** (what inputs would yield a given outcome?) is planned; it is not documented as a supported API yet.
 
@@ -232,7 +232,7 @@ Build: `node build.js` (from `engine/packages/npm/`). See [packages/npm/README.m
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.4</version>
+  <version>0.9.5</version>
 </dependency>
 ```
 

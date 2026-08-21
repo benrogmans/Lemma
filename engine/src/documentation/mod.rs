@@ -1,32 +1,27 @@
-//! Embedded Lemma guides and example specs for MCP tools/resources.
+//! Embedded language guides and example specs.
 
-pub const LLMS_TXT: &str = include_str!("../../documentation/llms.txt");
-pub const EVALUATE_GUIDE: &str = include_str!("../../documentation/evaluate_guide.txt");
+pub const LLMS_TXT: &str = include_str!("llms.txt");
+pub const EVALUATE_GUIDE: &str = include_str!("evaluate_guide.txt");
 
-const METHOD: &str = include_str!("../../documentation/guide/05_method.txt");
-const SYNTAX: &str = include_str!("../../documentation/guide/10_syntax.txt");
-const COMPOSITION: &str = include_str!("../../documentation/guide/20_composition.txt");
-const NATURAL_LANGUAGE: &str = include_str!("../../documentation/guide/25_natural_language.txt");
-const DATA: &str = include_str!("../../documentation/guide/30_data.txt");
-const UNITS: &str = include_str!("../../documentation/guide/40_units.txt");
-const RULES: &str = include_str!("../../documentation/guide/50_rules.txt");
-const VETO: &str = include_str!("../../documentation/guide/60_veto.txt");
-const ANTI_PATTERNS: &str = include_str!("../../documentation/guide/70_anti_patterns.txt");
+const METHOD: &str = include_str!("guide/05_method.txt");
+const SYNTAX: &str = include_str!("guide/10_syntax.txt");
+const COMPOSITION: &str = include_str!("guide/20_composition.txt");
+const NATURAL_LANGUAGE: &str = include_str!("guide/25_natural_language.txt");
+const DATA: &str = include_str!("guide/30_data.txt");
+const UNITS: &str = include_str!("guide/40_units.txt");
+const RULES: &str = include_str!("guide/50_rules.txt");
+const VETO: &str = include_str!("guide/60_veto.txt");
+const ANTI_PATTERNS: &str = include_str!("guide/70_anti_patterns.txt");
 
-pub const EXAMPLE_01_COFFEE_ORDER: &str =
-    include_str!("../../documentation/examples/01_coffee_order.lemma");
-pub const EXAMPLE_02_LIBRARY_FEES: &str =
-    include_str!("../../documentation/examples/02_library_fees.lemma");
-pub const EXAMPLE_03_RECIPE_SCALING: &str =
-    include_str!("../../documentation/examples/03_recipe_scaling.lemma");
+pub const EXAMPLE_01_COFFEE_ORDER: &str = include_str!("examples/01_coffee_order.lemma");
+pub const EXAMPLE_02_LIBRARY_FEES: &str = include_str!("examples/02_library_fees.lemma");
+pub const EXAMPLE_03_RECIPE_SCALING: &str = include_str!("examples/03_recipe_scaling.lemma");
 pub const EXAMPLE_04_MEMBERSHIP_BENEFITS: &str =
-    include_str!("../../documentation/examples/04_membership_benefits.lemma");
-pub const EXAMPLE_05_WEATHER_CLOTHING: &str =
-    include_str!("../../documentation/examples/05_weather_clothing.lemma");
-pub const EXAMPLE_NL_TAX_NET_SALARY: &str =
-    include_str!("../../documentation/examples/nl/tax/net_salary.lemma");
+    include_str!("examples/04_membership_benefits.lemma");
+pub const EXAMPLE_05_WEATHER_CLOTHING: &str = include_str!("examples/05_weather_clothing.lemma");
+pub const EXAMPLE_NL_TAX_NET_SALARY: &str = include_str!("examples/nl/tax/net_salary.lemma");
 
-/// Guide topics: authoring sections under `cli/documentation/guide/`,
+/// Guide topics: authoring sections under `documentation/guide/`,
 /// plus `evaluate` (default CS guide) and `full` (complete authoring llms.txt).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuideTopic {
@@ -98,7 +93,7 @@ impl GuideTopic {
     }
 }
 
-/// Example resource: URI path after `lemma://examples/` → body.
+/// Example source: path after `examples/` → body.
 pub struct ExampleResource {
     pub path: &'static str,
     pub body: &'static str,

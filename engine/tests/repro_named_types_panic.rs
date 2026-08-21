@@ -41,18 +41,21 @@ uses b: @benrogmans/test constants
 uses f
 "#;
 
-    let result = engine.load([(path_source("workspace.lemma"), workspace_source.to_string())]);
-    // `uses f` is a dangling import — should produce a planning error, not a panic.
-    match result {
-        Ok(()) => {
-            let now = DateTimeValue::now();
-            let _ = engine.show(None, "x", Some(&now));
-            let _ = engine.show(None, "d23d23", Some(&now));
-        }
-        Err(e) => {
-            eprintln!("Expected error (not panic): {:?}", e);
-        }
-    }
+    let err = engine
+        .load([(path_source("workspace.lemma"), workspace_source.to_string())])
+        .expect_err("dangling `uses f` must be a planning error, not Ok or panic");
+    let joined = err
+        .iter()
+        .map(|e| e.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        joined.contains('f')
+            || joined.to_lowercase().contains("uses")
+            || joined.to_lowercase().contains("import")
+            || joined.to_lowercase().contains("missing"),
+        "planning error must mention dangling import f, got: {joined}"
+    );
 }
 
 /// Same structure but without the dangling `uses f` — should succeed cleanly.

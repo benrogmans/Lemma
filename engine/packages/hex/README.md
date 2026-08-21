@@ -102,12 +102,12 @@ See `Lemma` module docs for full typespecs and options.
 
 ## Data values
 
-Data values passed to `Lemma.run/3` must be strings or integers. Elixir floats (IEEE 754 doubles) are rejected to prevent silent precision loss — pass decimal values as strings instead:
+Data values passed to `Lemma.run/3` must be strings or integers. Elixir floats (IEEE 754 doubles) are rejected to prevent silent precision loss: pass decimal values as strings instead:
 
 ```elixir
 Lemma.run(engine, %{spec: "pricing"}, %{data: %{"rate" => "0.075"}, explain: false})   # correct
 Lemma.run(engine, %{spec: "pricing"}, %{data: %{"quantity" => 42}, explain: false})     # correct (integer)
-Lemma.run(engine, %{spec: "pricing"}, %{data: %{"rate" => 0.075}, explain: false})      # raises — use string
+Lemma.run(engine, %{spec: "pricing"}, %{data: %{"rate" => 0.075}, explain: false})      # raises: use string
 ```
 
 With `explain: true`, each rule result may include an `explanation` object matching [`api.v1.json`](../../../engine/schemas/api.v1.json) (`RuleResult.explanation`).

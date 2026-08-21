@@ -28,10 +28,10 @@ Optionally qualify units; you must qualify when the bare name is ambiguous in sc
 
 | Form | Meaning |
 |------|---------|
-| `kilogram` | Bare — exactly one in-scope owner |
+| `kilogram` | Bare: exactly one in-scope owner |
 | `my_weight.kilogram` | Local owning type |
 | `units.mass.kilogram` | Import alias + type |
-| `units.kilogram` | Import sugar — unique under that alias |
+| `units.kilogram` | Import sugar: unique under that alias |
 
 Bare `5 kilogram` plans when only one type declares `kilogram`. Qualified forms are always allowed when the path uniquely identifies an owner, even if bare would also work. If two types declare the same unit name, bare use is a planning error that lists legal qualifiers (`money_a.eur`, `money_b.eur`, …). The same rule applies to `as` targets and each factor in a compound unit expression.
 
@@ -117,7 +117,7 @@ Prefix operators (parentheses optional): `sqrt`, `sin`, `cos`, `tan`, `log`, `ex
 
 ## Standard library: `uses lemma units`
 
-Lemma embeds SI bases, derived compounds, imperial, and information units in the standard library (Repo `lemma`, Spec `units`). Import with `uses lemma units`, then use units directly in literals or reference types as `units.mass`, `units.duration`, `units.length`, `units.calendar`, `units.force`, and others. When a local type reuses a stdlib unit name, qualify (`units.kilogram` or `units.mass.kilogram`) — see [Qualifying units](#qualifying-units).
+Lemma embeds SI bases, derived compounds, imperial, and information units in the standard library (Repo `lemma`, Spec `units`). Import with `uses lemma units`, then use units directly in literals or reference types as `units.mass`, `units.duration`, `units.length`, `units.calendar`, `units.force`, and others. When a local type reuses a stdlib unit name, qualify (`units.kilogram` or `units.mass.kilogram`): see [Qualifying units](#qualifying-units).
 
 Names are singular only (`8 hour`, not `8 hours`). Length uses American `meter` (not `metre`).
 
@@ -335,6 +335,8 @@ rule total: base_price * 2
 ```
 
 If `product` is not provided, `base_price` vetoes with "Missing data: product", not the default arm's "Unknown product" message. The `total` Rule also vetoes because its dependency has no value.
+
+After a `MissingData` or definitive veto, evaluation may still walk later siblings so nested control can record for explain and prune. Intake keeps unbound keys on `missing_data` only when some completion can still produce a **value**. For `and`, an unbound left stays `MissingData` even if a later conjunct definitively vetoes (`false and …` can still answer). Product and other operators that need both values settle on a definitive factor and clear keys that cannot un-veto. `is veto` stays a boolean probe and does not change this intake rule.
 
 ### `is veto` (boolean test)
 

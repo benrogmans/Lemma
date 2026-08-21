@@ -18,7 +18,7 @@ Aliases are in [`.cargo/config.toml`](../.cargo/config.toml) (`-q` on bump/verif
 Release version must match in:
 
 - `Cargo.toml` (`[workspace.package]`)
-- Path dependency pins in `cli/`, `openapi/`, `engine/lsp/` `Cargo.toml` files (`lemma` / `lemma-openapi`, `=…` exact pins)
+- Path dependency pins in `cli/`, `openapi/`, `engine/lsp/`, `mcp/` `Cargo.toml` files (`lemma` / `lemma-openapi` / `lemma-mcp`, `=…` exact pins)
 - `engine/packages/hex/mix.exs` (`@version`)
 - `engine/packages/maven/pom.xml` (project `<version>`)
 - Maven install snippets: root `README.md`, `engine/README.md`, `cli/documentation/tools/java.md`, `engine/packages/maven/README.md` (XML and/or Gradle coords)

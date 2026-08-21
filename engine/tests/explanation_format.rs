@@ -7,6 +7,160 @@ fn explanation_json(response: &lemma::Response, rule: &str) -> Value {
     serde_json::to_value(response).unwrap()["results"][rule]["explanation"].clone()
 }
 
+fn compose_nodes_matching<'a>(value: &'a Value, needle: &str) -> Vec<&'a Value> {
+    let mut found = Vec::new();
+    fn walk<'a>(value: &'a Value, needle: &str, found: &mut Vec<&'a Value>) {
+        match value {
+            Value::Object(obj) => {
+                if obj.get("type").and_then(|t| t.as_str()) == Some("compose")
+                    && obj
+                        .get("expression")
+                        .and_then(|e| e.as_str())
+                        .is_some_and(|expr| expr.contains(needle))
+                {
+                    found.push(value);
+                }
+                for child in obj.values() {
+                    walk(child, needle, found);
+                }
+            }
+            Value::Array(arr) => {
+                for child in arr {
+                    walk(child, needle, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(value, needle, &mut found);
+    found
+}
+
+fn assert_rule_binary_right_veto_children(explanation: &Value, body_needle: &str) {
+    assert!(
+        explanation["body"]
+            .as_str()
+            .is_some_and(|body| body.contains(body_needle)),
+        "rule body must retain binary expression, got: {explanation}"
+    );
+    let children = explanation["children"]
+        .as_array()
+        .expect("rule explanation must have children");
+    assert_eq!(
+        children.len(),
+        2,
+        "binary right veto must expose both operands under rule, got: {explanation}"
+    );
+    assert_eq!(
+        children[0]["type"], "compose",
+        "left settled operand must be compose child: {explanation}"
+    );
+    assert_eq!(
+        children[1]["type"], "rule",
+        "right veto embed must remain second operand: {explanation}"
+    );
+    assert_eq!(children[1]["name"], "base");
+}
+
+fn run_settled_left_right_veto_explanation(
+    engine: &mut Engine,
+    spec: &str,
+    rule_body: &str,
+) -> Value {
+    engine
+        .load([(
+            SourceType::Volatile,
+            format!(
+                r#"
+spec demo
+data age: number
+rule base: veto "no rate"
+  unless age < 70 then 10
+rule main: {rule_body}
+"#
+            ),
+        )])
+        .expect("load");
+    let mut data = HashMap::new();
+    data.insert("age".to_string(), "80".to_string());
+    let response = engine
+        .run(None, spec, None, data, Some(&["main".to_string()]), true)
+        .expect("evaluation must succeed");
+    explanation_json(&response, "main")
+}
+
+#[test]
+fn explanation_comparison_right_veto_compose() {
+    let mut engine = Engine::new();
+    let explanation = run_settled_left_right_veto_explanation(&mut engine, "demo", "100 > base");
+    assert_rule_binary_right_veto_children(&explanation, ">");
+    assert_eq!(explanation["body"], "100 > base");
+    assert_eq!(explanation["children"][0]["expression"], "100");
+}
+
+#[test]
+fn explanation_range_literal_right_veto_compose() {
+    let mut engine = Engine::new();
+    let explanation = run_settled_left_right_veto_explanation(&mut engine, "demo", "0...base");
+    assert_rule_binary_right_veto_children(&explanation, "base");
+    assert!(
+        explanation["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("0") && body.contains("base")),
+        "range literal body must name both endpoints: {}",
+        explanation["body"]
+    );
+    assert_eq!(explanation["children"][0]["expression"], "0");
+}
+
+#[test]
+fn explanation_range_containment_right_veto_compose() {
+    let mut engine = Engine::new();
+    let explanation =
+        run_settled_left_right_veto_explanation(&mut engine, "demo", "50 in 0...base");
+    assert!(
+        explanation["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("50") && body.contains("in")),
+        "range containment body must name value and range: {}",
+        explanation["body"]
+    );
+    let children = explanation["children"]
+        .as_array()
+        .expect("rule explanation must have children");
+    assert_eq!(
+        children.len(),
+        2,
+        "range containment right veto must expose value and range operands: {explanation}"
+    );
+    assert_eq!(children[0]["type"], "compose");
+    assert_eq!(children[0]["expression"], "50");
+    assert_eq!(children[1]["type"], "compose");
+    let range = compose_nodes_matching(&children[1], "to");
+    assert!(
+        !range.is_empty(),
+        "range operand must remain a compose subtree: {explanation}"
+    );
+    fn has_rule_named_base(value: &Value) -> bool {
+        match value {
+            Value::Object(obj) => {
+                if obj.get("type").and_then(|t| t.as_str()) == Some("rule")
+                    && obj.get("name").and_then(|n| n.as_str()) == Some("base")
+                {
+                    return true;
+                }
+                obj.values().any(has_rule_named_base)
+            }
+            Value::Array(arr) => arr.iter().any(has_rule_named_base),
+            _ => false,
+        }
+    }
+    assert!(
+        has_rule_named_base(&children[1]),
+        "range compose must still embed vetoing base rule: {explanation}"
+    );
+}
+
 #[test]
 fn explanation_unless_default_matched() {
     let mut engine = Engine::new();

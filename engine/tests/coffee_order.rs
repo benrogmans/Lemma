@@ -575,16 +575,29 @@ fn test_coffee_order_invalid_size_veto() {
         "size_multiplier should veto for 'extra large' size"
     );
 
-    // price_per_cup and subsequent rules should also fail due to dependency
+    // price_per_cup and subsequent rules must veto when size_multiplier vetoes
     let price_per_cup = response
         .results
         .values()
-        .find(|r| r.rule.name == "price_per_cup");
-
-    if let Some(price_per_cup) = price_per_cup {
-        assert!(
-            price_per_cup.vetoed,
-            "price_per_cup should fail when size_multiplier vetoes"
-        );
-    }
+        .find(|r| r.rule.name == "price_per_cup")
+        .expect("price_per_cup");
+    assert!(
+        price_per_cup.vetoed,
+        "price_per_cup should fail when size_multiplier vetoes"
+    );
+    let subtotal = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "subtotal")
+        .expect("subtotal");
+    assert!(
+        subtotal.vetoed,
+        "subtotal should fail when price_per_cup vetoes"
+    );
+    let total = response
+        .results
+        .values()
+        .find(|r| r.rule.name == "total")
+        .expect("total");
+    assert!(total.vetoed, "total should fail when subtotal vetoes");
 }

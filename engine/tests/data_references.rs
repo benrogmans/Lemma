@@ -256,56 +256,32 @@ rule r: i.limited
 "#;
 
     let mut engine = Engine::new();
-    let load_result = engine.load([(
-        lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
-            "reference.lemma",
-        ))),
-        code.to_string(),
-    )]);
+    engine
+        .load([(
+            lemma::SourceType::Path(std::sync::Arc::new(std::path::PathBuf::from(
+                "reference.lemma",
+            ))),
+            code.to_string(),
+        )])
+        .expect("plan must succeed; constraint failure is a runtime veto");
 
-    match load_result {
-        Ok(()) => {
-            let now = DateTimeValue::now();
-            let mut data = HashMap::new();
-            data.insert("src.v".to_string(), "10".to_string());
-            let run_result = engine.run(None, "outer", Some(&now), data, None, false);
-
-            match run_result {
-                Ok(resp) => {
-                    let rr = resp.results.get("r").expect("rule 'r'");
-                    if rr.vetoed {
-                        let s = rr.veto_reason.as_deref().expect("veto reason");
-                        assert!(
-                            s.contains("maximum") || s.contains("exceeds"),
-                            "expected max-constraint veto, got: {s}"
-                        );
-                    } else {
-                        panic!("expected constraint-violation veto; got {:?}", rr.display());
-                    }
-                }
-                Err(err) => {
-                    let s = err.to_string();
-                    assert!(
-                        s.contains("maximum") || s.contains("exceeds") || s.contains("constraint"),
-                        "expected constraint error at run time, got: {s}"
-                    );
-                }
-            }
-        }
-        Err(errors) => {
-            let joined = errors
-                .iter()
-                .map(|e| e.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            assert!(
-                joined.contains("maximum")
-                    || joined.contains("exceeds")
-                    || joined.contains("constraint"),
-                "expected constraint error at load time, got: {joined}"
-            );
-        }
-    }
+    let now = DateTimeValue::now();
+    let mut data = HashMap::new();
+    data.insert("src.v".to_string(), "10".to_string());
+    let resp = engine
+        .run(None, "outer", Some(&now), data, None, false)
+        .expect("run must complete with veto, not Error");
+    let rr = resp.results.get("r").expect("rule 'r'");
+    assert!(
+        rr.vetoed,
+        "expected max-constraint veto; got {:?}",
+        rr.display()
+    );
+    let s = rr.veto_reason.as_deref().expect("veto reason");
+    assert!(
+        s.contains("maximum") || s.contains("exceeds"),
+        "expected max-constraint veto, got: {s}"
+    );
 }
 
 #[test]
