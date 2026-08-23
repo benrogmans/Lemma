@@ -348,7 +348,7 @@ fn own_type_as_percent_ok() {
 spec s
 data margin: ratio -> suggest 20%
 data spread: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
 rule margin_as_pct: margin as percent
 "#;
     let mut engine = Engine::new();
@@ -371,7 +371,7 @@ fn foreign_unit_as_basis_points_fails_plan() {
 spec s
 data margin: ratio -> suggest 20%
 data spread: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
 rule bad: margin as basis_points
 "#;
     expect_load_error(code, "foreign_bps.lemma", &["basis_points", "margin"]);
@@ -382,9 +382,9 @@ fn shared_custom_unit_same_factor_two_types_number_as_ok() {
     let code = r#"
 spec s
 data spread: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
 data fee: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
 rule from_number: 500 basis_points
 "#;
     let mut engine = Engine::new();
@@ -404,9 +404,9 @@ fn conflicting_basis_points_factor_errors_at_load() {
     let code = r#"
 spec s
 data spread_a: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
 data spread_b: ratio
-  -> unit basis_points 5000
+  -> unit basis_points: 5000
 rule out: spread_a
 "#;
     expect_load_error(
@@ -422,7 +422,7 @@ fn redefining_builtin_percent_with_different_factor_errors() {
 spec s
 data margin: ratio
 data custom: ratio
-  -> unit percent 50
+  -> unit percent: 50
 rule out: margin
 "#;
     expect_load_error(
@@ -437,11 +437,11 @@ fn mixed_match_and_mismatch_factors_errors_on_first_mismatch() {
     let code = r#"
 spec s
 data spread_a: ratio
-  -> unit basis_points 10000
-  -> unit ten_thousandth 10000
+  -> unit basis_points: 10000
+  -> unit ten_thousandth: 10000
 data spread_b: ratio
-  -> unit basis_points 10000
-  -> unit ten_thousandth 5000
+  -> unit basis_points: 10000
+  -> unit ten_thousandth: 5000
 rule out: spread_a
 "#;
     expect_load_error(
@@ -456,11 +456,11 @@ fn three_types_third_introduces_factor_conflict() {
     let code = r#"
 spec s
 data a: ratio
-  -> unit thirds 3
+  -> unit thirds: 3
 data b: ratio
-  -> unit thirds 3
+  -> unit thirds: 3
 data c: ratio
-  -> unit thirds 6
+  -> unit thirds: 6
 rule out: a
 "#;
     expect_load_error(code, "three_types_conflict.lemma", &["thirds"]);
@@ -471,11 +471,11 @@ fn three_types_third_introduces_factor_conflict_reordered() {
     let code = r#"
 spec s
 data c: ratio
-  -> unit thirds 6
+  -> unit thirds: 6
 data a: ratio
-  -> unit thirds 3
+  -> unit thirds: 3
 data b: ratio
-  -> unit thirds 3
+  -> unit thirds: 3
 rule out: a
 "#;
     expect_load_error(code, "three_types_conflict_reordered.lemma", &["thirds"]);
@@ -680,7 +680,7 @@ fn ratio_range_default_with_basis_points_endpoints_canonical() {
     let code = r#"
 spec policy
 data allowed_band: ratio range
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> suggest 200 basis_points...3500 basis_points
 rule band: allowed_band
 "#;

@@ -38,7 +38,7 @@ fn bps_spec() -> &'static str {
     r#"
 spec s
 data r: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> minimum 500 basis_points
   -> maximum 10000 basis_points
 rule out: r
@@ -239,7 +239,7 @@ fn ratio_default_custom_unit_loads() {
     let code = r#"
 spec s
 data r: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> suggest 500 basis_points
 rule out: r
 "#;

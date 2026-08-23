@@ -12,6 +12,49 @@ use rust_decimal::Decimal;
 use std::sync::Arc;
 
 #[derive(Debug)]
+struct DeprecatedStandaloneWith {
+    path: Reference,
+    rhs: WithRhs,
+    source_location: Source,
+}
+
+fn merge_deprecated_standalone_with(
+    data: &mut [LemmaData],
+    pending: Vec<DeprecatedStandaloneWith>,
+) -> Result<(), Error> {
+    for item in pending {
+        let alias = item.path.segments[0].clone();
+        let relative = Reference {
+            segments: item.path.segments[1..].to_vec(),
+            name: item.path.name.clone(),
+        };
+        let import = data.iter_mut().find(|datum| {
+            datum.reference.is_local()
+                && datum.reference.name == alias
+                && matches!(&datum.value, DataValue::Import { .. })
+        });
+        if import.is_none() {
+            return Err(Error::parsing(
+                format!("`uses {alias}: …` is required for standalone `with {alias}.…`"),
+                item.source_location,
+                Some(format!("Add `uses {alias}: <spec_name>` in this spec")),
+            ));
+        }
+        let datum = import.expect("BUG: import row exists after is_none check");
+        let DataValue::Import { bindings, .. } = &mut datum.value else {
+            unreachable!("BUG: matched Import arm in find predicate");
+        };
+        bindings.push(UsesBinding {
+            path: relative,
+            rhs: item.rhs,
+            source_location: item.source_location,
+            deprecated_standalone_with: true,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
 pub struct ParseResult {
     pub repositories: IndexMap<Arc<LemmaRepository>, Vec<LemmaSpec>>,
     pub expression_count: usize,
@@ -316,6 +359,7 @@ impl Parser {
         let mut data = Vec::new();
         let mut rules = Vec::new();
         let mut meta_fields = Vec::new();
+        let mut pending_deprecated_with: Vec<DeprecatedStandaloneWith> = Vec::new();
 
         loop {
             let peek_kind = self.peek()?.kind.clone();
@@ -325,8 +369,7 @@ impl Parser {
                     data.push(datum);
                 }
                 TokenKind::With => {
-                    let datum = self.parse_with()?;
-                    data.push(datum);
+                    pending_deprecated_with.push(self.parse_deprecated_standalone_with()?);
                 }
                 TokenKind::Rule => {
                     let rule = self.parse_rule()?;
@@ -346,7 +389,7 @@ impl Parser {
                     return Err(self.error_at_token_with_suggestion(
                         &token,
                         format!(
-                            "Expected 'data', 'with', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
+                            "Expected 'data', 'rule', 'meta', 'uses', or a new 'spec', found '{}'",
                             token.text
                         ),
                         "Check the spelling or add the appropriate keyword",
@@ -354,6 +397,8 @@ impl Parser {
                 }
             }
         }
+
+        merge_deprecated_standalone_with(&mut data, pending_deprecated_with)?;
 
         for data in data {
             spec = spec.add_data(data);
@@ -712,8 +757,8 @@ impl Parser {
             let tok = self.peek()?.clone();
             return Err(self.error_at_token_with_suggestion(
                 &tok,
-                "Dotted paths require `with`; `data` declares types and values on local names only.",
-                "Use `with path.to.slot: <value or reference>` to assign on an imported or nested slot.",
+                "Dotted paths require `uses` with `-> with`; `data` declares types and values on local names only.",
+                "Use `uses alias: spec` with `  -> with path.to.slot: <value or reference>`.",
             ));
         }
 
@@ -725,75 +770,60 @@ impl Parser {
         Ok(LemmaData::new(reference, value, source))
     }
 
-    fn parse_with(&mut self) -> Result<LemmaData, Error> {
-        let with_token = self.expect(&TokenKind::With)?;
-        let start_span = with_token.span.clone();
-
-        let reference = self.parse_reference()?;
-        for segment in reference
-            .segments
-            .iter()
-            .chain(std::iter::once(&reference.name))
-        {
-            crate::limits::check_max_length(
-                segment,
-                self.max_data_name_length,
-                "with",
-                Some(Source::new(self.source_type(), start_span.clone())),
-            )?;
-        }
-
-        if reference.segments.is_empty() {
-            return Err(self.error_at_token_with_suggestion(
-                &with_token,
-                "`with` must target data on an imported spec (`with alias.field: …`), not a local name.",
-                "Use `data name: …` for local slots, or `with alias.field: …` to set data on a spec you `uses`.",
-            ));
-        }
-
-        self.expect(&TokenKind::Colon)?;
-
-        let value = self.parse_with_value()?;
-
-        let span = self.span_covering(&start_span, &self.last_span);
-        let source = self.make_source(span);
-
-        Ok(LemmaData::new(reference, value, source))
-    }
-
-    fn with_rhs_starts_as_literal(&self, kind: &TokenKind) -> bool {
+    fn with_rhs_starts_as_literal(kind: &TokenKind) -> bool {
         matches!(
             kind,
             TokenKind::StringLit | TokenKind::NumberLit | TokenKind::Minus | TokenKind::Plus
         ) || is_boolean_keyword(kind)
     }
 
-    fn parse_with_value(&mut self) -> Result<DataValue, Error> {
+    fn parse_deprecated_standalone_with(&mut self) -> Result<DeprecatedStandaloneWith, Error> {
+        let with_token = self.expect(&TokenKind::With)?;
+        let start_span = with_token.span.clone();
+        let path = self.parse_reference()?;
+        if path.segments.is_empty() {
+            return Err(self.error_at_token_with_suggestion(
+                &with_token,
+                "Standalone `with` must target an imported spec path (`with alias.field: …`).",
+                "Use `data name: …` for local slots, or nest under `uses` with `  -> with path: …`.",
+            ));
+        }
+        let (rhs, _) =
+            self.parse_assignment_after_key(|parser| parser.parse_with_rhs(), "with", false)?;
+        let span = self.span_covering(&start_span, &self.last_span);
+        Ok(DeprecatedStandaloneWith {
+            path,
+            rhs,
+            source_location: self.make_source(span),
+        })
+    }
+
+    fn parse_with_rhs(&mut self) -> Result<WithRhs, Error> {
         let peek_kind = self.peek()?.kind.clone();
 
-        if self.with_rhs_starts_as_literal(&peek_kind) {
+        if Self::with_rhs_starts_as_literal(&peek_kind) {
             let value = self.parse_literal_value()?;
-            return Ok(DataValue::With(WithRhs::Literal(value)));
+            return Ok(WithRhs::Literal(value));
         }
 
         if can_be_label(&peek_kind) {
             let target = self.parse_reference()?;
-            if self.at(&TokenKind::Arrow)? {
+            if self.at(&TokenKind::Arrow)? && self.lexer.peek_second()?.kind != TokenKind::With {
                 let tok = self.peek()?.clone();
                 return Err(self.error_at_token_with_suggestion(
                     &tok,
-                    "Constraint chains (`-> ...`) are not allowed on `with`; use `data` to declare types and constraints.",
-                    "Use `data name: <type> -> ...` for constraints, then `with alias.field: <reference or literal>` to assign on an imported spec.",
+                    "Constraint chains (`-> ...`) are not allowed on a `uses` binding reference.",
+                    "Use `data name: <type> -> ...` for type constraints on local slots.",
                 ));
             }
-            return Ok(DataValue::With(WithRhs::Reference { target }));
+            return Ok(WithRhs::Reference { target });
         }
 
         let tok = self.peek()?.clone();
         Err(self.error_at_token(
             &tok,
             format!(
-                "Expected a reference or literal after `with ...:`, found {}",
+                "Expected a reference or literal after `-> with ...:`, found {}",
                 tok.kind
             ),
         ))
@@ -916,10 +946,62 @@ impl Parser {
             implicit
         };
 
+        let mut bindings = Vec::new();
+        while self.at(&TokenKind::Arrow)? {
+            if self.lexer.peek_second()?.kind != TokenKind::With {
+                let tok = self.peek()?.clone();
+                return Err(self.error_at_token_with_suggestion(
+                    &tok,
+                    "Expected `with` after `->` in a `uses` block.",
+                    "Write `  -> with path.to.slot: <value or reference>` under the `uses` line.",
+                ));
+            }
+            self.next()?; // ->
+            let with_token = self.expect(&TokenKind::With)?;
+            let binding_start_span = with_token.span.clone();
+
+            let path = self.parse_reference()?;
+            for segment in path.segments.iter().chain(std::iter::once(&path.name)) {
+                crate::limits::check_max_length(
+                    segment,
+                    self.max_data_name_length,
+                    "uses binding",
+                    Some(Source::new(self.source_type(), binding_start_span.clone())),
+                )?;
+            }
+            if path
+                .segments
+                .first()
+                .is_some_and(|segment| segment == &alias)
+            {
+                return Err(self.error_at_token_with_suggestion(
+                    &with_token,
+                    format!(
+                        "Binding path must be relative to the imported spec, not prefixed with import alias `{alias}`."
+                    ),
+                    format!(
+                        "Use `-> with {}: …` without the `{alias}.` prefix.",
+                        path.name
+                    ),
+                ));
+            }
+
+            let (rhs, _) =
+                self.parse_assignment_after_key(|parser| parser.parse_with_rhs(), "with", false)?;
+
+            let binding_span = self.span_covering(&binding_start_span, &self.last_span);
+            bindings.push(crate::parsing::ast::UsesBinding {
+                path,
+                rhs,
+                source_location: self.make_source(binding_span),
+                deprecated_standalone_with: false,
+            });
+        }
+
         let span = self.span_covering(start_span, &self.last_span);
         Ok(LemmaData::new(
             Reference::local(alias),
-            DataValue::Import(spec_ref),
+            DataValue::Import { spec_ref, bindings },
             self.make_source(span),
         ))
     }
@@ -1109,9 +1191,16 @@ impl Parser {
     fn parse_trailing_constraints(&mut self) -> Result<Option<Vec<Constraint>>, Error> {
         let mut commands = Vec::new();
         while self.at(&TokenKind::Arrow)? {
-            self.next()?;
-            let (cmd, cmd_args) = self.parse_command()?;
-            commands.push((cmd, cmd_args));
+            let arrow_token = self.next()?;
+            let constraint_start_span = arrow_token.span.clone();
+            let (cmd, cmd_args, deprecated_without_colon) = self.parse_constraint_command()?;
+            let constraint_span = self.span_covering(&constraint_start_span, &self.last_span);
+            commands.push(Constraint {
+                command: cmd,
+                args: cmd_args,
+                source_location: self.make_source(constraint_span),
+                deprecated_without_colon,
+            });
         }
         let constraints = if commands.is_empty() {
             None
@@ -1121,7 +1210,9 @@ impl Parser {
         Ok(constraints)
     }
 
-    fn parse_command(&mut self) -> Result<(TypeConstraintCommand, Vec<CommandArg>), Error> {
+    fn parse_constraint_command(
+        &mut self,
+    ) -> Result<(TypeConstraintCommand, Vec<CommandArg>, bool), Error> {
         let name_tok = self.next()?;
         if !can_be_label(&name_tok.kind) {
             return Err(self.error_at_token(
@@ -1139,13 +1230,99 @@ impl Parser {
             )
         })?;
 
-        let args = if cmd == TypeConstraintCommand::Unit {
-            self.parse_unit_command_args()?
+        match cmd.continuation_shape() {
+            ContinuationShape::Assignment => {
+                let (args, deprecated_without_colon) = self.parse_unit_as_assignment()?;
+                Ok((cmd, args, deprecated_without_colon))
+            }
+            ContinuationShape::SpaceSeparated => {
+                Ok((cmd, self.parse_generic_command_args()?, false))
+            }
+        }
+    }
+
+    /// Shared spine for assignment continuations (`with`, `unit`): `key: value` or deprecated space.
+    fn parse_assignment_after_key<T>(
+        &mut self,
+        parse_value: impl FnOnce(&mut Self) -> Result<T, Error>,
+        assignment_context: &str,
+        allow_deprecated_without_colon: bool,
+    ) -> Result<(T, bool), Error> {
+        if self.at(&TokenKind::Colon)? {
+            self.next()?;
+            let value = parse_value(self)?;
+            return Ok((value, false));
+        }
+        if allow_deprecated_without_colon {
+            let value = parse_value(self)?;
+            return Ok((value, true));
+        }
+        let tok = self.peek()?.clone();
+        Err(self.error_at_token_with_suggestion(
+            &tok,
+            format!("Expected `:` after `{assignment_context}` key."),
+            format!("Use `-> {assignment_context} <key>: <value>`."),
+        ))
+    }
+
+    fn parse_unit_as_assignment(&mut self) -> Result<(Vec<CommandArg>, bool), Error> {
+        if self.at_command_terminator()? {
+            return Ok((Vec::new(), false));
+        }
+
+        let peek_kind = self.peek()?.kind.clone();
+        if !can_be_label(&peek_kind) {
+            return Ok((Vec::new(), false));
+        }
+
+        let unit_name_tok = self.next()?;
+        let unit_name_arg = CommandArg::Label(unit_name_tok.text.clone());
+
+        let (unit_arg, deprecated_without_colon) =
+            self.parse_assignment_after_key(|parser| parser.parse_unit_payload(), "unit", true)?;
+
+        Ok((
+            vec![unit_name_arg, CommandArg::UnitExpr(unit_arg)],
+            deprecated_without_colon,
+        ))
+    }
+
+    /// Value side of `-> unit <name>: <payload>` (factor, compound, or prefix + compound).
+    fn parse_unit_payload(&mut self) -> Result<UnitArg, Error> {
+        if self.at_command_terminator()? {
+            let tok = self.peek()?.clone();
+            return Err(self.error_at_token_with_suggestion(
+                &tok,
+                "Expected a unit conversion factor or compound unit expression after `:`.",
+                "Use `-> unit <name>: <factor>` or `-> unit <name>: <compound>` (e.g. `unit eur: 1.00`, `unit eur_per_hour: eur/hour`).",
+            ));
+        }
+
+        let numeric_prefix: Option<Decimal> = if self.at(&TokenKind::NumberLit)? {
+            let num_tok = self.next()?;
+            Some(parse_decimal_string(&num_tok.text, &num_tok.span, self)?)
         } else {
-            self.parse_generic_command_args()?
+            None
         };
 
-        Ok((cmd, args))
+        let peek_kind_after_prefix = self.peek()?.kind.clone();
+        let has_compound_expr =
+            can_be_label(&peek_kind_after_prefix) && !self.at_command_terminator()?;
+
+        if has_compound_expr {
+            let factors = self.parse_unit_factors()?;
+            let prefix = numeric_prefix.unwrap_or(Decimal::ONE);
+            Ok(UnitArg::Expr(prefix, factors))
+        } else if let Some(factor) = numeric_prefix {
+            Ok(UnitArg::Factor(factor))
+        } else {
+            let tok = self.peek()?.clone();
+            Err(self.error_at_token_with_suggestion(
+                &tok,
+                "Expected a unit conversion factor or compound unit expression after `:`.",
+                "Use `-> unit <name>: <factor>` or `-> unit <name>: <compound>` (e.g. `unit eur: 1.00`, `unit eur_per_hour: eur/hour`).",
+            ))
+        }
     }
 
     /// Parse arguments for a generic (non-unit) constraint command.
@@ -1216,60 +1393,6 @@ impl Parser {
             return Ok(true);
         }
         Ok(is_spec_body_keyword(&self.peek()?.kind))
-    }
-
-    /// Parse arguments for a `-> unit <name> ...` command.
-    ///
-    /// Produces `[CommandArg::Label(unit_name), CommandArg::UnitExpr(unit_arg)]` where
-    /// `unit_arg` is either a simple `UnitArg::Factor` or a compound `UnitArg::Expr`.
-    ///
-    /// Grammar (after the `unit` keyword has been consumed):
-    /// ```text
-    /// unit_name_label  [numeric_prefix]  [unit_factor ('/' | ' ') unit_factor …]
-    /// ```
-    fn parse_unit_command_args(&mut self) -> Result<Vec<CommandArg>, Error> {
-        if self.at_command_terminator()? {
-            // No unit name — semantics will produce a meaningful error.
-            return Ok(Vec::new());
-        }
-
-        let peek_kind = self.peek()?.kind.clone();
-        if !can_be_label(&peek_kind) {
-            // Not a label — let semantics produce the error.
-            return Ok(Vec::new());
-        }
-
-        let unit_name_tok = self.next()?;
-        let unit_name_arg = CommandArg::Label(unit_name_tok.text.clone());
-
-        // Optional numeric prefix (e.g. the `1` in `-> unit meter 1` or the `3.6` in
-        // `-> unit kmh 3.6 meter/second`).
-        let numeric_prefix: Option<Decimal> = if self.at(&TokenKind::NumberLit)? {
-            let num_tok = self.next()?;
-            Some(parse_decimal_string(&num_tok.text, &num_tok.span, self)?)
-        } else {
-            None
-        };
-
-        // After an optional numeric prefix, check whether a compound unit expression follows
-        // (starts with a label / duration-unit keyword).
-        let peek_kind_after_prefix = self.peek()?.kind.clone();
-        let has_compound_expr =
-            can_be_label(&peek_kind_after_prefix) && !self.at_command_terminator()?;
-
-        if has_compound_expr {
-            let factors = self.parse_unit_factors()?;
-            let prefix = numeric_prefix.unwrap_or(Decimal::ONE);
-            let unit_arg = CommandArg::UnitExpr(UnitArg::Expr(prefix, factors));
-            Ok(vec![unit_name_arg, unit_arg])
-        } else if let Some(factor) = numeric_prefix {
-            let unit_arg = CommandArg::UnitExpr(UnitArg::Factor(factor));
-            Ok(vec![unit_name_arg, unit_arg])
-        } else {
-            // No factor and no compound expression.
-            // Produce an arg list that semantics will reject with a clear error.
-            Ok(vec![unit_name_arg])
-        }
     }
 
     /// Parse a sequence of `<measure_ref>[^[-]<integer>]` terms joined by `*` or `/`.

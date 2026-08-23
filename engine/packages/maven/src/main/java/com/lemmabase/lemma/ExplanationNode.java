@@ -8,10 +8,26 @@ import org.jspecify.annotations.Nullable;
 
 /** Nested explanation tree node (tagged by {@code type}). */
 public sealed interface ExplanationNode {
+  /**
+   * Returns the node type tag.
+   *
+   * @return type tag
+   */
   String type();
-
-  /** One evaluated unless condition, stated as a fact. */
+  /**
+   * Cause.
+   * @param condition condition
+   * @param value value
+   * @param children children
+   */
   record Cause(String condition, String value, @Nullable List<ExplanationNode> children) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Cause read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "Cause");
       String condition = null;
@@ -37,7 +53,19 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * ConversionStep.
+   * @param role role
+   * @param text text
+   */
   record ConversionStep(String role, String text) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static ConversionStep read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ConversionStep");
       String role = null;
@@ -64,6 +92,14 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * Rule.
+   * @param name name
+   * @param result result
+   * @param body body
+   * @param causes causes
+   * @param children children
+   */
   record Rule(
       String name,
       String result,
@@ -71,11 +107,19 @@ public sealed interface ExplanationNode {
       @Nullable List<Cause> causes,
       @Nullable List<ExplanationNode> children)
       implements ExplanationNode {
+    /** {@inheritDoc} */
     @Override
     public String type() {
       return "rule";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Rule read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Rule");
       String name = null;
@@ -109,12 +153,25 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * Compose.
+   * @param expression expression
+   * @param operands operands
+   */
   record Compose(String expression, List<ExplanationNode> operands) implements ExplanationNode {
+    /** {@inheritDoc} */
     @Override
     public String type() {
       return "compose";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Compose read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Compose");
       String expression = null;
@@ -139,12 +196,25 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * Data.
+   * @param name name
+   * @param display display
+   */
   record Data(String name, String display) implements ExplanationNode {
+    /** {@inheritDoc} */
     @Override
     public String type() {
       return "data";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Data read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Data");
       String name = null;
@@ -169,12 +239,24 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * DataUnused.
+   * @param name name
+   */
   record DataUnused(String name) implements ExplanationNode {
+    /** {@inheritDoc} */
     @Override
     public String type() {
       return "data_unused";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static DataUnused read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.DataUnused");
       String name = null;
@@ -194,14 +276,28 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * Conversion.
+   * @param expression expression
+   * @param steps steps
+   * @param operands operands
+   */
   record Conversion(
       String expression, List<ConversionStep> steps, List<ExplanationNode> operands)
       implements ExplanationNode {
+    /** {@inheritDoc} */
     @Override
     public String type() {
       return "conversion";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Conversion read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Conversion");
       String expression = null;
@@ -231,12 +327,24 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * Veto.
+   * @param message message
+   */
   record Veto(@Nullable String message) implements ExplanationNode {
+    /** {@inheritDoc} */
     @Override
     public String type() {
       return "veto";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Veto read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ExplanationNode.Veto");
       String message = null;
@@ -260,6 +368,13 @@ public sealed interface ExplanationNode {
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   static ExplanationNode read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "ExplanationNode");
     String json = JsonReading.bufferObjectAsString(p);

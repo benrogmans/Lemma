@@ -555,8 +555,8 @@ pub async fn resolve_registry_references(
                 let repository_arc = Arc::new(header);
 
                 for spec in specs {
-                    if let Err(e) = ctx.insert_spec(Arc::clone(&repository_arc), spec) {
-                        round_errors.push(e);
+                    if let Err(es) = ctx.insert_spec(Arc::clone(&repository_arc), spec) {
+                        round_errors.extend(es);
                     }
                 }
             }
@@ -620,7 +620,7 @@ fn find_missing_repositories(
     for spec in ctx.iter() {
         for data in &spec.data {
             // `uses <repository> <spec>`
-            if let DataValue::Import(spec_ref) = &data.value {
+            if let DataValue::Import { spec_ref, .. } = &data.value {
                 collect_repository_qualifiers_from_spec_ref(
                     spec_ref,
                     &data.source_location,

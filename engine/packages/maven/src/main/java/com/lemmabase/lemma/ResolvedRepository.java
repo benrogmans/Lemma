@@ -5,13 +5,27 @@ import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
-
-/** One repository group from {@link Engine#list()}. */
+/**
+ * ResolvedRepository.
+ * @param repository repository
+ * @param specs specs
+ */
 public record ResolvedRepository(@Nullable String repository, List<ListedSpec> specs) {
-
-  /** One listed spec row. */
+  /**
+   * ListedSpec.
+   * @param name name
+   * @param effectiveFrom effectiveFrom
+   * @param effectiveTo effectiveTo
+   */
   public record ListedSpec(
       String name, @Nullable String effectiveFrom, @Nullable String effectiveTo) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static ListedSpec read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ListedSpec");
       String name = null;
@@ -34,6 +48,13 @@ public record ResolvedRepository(@Nullable String repository, List<ListedSpec> s
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static ResolvedRepository read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "ResolvedRepository");
     String repository = null;

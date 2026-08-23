@@ -236,7 +236,7 @@ fn accepts_permille_keyword() {
 fn accepts_user_defined_ratio_unit() {
     let code = r#"
 spec s
-data r: ratio -> unit basis_points 10000
+data r: ratio -> unit basis_points: 10000
 rule out: r
 "#;
     let mut engine = Engine::new();
@@ -419,7 +419,7 @@ fn rejects_unknown_unit_name() {
 fn measure_type_rejects_percent_sigil() {
     let code = r#"
 spec s
-data r: measure -> unit eur 1
+data r: measure -> unit eur: 1
 rule out: r
 "#;
     let mut engine = Engine::new();
@@ -439,7 +439,7 @@ rule out: r
 fn measure_type_rejects_permille_sigil() {
     let code = r#"
 spec s
-data r: measure -> unit eur 1
+data r: measure -> unit eur: 1
 rule out: r
 "#;
     let mut engine = Engine::new();

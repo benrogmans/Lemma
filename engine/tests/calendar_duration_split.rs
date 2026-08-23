@@ -103,7 +103,7 @@ data d: units.duration -> suggest 1 month"#;
 fn weight_measure_calendar_default_lists_measure_units() {
     let code = r#"spec s
 uses lemma units
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 data w: weight -> suggest 1 month"#;
     expect_plan_error(code, "Unit 'month' is for calendar data");
     expect_plan_error(code, "Valid 'weight' units are");

@@ -438,10 +438,10 @@ rule ok: (2024-06-01...2024-06-15) as day as number >= 7"#;
 fn f1_hours() {
     let code = r#"spec test
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 data hourly_rate: 50 eur_per_hour
 rule cost: (hourly_rate * (2024-01-01...2024-01-02 as hour))"#;
     let val = eval_rule(code, "test", "cost");
@@ -452,8 +452,8 @@ rule cost: (hourly_rate * (2024-01-01...2024-01-02 as hour))"#;
 fn f2_months() {
     let code = r#"spec test
 uses lemma units
-data money: measure -> unit eur 1.00
-data monthly_rate: measure -> unit eur_per_month eur/month
+data money: measure -> unit eur: 1.00
+data monthly_rate: measure -> unit eur_per_month: eur/month
 data rate: 50 eur_per_month
 rule cost: (rate * (2024-01-01...2024-06-15 as month))"#;
     let val = eval_rule(code, "test", "cost");

@@ -9,123 +9,123 @@ Thermodynamic temperature is `kelvin` only (no affine Celsius/Fahrenheit).
 """
 
 data duration: measure
-  -> unit second 1
-  -> unit millisecond 0.001
-  -> unit microsecond 0.000001
-  -> unit nanosecond 0.000000001
-  -> unit minute 60
-  -> unit hour 3600
-  -> unit day 86400
-  -> unit week 604800
+  -> unit second: 1
+  -> unit millisecond: 0.001
+  -> unit microsecond: 0.000001
+  -> unit nanosecond: 0.000000001
+  -> unit minute: 60
+  -> unit hour: 3600
+  -> unit day: 86400
+  -> unit week: 604800
   -> trait duration
 
 data length: measure
-  -> unit meter 1
-  -> unit millimeter 0.001
-  -> unit centimeter 0.01
-  -> unit micrometer 0.000001
-  -> unit nanometer 0.000000001
-  -> unit kilometer 1000
-  -> unit inch 0.0254
-  -> unit foot 0.3048
-  -> unit yard 0.9144
-  -> unit mile 1609.344
+  -> unit meter: 1
+  -> unit millimeter: 0.001
+  -> unit centimeter: 0.01
+  -> unit micrometer: 0.000001
+  -> unit nanometer: 0.000000001
+  -> unit kilometer: 1000
+  -> unit inch: 0.0254
+  -> unit foot: 0.3048
+  -> unit yard: 0.9144
+  -> unit mile: 1609.344
 
 data mass: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
-  -> unit milligram 0.000001
-  -> unit microgram 0.000000001
-  -> unit tonne 1000
-  -> unit ounce 0.028349523125
-  -> unit pound 0.45359237
-  -> unit ton 907.18474
+  -> unit kilogram: 1
+  -> unit gram: 0.001
+  -> unit milligram: 0.000001
+  -> unit microgram: 0.000000001
+  -> unit tonne: 1000
+  -> unit ounce: 0.028349523125
+  -> unit pound: 0.45359237
+  -> unit ton: 907.18474
 
 data current: measure
-  -> unit ampere 1
-  -> unit milliampere 0.001
-  -> unit microampere 0.000001
+  -> unit ampere: 1
+  -> unit milliampere: 0.001
+  -> unit microampere: 0.000001
 
 data temperature: measure
-  -> unit kelvin 1
+  -> unit kelvin: 1
 
 data substance: measure
-  -> unit mole 1
-  -> unit millimole 0.001
-  -> unit micromole 0.000001
+  -> unit mole: 1
+  -> unit millimole: 0.001
+  -> unit micromole: 0.000001
 
 data luminous_intensity: measure
-  -> unit candela 1
+  -> unit candela: 1
 
 data calendar: measure
-  -> unit month 1
-  -> unit year 12
+  -> unit month: 1
+  -> unit year: 12
   -> trait calendar
 
 data area: measure
-  -> unit square_meter meter^2
-  -> unit acre 4046.8564224 meter^2
+  -> unit square_meter: meter^2
+  -> unit acre: 4046.8564224 meter^2
 
 data volume: measure
-  -> unit cubic_meter meter^3
-  -> unit liter 0.001 meter^3
-  -> unit milliliter 0.000001 meter^3
-  -> unit gallon 0.003785411784 meter^3
+  -> unit cubic_meter: meter^3
+  -> unit liter: 0.001 meter^3
+  -> unit milliliter: 0.000001 meter^3
+  -> unit gallon: 0.003785411784 meter^3
 
 data force: measure
-  -> unit newton kilogram * meter / second^2
-  -> unit kilonewton 1000 kilogram * meter / second^2
+  -> unit newton: kilogram * meter / second^2
+  -> unit kilonewton: 1000 kilogram * meter / second^2
 
 data pressure: measure
-  -> unit pascal newton / meter^2
-  -> unit kilopascal 1000 newton / meter^2
-  -> unit bar 100000 newton / meter^2
+  -> unit pascal: newton / meter^2
+  -> unit kilopascal: 1000 newton / meter^2
+  -> unit bar: 100000 newton / meter^2
 
 data energy: measure
-  -> unit joule newton * meter
-  -> unit kilojoule 1000 newton * meter
-  -> unit watt_hour 3600 newton * meter
-  -> unit kilowatt_hour 3600000 newton * meter
+  -> unit joule: newton * meter
+  -> unit kilojoule: 1000 newton * meter
+  -> unit watt_hour: 3600 newton * meter
+  -> unit kilowatt_hour: 3600000 newton * meter
 
 data power: measure
-  -> unit watt joule / second
-  -> unit kilowatt 1000 joule / second
+  -> unit watt: joule / second
+  -> unit kilowatt: 1000 joule / second
 
 data velocity: measure
-  -> unit meter_per_second meter/second
-  -> unit kilometer_per_hour kilometer/hour
-  -> unit mile_per_hour mile/hour
+  -> unit meter_per_second: meter/second
+  -> unit kilometer_per_hour: kilometer/hour
+  -> unit mile_per_hour: mile/hour
 
 data frequency: measure
-  -> unit hertz second^-1
-  -> unit kilohertz 1000 second^-1
+  -> unit hertz: second^-1
+  -> unit kilohertz: 1000 second^-1
 
 data charge: measure
-  -> unit coulomb ampere * second
+  -> unit coulomb: ampere * second
 
 data voltage: measure
-  -> unit volt joule / coulomb
-  -> unit millivolt 0.001 joule / coulomb
-  -> unit kilovolt 1000 joule / coulomb
+  -> unit volt: joule / coulomb
+  -> unit millivolt: 0.001 joule / coulomb
+  -> unit kilovolt: 1000 joule / coulomb
 
 data resistance: measure
-  -> unit ohm volt / ampere
-  -> unit kilohm 1000 volt / ampere
+  -> unit ohm: volt / ampere
+  -> unit kilohm: 1000 volt / ampere
 
 data capacitance: measure
-  -> unit farad coulomb / volt
-  -> unit microfarad 0.000001 coulomb / volt
+  -> unit farad: coulomb / volt
+  -> unit microfarad: 0.000001 coulomb / volt
 
 data information: measure
-  -> unit bit 1
-  -> unit byte 8
-  -> unit kilobyte 8000
-  -> unit megabyte 8000000
-  -> unit gigabyte 8000000000
-  -> unit terabyte 8000000000000
-  -> unit petabyte 8000000000000000
-  -> unit kibibyte 8192
-  -> unit mebibyte 8388608
-  -> unit gibibyte 8589934592
-  -> unit tebibyte 8796093022208
-  -> unit pebibyte 9007199254740992
+  -> unit bit: 1
+  -> unit byte: 8
+  -> unit kilobyte: 8000
+  -> unit megabyte: 8000000
+  -> unit gigabyte: 8000000000
+  -> unit terabyte: 8000000000000
+  -> unit petabyte: 8000000000000000
+  -> unit kibibyte: 8192
+  -> unit mebibyte: 8388608
+  -> unit gibibyte: 8589934592
+  -> unit tebibyte: 8796093022208
+  -> unit pebibyte: 9007199254740992

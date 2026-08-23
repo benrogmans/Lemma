@@ -8,16 +8,26 @@ import java.util.Map;
 
 /** User/planning error from Lemma. Carries WASM-shaped {@link EngineError} entries. */
 public final class LemmaException extends RuntimeException {
+  /** Serialization version. */
   private static final long serialVersionUID = 1L;
 
+  /** Raw JSON array of {@link EngineError} objects from the engine. */
   private final String errorsJson;
+  /** Lazily parsed copy of {@link #errorsJson}. */
   private volatile ArrayList<EngineError> parsedErrors;
 
+  /**
+   * Creates an exception with structured errors.
+   *
+   * @param message summary message
+   * @param errorsJson JSON array of engine errors
+   */
   public LemmaException(String message, String errorsJson) {
     super(message);
     this.errorsJson = errorsJson;
   }
 
+  /** Parses and memoizes {@link #errorsJson}. */
   private ArrayList<EngineError> parse() {
     if (parsedErrors == null) {
       synchronized (this) {
@@ -29,6 +39,11 @@ public final class LemmaException extends RuntimeException {
     return parsedErrors;
   }
 
+  /**
+   * Structured engine errors.
+   *
+   * @return unmodifiable error list
+   */
   public List<EngineError> errors() {
     return Collections.unmodifiableList(parse());
   }
@@ -36,6 +51,8 @@ public final class LemmaException extends RuntimeException {
   /**
    * Groups errors by {@link EngineError#relatedData()}. Errors with a null {@code relatedData} are
    * excluded.
+   *
+   * @return map from data name to errors for that binding
    */
   public Map<String, List<EngineError>> errorsByData() {
     Map<String, List<EngineError>> byData = new LinkedHashMap<>();

@@ -66,10 +66,10 @@ fn ratio_unit<'a>(spec: &'a TypeSpecification, name: &str) -> &'a RatioUnit {
 fn measure_minimum_syncs_canonical_and_per_unit_magnitudes() {
     let code = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kilogram 1
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kilogram: 1
 data cost_per_unit: measure
-  -> unit eur_per_kilo eur/kilogram
+  -> unit eur_per_kilo: eur/kilogram
   -> minimum 1.20 eur_per_kilo
   -> maximum 2.00 eur_per_kilo
 rule out: cost_per_unit
@@ -99,8 +99,8 @@ fn measure_second_unit_minimum_converted_from_canonical() {
     let code = r#"
 spec s
 data mass: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
+  -> unit kilogram: 1
+  -> unit gram: 0.001
   -> minimum 1 kilogram
 rule out: mass
 "#;
@@ -120,7 +120,7 @@ rule out: mass
 fn measure_literal_resolves_unit_index_type_with_synced_minimum() {
     let code = r#"
 spec s
-data money: measure -> unit eur 1
+data money: measure -> unit eur: 1
 data budget: money -> minimum 0 eur
 data price: 10 eur
 rule out: price
@@ -158,7 +158,7 @@ fn ratio_show_json_exposes_per_unit_minimum_string() {
     let code = r#"
 spec s
 data r: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> minimum 500 basis_points
 rule out: r
 "#;
@@ -189,8 +189,8 @@ fn measure_default_populates_each_unit_magnitude() {
     let code = r#"
 spec s
 data money: measure
-  -> unit eur 1
-  -> unit usd 2
+  -> unit eur: 1
+  -> unit usd: 2
   -> suggest 4 eur
 rule out: money
 "#;
@@ -211,8 +211,8 @@ fn reference_local_suggestion_populates_per_unit_magnitudes() {
     let code = r#"
 spec inner
 data base: measure
-  -> unit eur 1
-  -> unit usd 2
+  -> unit eur: 1
+  -> unit usd: 2
 
 spec outer
 uses i: inner
@@ -265,8 +265,8 @@ fn show_json_round_trip_preserves_measure_unit_bounds() {
     let code = r#"
 spec s
 data mass: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
+  -> unit kilogram: 1
+  -> unit gram: 0.001
   -> minimum 1 kilogram
 rule r: mass
 "#;
@@ -287,8 +287,8 @@ fn same_type_alias_units_with_same_factor_must_plan() {
     let code = r#"
 spec s
 data money: measure
-  -> unit eur 1
-  -> unit euro 1
+  -> unit eur: 1
+  -> unit euro: 1
 rule r: 1 eur
 "#;
     let mut engine = Engine::new();
@@ -297,11 +297,11 @@ rule r: 1 eur
 
 const COMPOUND_COST_PER_UNIT_SPEC: &str = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kilogram 1 -> unit tonne 1000
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kilogram: 1 -> unit tonne: 1000
 data cost_per_unit: measure
-  -> unit eur_per_kilo eur/kilogram
-  -> unit usd_per_tonne usd/tonne
+  -> unit eur_per_kilo: eur/kilogram
+  -> unit usd_per_tonne: usd/tonne
   -> maximum 2.00 eur_per_kilo
 rule out: cost_per_unit
 "#;
@@ -352,11 +352,11 @@ fn compound_measure_maximum_converts_per_unit_across_units() {
 fn compound_measure_maximum_in_bound_unit_stays_literal() {
     let code = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.91
-data mass: measure -> unit kilogram 1 -> unit tonne 1000
+data money: measure -> unit eur: 1 -> unit usd: 0.91
+data mass: measure -> unit kilogram: 1 -> unit tonne: 1000
 data cost_per_unit: measure
-  -> unit eur_per_kilo eur/kilogram
-  -> unit usd_per_tonne usd/tonne
+  -> unit eur_per_kilo: eur/kilogram
+  -> unit usd_per_tonne: usd/tonne
   -> maximum 2.00 usd_per_tonne
 rule out: cost_per_unit
 "#;
@@ -380,16 +380,16 @@ spec s
 uses lemma units
 
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.91
+  -> unit eur: 1
+  -> unit usd: 0.91
 
 data mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data storage_cost: measure
-  -> unit eur_per_kilo_hour eur/kilogram/hour
-  -> unit usd_per_ton_hour usd/tonne/hour
+  -> unit eur_per_kilo_hour: eur/kilogram/hour
+  -> unit usd_per_ton_hour: usd/tonne/hour
   -> maximum 2.00 eur_per_kilo_hour
 
 rule out: storage_cost

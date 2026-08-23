@@ -55,10 +55,10 @@ spec as_prec
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data wage: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 
 data hours_worked: 160 hour
 data hourly_rate: wage -> suggest 50 eur_per_hour
@@ -91,9 +91,9 @@ fn hunt_as_precedence_with_division() {
 spec burn
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
 rule runway: balance / burn_rate as month
@@ -122,9 +122,9 @@ fn hunt_as_precedence_division_with_parentheses_evaluates() {
 spec burn
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
 rule runway: (balance / burn_rate) as month
@@ -314,7 +314,7 @@ spec money_test
 
 data money: measure
   -> decimals 2
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data price: money -> suggest 19.99 eur
 data tax_rate: 21%

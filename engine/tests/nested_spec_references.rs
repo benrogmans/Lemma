@@ -172,7 +172,7 @@ data value: 50
     let middle_spec = r#"
 spec middle
 uses config: base
-with config.value: 100
+  -> with value: 100
 "#;
 
     let top_spec = r#"
@@ -245,8 +245,8 @@ rule line_total: pricing.final_price * quantity
     let order_spec = r#"
 spec order
 uses line: line_item
-with line.pricing.tax_rate: 10%
-with line.quantity: 5
+  -> with pricing.tax_rate: 10%
+  -> with quantity: 5
 rule order_total: line.line_total
 "#;
 
@@ -314,7 +314,7 @@ uses base
 spec comparison
 uses path1: wrapper
 uses path2: wrapper
-with path2.base.price: 75
+  -> with base.price: 75
 rule total1: path1.base.total
 rule total2: path2.base.total
 rule difference: total2 - total1
@@ -512,7 +512,7 @@ rule x_squared: x * x
     let middle_spec = r#"
 spec middle
 uses base_config: base
-with base_config.x: 20
+  -> with x: 20
 rule x_squared_plus_ten: base_config.x_squared + 10
 "#;
 
@@ -591,11 +591,11 @@ rule final_price: price - discount_amount
     let scenario_spec = r#"
 spec scenarios
 uses retail: pricing
-with retail.discount: 5%
+  -> with discount: 5%
 
 uses wholesale: pricing
-with wholesale.discount: 15%
-with wholesale.price: 80
+  -> with discount: 15%
+  -> with price: 80
 
 rule retail_final: retail.final_price
 rule wholesale_final: wholesale.final_price

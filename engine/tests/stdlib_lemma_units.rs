@@ -71,7 +71,7 @@ rule hour: age as hour"#;
 fn uses_lemma_units_length_and_duration_units_for_compound_cast() {
     let code = r#"spec speed_test
 uses lemma units
-data velocity: measure -> unit mps meter/second
+data velocity: measure -> unit mps: meter/second
 data dist: 100 meter
 data secs: 20 second
 rule speed: (dist / secs) as mps"#;
@@ -175,7 +175,7 @@ fn mass_times_accel_as_newton() {
     let out = eval_rule(
         r#"spec force_test
 uses lemma units
-data acceleration: measure -> unit mps2 meter/second^2
+data acceleration: measure -> unit mps2: meter/second^2
 data m: 10 kilogram
 data a: 5 mps2
 rule f: (m * a) as newton"#,

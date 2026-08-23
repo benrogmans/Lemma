@@ -46,11 +46,11 @@ fn uses_lemma_compound_wage_rate_units_plan_without_unknown_unit_error() {
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data wage_rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 
 rule smoke: true
 "#;
@@ -69,17 +69,17 @@ fn uses_lemma_insurance_premium_per_vehicle_compound_plans() {
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data fleet_unit: measure
-  -> unit vehicle 1.00
+  -> unit vehicle: 1.00
 
 data premium_rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 
 data premium_per_vehicle: measure
-  -> unit eur_hour_per_vehicle eur_per_hour/vehicle
+  -> unit eur_hour_per_vehicle: eur_per_hour/vehicle
 
 rule smoke: true
 "#;
@@ -98,18 +98,18 @@ fn compound_newton_force_unit_plans() {
 uses lemma units
 
 data mass: measure
-  -> unit kg 1
-  -> unit gram 0.001
+  -> unit kg: 1
+  -> unit gram: 0.001
 
 data length: measure
-  -> unit meter 1
-  -> unit km 1000
+  -> unit meter: 1
+  -> unit km: 1000
 
 data acceleration: measure
-  -> unit mps2 meter/second^2
+  -> unit mps2: meter/second^2
 
 data force: measure
-  -> unit local_newton kg * mps2
+  -> unit local_newton: kg * mps2
 
 rule smoke: true
 "#;
@@ -127,22 +127,22 @@ fn compound_pascal_pressure_unit_plans() {
 uses lemma units
 
 data mass: measure
-  -> unit kg 1
+  -> unit kg: 1
 
 data length: measure
-  -> unit meter 1
+  -> unit meter: 1
 
 data acceleration: measure
-  -> unit mps2 meter/second^2
+  -> unit mps2: meter/second^2
 
 data force: measure
-  -> unit local_newton kg * mps2
+  -> unit local_newton: kg * mps2
 
 data area: measure
-  -> unit sqm meter^2
+  -> unit sqm: meter^2
 
 data pressure: measure
-  -> unit local_pascal local_newton/sqm
+  -> unit local_pascal: local_newton/sqm
 
 rule smoke: true
 "#;
@@ -160,19 +160,19 @@ fn compound_population_density_multi_unit_plans() {
 uses lemma units
 
 data population: measure
-  -> unit person 1
+  -> unit person: 1
 
 data length: measure
-  -> unit meter 1
-  -> unit km 1000
+  -> unit meter: 1
+  -> unit km: 1000
 
 data area: measure
-  -> unit sqm meter^2
-  -> unit sqkm km^2
+  -> unit sqm: meter^2
+  -> unit sqkm: km^2
 
 data density: measure
-  -> unit per_sqm person/sqm
-  -> unit per_sqkm person/sqkm
+  -> unit per_sqm: person/sqm
+  -> unit per_sqkm: person/sqkm
 
 rule smoke: true
 "#;
@@ -190,15 +190,15 @@ fn compound_annual_growth_rate_multi_unit_plans() {
 uses lemma units
 
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 
 data annual_growth: measure
-  -> unit growth_per_hour eur_per_hour/eur
-  -> unit growth_per_second eur_per_second/eur
+  -> unit growth_per_hour: eur_per_hour/eur
+  -> unit growth_per_second: eur_per_second/eur
 
 rule smoke: true
 "#;
@@ -216,16 +216,16 @@ fn compound_three_level_chain_plans() {
 uses lemma units
 
 data a: measure
-  -> unit au 1
+  -> unit au: 1
 
 data b: measure
-  -> unit bu au/second
+  -> unit bu: au/second
 
 data c: measure
-  -> unit cu bu/au
+  -> unit cu: bu/au
 
 data d: measure
-  -> unit du cu/au
+  -> unit du: cu/au
 
 rule smoke: true
 "#;
@@ -243,10 +243,10 @@ fn compound_cycle_between_measure_types_rejected() {
 uses lemma units
 
 data x: measure
-  -> unit xu yu/second
+  -> unit xu: yu/second
 
 data y: measure
-  -> unit yu xu/second
+  -> unit yu: xu/second
 
 rule smoke: true
 "#;
@@ -265,20 +265,20 @@ fn compound_kilonewton_with_prefix_plans() {
 uses lemma units
 
 data mass: measure
-  -> unit kg 1
-  -> unit gram 0.001
+  -> unit kg: 1
+  -> unit gram: 0.001
 
 data length: measure
-  -> unit meter 1
-  -> unit km 1000
+  -> unit meter: 1
+  -> unit km: 1000
 
 data acceleration: measure
-  -> unit mps2 meter/second^2
-  -> unit kmh2 km/hour^2
+  -> unit mps2: meter/second^2
+  -> unit kmh2: km/hour^2
 
 data force: measure
-  -> unit local_newton kg * mps2
-  -> unit local_kilonewton 1000 kg * meter/second^2
+  -> unit local_newton: kg * mps2
+  -> unit local_kilonewton: 1000 kg * meter/second^2
 
 rule smoke: true
 "#;
@@ -300,21 +300,21 @@ fn compound_kilonewton_to_gram_kmh2_conversion() {
 uses lemma units
 
 data mass: measure
-  -> unit kg 1
-  -> unit gram 0.001
+  -> unit kg: 1
+  -> unit gram: 0.001
 
 data length: measure
-  -> unit meter 1
-  -> unit km 1000
+  -> unit meter: 1
+  -> unit km: 1000
 
 data acceleration: measure
-  -> unit mps2 meter/second^2
-  -> unit kmh2 km/hour^2
+  -> unit mps2: meter/second^2
+  -> unit kmh2: km/hour^2
 
 data force: measure
-  -> unit local_newton kg * mps2
-  -> unit local_kilonewton 1000 kg * meter/second^2
-  -> unit gram_kmh2 gram * kmh2
+  -> unit local_newton: kg * mps2
+  -> unit local_kilonewton: 1000 kg * meter/second^2
+  -> unit gram_kmh2: gram * kmh2
 
 data f: 1 local_kilonewton
 rule converted: f as gram_kmh2
@@ -356,12 +356,12 @@ fn compound_volume_liter_and_cubic_meter_plans() {
 uses lemma units
 
 data length: measure
-  -> unit meter 1
-  -> unit km 1000
+  -> unit meter: 1
+  -> unit km: 1000
 
 data volume: measure
-  -> unit local_cubic_meter meter^3
-  -> unit local_liter 0.001 meter^3
+  -> unit local_cubic_meter: meter^3
+  -> unit local_liter: 0.001 meter^3
 
 rule smoke: true
 "#;

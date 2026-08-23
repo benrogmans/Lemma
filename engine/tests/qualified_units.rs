@@ -54,8 +54,8 @@ rule c: 5 units.mass.kilogram"#;
 fn bare_ambiguous_must_qualify() {
     let msg = expect_plan_error(
         r#"spec t
-data money_a: measure -> unit eur 1
-data money_b: measure -> unit eur 2
+data money_a: measure -> unit eur: 1
+data money_b: measure -> unit eur: 2
 rule r: 1 eur"#,
     );
     assert!(
@@ -73,8 +73,8 @@ rule r: 1 eur"#,
 #[test]
 fn qualified_disambiguation_and_eval_arithmetic() {
     let code = r#"spec t
-data money_a: measure -> unit eur 1
-data money_b: measure -> unit eur 2
+data money_a: measure -> unit eur: 1
+data money_b: measure -> unit eur: 2
 rule a: 10 money_a.eur + 5 money_a.eur
 rule b: 10 money_b.eur + 5 money_b.eur"#;
     let a = eval_display(code, "t", "a");
@@ -88,7 +88,7 @@ fn import_and_local_kilogram_clash() {
     let bare = expect_plan_error(
         r#"spec t
 uses lemma units
-data bag: measure -> unit kilogram 999
+data bag: measure -> unit kilogram: 999
 rule r: 1 kilogram"#,
     );
     assert!(
@@ -100,7 +100,7 @@ rule r: 1 kilogram"#,
 
     let code = r#"spec t
 uses lemma units
-data bag: measure -> unit kilogram 999
+data bag: measure -> unit kilogram: 999
 rule si: 1 units.mass.kilogram
 rule local: 1 bag.kilogram
 rule sugar: 1 units.kilogram"#;
@@ -112,8 +112,8 @@ rule sugar: 1 units.kilogram"#;
 #[test]
 fn as_qualified_unit() {
     let code = r#"spec t
-data money_a: measure -> unit eur 1
-data money_b: measure -> unit eur 2
+data money_a: measure -> unit eur: 1
+data money_b: measure -> unit eur: 2
 data x: 10 money_a.eur
 rule r: x as money_a.eur"#;
     assert!(eval_display(code, "t", "r").contains("eur"));
@@ -125,7 +125,7 @@ rule r: x as money_a.eur"#;
 fn multi_owner_second_datetime_subtract_does_not_panic() {
     let code = r#"spec t
 uses lemma units
-data tick: measure -> unit second 1
+data tick: measure -> unit second: 1
 rule value: (2024-01-01T03:30:00Z - 01:00:00) as minute"#;
     let display = eval_display(code, "t", "value");
     assert!(

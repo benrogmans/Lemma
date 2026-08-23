@@ -656,13 +656,13 @@ rule doubled: p * 2
 
 spec child 2025-01-01
 data money: measure
- -> unit eur 1.00
+ -> unit eur: 1.00
  -> decimals 2
 
 spec child 2025-06-01
 data money: measure
- -> unit eur 1.00
- -> unit usd 0.91
+ -> unit eur: 1.00
+ -> unit usd: 0.91
  -> decimals 2
 "#
                 .to_string(),

@@ -5,12 +5,12 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.Locale;
-import java.util.jar.Manifest;
 
 /** JNI declarations and native library load. */
 final class Native {
@@ -198,24 +198,24 @@ final class Native {
     return cachedLib;
   }
 
+  static String implementationVersion() {
+    return getImplementationVersion();
+  }
+
   private static String getImplementationVersion() {
-    try {
-      URL manifestUrl = Native.class.getClassLoader().getResource("META-INF/MANIFEST.MF");
-      if (manifestUrl == null) {
+    try (InputStream in = Native.class.getResourceAsStream("engine.version")) {
+      if (in == null) {
         throw new LemmaBugError(
-            "BUG: no MANIFEST.MF found; cannot determine version for cache key");
+            "BUG: engine.version resource missing; cannot determine version for cache key");
       }
-      try (InputStream in = manifestUrl.openStream()) {
-        Manifest manifest = new Manifest(in);
-        String version = manifest.getMainAttributes().getValue("Implementation-Version");
-        if (version == null || version.isBlank()) {
-          throw new LemmaBugError(
-              "BUG: Implementation-Version missing from manifest; cannot determine version for cache key");
-        }
-        return version;
+      String version = new String(in.readAllBytes(), StandardCharsets.UTF_8).trim();
+      if (version.isBlank()) {
+        throw new LemmaBugError(
+            "BUG: engine.version blank; cannot determine version for cache key");
       }
+      return version;
     } catch (IOException e) {
-      throw new LemmaBugError("BUG: failed to read MANIFEST.MF: " + e);
+      throw new LemmaBugError("BUG: failed to read engine.version: " + e);
     }
   }
 

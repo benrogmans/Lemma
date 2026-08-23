@@ -7,10 +7,23 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
-
 /**
- * Result of evaluating one rule. {@link RuleResultValue} fields are flattened onto this object when
- * the rule is not vetoed.
+ * RuleResult.
+ * @param display display
+ * @param measure measure
+ * @param ratio ratio
+ * @param number number
+ * @param booleanValue booleanValue
+ * @param text text
+ * @param date date
+ * @param time time
+ * @param calendar calendar
+ * @param range range
+ * @param vetoed vetoed
+ * @param vetoReason vetoReason
+ * @param ruleType ruleType
+ * @param missingData missingData
+ * @param explanation explanation
  */
 public record RuleResult(
     @Nullable String display,
@@ -29,6 +42,13 @@ public record RuleResult(
     @Nullable List<String> missingData,
     ExplanationNode.@Nullable Rule explanation) {
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static RuleResult read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "RuleResult");
     String display = null;

@@ -4,9 +4,16 @@ import com.fasterxml.jackson.core.JsonParser;
 import java.io.IOException;
 import java.util.List;
 
+/** JSON parse helpers for typed SDK responses. */
 final class JsonSupport {
+  /** Prevents instantiation. */
   private JsonSupport() {}
 
+  /**
+   * Parses a JSON array of engine errors.
+   *
+   * @param json JSON array text
+   */
   static List<EngineError> parseEngineErrors(String json) {
     try (JsonParser p = JsonReading.parserFor(json)) {
       return JsonReading.readList(p, EngineError::read);
@@ -15,6 +22,11 @@ final class JsonSupport {
     }
   }
 
+  /**
+   * Parses a run {@link Response}.
+   *
+   * @param json response JSON object
+   */
   static Response parseResponse(String json) {
     try (JsonParser p = JsonReading.parserFor(json)) {
       return Response.read(p);
@@ -23,6 +35,11 @@ final class JsonSupport {
     }
   }
 
+  /**
+   * Parses a {@link Show} result.
+   *
+   * @param json show JSON object
+   */
   static Show parseShow(String json) {
     try (JsonParser p = JsonReading.parserFor(json)) {
       return Show.read(p);
@@ -31,6 +48,11 @@ final class JsonSupport {
     }
   }
 
+  /**
+   * Parses a JSON array of {@link ResolvedRepository}.
+   *
+   * @param json JSON array text
+   */
   static List<ResolvedRepository> parseList(String json) {
     try (JsonParser p = JsonReading.parserFor(json)) {
       return JsonReading.readList(p, ResolvedRepository::read);
@@ -39,6 +61,11 @@ final class JsonSupport {
     }
   }
 
+  /**
+   * Parses {@link ResourceLimits}.
+   *
+   * @param json limits JSON object
+   */
   static ResourceLimits parseLimits(String json) {
     try (JsonParser p = JsonReading.parserFor(json)) {
       return ResourceLimits.read(p);
@@ -47,6 +74,11 @@ final class JsonSupport {
     }
   }
 
+  /**
+   * Parses a JSON array of {@link Recommendation}.
+   *
+   * @param json JSON array text
+   */
   static List<Recommendation> parseRecommendations(String json) {
     try (JsonParser p = JsonReading.parserFor(json)) {
       return JsonReading.readList(p, Recommendation::read);
@@ -55,6 +87,11 @@ final class JsonSupport {
     }
   }
 
+  /**
+   * Serializes limits for JNI.
+   *
+   * @param limits limits to serialize
+   */
   static String limitsToJson(ResourceLimits limits) {
     return limits.toJson();
   }

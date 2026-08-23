@@ -81,14 +81,14 @@ Create `shipping.lemma`:
 spec shipping
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
   -> minimum 0 eur
 
 data weight: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
+  -> unit kilogram: 1
+  -> unit gram: 0.001
 
 data is_express:     true
 data package_weight: 2.5 kilogram
@@ -139,8 +139,8 @@ Define custom types with units, constraints, and automatic conversion:
 spec type_examples
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
   -> decimals 2
   -> minimum 0 eur
 
@@ -243,7 +243,7 @@ spec invoicing
 uses @iso/countries alpha2
 
 data price: measure 
-  -> unit eur 1
+  -> unit eur: 1
 
 data country: alpha2.code
 
@@ -331,7 +331,7 @@ See [engine/packages/npm/README.md](engine/packages/npm/README.md).
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.5</version>
+  <version>0.9.6</version>
 </dependency>
 ```
 
@@ -362,7 +362,7 @@ Supports `linux/amd64` and `linux/arm64`.
 - **[Veto](cli/documentation/learn/types_and_units.md#veto)** -- when rules produce no value
 - **[CLI Reference](cli/documentation/reference/cli.md)** -- all commands and flags
 - **[Registry](cli/documentation/reference/registry.md)** -- shared specs and `@` references
-- **[Examples](cli/documentation/examples/)** -- example `.lemma` files
+- **[Examples](engine/documentation/examples/)** -- example `.lemma` files
 
 ## Status
 

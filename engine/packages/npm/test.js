@@ -336,10 +336,10 @@ rule r: 1
 
     await run('show rule result units for measure and ratio', () => {
       engine.load({ 'units_contract.lemma': `spec units_contract
-data money: measure -> unit eur 1 -> unit usd 0.91
+data money: measure -> unit eur: 1 -> unit usd: 0.91
 data rate: ratio
-  -> unit basis_points 10000
-  -> unit percent 100
+  -> unit basis_points: 10000
+  -> unit percent: 100
   -> suggest 500 basis_points
 rule total: money
 rule rate_out: rate` });
@@ -459,7 +459,7 @@ rule doubled: n * 2`,
 
     await run('invalid measure unit override completes with veto', () => {
       engine.load({ 'workspace.lemma': `spec bridge
-data bridge_height: measure -> unit meter 1.0
+data bridge_height: measure -> unit meter: 1.0
 rule span: bridge_height` });
       const response = runEx(engine, 'bridge', null, { bridge_height: '4 mete' }, null);
       assert(response.results.span.vetoed === true, 'span must veto on unknown unit');
@@ -525,8 +525,8 @@ rule r: x` });
       // unit usd 0.84: 1 USD = 0.84 EUR (canonical). 100 usd as eur => 100 * 0.84 = 84.
       engine.load({ 'sc.lemma': `spec measure_conv
       data money: measure
-        -> unit eur 1
-        -> unit usd 0.84
+        -> unit eur: 1
+        -> unit usd: 0.84
       rule price_eur: 100 usd as eur` });
       const r = runEx(engine, 'measure_conv', null, {}, null);
       const eur = ruleMeasureUnit(r.results.price_eur, 'eur');
@@ -537,19 +537,19 @@ rule r: x` });
       engine.load({ 'cost_price.lemma': `spec cost_price
 uses lemma units
 data money: measure
-  -> unit eur 1.00
-  -> unit inr 0.0092
+  -> unit eur: 1.00
+  -> unit inr: 0.0092
   -> decimals 2
 data labor_cost: measure
-  -> unit eur_per_hour eur/hour
-  -> unit inr_per_hour inr/hour
+  -> unit eur_per_hour: eur/hour
+  -> unit inr_per_hour: inr/hour
   -> suggest 25 eur_per_hour
 data product_cost: measure
-  -> unit eur_per_kg eur/kilogram
-  -> unit inr_per_kg inr/kilogram
+  -> unit eur_per_kg: eur/kilogram
+  -> unit inr_per_kg: inr/kilogram
   -> suggest 4 eur_per_kg
 data throughput: measure
-  -> unit kg_per_hour kilogram/hour
+  -> unit kg_per_hour: kilogram/hour
   -> suggest 12 kg_per_hour
 rule cost_price: product_cost + labor_cost / throughput` });
       const show = engine.show(null, 'cost_price', null);
@@ -603,7 +603,7 @@ rule m: margin` });
     await run('ratio basis_points show and response JSON wire', () => {
       engine.load({ 'policy_bps.lemma': `spec policy_bps
 data bps: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> suggest 500 basis_points
 rule m: bps` });
       const show = engine.show(null, 'policy_bps', null);

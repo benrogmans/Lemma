@@ -8,6 +8,7 @@ mod maven_natives;
 mod schema;
 mod versions;
 mod versions_diff;
+mod warnings;
 
 use std::process::Command;
 
@@ -159,10 +160,10 @@ fn run_maven_precommit() {
     let maven_dir = versions::workspace_root().join(MAVEN_PACKAGE_DIR);
     let mvnw = maven_dir.join("mvnw");
     eprintln!("xtask: maven ./mvnw -B verify");
-    let status = Command::new(&mvnw)
+    let output = Command::new(&mvnw)
         .args(["-B", "verify"])
         .current_dir(&maven_dir)
-        .status()
+        .output()
         .unwrap_or_else(|e| {
             panic!(
                 "failed to run {} in {}: {e}",
@@ -170,8 +171,19 @@ fn run_maven_precommit() {
                 maven_dir.display()
             )
         });
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{combined}");
+    let label = "./mvnw -B verify";
+    if !output.status.success() {
+        std::process::exit(output.status.code().unwrap_or(1));
+    }
+    if let Err(e) = warnings::reject_warnings_in_output(label, &combined) {
+        eprintln!("{e}");
+        std::process::exit(1);
     }
 }
 

@@ -432,8 +432,8 @@ fn import_binding_unit_factor_override_errors() {
             r#"
 spec finance
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
 "#
             .to_string(),
         )])
@@ -447,7 +447,7 @@ data money: measure
 spec pricing
 uses fin: finance
 data currency: fin.money
-  -> unit usd 0.84
+  -> unit usd: 0.84
 rule r: currency
 "#
         .to_string(),
@@ -467,7 +467,7 @@ rule r: currency
 fn measure_override_with_wrong_unit_rejected() {
     let code = r#"
 spec s
-data money: measure -> unit eur 1 -> unit usd 0.84
+data money: measure -> unit eur: 1 -> unit usd: 0.84
 data price: money
 rule r: price
 "#;
@@ -495,7 +495,7 @@ rule r: price
 fn test_veto_reason_on_invalid_measure_unit_override() {
     let code = r#"
 spec bridge
-data bridge_height: measure -> unit meter 1.0
+data bridge_height: measure -> unit meter: 1.0
 rule span: bridge_height
 "#;
 

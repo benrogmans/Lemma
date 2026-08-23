@@ -61,7 +61,7 @@ fn measure_spec(constraint: &str) -> String {
         r#"
 spec t
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> {constraint}
 rule r: money
 "#
@@ -73,8 +73,8 @@ fn measure_spec_with_milli(constraint: &str) -> String {
         r#"
 spec t
 data money: measure
-  -> unit eur 1
-  -> unit milli 0.001
+  -> unit eur: 1
+  -> unit milli: 0.001
   -> {constraint}
 rule r: money
 "#

@@ -1,0 +1,56 @@
+spec recipe_scaling
+"""
+Recipe Scaling
+
+Demonstrates calculations and scaling.
+Measure a recipe up or down based on servings needed.
+"""
+
+uses lemma units
+
+data temperature: measure
+  -> unit celsius: 1.0
+
+data recipe: text
+  -> option "chocolate_cake"
+  -> option "bread"
+  -> option "cookies"
+
+data butter_needed: 0.5
+data eggs_needed:   3
+data flour_needed:  2
+data sugar_needed:  1.5
+data recipe_name:   recipe
+data desired_servings: number
+  -> minimum 1
+
+data original_servings: number
+  -> minimum 1
+
+
+rule scaling_factor:
+  desired_servings / original_servings
+
+rule scaled_flour:
+  flour_needed * scaling_factor
+
+rule scaled_sugar:
+  sugar_needed * scaling_factor
+
+rule scaled_butter:
+  butter_needed * scaling_factor
+
+rule scaled_eggs:
+  eggs_needed * scaling_factor
+
+rule total_dry_ingredients:
+  scaled_flour + scaled_sugar
+
+rule baking_time:
+  30 minute
+  unless desired_servings <= 4 then 35 minute
+  unless desired_servings >= 8 then 40 minute
+
+rule oven_temperature:
+  175 celsius
+  unless recipe_name is "bread" then 190 celsius

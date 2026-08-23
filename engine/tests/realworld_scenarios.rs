@@ -243,8 +243,8 @@ spec invoice
 
 uses tax: tax_rates
 uses items: product_pricing
-with items.base_price: 50
-with items.quantity: 10
+  -> with base_price: 50
+  -> with quantity: 10
 
 rule net_total: items.subtotal
 rule tax_amount: net_total * tax.effective_tax

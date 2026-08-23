@@ -6,8 +6,8 @@ fn necessary_data_include_nested_spec_data_for_local_rule_deps() {
     let code = r#"
 spec money
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.84
+  -> unit eur: 1
+  -> unit usd: 0.84
 
 spec pricing
 uses money

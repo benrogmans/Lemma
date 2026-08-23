@@ -1454,7 +1454,7 @@ rule total: weight * item_cost
 
 spec calc
 uses bag
-with bag.item_cost: item_cost
+  -> with item_cost: item_cost
 data type_of_nut: text -> options "peanut" "cashew"
 rule item_cost: 1
   unless type_of_nut is "cashew" then 2
@@ -1597,8 +1597,8 @@ rule name: veto "no code"
 
 spec current
 uses prev
+  -> with code: code
 data code: prev.code -> option "SS"
-with prev.code: code
 rule name: prev.name
 "#,
     );

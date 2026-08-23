@@ -25,8 +25,8 @@ fn test_measure_op_measure_same_type_allowed() {
     // Measure * Measure is rejected at plan time (use `(a as number) * (b as number)` instead).
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.84
+  -> unit eur: 1.00
+  -> unit usd: 0.84
 
 data price1: money
 data price2: money
@@ -120,7 +120,7 @@ fn test_measure_op_number_allowed() {
     // Test that Measure op Number is allowed
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data price: money
 data multiplier: number
@@ -159,7 +159,7 @@ fn test_number_op_measure_allowed() {
     // Test that Number op Measure is allowed
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data multiplier: number
 data price: money
@@ -225,7 +225,7 @@ fn test_ratio_op_measure_allowed() {
     // Test that Ratio op Measure is allowed (result is Measure)
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data ratio_value: ratio
 data price: money
@@ -258,7 +258,7 @@ fn test_measure_op_ratio_allowed() {
     // Test that Measure op Ratio is allowed (result is Measure)
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data price: money
 data ratio_value: ratio
@@ -291,7 +291,7 @@ fn test_measure_comparison_same_type_allowed() {
     // Test that comparing same Measure types is allowed
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data price1: money
 data price2: money
@@ -324,7 +324,7 @@ fn test_all_arithmetic_operators_measure_same_type() {
     // Note: Measure ^ Number requires an integer literal exponent (Step 8 rule).
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data a: money
 data b: money
@@ -381,7 +381,7 @@ rule power: a ^ 2"#;
         .load([(
             lemma::SourceType::Volatile,
             r#"spec test2
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: money
 data b: money
 rule multiply: a * b"#
@@ -444,7 +444,7 @@ fn test_complex_mixed_operations() {
     // Test complex expressions with mixed types
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data base_price: money
 data discount_ratio: ratio
@@ -494,7 +494,7 @@ fn test_primitive_measure_and_number_types() {
     // This test uses a proper measure type (money) and unitful data value.
     let code = r#"spec test
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
   -> minimum 0 eur
 
 data measure_value: money

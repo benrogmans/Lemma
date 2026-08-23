@@ -281,7 +281,7 @@ fn measure_and_ratio_conversion_in_same_spec() {
     let code = r#"
 spec mixed
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data amount: 200
 data part: 50

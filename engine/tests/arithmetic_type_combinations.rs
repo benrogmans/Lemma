@@ -146,7 +146,7 @@ rule result: a ^ b"#;
 fn measure_add_number_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 10 eur
 data n: 5
 rule result: price + n"#;
@@ -157,7 +157,7 @@ rule result: price + n"#;
 fn measure_subtract_number_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 10 eur
 data n: 3
 rule result: price - n"#;
@@ -168,7 +168,7 @@ rule result: price - n"#;
 fn measure_multiply_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 10 eur
 data n: 3
 rule result: price * n"#;
@@ -180,7 +180,7 @@ rule result: price * n"#;
 fn number_multiply_measure() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data n: 3
 data price: 10 eur
 rule result: n * price"#;
@@ -192,7 +192,7 @@ rule result: n * price"#;
 fn measure_divide_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 12 eur
 data n: 4
 rule result: price / n"#;
@@ -204,7 +204,7 @@ rule result: price / n"#;
 fn measure_modulo_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 10 eur
 data n: 3
 rule result: price % n"#;
@@ -217,7 +217,7 @@ fn measure_power_number() {
     // Exponent must be an integer literal for dimensional types; using a literal 3 directly.
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 2 eur
 rule result: price ^ 3"#;
     let val = eval_rule(code, "t", "result", HashMap::new());
@@ -229,7 +229,7 @@ fn measure_power_variable_exponent_rejected() {
     // Variable exponent for Measure ^ Number must be rejected at plan time.
     expect_plan_error(
         r#"spec t
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 2 eur
 data n: 3
 rule result: price ^ n"#,
@@ -242,7 +242,7 @@ fn measure_power_fractional_exponent_rejected() {
     // Fractional literal exponents for Measure ^ Number must also be rejected.
     expect_plan_error(
         r#"spec t
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 4 eur
 rule result: price ^ 0.5"#,
         "fractional",
@@ -257,7 +257,7 @@ rule result: price ^ 0.5"#,
 fn measure_add_ratio_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data rate: 10%
 rule result: price + rate"#;
@@ -268,7 +268,7 @@ rule result: price + rate"#;
 fn measure_subtract_ratio_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data discount: 25%
 rule result: price - discount"#;
@@ -279,7 +279,7 @@ rule result: price - discount"#;
 fn ratio_add_measure_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data rate: 10%
 data price: 100 eur
 rule result: rate + price"#;
@@ -290,7 +290,7 @@ rule result: rate + price"#;
 fn ratio_subtract_measure_rejected() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data discount: 25%
 data price: 100 eur
 rule result: discount - price"#;
@@ -301,7 +301,7 @@ rule result: discount - price"#;
 fn measure_multiply_ratio() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data rate: 50%
 rule result: price * rate"#;
@@ -313,7 +313,7 @@ rule result: price * rate"#;
 fn measure_divide_ratio() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 data rate: 50%
 rule result: price / rate"#;
@@ -335,7 +335,7 @@ fn measure_multiply_duration_rejected_at_rule_boundary() {
     expect_plan_error(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data rate: 50 eur
 data hour: 8 hour
 rule result: rate * hour"#,
@@ -348,7 +348,7 @@ fn duration_multiply_measure_rejected_at_rule_boundary() {
     expect_plan_error(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data hour: 8 hour
 data rate: 50 eur
 rule result: hour * rate"#,
@@ -361,7 +361,7 @@ fn measure_divide_duration_rejected_at_rule_boundary() {
     expect_plan_error(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data total: 400 eur
 data hour: 8 hour
 rule result: total / hour"#,
@@ -634,7 +634,7 @@ rule result: r - n"#;
 fn measure_add_measure_same_family() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 4 eur
 data b: 5 eur
 rule result: a + b"#;
@@ -650,7 +650,7 @@ rule result: a + b"#;
 fn measure_subtract_measure_same_family() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 3 eur
 rule result: a - b"#;
@@ -666,7 +666,7 @@ rule result: a - b"#;
 fn measure_add_measure_result_used_in_comparison() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 4 eur
 data b: 5 eur
 data threshold: 8 eur
@@ -682,7 +682,7 @@ rule over_threshold: total > threshold"#;
 fn measure_add_measure_result_in_further_arithmetic() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 20 eur
 data c: 5 eur
@@ -726,7 +726,7 @@ rule result: a - b"#;
 fn ratio_add_ratio_result_used_with_measure() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data base_rate: 10%
 data surcharge: 5%
 data price: 200 eur
@@ -849,8 +849,8 @@ rule result: dur + d"#;
 fn same_family_parent_plus_child() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
-data budget: money -> unit jpy 160.00 -> minimum 0 eur
+data money: measure -> unit eur: 1.00
+data budget: money -> unit jpy: 160.00 -> minimum 0 eur
 data price: 10 eur
 data allowance: 5 eur
 rule result: price + allowance"#;
@@ -866,7 +866,7 @@ rule result: price + allowance"#;
 fn same_family_siblings() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data income: money -> minimum 0 eur
 data expense: money -> minimum 0 eur
 data salary: 3000 eur
@@ -884,8 +884,8 @@ rule remaining: salary - rent"#;
 fn same_family_result_used_in_comparison() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
-data budget: money -> unit jpy 160.00 -> minimum 0 eur
+data money: measure -> unit eur: 1.00
+data budget: money -> unit jpy: 160.00 -> minimum 0 eur
 data price: 4 eur
 data fee: 5 eur
 data limit: 8 eur
@@ -902,7 +902,7 @@ rule over_budget: total > limit"#;
 fn measure_divide_measure_returns_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data total: 10 eur
 data unit_price: 5 eur
 rule price_ratio: total / unit_price"#;
@@ -922,7 +922,7 @@ rule price_ratio: total / unit_price"#;
 fn measure_divide_measure_result_usable_as_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data revenue: 100 eur
 data cost: 50 eur
 rule margin_factor: revenue / cost
@@ -944,7 +944,7 @@ rule doubled: margin_factor * 10"#;
 fn number_divide_measure_returns_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data count: 20
 data price: 10 eur
 rule units_per_eur: count / price"#;
@@ -969,7 +969,7 @@ rule units_per_eur: count / price"#;
 fn measure_multiply_measure_rejected_at_plan_time() {
     expect_plan_error(
         r#"spec t
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule product: a * b"#,
@@ -981,7 +981,7 @@ rule product: a * b"#,
 fn measure_multiply_measure_via_as_number_produces_number() {
     let code = r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule product: (a as eur as number) * (b as eur as number)"#;

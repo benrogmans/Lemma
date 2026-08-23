@@ -281,3 +281,52 @@ fn lsp_workspace_missing_ref_diagnostic() {
 
     session.shutdown();
 }
+
+#[test]
+fn lsp_duplicate_spec_reports_conflict_on_discovered_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path_a = write_lemma_file(dir.path(), "a.lemma", "spec conflict_test\ndata x: 1");
+    let path_b = write_lemma_file(dir.path(), "b.lemma", "spec conflict_test\ndata x: 2");
+    let uri_a = path_to_uri(&path_a);
+    let uri_b = path_to_uri(&path_b);
+    let root_uri = path_to_uri(dir.path());
+
+    let mut session = LspSession::spawn_lemma_lsp();
+    session.initialize(Some(&root_uri));
+    session.initialized();
+
+    let notification_a = session.wait_for_diagnostics(&uri_a);
+    let diagnostics_a = notification_a["params"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array");
+    assert!(
+        !diagnostics_a.is_empty(),
+        "workspace must publish duplicate spec diagnostic on first file, got: {notification_a}"
+    );
+    assert_eq!(
+        diagnostics_a[0]["severity"].as_i64(),
+        Some(LSP_ERROR_SEVERITY),
+        "expected Error severity on first file"
+    );
+    let message_a = diagnostics_a[0]["message"].as_str().unwrap_or("");
+    assert!(
+        message_a.contains("conflict_test") && message_a.contains("also declared"),
+        "expected conflict message on first file, got: {message_a}"
+    );
+
+    let notification_b = session.wait_for_diagnostics(&uri_b);
+    let diagnostics_b = notification_b["params"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array");
+    assert!(
+        !diagnostics_b.is_empty(),
+        "workspace must publish duplicate spec diagnostic on second file, got: {notification_b}"
+    );
+    let message_b = diagnostics_b[0]["message"].as_str().unwrap_or("");
+    assert!(
+        message_b.contains("conflict_test") && message_b.contains("also declared"),
+        "expected conflict message on second file, got: {message_b}"
+    );
+
+    session.shutdown();
+}

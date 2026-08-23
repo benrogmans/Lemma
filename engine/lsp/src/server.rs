@@ -491,7 +491,7 @@ impl LanguageServer for LemmaLanguageServer {
             let mut links: Vec<DocumentLink> = Vec::new();
             for consumer in parse_result.repositories.values().flatten() {
                 for data in &consumer.data {
-                    let DataValue::Import(spec_ref) = &data.value else {
+                    let DataValue::Import { spec_ref, .. } = &data.value else {
                         continue;
                     };
                     if let Some(link) = build_uses_document_link(
@@ -525,7 +525,7 @@ impl LanguageServer for LemmaLanguageServer {
         for specs in parse_result.repositories.values() {
             for consumer in specs {
                 for data in &consumer.data {
-                    let DataValue::Import(spec_ref) = &data.value else {
+                    let DataValue::Import { spec_ref, .. } = &data.value else {
                         continue;
                     };
                     let Some(repo_qual) = spec_ref.repository.as_ref() else {
@@ -934,7 +934,7 @@ mod tests {
             .data
             .iter()
             .find_map(|d| match &d.value {
-                DataValue::Import(sr) => Some(sr),
+                DataValue::Import { spec_ref: sr, .. } => Some(sr),
                 _ => None,
             })
             .expect("consumer must contain a uses import");
@@ -1026,7 +1026,7 @@ mod tests {
             .data
             .iter()
             .find_map(|d| match &d.value {
-                DataValue::Import(sr) => Some(sr),
+                DataValue::Import { spec_ref: sr, .. } => Some(sr),
                 _ => None,
             })
             .expect("consumer must contain a uses import");
@@ -1162,7 +1162,7 @@ mod tests {
         for specs in parse_result.repositories.values() {
             for consumer in specs {
                 for data in &consumer.data {
-                    let DataValue::Import(spec_ref) = &data.value else {
+                    let DataValue::Import { spec_ref, .. } = &data.value else {
                         continue;
                     };
                     if let Some(link) = build_uses_document_link(

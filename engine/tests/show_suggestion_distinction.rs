@@ -113,7 +113,7 @@ rule r: x
 
 spec a/template
 uses a
-with a.x: 2
+  -> with x: 2
 rule r: a.r
 "#;
 

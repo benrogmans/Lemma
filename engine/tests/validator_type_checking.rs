@@ -65,7 +65,7 @@ rule result: time1 and time2
 fn test_mathematical_function_requires_number_operand() {
     let code = r#"
 spec test
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data price: 100 eur
 rule bad: sqrt price
 "#;

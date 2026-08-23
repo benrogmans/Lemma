@@ -12,7 +12,6 @@ mod tracked {
         "cli/Cargo.toml",
         "openapi/Cargo.toml",
         "engine/lsp/Cargo.toml",
-        "mcp/Cargo.toml",
     ];
 
     pub const HEX_MIX: &str = "engine/packages/hex/mix.exs";
@@ -310,16 +309,22 @@ fn run_npm_package_lock_only(root: &Path) -> Result<(), String> {
     let vscode_dir = pkg_json
         .parent()
         .expect("VSCODE_PACKAGE_JSON must have a parent directory");
-    let st = Command::new("npm")
+    let output = Command::new("npm")
         .args(["install", "--package-lock-only"])
         .current_dir(vscode_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .status()
+        .output()
         .map_err(|e| format!("failed to run npm in {}: {e}", vscode_dir.display()))?;
-    if !st.success() {
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{combined}");
+    let label = "npm install --package-lock-only";
+    if !output.status.success() {
         return Err("npm install --package-lock-only failed".into());
     }
+    crate::warnings::reject_warnings_in_output(label, &combined)?;
     Ok(())
 }
 

@@ -15,7 +15,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 lemma-engine = { path = "../../../../" }
-lemma-mcp = { path = "../../../../../mcp" }
 lemma-openapi = { path = "../../../../../openapi" }
 rustler = "0.38"
 rust_decimal = "1"

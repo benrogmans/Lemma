@@ -51,7 +51,7 @@ Each command supports `--help`.
 
 - CLI reference: <https://github.com/lemma/lemma/blob/main/cli/documentation/reference/cli.md>
 - Learn guide: <https://github.com/lemma/lemma/blob/main/cli/documentation/learn/readme.md>
-- Examples: <https://github.com/lemma/lemma/tree/main/cli/documentation/examples>
+- Examples: <https://github.com/lemma/lemma/tree/main/engine/documentation/examples>
 
 ## Local development
 

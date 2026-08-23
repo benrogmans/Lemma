@@ -12,14 +12,14 @@ Numbers are produced by `cargo benchmarks cli`. Measures the `lemma` binary and 
 
 ### HTTP evaluate (`http_evaluate`)
 
-- Spawns `lemma server --prefix cli/documentation/examples` on `127.0.0.1:19877` once per Criterion group.
+- Spawns `lemma server --prefix engine/documentation/examples` on `127.0.0.1:19877` once per Criterion group.
 - Each iteration: blocking `reqwest` POST with `application/x-www-form-urlencoded` body (coffee order, library fees, Dutch net salary) or GET for show-only retrieval.
-- Examples loaded from [`cli/documentation/examples`](https://github.com/lemma/lemma/tree/9648f33a780661d4b309b4e1c8f1a3a9f80aa001/cli/documentation/examples).
+- Examples loaded from [`engine/documentation/examples`](https://github.com/lemma/lemma/tree/9648f33a780661d4b309b4e1c8f1a3a9f80aa001/engine/documentation/examples).
 - Latency: Criterion (3s warmup, 10s measurement for evaluate group, 5s for show). Median and standard deviation reported.
 
 ### Engine profile (`engine_profile`)
 
-- In-process: loads all `.lemma` files from `cli/documentation/examples` into one `Engine`.
+- In-process: loads all `.lemma` files from `engine/documentation/examples` into one `Engine`.
 - Fixture: Dutch net salary (`net_salary`) with `gross_salary=5000 eur`, `pay_period=month`, `income_source=employment`, `pension_contribution=150 eur`, `payroll_tax_credit=true`; effective is `DateTimeValue::now()` per iteration setup.
 - Breakdown benches isolate evaluate, overlay resolve, single-rule run, and JSON serialization paths.
 - Latency: Criterion (3s warmup, 5s measurement). Median and standard deviation reported.

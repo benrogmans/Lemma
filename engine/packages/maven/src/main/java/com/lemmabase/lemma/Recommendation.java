@@ -4,8 +4,14 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import org.jspecify.annotations.Nullable;
-
-/** Structural quality recommendation from {@link Engine#quality()}. Advisory only. */
+/**
+ * Recommendation.
+ * @param message message
+ * @param spec spec
+ * @param effectiveFrom effectiveFrom
+ * @param repository repository
+ * @param source source
+ */
 public record Recommendation(
     String message,
     String spec,
@@ -13,6 +19,13 @@ public record Recommendation(
     @Nullable String repository,
     EngineError.EngineErrorSource source) {
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   static Recommendation read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "Recommendation");
     String message = null;

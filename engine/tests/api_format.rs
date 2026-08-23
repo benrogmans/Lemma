@@ -45,22 +45,22 @@ spec cost_price
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
-  -> unit inr 0.0092
+  -> unit eur: 1.00
+  -> unit inr: 0.0092
   -> decimals 2
 
 data labor_cost: measure
-  -> unit eur_per_hour eur/hour
-  -> unit inr_per_hour inr/hour
+  -> unit eur_per_hour: eur/hour
+  -> unit inr_per_hour: inr/hour
   -> suggest 25 eur_per_hour
 
 data product_cost: measure
-  -> unit eur_per_kg eur/kilogram
-  -> unit inr_per_kg inr/kilogram
+  -> unit eur_per_kg: eur/kilogram
+  -> unit inr_per_kg: inr/kilogram
   -> suggest 4 eur_per_kg
 
 data throughput: measure
-  -> unit kg_per_hour kilogram/hour
+  -> unit kg_per_hour: kilogram/hour
   -> suggest 12 kg_per_hour
 
 rule cost_price: product_cost + labor_cost / throughput
@@ -70,7 +70,7 @@ const POLICY_RATIO_SPEC: &str = r#"
 spec policy
 data margin: ratio -> suggest 15%
 data bps: ratio
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> suggest 500 basis_points
 data permille_rate: ratio -> suggest 150 permille
 rule m: margin
@@ -715,7 +715,7 @@ rule band: allowed_band
 const RATIO_RANGE_BPS_SPEC: &str = r#"
 spec policy
 data allowed_band: ratio range
-  -> unit basis_points 10000
+  -> unit basis_points: 10000
   -> suggest 200 basis_points...3500 basis_points
 rule band: allowed_band
 "#;
@@ -771,8 +771,8 @@ const NON_BASE_MEASURE_SPEC: &str = r#"
 spec pricing
 uses lemma units
 data money: measure
-  -> unit eur 1.00
-  -> unit inr 0.0092
+  -> unit eur: 1.00
+  -> unit inr: 0.0092
   -> decimals 2
   -> suggest 100 inr
 rule out: money
@@ -782,14 +782,14 @@ const PREFILLED_INR_SPEC: &str = r#"
 spec base
 uses lemma units
 data money: measure
-  -> unit eur 1.00
-  -> unit inr 0.0092
+  -> unit eur: 1.00
+  -> unit inr: 0.0092
   -> decimals 2
 rule out: money
 
 spec priced
 uses base
-with base.money: 100 inr
+  -> with money: 100 inr
 rule out: base.out
 "#;
 
@@ -797,8 +797,8 @@ const UNIT_SCOPED_RANGE_SPEC: &str = r#"
 spec band
 uses lemma units
 data money: measure
-  -> unit eur 1.00
-  -> unit inr 0.0092
+  -> unit eur: 1.00
+  -> unit inr: 0.0092
 data window: money range -> suggest 10 eur...20 eur
 rule band: window
 "#;
@@ -930,7 +930,7 @@ fn measure_declared_bound_is_named_value_unit_object() {
         r#"
 spec t
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> minimum 10 eur
   -> maximum 1000 eur
 rule r: money

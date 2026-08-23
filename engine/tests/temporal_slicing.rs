@@ -1466,7 +1466,7 @@ data threshold: number
             r#"
 spec consumer 2025-01-01
 uses c: cfg
-with c.threshold: 50
+  -> with threshold: 50
 rule t: c.threshold
 "#
             .to_string(),
@@ -1913,12 +1913,12 @@ fn slice_incompat_named_type_adds_unit_across_slices() {
             r#"
 spec dep 2025-01-01
 data money: measure
- -> unit eur 1.0
+ -> unit eur: 1.0
 
 spec dep 2025-07-01
 data money: measure
- -> unit eur 1.0
- -> unit usd 1.1
+ -> unit eur: 1.0
+ -> unit usd: 1.1
 "#
             .to_string(),
         )])

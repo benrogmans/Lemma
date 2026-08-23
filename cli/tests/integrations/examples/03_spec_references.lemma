@@ -30,9 +30,9 @@ Demonstrates spec composition, data binding, and rule references.
 """
 
 uses employee: base_employee
-with employee.employment_duration : 3 year
-with employee.monthly_salary      : 7_500
-with employee.name                : "Alice Smith"
+  -> with employment_duration: 3 year
+  -> with monthly_salary: 7_500
+  -> with name: "Alice Smith"
 
 rule salary_with_bonus:
   employee.annual_salary
@@ -53,17 +53,17 @@ Shows a different employment model using spec references.
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data wage_rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 
 data hours_worked : 120 hour
 data hourly_rate  : wage_rate -> minimum 0 eur_per_hour -> suggest 85 eur_per_hour
 
 uses person: base_employee
-with person.is_full_time : false
+  -> with is_full_time: false
 
 rule total_payment:
   (hourly_rate * hours_worked) as eur

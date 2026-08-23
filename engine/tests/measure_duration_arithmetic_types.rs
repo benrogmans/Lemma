@@ -52,7 +52,7 @@ fn measure_divide_measure_same_type_returns_number() {
     let engine = load_ok(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule result: a / b"#,
@@ -66,7 +66,7 @@ fn measure_divide_measure_result_is_not_measure() {
     let engine = load_ok(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule result: a / b"#,
@@ -88,7 +88,7 @@ fn measure_multiply_measure_same_family_rejected_by_planner() {
     let err = load_err(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule result: a * b"#,
@@ -104,7 +104,7 @@ fn measure_multiply_measure_via_as_number_allowed() {
     let engine = load_ok(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule result: (a as eur as number) * (b as eur as number)"#,
@@ -268,7 +268,7 @@ fn measure_power_ratio_rejected_by_planner() {
     let err = load_err(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 100 eur
 data r: 50%
 rule result: a ^ r"#,
@@ -286,7 +286,7 @@ fn measure_modulo_ratio_rejected_by_planner() {
     let err = load_err(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 100 eur
 data r: 25%
 rule result: a % r"#,
@@ -306,7 +306,7 @@ fn measure_as_number_strips_unit() {
     let engine = load_ok(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 rule result: a as eur as number"#,
     );
@@ -319,7 +319,7 @@ fn measure_as_number_result_is_usable_as_number() {
     let engine = load_ok(
         r#"spec t
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data a: 10 eur
 data b: 5 eur
 rule result: (a as eur as number) * (b as eur as number)"#,

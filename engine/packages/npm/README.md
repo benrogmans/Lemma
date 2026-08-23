@@ -8,7 +8,7 @@ Pricing tiers, tax brackets, leave entitlement, eligibility checks, discount sta
 spec pricing 2026-01-01
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
   -> decimals 2
 
 data quantity : number

@@ -104,7 +104,7 @@ rule rtm: tm
 spec measures
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> suggest 10 eur
 data rate: ratio -> suggest 15%
 data window: 1...10
@@ -119,7 +119,7 @@ rule rw: window
 spec veto_and_range
 uses lemma units
 data band: measure range
-  -> unit kilogram 1
+  -> unit kilogram: 1
   -> suggest 1 kilogram...5 kilogram
 rule outcome: veto "nope"
 rule band_out: band

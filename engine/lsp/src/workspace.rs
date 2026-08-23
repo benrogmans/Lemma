@@ -245,11 +245,18 @@ impl WorkspaceModel {
     }
 
     fn load_tracked_files_into(&self, engine: &mut lemma::Engine) -> HashMap<String, Vec<Error>> {
-        let sources: Vec<_> = self
-            .files
-            .values()
-            .filter(|t| matches!(t.parse_outcome, ParseOutcome::Success(_)))
-            .map(|t| (self.source_type_for_url(&t.url), t.text.clone()))
+        let mut attributes: Vec<&String> = self.files.keys().collect();
+        attributes.sort();
+
+        let sources: Vec<_> = attributes
+            .into_iter()
+            .filter_map(|attribute| {
+                let tracked = self.files.get(attribute)?;
+                if !matches!(tracked.parse_outcome, ParseOutcome::Success(_)) {
+                    return None;
+                }
+                Some((self.source_type_for_url(&tracked.url), tracked.text.clone()))
+            })
             .collect();
 
         match engine.load(sources) {
@@ -375,7 +382,7 @@ mod tests {
         );
         workspace.update_file(
             url_b.clone(),
-            "spec company\nuses employee: person\nwith employee.name: \"Bob\"".to_string(),
+            "spec company\nuses employee: person\n  -> with name: \"Bob\"".to_string(),
         );
 
         let results = workspace.validate_workspace();
@@ -501,7 +508,7 @@ mod tests {
         let url_ok = url_from_path("/tmp/lsp_clean.lemma");
         workspace.update_file(
             url_bad.clone(),
-            "spec consumer\nuses dep: no_such_dep\nwith dep.money: 10\ndata x: 1".to_string(),
+            "spec consumer\nuses dep: no_such_dep\n  -> with money: 10\ndata x: 1".to_string(),
         );
         workspace.update_file(url_ok.clone(), "spec other\ndata y: 2".to_string());
 
@@ -540,7 +547,7 @@ mod tests {
         let main_path = root.join("main.lemma");
         std::fs::write(
             &main_path,
-            "spec demo\nuses iso: @iso/countries alpha2 2026\nwith iso.code: \"NL\"\n",
+            "spec demo\nuses iso: @iso/countries alpha2 2026\n  -> with code: \"NL\"\n",
         )
         .expect("write main");
 
@@ -637,11 +644,11 @@ mod tests {
 uses lemma units
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 data wage_rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 
 rule smoke: true
 "#
@@ -654,6 +661,89 @@ rule smoke: true
             results[0].errors.is_empty(),
             "uses lemma units must resolve stdlib duration units: {:?}",
             results[0].errors
+        );
+    }
+
+    #[test]
+    fn validate_workspace_rejects_stdlib_units_missing_with_target() {
+        let mut workspace = WorkspaceModel::new();
+        let url = url_from_path("/tmp/coffee_order.lemma");
+        workspace.update_file(
+            url.clone(),
+            r#"spec coffee_order
+uses lemma units
+  -> with sdfsdf: 34
+rule r: 1
+"#
+            .to_string(),
+        );
+
+        let results = workspace.validate_workspace();
+        let file = results
+            .iter()
+            .find(|r| r.url == url)
+            .expect("coffee_order file diagnostics");
+        let joined: String = file
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined.contains("`units` has no data field `sdfsdf`"),
+            "expected planning error on invalid uses binding, got:\n{joined}"
+        );
+    }
+
+    #[test]
+    fn validate_workspace_reports_duplicate_spec_on_both_files() {
+        let mut workspace = WorkspaceModel::new();
+        let url_a = url_from_path("/tmp/conflict_a.lemma");
+        let url_b = url_from_path("/tmp/conflict_b.lemma");
+
+        workspace.update_file(url_a.clone(), "spec conflict_test\ndata x: 1".to_string());
+        workspace.update_file(url_b.clone(), "spec conflict_test\ndata x: 2".to_string());
+
+        let results = workspace.validate_workspace();
+        let file_a = results
+            .iter()
+            .find(|r| r.url == url_a)
+            .expect("file_a diagnostics");
+        let file_b = results
+            .iter()
+            .find(|r| r.url == url_b)
+            .expect("file_b diagnostics");
+
+        assert!(
+            !file_a.errors.is_empty(),
+            "first declaring file must report duplicate spec conflict: {:?}",
+            file_a.errors
+        );
+        assert!(
+            !file_b.errors.is_empty(),
+            "second declaring file must report duplicate spec conflict: {:?}",
+            file_b.errors
+        );
+
+        let joined_a: String = file_a
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let joined_b: String = file_b
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            joined_a.contains("conflict_test") && joined_a.contains("also declared"),
+            "expected conflict message on file_a, got:\n{joined_a}"
+        );
+        assert!(
+            joined_b.contains("conflict_test") && joined_b.contains("also declared"),
+            "expected conflict message on file_b, got:\n{joined_b}"
         );
     }
 

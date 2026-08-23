@@ -6,8 +6,19 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import org.jspecify.annotations.Nullable;
-
-/** Result of {@link Engine#show}. */
+/**
+ * Show.
+ * @param spec spec
+ * @param commentary commentary
+ * @param effectiveFrom effectiveFrom
+ * @param effectiveTo effectiveTo
+ * @param versions versions
+ * @param startLine startLine
+ * @param sourceType sourceType
+ * @param data data
+ * @param rules rules
+ * @param meta meta
+ */
 public record Show(
     String spec,
     @Nullable String commentary,
@@ -19,13 +30,25 @@ public record Show(
     Map<String, ShowData> data,
     Map<String, LemmaType> rules,
     Map<String, MetaValue> meta) {
-
-  /** One input declared in a spec. */
+  /**
+   * ShowData.
+   * @param type type
+   * @param prefilled prefilled
+   * @param suggestion suggestion
+   * @param neededByRules neededByRules
+   */
   public record ShowData(
       LemmaType type,
       @Nullable RuleResultValue prefilled,
       @Nullable RuleResultValue suggestion,
       List<String> neededByRules) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static ShowData read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ShowData");
       LemmaType type = null;
@@ -52,9 +75,19 @@ public record Show(
       return new ShowData(type, prefilled, suggestion, neededByRules);
     }
   }
-
-  /** Half-open temporal window for one loaded version. */
+  /**
+   * ShowVersion.
+   * @param effectiveFrom effectiveFrom
+   * @param effectiveTo effectiveTo
+   */
   public record ShowVersion(@Nullable String effectiveFrom, @Nullable String effectiveTo) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static ShowVersion read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "ShowVersion");
       String effectiveFrom = null;
@@ -72,6 +105,13 @@ public record Show(
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static Show read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "Show");
     String spec = null;

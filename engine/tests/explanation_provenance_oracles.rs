@@ -315,7 +315,7 @@ fn vetoed_unit_conversion_explains_with_veto_result() {
     let engine = load(
         r#"
 spec veto_conversion_oracle
-data mass: measure -> unit kg 1
+data mass: measure -> unit kg: 1
 data zero: 0
 rule as_kg: (1 / zero) as kg
 "#,

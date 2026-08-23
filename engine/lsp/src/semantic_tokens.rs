@@ -507,22 +507,23 @@ mod tests {
 
     #[test]
     fn data_body_granular_type_and_constraints() {
-        let text = "data temperature: measure\n  -> unit celsius 1.0\n  -> minimum -70 celsius";
+        let text = "data temperature: measure\n  -> unit celsius: 1.0\n  -> minimum -70 celsius";
         let types = token_types(text);
         assert_eq!(
             &types[..3],
             &[IDX_DECLARATION, IDX_PROPERTY, IDX_PUNCTUATION]
         );
-        // measure → KEYWORD, -> OPERATOR, unit → KEYWORD, celsius 1.0 → DATA_BODY...
+        // measure → KEYWORD, -> OPERATOR, unit → KEYWORD, celsius : 1.0 → DATA_BODY...
         assert_eq!(types[3], IDX_KEYWORD); // measure
         assert_eq!(types[4], IDX_OPERATOR); // ->
         assert_eq!(types[5], IDX_KEYWORD); // unit
         assert_eq!(types[6], IDX_DATA_BODY); // celsius
-        assert_eq!(types[7], IDX_DATA_BODY); // 1.0
-        assert_eq!(types[8], IDX_OPERATOR); // ->
-        assert_eq!(types[9], IDX_KEYWORD); // minimum
-        assert_eq!(types[10], IDX_DATA_BODY); // -70
-        assert_eq!(types[11], IDX_DATA_BODY); // celsius
+        assert_eq!(types[7], IDX_DATA_BODY); // :
+        assert_eq!(types[8], IDX_DATA_BODY); // 1.0
+        assert_eq!(types[9], IDX_OPERATOR); // ->
+        assert_eq!(types[10], IDX_KEYWORD); // minimum
+        assert_eq!(types[11], IDX_DATA_BODY); // -70
+        assert_eq!(types[12], IDX_DATA_BODY); // celsius
     }
 
     #[test]
@@ -544,11 +545,11 @@ mod tests {
     }
 
     #[test]
-    fn with_dotted_path_colon_punctuation() {
-        // with → DECLARATION, employee → PROPERTY, . transparent, name → PROPERTY, : PUNCTUATION
+    fn uses_block_with_binding_path_colon_punctuation() {
+        // -> OPERATOR, with → DECLARATION, name → PROPERTY, : PUNCTUATION
         assert_eq!(
-            token_types("with employee.name:"),
-            vec![IDX_DECLARATION, IDX_PROPERTY, IDX_PROPERTY, IDX_PUNCTUATION]
+            token_types("  -> with name:"),
+            vec![IDX_OPERATOR, IDX_DECLARATION, IDX_PROPERTY, IDX_PUNCTUATION]
         );
     }
 

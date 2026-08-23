@@ -2,7 +2,7 @@
   "name": "lemma-language",
   "displayName": "Lemma Language",
   "description": "Language support for Lemma: syntax highlighting, inline diagnostics, and clickable Registry references",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "publisher": "lemma",
   "license": "Apache-2.0",
   "icon": "lemma_128.png",
@@ -11,7 +11,8 @@
     "url": "https://github.com/lemma/lemma"
   },
   "engines": {
-    "vscode": "^1.91.0"
+    "vscode": "^1.91.0",
+    "node": ">=24.0.0"
   },
   "categories": [
     "Programming Languages"
@@ -128,7 +129,7 @@
     "compile": "npm run check-types && node esbuild.js --production",
     "watch": "node esbuild.js --watch",
     "vscode:prepublish": "npm run compile",
-    "precommit": "npm ci && npm run compile"
+    "precommit": "npm ci --omit=optional && npm run compile"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.0"
@@ -137,8 +138,16 @@
     "@types/node": "^26.0.0",
     "@types/vscode": "^1.91.0",
     "@vscode/vsce": "3.9.2",
+    "@typescript/typescript-linux-x64": "7.0.2",
     "esbuild": "^0.25.0",
     "ovsx": "1.0.2",
     "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "encoding-sniffer": "1.0.2"
+  },
+  "allowScripts": {
+    "@vscode/vsce-sign@2.0.9": true,
+    "esbuild@0.25.12": true
   }
 }

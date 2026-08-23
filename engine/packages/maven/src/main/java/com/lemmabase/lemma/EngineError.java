@@ -4,8 +4,22 @@ import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
 import org.jspecify.annotations.Nullable;
-
-/** Structured error thrown by Engine run/show/load. */
+/**
+ * EngineError.
+ * @param kind kind
+ * @param message message
+ * @param relatedData relatedData
+ * @param spec spec
+ * @param relatedSpec relatedSpec
+ * @param source source
+ * @param suggestion suggestion
+ * @param repository repository
+ * @param registryKind registryKind
+ * @param requestKind requestKind
+ * @param limitName limitName
+ * @param limitValue limitValue
+ * @param actualValue actualValue
+ */
 public record EngineError(
     String kind,
     String message,
@@ -20,9 +34,21 @@ public record EngineError(
     @Nullable String limitName,
     @Nullable String limitValue,
     @Nullable String actualValue) {
-
-  /** Source location attached to an {@link EngineError}. */
+  /**
+   * EngineErrorSource.
+   * @param attribute attribute
+   * @param line line
+   * @param column column
+   * @param length length
+   */
   public record EngineErrorSource(String attribute, int line, int column, int length) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static EngineErrorSource read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "EngineErrorSource");
       String attribute = null;
@@ -56,6 +82,13 @@ public record EngineError(
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static EngineError read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "EngineError");
     String kind = null;

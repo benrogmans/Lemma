@@ -1,9 +1,0 @@
-# Lemma
-
-> Lemma: declarative business rule language. Translate natural-language policy to readable, deterministic `.lemma` specs. Inputs derived from rules: declare `data` with constraints. No runtime value invention.
-
-Goal: produce Lemma source for human reading and system evaluation. Prefer named pipeline rules. No clever one-liners. Split unrelated policies to separate specs.
-
-Authoring method, discovery loop, and output contract: see **Method**. Explanations opt-in (`explain: true` / `lemma run -x`).
-
-**NO INLINE COMMENTS.** Lemma has no `#`, `//`, or `--` comment syntax. See **Syntax** for opening order and commentary placement.

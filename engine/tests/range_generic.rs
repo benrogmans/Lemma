@@ -330,7 +330,7 @@ rule check: 50 in bounds"#;
 #[test]
 fn q1_containment_same_unit() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 32 kilogram in 30 kilogram...35 kilogram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -338,7 +338,7 @@ rule ok: 32 kilogram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q2_containment_outside() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 36 kilogram in 30 kilogram...35 kilogram"#;
     assert!(!eval_bool(code, "test", "ok"));
 }
@@ -346,7 +346,7 @@ rule ok: 36 kilogram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q3_containment_cross_unit() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 32000 gram in 30 kilogram...35 kilogram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -354,7 +354,7 @@ rule ok: 32000 gram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q4_containment_cross_unit_outside() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 29000 gram in 30 kilogram...35 kilogram"#;
     assert!(!eval_bool(code, "test", "ok"));
 }
@@ -362,7 +362,7 @@ rule ok: 29000 gram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q5_containment_at_boundary_cross_unit() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 30000 gram in 30 kilogram...35 kilogram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -370,7 +370,7 @@ rule ok: 30000 gram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q5b_containment_at_right_boundary_excluded() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 35 kilogram in 30 kilogram...35 kilogram"#;
     assert!(!eval_bool(code, "test", "ok"));
 }
@@ -378,7 +378,7 @@ rule ok: 35 kilogram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q5c_containment_just_inside_right_boundary() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: 34 kilogram in 30 kilogram...35 kilogram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -386,7 +386,7 @@ rule ok: 34 kilogram in 30 kilogram...35 kilogram"#;
 #[test]
 fn q6_span_gte_same_unit() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: (30 kilogram...35 kilogram) >= 5 kilogram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -394,7 +394,7 @@ rule ok: (30 kilogram...35 kilogram) >= 5 kilogram"#;
 #[test]
 fn q7_span_gte_cross_unit() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: (30 kilogram...35 kilogram) >= 5000 gram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -402,7 +402,7 @@ rule ok: (30 kilogram...35 kilogram) >= 5000 gram"#;
 #[test]
 fn q8_span_lt_cross_unit() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: (30 kilogram...35 kilogram) >= 6000 gram"#;
     assert!(!eval_bool(code, "test", "ok"));
 }
@@ -410,7 +410,7 @@ rule ok: (30 kilogram...35 kilogram) >= 6000 gram"#;
 #[test]
 fn q9_span_mixed_range_units() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: (1000 gram...5 kilogram) >= 4 kilogram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -418,7 +418,7 @@ rule ok: (1000 gram...5 kilogram) >= 4 kilogram"#;
 #[test]
 fn q12_subtraction_cross_unit_uses_range_size() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule lower_bound: ((30 kilogram...35 kilogram) - 500 gram) >= 4500 gram
 rule upper_bound: ((30 kilogram...35 kilogram) - 500 gram) > 4500 gram"#;
     assert!(eval_bool(code, "test", "lower_bound"));
@@ -428,7 +428,7 @@ rule upper_bound: ((30 kilogram...35 kilogram) - 500 gram) > 4500 gram"#;
 #[test]
 fn q13_comparison_after_range_arithmetic() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule ok: ((30 kilogram...35 kilogram) + 2000 gram) >= 6500 gram"#;
     assert!(eval_bool(code, "test", "ok"));
 }
@@ -436,7 +436,7 @@ rule ok: ((30 kilogram...35 kilogram) + 2000 gram) >= 6500 gram"#;
 #[test]
 fn q14_range_through_rules() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 data min_weight: 30 kilogram
 data max_weight: 35 kilogram
 data sample: 32 kilogram
@@ -451,7 +451,7 @@ rule margin_ok: span_with_allowance >= 5500 gram"#;
 #[test]
 fn q15_user_declared() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 data acceptable: weight range -> suggest 30 kilogram...35 kilogram
 rule check: 32 kilogram in acceptable"#;
     let mut data = HashMap::new();
@@ -465,7 +465,7 @@ rule check: 32 kilogram in acceptable"#;
 #[test]
 fn q15_mixed_unit_endpoints_gram_to_kilogram() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 data band_low: 3000 gram
 data band_high: 35 kilogram
 rule band: band_low...band_high
@@ -480,7 +480,7 @@ rule upper_excluded: 35 kilogram in band"#;
 #[test]
 fn q16_money_named_range() {
     let code = r#"spec test
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data estimated: money range -> suggest 30 eur...50 eur
 rule inside: 40 eur in estimated
 rule span: (30 eur...50 eur) >= 20 eur"#;
@@ -591,8 +591,8 @@ rule bad: 2024-01-01...100"#;
 #[test]
 fn s2_measure_family_mismatch() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
-data money: measure -> unit eur 1.00
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
+data money: measure -> unit eur: 1.00
 rule bad: 30 kilogram...100 eur"#;
     expect_plan_error(code, "range");
 }
@@ -639,7 +639,7 @@ rule bad: 50...50%"#;
 #[test]
 fn s8_measure_range_in_months() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule bad: (30 kilogram...35 kilogram) as number"#;
     expect_plan_error(code, "as number");
 }
@@ -648,10 +648,10 @@ rule bad: (30 kilogram...35 kilogram) as number"#;
 fn s9_measure_times_number_range() {
     let code = r#"spec test
 uses lemma units
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_hour: eur/hour
 data hourly_rate: 50 eur_per_hour
 rule bad: hourly_rate * (0...100)"#;
     expect_plan_error(code, "range");

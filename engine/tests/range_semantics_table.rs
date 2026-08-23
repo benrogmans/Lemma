@@ -249,7 +249,7 @@ rule reversed_cmp: (5...3) >= 0"#;
 #[test]
 fn measure_mixed_arithmetic_uses_range_size() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule plus: (3 kilogram...5 kilogram) + 2 kilogram
 rule rplus: 2 kilogram + (3 kilogram...5 kilogram)
 rule minus: (3 kilogram...5 kilogram) - 2 kilogram
@@ -275,7 +275,7 @@ rule rminus: 5 kilogram - (3 kilogram...5 kilogram)"#;
 #[test]
 fn measure_range_arithmetic_and_comparison_use_sizes() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
 rule sum: (3 kilogram...5 kilogram) + (6 kilogram...7 kilogram)
 rule diff: (3 kilogram...5 kilogram) - (6 kilogram...7 kilogram)
 rule cmp: (3 kilogram...5 kilogram) >= 2 kilogram"#;
@@ -337,8 +337,8 @@ rule reversed: (2024-01-03...2024-01-01) as day as number"#;
 #[test]
 fn measure_range_arithmetic_rejects_mixed_families() {
     let code = r#"spec test
-data weight: measure -> unit gram 1 -> unit kilogram 1000
-data money: measure -> unit eur 1
+data weight: measure -> unit gram: 1 -> unit kilogram: 1000
+data money: measure -> unit eur: 1
 rule bad: (3 kilogram...5 kilogram) + (6 eur...7 eur)"#;
     expect_plan_error(code, "Cannot apply");
 }

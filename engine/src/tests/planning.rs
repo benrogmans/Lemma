@@ -23,9 +23,7 @@ fn plan_single(
     let mut ctx = Context::new();
     let repository = ctx.workspace();
     for spec in all_specs {
-        if let Err(e) = ctx.insert_spec(Arc::clone(&repository), spec.clone()) {
-            return Err(vec![e]);
-        }
+        ctx.insert_spec(Arc::clone(&repository), spec.clone())?;
     }
     let main_spec_arc = ctx
         .spec_set(&repository, main_spec.name.as_str())
@@ -467,7 +465,7 @@ data x: money
 
 spec two
 uses one
-with one.x: 7
+  -> with x: 7
 rule getx: one.x
 "#;
 
@@ -516,12 +514,12 @@ fn test_data_definition_from_spec_has_import_defining_spec() {
     let code = r#"
 spec examples
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 
 spec checkout
 uses examples
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 data local_price: money
 data imported_price: examples.money
 "#;
@@ -647,7 +645,7 @@ fn test_multiple_independent_errors_are_all_reported() {
     // spec should report errors for BOTH, not just stop at the first.
     let source = r#"spec demo
 uses type_src: nonexistent_type_source
-with type_src.amount: 10
+  -> with amount: 10
 uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#;
@@ -719,7 +717,7 @@ fn test_type_error_does_not_suppress_cross_spec_data_error() {
     // must still be reported.
     let source = r#"spec demo
 uses cur: missing_spec
-with cur.currency: 10
+  -> with currency: 10
 uses ext: also_missing
 rule val: ext.some_data"#;
 

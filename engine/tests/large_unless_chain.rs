@@ -39,7 +39,7 @@ fn alpha2_analog_source(branch_count: usize, layer_count: usize) -> String {
     for layer in 1..layer_count {
         let year = 1974 + layer * 3;
         src.push_str(&format!(
-            "spec lookup {year}-01-01\n\nuses {prev_alias}: {prev_spec}\nwith {prev_alias}.code: code\n\n"
+            "spec lookup {year}-01-01\n\nuses {prev_alias}: {prev_spec}\n  -> with code: code\n\n"
         ));
         src.push_str(&format!(
             "data code: {prev_alias}.code\n  -> option \"L{layer:02}\"\n\n"

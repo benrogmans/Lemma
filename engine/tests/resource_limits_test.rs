@@ -358,9 +358,7 @@ fn data_import_name_exceeding_max_length_is_rejected() {
 }
 
 /// Scaling test: incremental rule counts to find performance cliffs.
-/// Run with: cargo nextest run bench_1m --run-ignored ignored-only --workspace
 #[test]
-#[ignore]
 fn performance_test_10k_rules() {
     use std::collections::HashMap;
     use std::fmt::Write;
@@ -407,9 +405,7 @@ fn performance_test_10k_rules() {
 }
 
 /// Scaling test: deep rule dependency chains (linear + binary tree).
-/// Run with: cargo nextest run bench_deep_chains --run-ignored only -p lemma-engine
 #[test]
-#[ignore]
 fn bench_deep_chains() {
     const STACK_SIZE: usize = 32 * 1024 * 1024;
 

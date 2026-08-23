@@ -160,6 +160,51 @@ impl Context {
             .values()
     }
 
+    fn spec_declaration_source(spec: &LemmaSpec) -> crate::parsing::source::Source {
+        let source_type = spec
+            .source_type
+            .as_ref()
+            .expect("BUG: spec must carry source_type after parse");
+        crate::parsing::source::Source::new(
+            source_type.clone(),
+            crate::parsing::ast::Span {
+                start: 0,
+                end: 0,
+                line: spec.start_line,
+                col: 0,
+            },
+        )
+    }
+
+    fn duplicate_spec_path_line(spec: &LemmaSpec) -> (String, usize) {
+        let source_type = spec
+            .source_type
+            .as_ref()
+            .expect("BUG: spec must carry source_type after parse");
+        (source_type.to_string(), spec.start_line)
+    }
+
+    fn duplicate_spec_errors(name: &str, incoming: &LemmaSpec, existing: &LemmaSpec) -> Vec<Error> {
+        let (incoming_path, incoming_line) = Self::duplicate_spec_path_line(incoming);
+        let (existing_path, existing_line) = Self::duplicate_spec_path_line(existing);
+        vec![
+            Error::validation(
+                format!(
+                    "Duplicate spec '{name}' (also declared in '{existing_path}':{existing_line})"
+                ),
+                Some(Self::spec_declaration_source(incoming)),
+                None::<String>,
+            ),
+            Error::validation(
+                format!(
+                    "Duplicate spec '{name}' (also declared in '{incoming_path}':{incoming_line})"
+                ),
+                Some(Self::spec_declaration_source(existing)),
+                None::<String>,
+            ),
+        ]
+    }
+
     /// Insert a spec under `repository`. Enforces two invariants:
     /// 1. Dependency isolation: all specs in a repo must share the same `dependency`
     ///    provenance. A workspace repo cannot be merged with a dependency repo, and
@@ -169,7 +214,7 @@ impl Context {
         &mut self,
         repository: Arc<LemmaRepository>,
         spec: LemmaSpec,
-    ) -> Result<(), Error> {
+    ) -> Result<(), Vec<Error>> {
         if let Some((existing_repo, _)) = self.repositories.get_key_value(&repository) {
             if existing_repo.dependency != repository.dependency {
                 let repo_display = repository.name.as_deref().unwrap_or("(main)");
@@ -181,7 +226,7 @@ impl Context {
                     None => "the workspace".to_string(),
                     Some(id) => format!("dependency '{id}'"),
                 };
-                return Err(Error::validation_with_context(
+                return Err(vec![Error::validation_with_context(
                     format!(
                         "Repository '{repo_display}' was introduced by {existing_owner} but {new_owner} also declares it"
                     ),
@@ -189,7 +234,7 @@ impl Context {
                     Some("Each dependency's repositories must be unique across all loaded sources"),
                     Some(&spec),
                     None,
-                ));
+                )]);
             }
         }
 
@@ -197,20 +242,10 @@ impl Context {
             .repositories
             .entry(Arc::clone(&repository))
             .or_default();
-        if entry
-            .get(&spec.name)
-            .is_some_and(|ss| ss.get_exact(spec.effective_from()).is_some())
-        {
-            return Err(Error::validation_with_context(
-                format!(
-                    "Duplicate spec '{}' (same repository, name and effective_from already in context)",
-                    spec.name
-                ),
-                None,
-                None::<String>,
-                Some(&spec),
-                None,
-            ));
+        if let Some(ss) = entry.get(&spec.name) {
+            if let Some(existing) = ss.get_exact(spec.effective_from()) {
+                return Err(Self::duplicate_spec_errors(&spec.name, &spec, existing));
+            }
         }
 
         let name = spec.name.clone();
@@ -872,27 +907,13 @@ impl Engine {
         }
 
         let mut inserted: Vec<(Arc<LemmaRepository>, String, EffectiveDate)> = Vec::new();
-        for (source_id, repository_arc, spec) in staged {
-            let start_line = spec.start_line;
+        for (_, repository_arc, spec) in staged {
             let name = spec.name.clone();
             let effective_from = spec.effective_from.clone();
             match self.context.insert_spec(Arc::clone(&repository_arc), spec) {
                 Ok(()) => inserted.push((repository_arc, name, effective_from)),
-                Err(e) => {
-                    let source = crate::parsing::source::Source::new(
-                        source_id.clone(),
-                        crate::parsing::ast::Span {
-                            start: 0,
-                            end: 0,
-                            line: start_line,
-                            col: 0,
-                        },
-                    );
-                    errors.push(Error::validation(
-                        e.to_string(),
-                        Some(source),
-                        None::<String>,
-                    ));
+                Err(es) => {
+                    errors.extend(es);
                     self.rollback_apply(&inserted, &to_restore);
                     return Err(Errors {
                         errors,
@@ -1831,7 +1852,7 @@ rule formatted: helper_value + 0"#
             SourceType::Path(Arc::new(std::path::PathBuf::from("test.lemma"))),
             r#"spec demo
 uses type_src: nonexistent_type_source
-with type_src.amount: 10
+  -> with amount: 10
 uses helper: nonexistent_spec
 data price: 10
 rule total: helper.value + price"#
@@ -1978,10 +1999,40 @@ rule total: helper.value + price"#
             result.is_err(),
             "should reject duplicate spec name in same repo"
         );
-        let err_msg = result.unwrap_err().errors[0].to_string();
+        let load_err = result.unwrap_err();
+        assert_eq!(
+            load_err.errors.len(),
+            2,
+            "duplicate spec must error on both declaring sources, got: {:?}",
+            load_err.errors
+        );
+        let joined = load_err
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            err_msg.contains("Duplicate spec 'a'"),
-            "error should mention duplicate spec"
+            joined.contains("Duplicate spec 'a'"),
+            "error should mention duplicate spec, got: {joined}"
+        );
+        let paths: Vec<String> = load_err
+            .errors
+            .iter()
+            .map(|err| {
+                err.location()
+                    .expect("duplicate errors must have source")
+                    .source_type
+                    .to_string()
+            })
+            .collect();
+        assert!(
+            paths.iter().any(|p| p == "file1.lemma"),
+            "first declaring file must get conflict diagnostic, got paths: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p == "file2.lemma"),
+            "incoming file must get conflict diagnostic, got paths: {paths:?}"
         );
     }
 

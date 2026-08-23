@@ -36,7 +36,7 @@ with x: 42"#
         )]),
     );
     assert!(
-        joined.contains("imported spec") || joined.contains("alias.field"),
+        joined.contains("Standalone") || joined.contains("uses"),
         "local with must be rejected at parse, got: {joined}"
     );
 }
@@ -59,7 +59,7 @@ with copy: i.v"#
         )]),
     );
     assert!(
-        joined.contains("imported spec") || joined.contains("alias.field"),
+        joined.contains("Standalone") || joined.contains("uses"),
         "local with must be rejected at parse, got: {joined}"
     );
 }
@@ -76,8 +76,8 @@ data slot: number
 
 spec top
 uses lic: inner
+  -> with slot: lw.other
 uses lw: law
-with lic.slot: lw.other
 rule answer: lic.slot
 "#;
 
@@ -110,8 +110,8 @@ data b: number
 
 spec outer
 uses i: inner
-with i.a: i.b
-with i.b: i.a
+  -> with a: i.b
+  -> with b: i.a
 "#;
 
     let mut engine = Engine::new();
@@ -136,7 +136,7 @@ data x: number
 
 spec outer
 uses i: inner
-with i.x: i.x
+  -> with x: i.x
 "#;
 
     let mut engine = Engine::new();
@@ -164,8 +164,8 @@ data s: text -> suggest "hello"
 
 spec outer
 uses i: inner
+  -> with n: src.s
 uses src: source_spec
-with i.n: src.s
 rule r: i.n
 "#;
 
@@ -191,7 +191,7 @@ data slot: number
 
 spec outer
 uses i: inner
-with i.slot: r
+  -> with slot: r
 rule r: i.slot
 "#;
 
@@ -220,8 +220,8 @@ rule greeting: "hello"
 
 spec outer
 uses i: inner
+  -> with v: src.greeting
 uses src: source_spec
-with i.v: src.greeting
 rule r: i.v
 "#;
 
@@ -250,8 +250,8 @@ data v: number -> suggest 10
 
 spec outer
 uses i: inner
+  -> with limited: src.v
 uses src: source_spec
-with i.limited: src.v
 rule r: i.limited
 "#;
 
@@ -321,8 +321,8 @@ data slot: number
 
 spec outer
 uses i: inner
+  -> with slot: src
 data src: number -> suggest 123
-with i.slot: src
 rule r: i.slot
 "#;
 
@@ -349,17 +349,17 @@ rule r: i.slot
 fn binding_reference_measure_family_mismatch_is_rejected() {
     let code = r#"
 spec inner
-data money: measure -> unit eur 1.00
+data money: measure -> unit eur: 1.00
 data payment: money
 
 spec source_spec
-data temp_unit: measure -> unit celsius 1.0
+data temp_unit: measure -> unit celsius: 1.0
 data temperature: temp_unit
 
 spec outer
 uses i: inner
+  -> with payment: src.temperature
 uses src: source_spec
-with i.payment: src.temperature
 rule r: i.payment
 "#;
 

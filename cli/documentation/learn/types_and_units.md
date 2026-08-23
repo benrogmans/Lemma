@@ -38,8 +38,8 @@ Bare `5 kilogram` plans when only one type declares `kilogram`. Qualified forms 
 ```lemma
 spec wages
 
-data money_a: measure -> unit eur 1
-data money_b: measure -> unit eur 2
+data money_a: measure -> unit eur: 1
+data money_b: measure -> unit eur: 2
 
 rule a: 10 money_a.eur
 rule b: 10 money_b.eur
@@ -145,8 +145,8 @@ Convert within a unit family with `as`:
 spec conversion_examples
 
 data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91
+  -> unit eur: 1.00
+  -> unit usd: 0.91
 
 data price: 100 eur
 
@@ -322,7 +322,7 @@ When a Data field has no value (not provided), Rules that depend on it Veto with
 spec coffee_prices
 
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
   -> decimals 2
 
 data product: text

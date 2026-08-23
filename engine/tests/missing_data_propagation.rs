@@ -22,7 +22,7 @@ rule final_total: total_before_discount
     let main_spec = r#"
 spec rules_and_unless
 uses rules: private_rules
-with rules.base_price: 500
+  -> with base_price: 500
 rule total: rules.final_total
 "#;
 

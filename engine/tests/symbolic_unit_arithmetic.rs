@@ -120,9 +120,9 @@ fn cross_type_arithmetic_promotes_without_as_cast() {
     let code = r#"spec pay_calc
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data hours_worked: 40 hour
 data hourly_rate: 30 eur_per_hour
 rule pay: hourly_rate * hours_worked"#;
@@ -148,13 +148,13 @@ rule pay: hourly_rate * hours_worked"#;
 fn ambiguous_decomposition_lists_both_candidates() {
     let code = r#"spec ambiguous
 data torque: measure
-  -> unit newton_meter newton*meter
+  -> unit newton_meter: newton*meter
 data energy: measure
-  -> unit joule newton*meter
+  -> unit joule: newton*meter
 data force: measure
-  -> unit newton 1
+  -> unit newton: 1
 data length: measure
-  -> unit meter 1
+  -> unit meter: 1
 data f: 3 newton
 data d: 5 meter
 rule work: f * d"#;
@@ -180,9 +180,9 @@ rule work: f * d"#;
 fn ambiguity_across_distinct_types_same_decomposition() {
     let code = r#"spec ambiguous_length
 data imperial_length: measure
-  -> unit inch 1
+  -> unit inch: 1
 data metric_length: measure
-  -> unit meter 1
+  -> unit meter: 1
 data x: 3 inch
 data y: 4 inch
 rule total: x + y"#;
@@ -197,9 +197,9 @@ rule total: x + y"#;
     // to {length:2} which has no named type and is rejected as anonymous at rule boundary):
     let cross_code = r#"spec ambiguous_length
 data imperial_length: measure
-  -> unit inch 1
+  -> unit inch: 1
 data metric_length: measure
-  -> unit meter 1
+  -> unit meter: 1
 data x: 3 inch
 data y: 4 meter
 rule product: x * y"#;
@@ -218,9 +218,9 @@ rule product: x * y"#;
 fn no_named_type_for_decomposition_clear_error() {
     let code = r#"spec pressure_calc
 data force: measure
-  -> unit newton 1
+  -> unit newton: 1
 data area: measure
-  -> unit square_meter meter*meter
+  -> unit square_meter: meter*meter
 data f: 10 newton
 data a: 2 square_meter
 rule pressure: f / a"#;
@@ -243,10 +243,10 @@ fn input_only_data_uses_decomposition() {
     let base = r#"spec rate_calc
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_hour: eur/hour
+  -> unit eur_per_minute: eur/minute
 data rate_value: {RATE}
 data duration_value: {DURATION}
 rule pay: (rate_value * duration_value)"#;
@@ -332,8 +332,8 @@ rule gap: finish - start"#;
 fn base_measure_without_factor_one_unit_accepted_and_displays_in_declared_units() {
     let code = r#"spec weird_units
 data weight: measure
-  -> unit half_kg 0.5
-  -> unit quarter_kg 0.25
+  -> unit half_kg: 0.5
+  -> unit quarter_kg: 0.25
 data a: 5 half_kg
 data b: 3 quarter_kg
 rule sum: a + b
@@ -361,11 +361,11 @@ rule converted: (a) as quarter_kg"#;
 fn compound_type_without_factor_one_unit_evaluates_and_displays_via_signature() {
     let code = r#"spec rate_display
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data time_unit: measure
-  -> unit hour 1
+  -> unit hour: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data total: 120 eur
 data duration: 2 hour
 rule rate_result: total / duration"#;
@@ -396,11 +396,11 @@ rule rate_result: total / duration"#;
 fn value_with_compound_signature_renders_friendly_name_when_signature_index_matches() {
     let code = r#"spec rate_display
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data time_unit: measure
-  -> unit hour 1
+  -> unit hour: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data total: 120 eur
 data duration: 2 hour
 rule rate_result: total / duration"#;
@@ -421,11 +421,11 @@ rule rate_result: total / duration"#;
 fn value_with_compound_signature_renders_operator_style_when_signature_index_misses() {
     let code = r#"spec weird_compound
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data time_h: measure
-  -> unit hour 1
+  -> unit hour: 1
 data time_m: measure
-  -> unit minute 1
+  -> unit minute: 1
 data amount: 40 eur
 data h: 2 hour
 data m: 3 minute
@@ -447,9 +447,9 @@ fn signature_combination_cancels_to_named_unit() {
     let code = r#"spec packaging
 uses lemma units
 data batch: measure
-  -> unit ce 1
+  -> unit ce: 1
 data packaging_speed: measure
-  -> unit ce_per_minute ce/minute
+  -> unit ce_per_minute: ce/minute
 data speed: 5 ce_per_minute
 data duration: 3 minute
 rule throughput: speed * duration"#;
@@ -472,13 +472,13 @@ rule throughput: speed * duration"#;
 fn signature_combination_misses_yields_operator_style_display() {
     let code = r#"spec weird_rate
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data time_m: measure
-  -> unit minute 1
+  -> unit minute: 1
 data time_h: measure
-  -> unit hour 1
+  -> unit hour: 1
 data rate: measure
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_minute: eur/minute
 data r: 40 eur_per_minute
 data h: 2 hour
 rule compound: r * h"#;
@@ -498,7 +498,7 @@ rule compound: r * h"#;
 fn measure_plus_measure_same_signature_direct_sum() {
     let code = r#"spec sums
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data a: 100 eur
 data b: 50 eur
 rule total: a + b"#;
@@ -518,10 +518,10 @@ fn measure_plus_measure_different_signature_converts_via_signature_factor() {
     let code = r#"spec rate_sum
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_second eur/second
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_second: eur/second
+  -> unit eur_per_minute: eur/minute
 data a: 10 eur_per_second
 data b: 20 eur_per_minute
 rule total_rate: (a + b)"#;
@@ -547,9 +547,9 @@ fn q_times_calendar_uses_builtin_calendar_factor() {
     let code = r#"spec monthly_pay
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data monthly: 100 eur_per_month
 rule quarterly: monthly * 3 month"#;
     assert_loads(code);
@@ -575,9 +575,9 @@ fn q_divide_rate_yields_months() {
     let code = r#"spec runway_inverse
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate_type: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data balance: 300 eur
 data burn: 100 eur_per_month
 rule month: (balance / burn) as month"#;
@@ -600,9 +600,9 @@ fn q_times_calendar_mismatched_unit_keeps_operand_magnitudes() {
     let code = r#"spec annual_pay
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data monthly: 100 eur_per_month
 rule annual: (monthly * 1 year)"#;
     assert_loads(code);
@@ -625,7 +625,7 @@ rule annual: (monthly * 1 year)"#;
 fn user_declared_unit_named_after_calendar_unit_is_rejected() {
     let code = r#"spec bad_unit
 data duration: measure
-  -> unit month 1"#;
+  -> unit month: 1"#;
     let error = load_expect_error(code);
     assert!(
         error.to_lowercase().contains("month")
@@ -657,15 +657,15 @@ fn burn_baby_burn_deadline_months() {
 uses lemma units
 
 data money: measure
-  -> unit usd 1.00
-  -> unit eur 1.19
+  -> unit usd: 1.00
+  -> unit eur: 1.19
   -> decimals 2
   -> minimum 0 usd
 
 data balance: money
 data money_flow: measure
-  -> unit eur_month eur/month
-  -> unit usd_year usd/year
+  -> unit eur_month: eur/month
+  -> unit usd_year: usd/year
 
 data burn_rate: money_flow
   -> help "Provide the burn rate as EUR/month or USD/year."
@@ -724,9 +724,9 @@ fn plural_calendar_unit_rejected_with_import() {
     let plural_code = r#"spec pl
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data r: 10 eur_per_month
 rule x: r * 3 months"#;
     let mut engine = Engine::new();
@@ -739,9 +739,9 @@ rule x: r * 3 months"#;
     let singular_code = r#"spec sing
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data r: 10 eur_per_month
 rule x: r * 3 month"#;
     assert_loads(singular_code);
@@ -761,20 +761,20 @@ fn manufacturing_spec_full_eval_no_casts() {
 uses lemma units
 
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 
 data rate: measure
-  -> unit eur_per_hour eur/hour
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_hour: eur/hour
+  -> unit eur_per_minute: eur/minute
 
 data unit_cost: measure
-  -> unit eur_per_ce eur/ce
+  -> unit eur_per_ce: eur/ce
 
 data batch: measure
-  -> unit ce 1
+  -> unit ce: 1
 
 data speed: measure
-  -> unit ce_per_minute ce/minute
+  -> unit ce_per_minute: ce/minute
 
 data batch_size_ce: 100 ce
 data packaging_speed: 5 ce_per_minute
@@ -789,7 +789,7 @@ data machine_fixed_rate_hr: 20 eur_per_hour
 data indirect_overhead_pct: 15 percent
 
 data mixing_rate: measure
-  -> unit eur_per_kg eur/kilogram
+  -> unit eur_per_kg: eur/kilogram
 
 rule packaging_duration: batch_size_ce / packaging_speed
 rule unpack_and_mix_cost: (net_weight_mixing * mixing_rate_per_kg)
@@ -843,9 +843,9 @@ fn value_round_trip_via_evaluator_unit_conversion() {
     let code = r#"spec round_trip
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data fee: 120 eur
 data hrs: 2 hour
 rule hourly: (fee / hrs)"#;
@@ -872,9 +872,9 @@ fn ce_divided_by_ce_per_minute_yields_minute() {
     let code = r#"spec packaging
 uses lemma units
 data batch_size: measure
-  -> unit ce 1
+  -> unit ce: 1
 data packaging_speed: measure
-  -> unit ce_per_minute ce/minute
+  -> unit ce_per_minute: ce/minute
 data batch_size_ce: 100 ce
 data speed: 5 ce_per_minute
 rule packaging_duration: batch_size_ce / speed"#;
@@ -893,9 +893,9 @@ fn ce_per_minute_times_minute_yields_ce_with_correct_magnitude() {
     let code = r#"spec packaging
 uses lemma units
 data batch_size: measure
-  -> unit ce 1
+  -> unit ce: 1
 data packaging_speed: measure
-  -> unit ce_per_minute ce/minute
+  -> unit ce_per_minute: ce/minute
 data speed: 2 ce_per_minute
 data shift: 60 minute
 rule throughput: speed * shift"#;
@@ -914,9 +914,9 @@ fn ce_per_minute_times_hour_requires_as_cast() {
     let code = r#"spec packaging
 uses lemma units
 data batch_size: measure
-  -> unit ce 1
+  -> unit ce: 1
 data packaging_speed: measure
-  -> unit ce_per_minute ce/minute
+  -> unit ce_per_minute: ce/minute
 data speed: 2 ce_per_minute
 data shift: 1 hour
 rule throughput: (speed * shift) as ce"#;
@@ -935,14 +935,14 @@ fn manufacturing_packaging_duration_and_labor_cost() {
     let code = r#"spec manufacturing
 uses lemma units
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 data rate: measure
-  -> unit eur_per_hour eur/hour
-  -> unit eur_per_minute eur/minute
+  -> unit eur_per_hour: eur/hour
+  -> unit eur_per_minute: eur/minute
 data batch: measure
-  -> unit ce 1
+  -> unit ce: 1
 data speed: measure
-  -> unit ce_per_minute ce/minute
+  -> unit ce_per_minute: ce/minute
 data batch_size_ce: 100 ce
 data packaging_speed: 5 ce_per_minute
 data labor_rate_hr: 60 eur_per_hour
@@ -967,9 +967,9 @@ rule direct_labor_cost: (labor_rate_hr * packaging_duration)"#;
 fn unresolvable_signature_rejected_at_rule_boundary() {
     let code = r#"spec mixed
 data length: measure
-  -> unit meter 1
+  -> unit meter: 1
 data force: measure
-  -> unit newton 1
+  -> unit newton: 1
 data x: 3 meter
 data y: 5 newton
 rule weird: x * y"#;
@@ -988,9 +988,9 @@ fn derived_type_without_factor_one_unit_plans_and_runs() {
     let code = r#"spec rates
 uses lemma units
 data money: measure
-  -> unit eur 1.00
+  -> unit eur: 1.00
 data rate: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data fee: 10 eur_per_hour
 data minute: 30 minute
 rule charge: (fee * minute)"#;
@@ -1011,9 +1011,9 @@ fn as_binding_division_suggests_parentheses() {
     let code = r#"spec burn
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
 rule runway: balance / burn_rate as month"#;
@@ -1038,11 +1038,11 @@ rule runway: balance / burn_rate as month"#;
 fn as_binding_multiplication_suggests_parentheses() {
     let code = r#"spec payroll
 data money_type: measure
-  -> unit eur 1
+  -> unit eur: 1
 data duration_type: measure
-  -> unit hour 1
+  -> unit hour: 1
 data rate_type: measure
-  -> unit eur_per_hour eur/hour
+  -> unit eur_per_hour: eur/hour
 data fee: 10 eur_per_hour
 data shift: 8 hour
 rule wages: fee * shift as eur"#;
@@ -1061,9 +1061,9 @@ fn as_binding_compound_operand_suggestion_is_readable() {
     let code = r#"spec burn
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
 data revenue: 2000 eur_per_month
@@ -1101,8 +1101,8 @@ fn as_binding_neither_interpretation_valid_emits_standard_error() {
     let code = r#"spec bad
 uses lemma units
 data mass_type: measure
-  -> unit kilogram 1
-  -> unit gram 0.001
+  -> unit kilogram: 1
+  -> unit gram: 0.001
 data m: 5 kilogram
 data t: 2 second
 rule weird: m / t as gram"#;
@@ -1123,7 +1123,7 @@ fn as_binding_compound_unit_newton_suggests_parentheses() {
     let code = r#"spec mechanics
 uses lemma units
 data acceleration_type: measure
-  -> unit mps2 meter/second^2
+  -> unit mps2: meter/second^2
 data m: 10 kilogram
 data a: 5 mps2
 rule f: m * a as newton"#;
@@ -1142,7 +1142,7 @@ fn as_binding_compound_unit_newton_explicit_parentheses_succeeds() {
     let code = r#"spec mechanics
 uses lemma units
 data acceleration_type: measure
-  -> unit mps2 meter/second^2
+  -> unit mps2: meter/second^2
 data m: 10 kilogram
 data a: 5 mps2
 rule f: (m * a) as newton"#;
@@ -1161,9 +1161,9 @@ fn as_binding_explicit_parentheses_succeeds() {
     let code = r#"spec burn
 uses lemma units
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 data rate: measure
-  -> unit eur_per_month eur/month
+  -> unit eur_per_month: eur/month
 data balance: 120000 eur
 data burn_rate: 10000 eur_per_month
 rule runway: (balance / burn_rate) as month"#;

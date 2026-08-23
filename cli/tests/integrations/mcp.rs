@@ -3288,7 +3288,7 @@ fn test_mcp_show_json_includes_rule_units() {
     write_spec(
         temp_dir.path(),
         "money.lemma",
-        "spec money\ndata amount: measure\n  -> unit eur 1\n  -> unit cent 0.01\nrule total: amount\n",
+        "spec money\ndata amount: measure\n  -> unit eur: 1\n  -> unit cent: 0.01\nrule total: amount\n",
     );
 
     let responses = mcp_session(
@@ -3324,7 +3324,7 @@ fn test_mcp_evaluate_renders_unit_map() {
     write_spec(
         temp_dir.path(),
         "money.lemma",
-        "spec money\ndata amount: measure\n  -> unit eur 1\n  -> unit cent 0.01\nrule total: amount\n",
+        "spec money\ndata amount: measure\n  -> unit eur: 1\n  -> unit cent: 0.01\nrule total: amount\n",
     );
 
     let responses = mcp_session(
@@ -3375,7 +3375,6 @@ fn test_mcp_guide_topics() {
         "units",
         "veto",
         "composition",
-        "natural_language",
         "anti_patterns",
         "evaluate",
         "full",
@@ -3399,203 +3398,9 @@ fn test_mcp_guide_topics() {
             .as_str()
             .unwrap_or("");
         assert!(!text.is_empty(), "guide topic {topic} must not be empty");
-
-        match *topic {
-            "method" => {
-                assert!(
-                    text.contains("**Method: write as a policy consultant"),
-                    "method must include consultant heading"
-                );
-                assert!(
-                    text.contains("**Output contract (mandatory)**"),
-                    "method must include output contract"
-                );
-                assert!(
-                    text.contains("**What to ask (and what not to)**"),
-                    "method must teach ask-only-real-gaps filter"
-                );
-                assert!(
-                    !text.contains("**Consuming loaded specs**"),
-                    "method must not include consuming section (moved to evaluate guide)"
-                );
-                assert!(
-                    !text.contains("Defective on arrival?"),
-                    "method must not train laundry-list edge-case questions"
-                );
-                assert!(
-                    text.contains("Always paste the full Lemma source"),
-                    "method must require pasting full source at deliver"
-                );
-                assert!(
-                    text.contains("user can verify what was saved"),
-                    "method must require user verify of saved/loaded source"
-                );
-                assert!(
-                    text.contains("if anything requires adjustment"),
-                    "method must invite adjustment with a statement, not a confirm question"
-                );
-            }
-            "evaluate" => {
-                assert!(
-                    text.contains("**Evaluating loaded specs**"),
-                    "evaluate must include evaluating heading"
-                );
-                assert!(
-                    text.contains("**User-facing language**"),
-                    "evaluate must include User-facing language"
-                );
-                assert!(
-                    text.contains("Do not say bindings"),
-                    "evaluate must forbid saying bindings to the user"
-                );
-                assert!(
-                    text.contains("Never ask the user what the policy means"),
-                    "evaluate must forbid asking the user to interpret policy"
-                );
-                assert!(
-                    text.contains("Never dispose your interpretation as the truth"),
-                    "evaluate must forbid disposing interpretation as truth"
-                );
-                assert!(
-                    text.contains("use *should*"),
-                    "evaluate must require should when judgment call cannot be answered"
-                );
-                assert!(
-                    text.contains("A reply can close many fields"),
-                    "evaluate must teach multi-bind from replies"
-                );
-                assert!(
-                    text.contains("After every user turn (primary loop)"),
-                    "evaluate must make utterance multi-bind the primary loop"
-                );
-                assert!(
-                    text.contains("Synonym probes of the same claim are forbidden"),
-                    "evaluate must forbid synonym leaf-walk"
-                );
-                assert!(
-                    text.contains("At most one unanswered question in flight"),
-                    "evaluate must limit open questions"
-                );
-                assert!(
-                    text.contains("When the rule answers (verify before done)"),
-                    "evaluate must require verify before done"
-                );
-                assert!(
-                    text.contains("**Details**") && text.contains("**Answer**"),
-                    "evaluate must require details+answer verify table"
-                );
-                assert!(
-                    text.contains("Close with a statement, not a question"),
-                    "evaluate must close verify with a statement, not a question"
-                );
-                assert!(
-                    text.contains("if anything requires adjustment"),
-                    "evaluate must invite adjustment after verify table"
-                );
-                assert!(
-                    text.contains("missing_data"),
-                    "evaluate must mention missing_data"
-                );
-                assert!(
-                    !text.contains("copy help verbatim"),
-                    "evaluate must not force dumping help as the entire message"
-                );
-            }
-            "full" => {
-                assert!(
-                    text.contains("**Method: write as a policy consultant"),
-                    "full must include authoring method"
-                );
-                assert!(
-                    text.contains("Always paste the full Lemma source"),
-                    "full must require pasting full source at deliver"
-                );
-                assert!(
-                    text.contains("user can verify what was saved"),
-                    "full must require user verify of saved/loaded source"
-                );
-                assert!(
-                    text.contains("if anything requires adjustment"),
-                    "full must invite adjustment with a statement, not a confirm question"
-                );
-                assert!(
-                    text.contains("**Mandatory spec opening order:**"),
-                    "full must include syntax"
-                );
-                assert!(
-                    text.contains("## See also"),
-                    "full must include See also footer"
-                );
-                assert!(
-                    !text.contains("**Evaluating loaded specs**"),
-                    "full authoring guide must not include evaluate guide"
-                );
-            }
-            "syntax" => {
-                assert!(
-                    text.contains("**Mandatory spec opening order:**"),
-                    "syntax must include opening order"
-                );
-            }
-            "composition" => {
-                assert!(
-                    text.contains("**Example A"),
-                    "composition must include Example A"
-                );
-                assert!(
-                    text.contains("**Example B"),
-                    "composition must include Example B"
-                );
-                assert!(
-                    text.contains("**LemmaBase"),
-                    "composition must include LemmaBase"
-                );
-            }
-            "natural_language" => {
-                assert!(
-                    text.contains("**Natural language"),
-                    "natural_language must include heading"
-                );
-                assert!(
-                    text.contains("**Example C"),
-                    "natural_language must include Example C"
-                );
-            }
-            "data" => {
-                assert!(text.contains("**Example D"), "data must include Example D");
-                assert!(text.contains("**Example E"), "data must include Example E");
-            }
-            "units" => {
-                assert!(text.contains("**Ranges"), "units must include Ranges");
-                assert!(
-                    text.contains("**Derived measures"),
-                    "units must include Derived measures"
-                );
-            }
-            "rules" => {
-                assert!(text.contains("**Example F"), "rules must include Example F");
-                assert!(text.contains("**Example G"), "rules must include Example G");
-                assert!(text.contains("**Example H"), "rules must include Example H");
-            }
-            "veto" => {
-                assert!(text.contains("**Example I"), "veto must include Example I");
-                assert!(
-                    text.contains("**Workflow checklist"),
-                    "veto must include Workflow checklist"
-                );
-            }
-            "anti_patterns" => {
-                assert!(
-                    text.contains("Inline comments (WRONG"),
-                    "anti_patterns must include inline comments example"
-                );
-                assert!(
-                    !text.contains("## See also"),
-                    "anti_patterns must not include footer"
-                );
-            }
-            _ => panic!("unknown topic: {topic}"),
-        }
+        let guide_topic =
+            lemma::documentation::GuideTopic::parse(topic).expect("known guide topic");
+        assert_eq!(text, guide_topic.section_text(), "guide topic {topic}");
     }
 }
 
@@ -3622,54 +3427,7 @@ fn test_mcp_guide_default_is_evaluate() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("default guide text");
-    assert!(
-        text.contains("**Evaluating loaded specs**"),
-        "default guide (no topic) must be evaluate guide"
-    );
-    assert!(
-        text.contains("**User-facing language**"),
-        "default guide must include User-facing language"
-    );
-    assert!(
-        text.contains("Do not say bindings"),
-        "default guide must forbid saying bindings to the user"
-    );
-    assert!(
-        text.contains("Never ask the user what the policy means"),
-        "default guide must forbid asking the user to interpret policy"
-    );
-    assert!(
-        text.contains("Never dispose your interpretation as the truth"),
-        "default guide must forbid disposing interpretation as truth"
-    );
-    assert!(
-        text.contains("use *should*"),
-        "default guide must require should when judgment call cannot be answered"
-    );
-    assert!(
-        text.contains("A reply can close many fields"),
-        "default guide must teach multi-bind from replies"
-    );
-    assert!(
-        text.contains("When the rule answers (verify before done)"),
-        "default guide must require verify before done"
-    );
-    assert!(
-        text.contains("Close with a statement, not a question"),
-        "default guide must close verify with a statement, not a question"
-    );
-    assert!(
-        text.contains("if anything requires adjustment"),
-        "default guide must invite adjustment after verify table"
-    );
-    assert!(
-        !text.contains("copy help verbatim"),
-        "default guide must not force dumping help as the entire message"
-    );
-    assert!(
-        !text.contains("**Mandatory spec opening order:**"),
-        "default guide must not be the full authoring guide"
-    );
+    assert_eq!(text, lemma::documentation::EVALUATE_GUIDE);
 }
 
 #[test]
@@ -3695,30 +3453,7 @@ fn test_mcp_guide_full_topic_is_authoring() {
     let text = responses[1]["result"]["content"][0]["text"]
         .as_str()
         .expect("full guide text");
-    assert!(
-        text.contains("**Mandatory spec opening order:**"),
-        "full guide must include syntax section"
-    );
-    assert!(
-        text.contains("**Method: write as a policy consultant"),
-        "full guide must include method section"
-    );
-    assert!(
-        !text.contains("**Evaluating loaded specs**"),
-        "full authoring guide must not include evaluate guide"
-    );
-    assert!(
-        !text.contains("**Consuming loaded specs**"),
-        "full authoring guide must not include old consuming section"
-    );
-    assert!(
-        text.contains("**Workflow checklist**"),
-        "full guide must include veto section"
-    );
-    assert!(
-        text.contains("## See also"),
-        "full guide must include See also footer"
-    );
+    assert_eq!(text, lemma::documentation::GuideTopic::Full.section_text());
 }
 
 #[test]

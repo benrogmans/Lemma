@@ -13,14 +13,41 @@ import org.jspecify.annotations.Nullable;
  * specifications never reach a successfully planned response.
  */
 public sealed interface LemmaType {
+  /**
+   * Returns the kind tag.
+   *
+   * @return kind tag
+   */
   String kind();
 
+  /**
+   * Optional typedef name.
+   *
+   * @return type name or null
+   */
   @Nullable
   String name();
 
+  /**
+   * Optional extends clause.
+   *
+   * @return extends type
+   */
   TypeExtends extendsType();
 
+  /**
+   * RationalFactor.
+   * @param numer numer
+   * @param denom denom
+   */
   record RationalFactor(BigDecimal numer, BigDecimal denom) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static RationalFactor read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "RationalFactor");
       BigDecimal numer = null;
@@ -44,7 +71,19 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * NamedBound.
+   * @param value value
+   * @param unit unit
+   */
   record NamedBound(BigDecimal value, String unit) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static NamedBound read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "NamedBound");
       BigDecimal value = null;
@@ -67,6 +106,13 @@ public sealed interface LemmaType {
       return new NamedBound(value, unit);
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static @Nullable NamedBound readNullable(JsonParser p) throws IOException {
       if (p.currentToken() == JsonToken.VALUE_NULL) {
         return null;
@@ -75,6 +121,16 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * MeasureUnit.
+   * @param name name
+   * @param factor factor
+   * @param derivedMeasureFactors derivedMeasureFactors
+   * @param decomposition decomposition
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param suggestion suggestion
+   */
   record MeasureUnit(
       String name,
       RationalFactor factor,
@@ -83,8 +139,20 @@ public sealed interface LemmaType {
       @Nullable BigDecimal minimum,
       @Nullable BigDecimal maximum,
       @Nullable BigDecimal suggestion) {
+    /**
+     * DerivedMeasureFactor.
+     * @param measureRef measureRef
+     * @param exponent exponent
+     */
     record DerivedMeasureFactor(String measureRef, int exponent) {}
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static MeasureUnit read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "MeasureUnit");
       String name = null;
@@ -131,12 +199,27 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * RatioUnit.
+   * @param name name
+   * @param value value
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param suggestion suggestion
+   */
   record RatioUnit(
       String name,
       RationalFactor value,
       @Nullable BigDecimal minimum,
       @Nullable BigDecimal maximum,
       @Nullable BigDecimal suggestion) {
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static RatioUnit read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "RatioUnit");
       String name = null;
@@ -173,6 +256,13 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   private static @Nullable BigDecimal readNullableDecimal(JsonParser p) throws IOException {
     if (p.currentToken() == JsonToken.VALUE_NULL) {
       return null;
@@ -180,13 +270,27 @@ public sealed interface LemmaType {
     return JsonReading.readDecimal(p);
   }
 
+  /**
+   * BooleanType.
+   * @param name name
+   * @param help help
+   * @param extendsType extendsType
+   */
   record BooleanType(@Nullable String name, String help, TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "boolean";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static BooleanType read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Boolean");
       String name = null;
@@ -220,6 +324,18 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * Measure.
+   * @param name name
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param decimals decimals
+   * @param units units
+   * @param traits traits
+   * @param decomposition decomposition
+   * @param help help
+   * @param extendsType extendsType
+   */
   record Measure(
       @Nullable String name,
       @Nullable NamedBound minimum,
@@ -231,11 +347,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "measure";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Measure read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Measure");
       String name = null;
@@ -319,6 +443,15 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * NumberType.
+   * @param name name
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param decimals decimals
+   * @param help help
+   * @param extendsType extendsType
+   */
   record NumberType(
       @Nullable String name,
       @Nullable BigDecimal minimum,
@@ -327,11 +460,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "number";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static NumberType read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Number");
       String name = null;
@@ -392,6 +533,16 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * NumberRange.
+   * @param name name
+   * @param lower lower
+   * @param upper upper
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param help help
+   * @param extendsType extendsType
+   */
   record NumberRange(
       @Nullable String name,
       @Nullable BigDecimal lower,
@@ -401,11 +552,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "numberrange";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static NumberRange read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.NumberRange");
       String name = null;
@@ -475,6 +634,16 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * Ratio.
+   * @param name name
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param decimals decimals
+   * @param units units
+   * @param help help
+   * @param extendsType extendsType
+   */
   record Ratio(
       @Nullable String name,
       @Nullable BigDecimal minimum,
@@ -484,11 +653,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "ratio";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Ratio read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Ratio");
       String name = null;
@@ -554,6 +731,17 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * RatioRange.
+   * @param name name
+   * @param lower lower
+   * @param upper upper
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param units units
+   * @param help help
+   * @param extendsType extendsType
+   */
   record RatioRange(
       @Nullable String name,
       @Nullable BigDecimal lower,
@@ -564,11 +752,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "ratiorange";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static RatioRange read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.RatioRange");
       String name = null;
@@ -643,6 +839,14 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * Text.
+   * @param name name
+   * @param length length
+   * @param options options
+   * @param help help
+   * @param extendsType extendsType
+   */
   record Text(
       @Nullable String name,
       @Nullable Integer length,
@@ -650,11 +854,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "text";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static Text read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.Text");
       String name = null;
@@ -702,6 +914,14 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * DateType.
+   * @param name name
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param help help
+   * @param extendsType extendsType
+   */
   record DateType(
       @Nullable String name,
       @Nullable String minimum,
@@ -709,16 +929,32 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "date";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static DateType read(JsonParser p) throws IOException {
       return readStringBounds(p, "date", "LemmaType.Date");
     }
   }
 
+  /**
+   * TimeType.
+   * @param name name
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param help help
+   * @param extendsType extendsType
+   */
   record TimeType(
       @Nullable String name,
       @Nullable String minimum,
@@ -726,11 +962,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "time";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static TimeType read(JsonParser p) throws IOException {
       var r = readStringBounds(p, "time", "LemmaType.Time");
       return new TimeType(r.name(), r.minimum(), r.maximum(), r.help(), r.extendsType());
@@ -788,6 +1032,16 @@ public sealed interface LemmaType {
     return new DateType(name, minimum, maximum, help, extendsType);
   }
 
+  /**
+   * DateRange.
+   * @param name name
+   * @param lower lower
+   * @param upper upper
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param help help
+   * @param extendsType extendsType
+   */
   record DateRange(
       @Nullable String name,
       @Nullable String lower,
@@ -797,16 +1051,34 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "daterange";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static DateRange read(JsonParser p) throws IOException {
       return readCalendarRange(p, "daterange", "LemmaType.DateRange");
     }
   }
 
+  /**
+   * TimeRange.
+   * @param name name
+   * @param lower lower
+   * @param upper upper
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param help help
+   * @param extendsType extendsType
+   */
   record TimeRange(
       @Nullable String name,
       @Nullable String lower,
@@ -816,11 +1088,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "timerange";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static TimeRange read(JsonParser p) throws IOException {
       var r = readCalendarRange(p, "timerange", "LemmaType.TimeRange");
       return new TimeRange(
@@ -897,6 +1177,18 @@ public sealed interface LemmaType {
     return new DateRange(name, lower, upper, minimum, maximum, help, extendsType);
   }
 
+  /**
+   * MeasureRange.
+   * @param name name
+   * @param lower lower
+   * @param upper upper
+   * @param minimum minimum
+   * @param maximum maximum
+   * @param units units
+   * @param decomposition decomposition
+   * @param help help
+   * @param extendsType extendsType
+   */
   record MeasureRange(
       @Nullable String name,
       @Nullable NamedBound lower,
@@ -908,11 +1200,19 @@ public sealed interface LemmaType {
       String help,
       TypeExtends extendsType)
       implements LemmaType {
+    /** {@inheritDoc} */
     @Override
     public String kind() {
       return "measurerange";
     }
 
+    /**
+     * Parses JSON.
+     *
+     * @param p parser at value start
+     * @return parsed value
+     * @throws IOException if JSON IO fails
+     */
     static MeasureRange read(JsonParser p) throws IOException {
       JsonReading.expectStartObject(p, "LemmaType.MeasureRange");
       String name = null;
@@ -1000,6 +1300,13 @@ public sealed interface LemmaType {
     }
   }
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   static LemmaType read(JsonParser p) throws IOException {
     JsonReading.expectStartObject(p, "LemmaType");
     String json = JsonReading.bufferObjectAsString(p);

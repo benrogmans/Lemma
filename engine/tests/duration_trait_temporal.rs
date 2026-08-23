@@ -9,7 +9,7 @@ fn source() -> lemma::SourceType {
 
 const MONEY_TYPEDEF: &str = r#"
 data money: measure
-  -> unit eur 1
+  -> unit eur: 1
 "#;
 
 fn effective(y: i32, m: u32, d: u32, h: u32, min: u32, s: u32) -> DateTimeValue {

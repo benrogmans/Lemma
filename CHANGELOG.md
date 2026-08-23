@@ -2,6 +2,26 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.9.6] - 2026-08-23
+
+0.9.6 moves the MCP tool catalog into the engine, refines import and unit syntax, and tightens Java and npm release gates.
+
+### Changed
+
+- **MCP tool catalog**: `lemma::mcp` (`evaluate`, `list`, `show`, `source`, `check`, `guide`, resources). CLI MCP and Hex `Lemma.Mcp` use the engine module; JSON-RPC stays in the CLI.
+- **Formatter**: `lemma format` puts the rule body on the line after `rule name:` (CLI, LSP, MCP `source`, SDKs).
+- **Import bindings under `uses`**: canonical form is `uses alias: spec` with nested `-> with path: value` (paths relative to the imported spec). `lemma format` emits this block form.
+- **Deprecated standalone `with`**: `with alias.field: …` still parses when a matching `uses` exists; bindings merge into the import. `Engine::quality` recommends nesting as `  -> with field: …`. `lemma format` does not emit standalone `with`.
+- **`-> unit` syntax**: canonical `-> unit <name>: <value>`; legacy `-> unit <name> <value>` still parses. `Engine::quality` recommends the colon form; `lemma format` emits colon syntax.
+- **Authoring guide**: tightened LLM guide fragments (one owner per fact, less repetition, veto default-vs-last clarified); Markdown fragments under `engine/documentation/`.
+- **Java Maven SDK**: shaded jackson-core no longer contributes `META-INF/MANIFEST.MF` or JPMS `module-info`; published manifest is Lemma's. JNI native cache key reads package `engine.version` resource instead of classpath `META-INF/MANIFEST.MF`. Maven build treats warnings as errors: `javac -Werror`, compiler `failOnWarning`, javadoc `failOnWarnings` with `doclint=all`, and xtask `[WARNING]` gate on `./mvnw verify`.
+- **Precommit warnings**: xtask treats `npm warn` on `npm ci`, `npm run compile`, and `npm install --package-lock-only` as errors. VS Code extension build uses Node.js 24 (same as CI and Nix dev shell).
+
+### Removed
+
+- **`lemma-mcp` crate**: deleted; was `publish = false` and blocked `cargo publish -p lemma`.
+- **`DataValue::With`**: removed from the AST/serde surface; bindings live only on `DataValue::Import`.
+
 ## [0.9.5] - 2026-08-21
 
 0.9.5 sharpens per-rule missing-data reporting, extracts a reusable MCP tool catalog (CLI + Hex), embeds authoring docs in the engine, and accepts the older MCP `initialize` handshake alongside modern per-request `_meta`.
@@ -349,7 +369,7 @@ Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Co
 spec employment_contract
 
 data salary: measure 
-  -> unit eur 1
+  -> unit eur: 1
 
 rule net: salary * 1.3
 
@@ -357,7 +377,7 @@ rule net: salary * 1.3
 spec employment
 
 uses contract: employment_contract
-with contract.salary: 5000 eur
+  -> with salary: 5000 eur
 
 rule net_salary: contract.net
 ```

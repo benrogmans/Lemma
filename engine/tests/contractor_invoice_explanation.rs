@@ -8,7 +8,7 @@ spec calc
 
 data money: measure
   -> decimals 2
-  -> unit eur 1
+  -> unit eur: 1
 
 data hourly_rate: 85.00 eur
 data hours_worked: 37.5

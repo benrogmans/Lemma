@@ -150,8 +150,8 @@ rule computed: v * 2
 
 spec outer
 uses i: inner
+  -> with slot: src.computed
 uses src: source_spec
-with i.slot: src.computed
 rule r: i.slot + 1
 "#
             .to_string(),

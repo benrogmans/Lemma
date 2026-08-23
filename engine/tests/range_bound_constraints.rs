@@ -48,8 +48,8 @@ fn cargo_mass_shipment_ok() -> &'static str {
     r#"
 spec s
 data cargo_mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data shipment: cargo_mass range
   -> lower 100 kilogram
@@ -93,8 +93,8 @@ fn custom_measure_range_rejects_lower_above_upper_across_units() {
     let code = r#"
 spec s
 data cargo_mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data shipment: cargo_mass range
   -> lower 3 tonne
@@ -114,8 +114,8 @@ fn custom_measure_range_rejects_width_minimum_above_maximum_across_units() {
     let code = r#"
 spec s
 data cargo_mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data shipment: cargo_mass range
   -> lower 100 kilogram
@@ -137,8 +137,8 @@ fn custom_measure_range_default_fails_endpoint() {
     let code = r#"
 spec s
 data cargo_mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data shipment: cargo_mass range
   -> lower 100 kilogram
@@ -165,8 +165,8 @@ fn custom_measure_range_default_fails_width() {
     let code = r#"
 spec s
 data cargo_mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data shipment: cargo_mass range
   -> lower 100 kilogram
@@ -232,8 +232,8 @@ fn custom_measure_range_rejects_foreign_unit() {
     let code = r#"
 spec s
 data cargo_mass: measure
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
 
 data shipment: cargo_mass range
   -> lower 10 eur
@@ -252,8 +252,8 @@ fn money_range_cross_unit_bounds() {
     let code = r#"
 spec s
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.92
+  -> unit eur: 1
+  -> unit usd: 0.92
 
 data band: money range
   -> lower 0 eur
@@ -290,8 +290,8 @@ fn anonymous_measure_range_cross_unit_bounds() {
     let code = r#"
 spec s
 data band: measure range
-  -> unit kilogram 1
-  -> unit tonne 1000
+  -> unit kilogram: 1
+  -> unit tonne: 1000
   -> lower 100 kilogram
   -> upper 50 tonne
   -> minimum 500 kilogram
@@ -328,7 +328,7 @@ fn ratio_range_accepts_all_four_commands() {
     let code = r#"
 spec s
 data band: ratio range
-  -> unit percent 100
+  -> unit percent: 100
   -> lower 0%
   -> upper 100%
   -> minimum 10%
@@ -381,9 +381,9 @@ rule out: shift
 fn scalar_rejects_lower_upper() {
     for ty in ["number", "measure", "date", "time", "ratio"] {
         let unit_line = if ty == "measure" {
-            "  -> unit kilogram 1\n"
+            "  -> unit kilogram: 1\n"
         } else if ty == "ratio" {
-            "  -> unit percent 100\n"
+            "  -> unit percent: 100\n"
         } else {
             ""
         };
@@ -681,8 +681,8 @@ fn named_money_range_inherits_endpoint_bounds_only() {
     let code = r#"
 spec s
 data money: measure
-  -> unit eur 1
-  -> unit usd 0.92
+  -> unit eur: 1
+  -> unit usd: 0.92
   -> minimum 0 eur
   -> maximum 1000000 eur
 

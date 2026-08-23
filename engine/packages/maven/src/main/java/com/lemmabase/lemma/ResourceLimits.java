@@ -3,10 +3,18 @@ package com.lemmabase.lemma;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
 import java.io.IOException;
-
 /**
- * Resource limits for an {@link Engine}. All fields match {@code ResourceLimits} in Rust
- * ({@code usize}).
+ * ResourceLimits.
+ * @param maxSourceSizeBytes maxSourceSizeBytes
+ * @param maxExpressionDepth maxExpressionDepth
+ * @param maxExpressionCount maxExpressionCount
+ * @param maxDataValueBytes maxDataValueBytes
+ * @param maxLoadedBytes maxLoadedBytes
+ * @param maxSources maxSources
+ * @param maxNormalizedExpressionNodes maxNormalizedExpressionNodes
+ * @param maxSpecDependencyDepth maxSpecDependencyDepth
+ * @param maxDagSpecs maxDagSpecs
+ * @param maxNormalFormDepth maxNormalFormDepth
  */
 public record ResourceLimits(
     long maxSourceSizeBytes,
@@ -20,6 +28,13 @@ public record ResourceLimits(
     long maxDagSpecs,
     long maxNormalFormDepth) {
 
+  /**
+   * Parses JSON.
+   *
+   * @param p parser at value start
+   * @return parsed value
+   * @throws IOException if JSON IO fails
+   */
   public static ResourceLimits read(JsonParser p) throws IOException {
     if (p.currentToken() != JsonToken.START_OBJECT) {
       throw new LemmaBugError("BUG: expected START_OBJECT for ResourceLimits");
@@ -94,6 +109,11 @@ public record ResourceLimits(
         maxNormalFormDepth);
   }
 
+  /**
+   * Serializes limits to JSON for JNI.
+   *
+   * @return JSON object text
+   */
   public String toJson() {
     return "{\"max_source_size_bytes\":"
         + maxSourceSizeBytes

@@ -121,12 +121,12 @@ fn assert_contains_parts(actual: &str, parts: &[&str]) {
 const USES_UNITS: &str = "uses lemma units";
 
 const MONEY: &str = r#"data money: measure
-  -> unit eur 1.00
-  -> unit usd 0.91"#;
+  -> unit eur: 1.00
+  -> unit usd: 0.91"#;
 
 const WEIGHT: &str = r#"data weight: measure
-  -> unit stone 1
-  -> unit lb 14"#;
+  -> unit stone: 1
+  -> unit lb: 14"#;
 
 // =============================================================================
 // DateRange
@@ -379,7 +379,7 @@ rule span: (1 stone...3 stone) as lb as number"#
         let code = format!(
             r#"spec test
 {USES_UNITS}
-data cargo: measure -> unit crate 1
+data cargo: measure -> unit crate: 1
 rule bad: (3 crate...5 crate) as day as number"#
         );
         expect_plan_error(&code, "convert");

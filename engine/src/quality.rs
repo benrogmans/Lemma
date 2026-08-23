@@ -4,10 +4,10 @@
 //! Veto / panic.
 
 use crate::error::EngineErrorSource;
-use crate::literals::Value;
+use crate::literals::{BooleanValue, Value};
 use crate::parsing::ast::{
-    DataValue, Expression, ExpressionKind, LemmaData, LemmaRule, LemmaSpec, ParentType,
-    PrimitiveKind, Span, TypeConstraintCommand,
+    ComparisonComputation, DataValue, Expression, ExpressionKind, LemmaData, LemmaRule, LemmaSpec,
+    NegationType, ParentType, PrimitiveKind, Span, TypeConstraintCommand,
 };
 use crate::parsing::source::{Source, SourceType};
 use crate::Engine;
@@ -150,12 +150,37 @@ fn analyze_spec(repository: Option<String>, spec: &LemmaSpec, out: &mut Vec<Reco
     }
 }
 
+fn analyze_import(
+    repository: Option<String>,
+    spec: &LemmaSpec,
+    bindings: &[crate::parsing::ast::UsesBinding],
+    out: &mut Vec<Recommendation>,
+) {
+    for binding in bindings {
+        if !binding.deprecated_standalone_with {
+            continue;
+        }
+        out.push(Recommendation {
+            message: "Standalone `with alias.field: …` is deprecated; nest under the matching `uses` line as `  -> with field: …`.".to_string(),
+            repository: repository.clone(),
+            spec: spec.name.clone(),
+            effective_from: spec.effective_from.to_option(),
+            source_location: binding.source_location.clone(),
+        });
+    }
+}
+
 fn analyze_data(
     repository: Option<String>,
     spec: &LemmaSpec,
     data: &LemmaData,
     out: &mut Vec<Recommendation>,
 ) {
+    if let DataValue::Import { bindings, .. } = &data.value {
+        analyze_import(repository.clone(), spec, bindings, out);
+        return;
+    }
+
     let DataValue::Definition {
         base,
         constraints,
@@ -169,19 +194,32 @@ fn analyze_data(
     let constraints = constraints.as_deref().unwrap_or(&[]);
     let has_help = constraints
         .iter()
-        .any(|(c, _)| matches!(c, TypeConstraintCommand::Help));
-    let has_option = constraints.iter().any(|(c, _)| {
+        .any(|row| matches!(row.command, TypeConstraintCommand::Help));
+    let has_option = constraints.iter().any(|row| {
         matches!(
-            c,
+            row.command,
             TypeConstraintCommand::Option | TypeConstraintCommand::Options
         )
     });
     let has_minimum = constraints
         .iter()
-        .any(|(c, _)| matches!(c, TypeConstraintCommand::Minimum));
+        .any(|row| matches!(row.command, TypeConstraintCommand::Minimum));
     let has_maximum = constraints
         .iter()
-        .any(|(c, _)| matches!(c, TypeConstraintCommand::Maximum));
+        .any(|row| matches!(row.command, TypeConstraintCommand::Maximum));
+
+    for row in constraints {
+        if !row.deprecated_without_colon {
+            continue;
+        }
+        out.push(Recommendation {
+            message: "`-> unit name value` is deprecated; use `-> unit name: value`.".to_string(),
+            repository: repository.clone(),
+            spec: spec.name.clone(),
+            effective_from: spec.effective_from.to_option(),
+            source_location: row.source_location.clone(),
+        });
+    }
 
     if !has_help {
         out.push(Recommendation {
@@ -259,22 +297,61 @@ fn analyze_rule(
     rule: &LemmaRule,
     out: &mut Vec<Recommendation>,
 ) {
-    if !is_boolean_literal(&rule.expression) {
+    walk_expr_for_ambiguous_and(repository.clone(), spec, rule, &rule.expression, out);
+    for unless in &rule.unless_clauses {
+        walk_expr_for_ambiguous_and(repository.clone(), spec, rule, &unless.condition, out);
+        walk_expr_for_ambiguous_and(repository.clone(), spec, rule, &unless.result, out);
+    }
+
+    analyze_redundant_boolean_default_unless(repository.clone(), spec, rule, out);
+
+    if is_boolean_literal(&rule.expression)
+        && !rule.unless_clauses.is_empty()
+        && rule
+            .unless_clauses
+            .iter()
+            .all(|u| matches!(u.result.kind, ExpressionKind::Veto(_)))
+    {
+        out.push(Recommendation {
+            message: format!(
+                "`{}` treats a yes/no outcome as veto. Consider `false` or `no` when denying — veto means there is no answer, and it blocks every rule that depends on this one.",
+                rule.name
+            ),
+            repository,
+            spec: spec.name.clone(),
+            effective_from: spec.effective_from.to_option(),
+            source_location: rule.source_location.clone(),
+        });
+    }
+}
+
+fn boolean_literal_truth(expr: &Expression) -> Option<bool> {
+    match &expr.kind {
+        ExpressionKind::Literal(Value::Boolean(b)) => Some(bool::from(*b)),
+        _ => None,
+    }
+}
+
+fn analyze_redundant_boolean_default_unless(
+    repository: Option<String>,
+    spec: &LemmaSpec,
+    rule: &LemmaRule,
+    out: &mut Vec<Recommendation>,
+) {
+    if rule.unless_clauses.len() != 1 {
         return;
     }
-    if rule.unless_clauses.is_empty() {
+    let unless = &rule.unless_clauses[0];
+    if boolean_literal_truth(&rule.expression) != Some(false) {
         return;
     }
-    let all_veto = rule
-        .unless_clauses
-        .iter()
-        .all(|u| matches!(u.result.kind, ExpressionKind::Veto(_)));
-    if !all_veto {
+    if boolean_literal_truth(&unless.result) != Some(true) {
         return;
     }
+    let condition = format!("{}", unless.condition);
     out.push(Recommendation {
         message: format!(
-            "`{}` treats a yes/no outcome as veto. Consider `false` or `no` when denying — veto means there is no answer, and it blocks every rule that depends on this one.",
+            "`{}` uses `no` (or `false`) with a single `unless … then yes`. Equivalent to `{condition}`; use a direct expression instead.",
             rule.name
         ),
         repository,
@@ -285,7 +362,98 @@ fn analyze_rule(
 }
 
 fn is_boolean_literal(expr: &Expression) -> bool {
-    matches!(&expr.kind, ExpressionKind::Literal(Value::Boolean(_)))
+    boolean_literal_truth(expr).is_some()
+}
+
+/// Conjunct shape for ambiguous `and` detection (AST only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoolConjunct {
+    Bare,
+    NotRef,
+    IsFalse,
+    Other,
+}
+
+fn classify_bool_conjunct(expr: &Expression) -> BoolConjunct {
+    match &expr.kind {
+        ExpressionKind::Reference(_) => BoolConjunct::Bare,
+        ExpressionKind::LogicalNegation(inner, NegationType::Not)
+            if matches!(inner.kind, ExpressionKind::Reference(_)) =>
+        {
+            BoolConjunct::NotRef
+        }
+        ExpressionKind::Comparison(left, ComparisonComputation::Is, right)
+            if matches!(left.kind, ExpressionKind::Reference(_))
+                && matches!(
+                    right.kind,
+                    ExpressionKind::Literal(Value::Boolean(BooleanValue::False | BooleanValue::No))
+                ) =>
+        {
+            BoolConjunct::IsFalse
+        }
+        _ => BoolConjunct::Other,
+    }
+}
+
+fn is_ambiguous_logical_and(left: &Expression, right: &Expression) -> bool {
+    matches!(
+        (classify_bool_conjunct(left), classify_bool_conjunct(right)),
+        (BoolConjunct::Bare, BoolConjunct::NotRef)
+            | (BoolConjunct::NotRef, BoolConjunct::Bare)
+            | (BoolConjunct::Bare, BoolConjunct::IsFalse)
+            | (BoolConjunct::IsFalse, BoolConjunct::Bare)
+    )
+}
+
+const AMBIGUOUS_AND_MESSAGE: &str = "Boolean `and` mixes a bare name with `not` / `is false`. Readers misread scope. Prefer parallel probes (`not x and y is true`, or `x is false and y is true`) or parentheses.";
+
+fn walk_expr_for_ambiguous_and(
+    repository: Option<String>,
+    spec: &LemmaSpec,
+    rule: &LemmaRule,
+    expr: &Expression,
+    out: &mut Vec<Recommendation>,
+) {
+    match &expr.kind {
+        ExpressionKind::LogicalAnd(left, right) => {
+            if is_ambiguous_logical_and(left, right) {
+                out.push(Recommendation {
+                    message: AMBIGUOUS_AND_MESSAGE.to_string(),
+                    repository: repository.clone(),
+                    spec: spec.name.clone(),
+                    effective_from: spec.effective_from.to_option(),
+                    source_location: expr
+                        .source_location
+                        .clone()
+                        .unwrap_or_else(|| rule.source_location.clone()),
+                });
+            }
+            walk_expr_for_ambiguous_and(repository.clone(), spec, rule, left, out);
+            walk_expr_for_ambiguous_and(repository, spec, rule, right, out);
+        }
+        ExpressionKind::DateRelative(_, inner)
+        | ExpressionKind::PastFutureRange(_, inner)
+        | ExpressionKind::UnitConversion(inner, _)
+        | ExpressionKind::LogicalNegation(inner, _)
+        | ExpressionKind::MathematicalComputation(_, inner)
+        | ExpressionKind::ResultIsVeto(inner) => {
+            walk_expr_for_ambiguous_and(repository, spec, rule, inner, out);
+        }
+        ExpressionKind::DateCalendar(_, _, inner) => {
+            walk_expr_for_ambiguous_and(repository, spec, rule, inner, out);
+        }
+        ExpressionKind::RangeLiteral(left, right)
+        | ExpressionKind::RangeContainment(left, right)
+        | ExpressionKind::Arithmetic(left, _, right)
+        | ExpressionKind::Comparison(left, _, right) => {
+            walk_expr_for_ambiguous_and(repository.clone(), spec, rule, left, out);
+            walk_expr_for_ambiguous_and(repository, spec, rule, right, out);
+        }
+        ExpressionKind::Literal(_)
+        | ExpressionKind::Reference(_)
+        | ExpressionKind::Now
+        | ExpressionKind::Veto(_) => {}
+    }
 }
 
 #[cfg(test)]
@@ -350,6 +518,49 @@ rule total: qty
 "#,
         );
         assert!(engine.quality().is_empty(), "got: {:?}", engine.quality());
+    }
+
+    #[test]
+    fn deprecated_standalone_with_emits_quality_recommendation() {
+        let engine = load(
+            r#"spec inner
+data x: number
+
+spec outer
+uses i: inner
+with i.x: 42
+rule r: i.x
+"#,
+        );
+        let recs = engine.quality();
+        let hit = recs
+            .iter()
+            .find(|r| r.message.contains("deprecated") && r.spec == "outer")
+            .expect("deprecated standalone with must produce quality recommendation");
+        assert!(hit.message.contains("-> with"), "got: {}", hit.message);
+        assert_eq!(hit.source_location.span.line, 6);
+    }
+
+    #[test]
+    fn block_uses_binding_has_no_deprecated_recommendation() {
+        let engine = load(
+            r#"spec inner
+data x: number
+
+spec outer
+uses i: inner
+  -> with x: 42
+rule r: i.x
+"#,
+        );
+        assert!(
+            engine
+                .quality()
+                .iter()
+                .all(|r| !r.message.contains("deprecated")),
+            "block syntax must not flag deprecated: {:?}",
+            engine.quality()
+        );
     }
 
     #[test]
@@ -463,7 +674,7 @@ x
 """
 
 data price: measure
-  -> unit eur 1
+  -> unit eur: 1
   -> help "Unit price."
 data discount: ratio
   -> help "Discount rate."
@@ -732,5 +943,277 @@ rule total: qty
         let round: Recommendation = serde_json::from_value(json).expect("deserialize");
         assert_eq!(round.spec, "pricing");
         assert!(round.message.contains("no `-> help`"));
+    }
+
+    fn and_chain_spec(rule_body: &str) -> String {
+        format!(
+            r#"spec gate 2026-01-01
+"""
+Gate.
+"""
+
+data ready: boolean
+  -> help "Ready?"
+data eligible: boolean
+  -> help "Eligible?"
+
+rule pass: no
+  {rule_body}
+"#
+        )
+    }
+
+    fn ambiguous_and_hits(engine: &Engine) -> Vec<Recommendation> {
+        engine
+            .quality()
+            .into_iter()
+            .filter(|r| r.message.contains("Boolean `and` mixes a bare name"))
+            .collect()
+    }
+
+    #[test]
+    fn flags_not_ref_and_bare() {
+        let engine = load(&and_chain_spec("unless not ready and eligible then yes"));
+        let hits = ambiguous_and_hits(&engine);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert_eq!(hits[0].spec, "gate");
+        assert!(
+            hits[0].message.contains("Prefer parallel probes"),
+            "got: {}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn flags_bare_and_is_false() {
+        let engine = load(&and_chain_spec(
+            "unless ready and eligible is false then yes",
+        ));
+        let hits = ambiguous_and_hits(&engine);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert_eq!(hits[0].spec, "gate");
+    }
+
+    #[test]
+    fn clean_not_and_is_true() {
+        let engine = load(&and_chain_spec(
+            "unless not ready and eligible is true then yes",
+        ));
+        assert!(
+            ambiguous_and_hits(&engine).is_empty(),
+            "got: {:?}",
+            ambiguous_and_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_is_false_and_is_true() {
+        let engine = load(&and_chain_spec(
+            "unless ready is false and eligible is true then yes",
+        ));
+        assert!(
+            ambiguous_and_hits(&engine).is_empty(),
+            "got: {:?}",
+            ambiguous_and_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_unary_not() {
+        let engine = load(&and_chain_spec("unless not ready then yes"));
+        assert!(
+            ambiguous_and_hits(&engine).is_empty(),
+            "got: {:?}",
+            ambiguous_and_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_bare_and_bare() {
+        let engine = load(&and_chain_spec("unless ready and eligible then yes"));
+        assert!(
+            ambiguous_and_hits(&engine).is_empty(),
+            "got: {:?}",
+            ambiguous_and_hits(&engine)
+        );
+    }
+
+    fn redundant_unless_hits(engine: &Engine) -> Vec<Recommendation> {
+        engine
+            .quality()
+            .into_iter()
+            .filter(|r| r.message.contains("single `unless … then yes`"))
+            .collect()
+    }
+
+    #[test]
+    fn flags_redundant_no_unless_yes() {
+        let engine = load(&and_chain_spec("unless ready and eligible then yes"));
+        let hits = redundant_unless_hits(&engine);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert!(
+            hits[0].message.contains("ready and eligible"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
+    fn flags_redundant_false_unless_true() {
+        let engine = load(
+            r#"spec gate
+data ready: boolean
+
+rule pass: false
+  unless ready then true
+"#,
+        );
+        let hits = redundant_unless_hits(&engine);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+    }
+
+    #[test]
+    fn flags_redundant_no_unless_not_ready_then_yes() {
+        let engine = load(&and_chain_spec("unless not ready then yes"));
+        let hits = redundant_unless_hits(&engine);
+        assert_eq!(hits.len(), 1, "got: {hits:?}");
+        assert!(hits[0].message.contains("not ready"), "{}", hits[0].message);
+    }
+
+    #[test]
+    fn clean_symmetric_yes_unless_no() {
+        let engine = load(
+            r#"spec gate
+data ready: boolean
+data eligible: boolean
+
+rule pass: yes
+  unless ready and eligible then no
+"#,
+        );
+        assert!(
+            redundant_unless_hits(&engine).is_empty(),
+            "got: {:?}",
+            redundant_unless_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_multi_unless_discount() {
+        let engine = load(
+            r#"spec vip_discount
+data qty: number
+  -> minimum 0
+data is_vip: boolean
+
+rule discount: 0%
+  unless qty >= 10 then 10%
+  unless qty >= 50 then 20%
+  unless is_vip    then 25%
+"#,
+        );
+        assert!(
+            redundant_unless_hits(&engine).is_empty(),
+            "got: {:?}",
+            redundant_unless_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_multi_unless_needs_jacket() {
+        let engine = load(
+            r#"spec weather
+uses lemma units
+
+data temperature: measure
+  -> unit celsius: 1.0
+data is_raining: boolean
+data wind_speed: number
+
+rule needs_jacket: no
+  unless temperature < 15 celsius then yes
+  unless is_raining               then yes
+  unless wind_speed > 20          then yes
+"#,
+        );
+        assert!(
+            redundant_unless_hits(&engine).is_empty(),
+            "got: {:?}",
+            redundant_unless_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_direct_boolean_rule() {
+        let engine = load(
+            r#"spec gate
+data ready: boolean
+data eligible: boolean
+
+rule pass: ready and eligible
+"#,
+        );
+        assert!(
+            redundant_unless_hits(&engine).is_empty(),
+            "got: {:?}",
+            redundant_unless_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn clean_non_boolean_unless() {
+        let engine = load(
+            r#"spec pricing
+data qty: number
+
+rule discount: 0%
+  unless qty >= 10 then 10%
+"#,
+        );
+        assert!(
+            redundant_unless_hits(&engine).is_empty(),
+            "got: {:?}",
+            redundant_unless_hits(&engine)
+        );
+    }
+
+    #[test]
+    fn deprecated_unit_without_colon_emits_quality_recommendation() {
+        let engine = load(
+            r#"spec money_spec
+data money: measure
+  -> unit eur 1.00
+  -> help "Money amount."
+"#,
+        );
+        let hit = engine
+            .quality()
+            .into_iter()
+            .find(|r| r.message.contains("deprecated") && r.spec == "money_spec")
+            .expect("deprecated unit without colon must produce quality recommendation");
+        assert!(
+            hit.message.contains("unit") && hit.message.contains(":"),
+            "got: {}",
+            hit.message
+        );
+    }
+
+    #[test]
+    fn unit_with_colon_has_no_deprecated_unit_recommendation() {
+        let engine = load(
+            r#"spec money_spec
+data money: measure
+  -> unit eur: 1.00
+  -> help "Money amount."
+"#,
+        );
+        assert!(
+            engine
+                .quality()
+                .iter()
+                .all(|r| !r.message.contains("deprecated")),
+            "colon unit syntax must not flag deprecated: {:?}",
+            engine.quality()
+        );
     }
 }

@@ -121,7 +121,7 @@ Demonstrates literal bindings through nested spec references.
 """
 
 uses line: line_item
-with line.quantity : 100
+  -> with quantity: 100
 
 rule order_total:
   line.line_total
