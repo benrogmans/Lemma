@@ -17,14 +17,14 @@ Maven:
 <dependency>
   <groupId>com.lemmabase</groupId>
   <artifactId>lemma-engine</artifactId>
-  <version>0.9.6</version>
+  <version>0.9.7</version>
 </dependency>
 ```
 
 Gradle (Kotlin DSL): consume the published artifact; this repository builds the package with Maven only:
 
 ```kotlin
-implementation("com.lemmabase:lemma-engine:0.9.6")
+implementation("com.lemmabase:lemma-engine:0.9.7")
 ```
 
 Requires JDK 21+.
@@ -104,6 +104,7 @@ Engine.create().use { engine ->
 | `run(RunRequest)` | Evaluate; named fields only |
 | `list()` / `show(...)` / `source(...)` / `remove(...)` / `update(...)` | Inspect and manage loaded specs |
 | `limits()` | Current resource limits |
+| `quality()` | Structural quality recommendations across loaded specs (advisory only) |
 | `Lemma.format(String)` | Format source without an engine |
 | `close()` | Drop native engine (`AutoCloseable` + `Cleaner`) |
 
@@ -111,7 +112,7 @@ Engine.create().use { engine ->
 
 ## Errors and veto
 
-- Invalid Lemma or bad requests → unchecked `LemmaException` with WASM-shaped `EngineError` entries.
+- Invalid Lemma or bad requests → unchecked `LemmaException` with `EngineError` entries (same wire shape as [api.v1.json](../../../engine/schemas/api.v1.json)).
 - Domain `veto` → still a successful `Response`; check `RuleResult.vetoed()` / `vetoReason()`.
 - Use-after-close or invariant failures → `LemmaBugError`.
 

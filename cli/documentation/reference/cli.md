@@ -25,7 +25,7 @@ lemma run [[repo] spec] [name=value ...] [--prefix PATH] [--rules=RULES] [option
 - `--prefix <path>`: workspace directory or `.lemma` file (default: current directory)
 - `--rules <rules>`: comma-separated rule names (omit to evaluate all)
 - `--json`: output results as JSON (default: human-readable table). Each rule result may include `missing_data` (unbound input keys). Types, prefilled values, and suggestions come from `lemma show`, not from evaluate JSON.
-- `-x, --explain`: include explanation trees (human: reasoning tables; JSON: per-rule `explanation` objects matching [`api.v1.json`](../schemas/api.v1.json)). Human output prints **Missing data** only for rules still awaiting input (`MissingData` veto), not leftover live keys on a settled value or UserDefined/Computation answer. JSON still carries raw per-rule `missing_data` from the engine.
+- `-x, --explain`: include explanation trees (human: reasoning tables; JSON: per-rule `explanation` objects matching [`api.v1.json`](../../../engine/schemas/api.v1.json)). Human output prints **Missing data** only for rules still awaiting input (`MissingData` veto), not leftover live keys on a settled value or UserDefined/Computation answer. JSON still carries raw per-rule `missing_data` from the engine.
 - `-i, --interactive`: guided spec/rule/data selection
 - `--effective <datetime>`: evaluate at effective datetime (e.g. `2025`, `2025-03`, `2025-03-04`)
 
@@ -125,7 +125,7 @@ lemma server [--prefix PATH] [--host <host>] [-p <port>] [--watch] [--explanatio
 - `--host <host>`: bind address (default: `127.0.0.1`)
 - `-p, --port <port>`: port (default: `8012`)
 - `--watch`: live-reload on `.lemma` file changes
-- `--explanations`: enable explanation generation (clients send `x-explanations` header; JSON shape [`api.v1.json`](../schemas/api.v1.json))
+- `--explanations`: enable explanation generation (clients send `x-explanations` header; JSON shape [`api.v1.json`](../../../engine/schemas/api.v1.json))
 - `--eval-timeout <second>`: wall-clock timeout for a single evaluation request (default: `10`)
 - `--cors`: allow cross-origin browser requests from any origin (off by default)
 
@@ -178,7 +178,7 @@ lemma mcp [--prefix PATH] [--admin] [--request-timeout SECONDS]
 
 ## Workspace
 
-A workspace is a directory containing `.lemma` files. Commands that load specs use `--prefix` to select the workspace (default: current directory). Every `.lemma` file is loaded recursively from that directory, plus any registry deps from the global cache.
+A workspace is a directory containing `.lemma` files. Commands that load specs use `--prefix` to select the workspace (default: current directory). Every `.lemma` file is loaded recursively from that directory, plus any registry deps in `lemma_deps/`.
 
 ```
 policies/
@@ -212,14 +212,14 @@ Resource limits control parse-time and planning-time budgets. These are security
 
 **Accept-Datetime (HTTP)**: clients send `Accept-Datetime` with the same formats as `--effective`: `YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or an ISO 8601 datetime. Empty or omitted → now. Invalid values are a bad request. Responses include `Vary: Accept-Datetime`. When the resolved spec row has an `effective_from`, the server also sets `Memento-Datetime` to that instant.
 
-**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and WASM. Use `--explain` (CLI), `--explanations` (server) + `x-explanations` (client), or `explain: true` (SDK) to opt in. MCP `evaluate` always sets `explain: true` (no opt-out). Evaluate JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`api.v1.json`](../schemas/api.v1.json). Bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
+**Explanations**: disabled by default in CLI (`lemma run`), HTTP, and SDKs. Use `--explain` (CLI), `--explanations` (server) + `x-explanations` (client), or `explain: true` (SDK) to opt in. MCP `evaluate` always sets `explain: true` (no opt-out). Evaluate JSON has no top-level `data` array: unbound inputs are per-rule `missing_data`; types and suggestions come from `lemma show`. When explanations are enabled, each `results.<rule>.explanation` is a rule node (`"type":"rule"`, `"name"`, `"result"`, `"body"`, optional `"causes"` / `"children"`) per [`api.v1.json`](../../../engine/schemas/api.v1.json). Bound data uses `"type":"data"`, unused cause paths `"type":"data_unused"`.
 
 ## See Also
 
 - [Learn guide](../learn/readme.md)
 - [Installation](../installation.md)
 - [Language reference](readme.md)
-- [API schema](../schemas/api.v1.json) (Show, Response, list, errors, `RuleResult.explanation` / `ExplanationNode`)
+- [API schema](../../../engine/schemas/api.v1.json) (Show, Response, list, errors, `RuleResult.explanation` / `ExplanationNode`)
 - [LemmaBase](registry.md)
 - [Engine test coverage](coverage/engine.md)
 - [CLI test coverage](coverage/cli.md)

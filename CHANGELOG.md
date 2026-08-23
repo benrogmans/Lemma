@@ -2,6 +2,28 @@
 
 Releases cover the Lemma engine, `lemma` CLI, OpenAPI crate, LSP, SDKs and VS Code extension. They all follow the same version everywhere. The release version is `[workspace.package] version` in the root `Cargo.toml`. Git tags follow `lemma-v{version}` (for example `lemma-v0.8.20`); releases before the rename used `cli-v{version}`. Draft notes for the next version quickly by running `cargo changelog` to print `git diff` / `git log` since the latest release tag (`xtask` `versions-diff`). Tip: feed that into an LLM to create a summary for this changelog.
 
+## [0.9.7] - 2026-08-23
+
+0.9.7 aligns Learn docs with the LLM authoring guide, fixes release packaging for crates.io and Open VSX, and corrects SDK and reference documentation.
+
+### Changed
+
+- **Learn veto pedagogy**: bounds on `data` (`-> minimum` / `-> maximum`), boolean denial, lookup default `veto` + `unless` arms; removed veto-for-bounds and "place Veto last" guidance.
+- **SDK docs**: JavaScript `run({ spec, data, … })` options object; `quality()` on npm, Java, Elixir, and package READMEs; Hex `limits` / `update` on Hex README.
+- **READMEs**: root and engine README add Elixir; npm section titled JavaScript/TypeScript (not WebAssembly); Rust shipping examples use `uses lemma units`.
+- **Reference**: `year` / `month` calendar literals (`units.calendar`, not `units.duration`); workspace deps in `lemma_deps/`; API schema links point at `engine/schemas/api.v1.json`.
+- **LLM guide**: `10_syntax.md` opening order is formatter convention; parser still allows any order after commentary.
+- **Site home**: planning-time errors vs veto; typo fix.
+
+### Removed
+
+- **`cli/build.rs`**: generated `llms.txt` at compile time from a sibling engine path not present in the crates.io tarball.
+
+### Fixed
+
+- **Crates.io `lemma` publish**: removed `cli/build.rs`; `llms.txt` is generated via `cargo run -p xtask -- llms` and checked in.
+- **Open VSX publish**: `npm ci` no longer omits optional deps (which dropped `@node-rs/crc32` required by `ovsx`); precommit smoke-loads `@node-rs/crc32`, `ovsx`, and `@vscode/vsce`.
+
 ## [0.9.6] - 2026-08-23
 
 0.9.6 moves the MCP tool catalog into the engine, refines import and unit syntax, and tightens Java and npm release gates.

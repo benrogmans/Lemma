@@ -21,12 +21,12 @@ import { Lemma } from '@lemmabase/lemma-engine';
 const engine = await Lemma();
 await engine.load({ 'pricing.lemma': pricing });
 
-const response = engine.run(null, 'pricing', null, { quantity: 50, is_vip: false }, null, false);
+const response = engine.run({ spec: 'pricing', data: { quantity: 50, is_vip: false } });
 // response.results.unit_price → 16 eur
 // response.results.total      → 800 eur
 ```
 
-`Lemma()` initializes the engine once and returns an `Engine`. The response carries each rule's value (or veto), per-rule `missing_data` when inputs are still unbound, and optional explanation trees when the last `run` argument is `true` ([api.v1.json](../schemas/api.v1.json)). Types and suggestions are on `engine.show(...)` (`Show.data` values are `ShowData`). Non-veto results flatten `RuleResultValue` (`display` + typed field) onto each `RuleResult`.
+`Lemma()` initializes the engine once and returns an `Engine`. The response carries each rule's value (or veto), per-rule `missing_data` when inputs are still unbound, and optional explanation trees when `run` is called with `explain: true` ([api.v1.json](../../../engine/schemas/api.v1.json)). Types and suggestions are on `engine.show(...)` (`Show.data` values are `ShowData`). Non-veto results flatten `RuleResultValue` (`display` + typed field) onto each `RuleResult`.
 
 ## Browser
 
@@ -94,10 +94,11 @@ A pre-wired Monaco adapter ships at `@lemmabase/lemma-engine/monaco`.
 | `list()` | JSON array of `ResolvedRepository`: each has `repository` and `specs`. |
 | `show(repo?, spec, effective?)` | `Show`: interface + temporal window (no Lemma text) |
 | `source(repo?, spec?, effective?)` | Formatted Lemma source (omit `spec` for whole repo) |
-| `run(repo?, spec, effective?, data?, ruleNames?, explain?)` | Evaluate. Omit/`null` `ruleNames` for all rules. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [api.v1.json](../schemas/api.v1.json). |
+| `run({ spec, repository?, effective?, data?, rules?, explain? })` | Evaluate. Omit `rules` for all rules; pass a non-empty array to scope. `[]` errors. Returns a `Response`. With `explain: true`, per-rule `explanation` matches [api.v1.json](../../../engine/schemas/api.v1.json). |
 | `remove(repo?, name, effective?)` | Remove a temporal spec slice. |
 | `update(repo?, spec, effective?, code, attribute?)` | Replace a temporal spec slice (atomic remove + load). |
 | `limits()` | Resource limits for this engine. |
+| `quality()` | Structural quality recommendations across loaded specs (advisory only). |
 | `format(code, attribute?)` | Canonical formatting; throws `EngineError` on parse error. |
 
 Full TypeScript types are bundled (see `lemma.d.ts`).

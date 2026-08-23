@@ -23,7 +23,7 @@ Or via npm:
 npm install -g lemma
 ```
 
-For library bindings, WASM, editor support, and Docker, see [Installation](../installation.md). To embed Lemma in your application, see [Tools & SDKs](../tools/readme.md).
+For library bindings (JavaScript/TypeScript, Elixir, Java/Kotlin), editor support, and Docker, see [Installation](../installation.md). To embed Lemma in your application, see [Tools & SDKs](../tools/readme.md).
 
 ## Your first Spec
 
@@ -115,7 +115,7 @@ Machine-readable output.
 lemma run shipping -x
 ```
 
-Show how each Rule was evaluated (human reasoning table; with `--json`, per-rule `explanation` objects per [api.v1.json](../schemas/api.v1.json)).
+Show how each Rule was evaluated (human reasoning table; with `--json`, per-rule `explanation` objects per [api.v1.json](../../../engine/schemas/api.v1.json)).
 
 ```bash
 lemma show shipping

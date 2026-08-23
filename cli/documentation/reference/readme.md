@@ -584,7 +584,7 @@ rule span_days: ((2024-02-15...2024-03-15) + 1 day) as day
 
 Date endpoints can be built from separate `date` values: `hire_date...today`.
 
-For duration quantities, import SI types with `uses lemma units` so literals like `25 year` and `18 year...67 year` resolve (`units.duration`).
+For duration quantities, import SI types with `uses lemma units` so literals like `8 hour` and `7 day` resolve (`units.duration`). Calendar periods (`25 year`, `18 year...67 year`) use `units.calendar`.
 
 ## Data
 
@@ -1024,7 +1024,7 @@ rule discount_as_percent: 0.25 as percent
 
 ## Evaluate JSON / explanations
 
-Evaluate responses (`lemma run --json`, HTTP POST, SDK `run`) carry per-rule values, optional `missing_data`, and, when explanations are opted in, a per-rule `explanation` tree. Shape: [`api.v1.json`](../schemas/api.v1.json) (root and nested rules use `"type":"rule"` + `"name"`; bound data `"type":"data"`; unused cause paths `"type":"data_unused"`). See [CLI: Explanations](cli.md#api-defaults).
+Evaluate responses (`lemma run --json`, HTTP POST, SDK `run`) carry per-rule values, optional `missing_data`, and, when explanations are opted in, a per-rule `explanation` tree. Shape: [`api.v1.json`](../../../engine/schemas/api.v1.json) (root and nested rules use `"type":"rule"` + `"name"`; bound data `"type":"data"`; unused cause paths `"type":"data_unused"`). See [CLI: Explanations](cli.md#api-defaults).
 
 ## Test coverage
 

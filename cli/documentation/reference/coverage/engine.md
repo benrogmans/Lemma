@@ -24,7 +24,7 @@ Numbers are produced by `cargo coverage engine`.
 
 ## Environment
 
-- Host: `Linux 7.0.0-28-generic x86_64`
+- Host: `Linux 7.0.0-30-generic x86_64`
 - Rustc:
 
 ```

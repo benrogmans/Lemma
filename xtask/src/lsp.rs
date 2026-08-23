@@ -91,7 +91,7 @@ fn prepare_extension(root: &Path, vscode_dir: &Path) -> Result<(), String> {
     eprintln!("xtask: cargo build --release -p lemma");
     build_release_lemma(root)?;
     eprintln!("xtask: npm ci (vscode extension)");
-    run_npm(vscode_dir, &["ci", "--omit=optional"])?;
+    run_npm(vscode_dir, &["ci"])?;
     eprintln!("xtask: npm run compile (vscode extension)");
     run_npm(vscode_dir, &["run", "compile"])?;
     Ok(())
@@ -115,10 +115,44 @@ fn package_vsix(vscode_dir: &Path) -> Result<(), String> {
 /// `npm ci` + compile + package `.vsix` (no lemma binary build). Used by precommit and release.
 pub fn ci_compile_package(vscode_dir: &Path) -> Result<(), String> {
     eprintln!("xtask: npm ci (vscode extension)");
-    run_npm(vscode_dir, &["ci", "--omit=optional"])?;
+    run_npm(vscode_dir, &["ci"])?;
     eprintln!("xtask: npm run compile (vscode extension)");
     run_npm(vscode_dir, &["run", "compile"])?;
-    package_vsix(vscode_dir)
+    package_vsix(vscode_dir)?;
+    smoke_publish_clis(vscode_dir)?;
+    Ok(())
+}
+
+const PUBLISH_CLI_SMOKE: &str =
+    r#"require("@node-rs/crc32"); require("ovsx"); require("@vscode/vsce");"#;
+
+fn smoke_publish_clis(vscode_dir: &Path) -> Result<(), String> {
+    eprintln!("xtask: smoke require publish CLIs (@node-rs/crc32, ovsx, vsce)");
+    let output = Command::new("node")
+        .current_dir(vscode_dir)
+        .args(["-e", PUBLISH_CLI_SMOKE])
+        .output()
+        .map_err(|e| {
+            format!(
+                "failed to run node publish CLI smoke in {}: {e}",
+                vscode_dir.display()
+            )
+        })?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{combined}");
+    let label = "node publish CLI smoke";
+    if !output.status.success() {
+        return Err(format!(
+            "{label} exited with status {:?}",
+            output.status.code()
+        ));
+    }
+    crate::warnings::reject_warnings_in_output(label, &combined)?;
+    Ok(())
 }
 
 fn require_env(name: &str) -> Result<String, String> {

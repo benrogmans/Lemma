@@ -1,4 +1,4 @@
-**Mandatory spec opening order:**
+**Recommended spec opening order** (`lemma format` emits this; the parser allows `meta` / `uses` / `data` / `rule` in any order after commentary):
 
 ```
 spec <name> [<effective>]

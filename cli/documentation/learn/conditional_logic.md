@@ -25,8 +25,6 @@ rule discount: 0%
 
 If a VIP customer orders 75 items, they get 25% (last matching wins), not 20%.
 
-Best practice: place Veto clauses last so they override all other logic.
-
 There is no `or` operator. Unless chains accommodate disjunctive logic. For boolean composition within a single condition, use `and` and `not`.
 
 ## Boolean literals

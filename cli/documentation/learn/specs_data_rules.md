@@ -117,8 +117,7 @@ rule is_adult: age >= 18
 
 rule has_license: license_status is "valid"
 
-rule can_drive: is_adult and has_license
-  unless license_suspended then veto "License suspended"
+rule can_drive: is_adult and has_license and not license_suspended
 ```
 
 Rules evaluate in dependency order: `can_drive` depends on `is_adult` and `has_license`, so those run first.

@@ -23,7 +23,7 @@ Numbers are produced by `cargo coverage cli`.
 
 ## Environment
 
-- Host: `Linux 7.0.0-28-generic x86_64`
+- Host: `Linux 7.0.0-30-generic x86_64`
 - Rustc:
 
 ```
@@ -40,14 +40,14 @@ LLVM version: 21.1.3
 
 | Metric | Covered | Total | Percent |
 |--------|--------:|------:|--------:|
-| Lines | 2738 | 4819 | 56.82% |
-| Functions | 236 | 428 | 55.14% |
-| Regions | 4218 | 7269 | 58.03% |
+| Lines | 2742 | 4819 | 56.90% |
+| Functions | 237 | 428 | 55.37% |
+| Regions | 4226 | 7269 | 58.14% |
 
 ## Test run
 
-- Total: 210
-- Passed: 210
+- Total: 209
+- Passed: 209
 - Skipped: 0
 - Failed: 0
 
@@ -61,7 +61,7 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 | `interactive.rs` | 23.93 | 17.46 | 22.36 | 206/861 |
 | `main.rs` | 44.39 | 56.67 | 42.65 | 293/660 |
 | `error_formatter.rs` | 61.76 | 100.00 | 62.26 | 42/68 |
-| `workspace.rs` | 72.29 | 65.12 | 75.18 | 373/516 |
+| `workspace.rs` | 73.06 | 67.44 | 76.13 | 377/516 |
 | `mcp/server.rs` | 84.14 | 80.65 | 82.32 | 1204/1431 |
 | `formatter.rs` | 85.62 | 84.62 | 87.87 | 125/146 |
 | `install.rs` | 86.36 | 83.78 | 83.91 | 380/440 |
@@ -72,4 +72,4 @@ Sorted by line coverage ascending (weakest first). Only files under `src/` for t
 - [CLI integration test catalog](../../../cli/tests/README.md)
 - [Engine test coverage](engine.md)
 - [CLI benchmarks](../benchmarks/cli.md)
-<!-- coverage-input-digest: 4f4a6e72c0610d11 -->
+<!-- coverage-input-digest: 3614cd51bd8250f7 -->
